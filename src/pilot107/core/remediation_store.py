@@ -18,6 +18,7 @@ from pilot107.core.remediation import (
     EvaluationResult,
     RemediationBudget,
     RemediationConflict,
+    RemediationEvent,
     RemediationSession,
     RemediationState,
     RemediationUsage,
@@ -87,6 +88,14 @@ class RemediationStore:
                     now,
                 ),
             )
+            if cursor.rowcount == 1:
+                self._append_event(
+                    conn,
+                    session_id=session_id,
+                    event_type="session.created",
+                    payload={"state": state.value, "version": 1},
+                    created_at=now,
+                )
             row = conn.execute(
                 "SELECT * FROM remediation_sessions WHERE owner = ? AND request_key = ?",
                 (owner, request_key),
@@ -115,6 +124,17 @@ class RemediationStore:
         states: tuple[RemediationState, ...] = (),
         limit: int = 50,
     ) -> list[RemediationSession]:
+        items, _ = self.list_sessions_page(owner=owner, states=states, limit=limit)
+        return items
+
+    def list_sessions_page(
+        self,
+        *,
+        owner: str,
+        states: tuple[RemediationState, ...] = (),
+        before: tuple[str, str] | None = None,
+        limit: int = 50,
+    ) -> tuple[list[RemediationSession], tuple[str, str] | None]:
         if limit <= 0 or limit > 100:
             raise ValueError("limit must be between 1 and 100")
         clauses = ["owner = ?"]
@@ -123,15 +143,26 @@ class RemediationStore:
             placeholders = ",".join("?" for _ in states)
             clauses.append(f"state IN ({placeholders})")
             values.extend(state.value for state in states)
-        values.append(limit)
+        if before is not None:
+            updated_at, session_id = before
+            clauses.append("(updated_at < ? OR (updated_at = ? AND session_id < ?))")
+            values.extend((updated_at, updated_at, session_id))
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM remediation_sessions WHERE "
                 + " AND ".join(clauses)
                 + " ORDER BY updated_at DESC, session_id DESC LIMIT ?",
-                values,
+                (*values, limit + 1),
             ).fetchall()
-        return [_row_to_session(row) for row in rows]
+        selected = rows[:limit]
+        items = [_row_to_session(row) for row in selected]
+        next_position = None
+        if len(rows) > limit and selected:
+            next_position = (
+                str(selected[-1]["updated_at"]),
+                str(selected[-1]["session_id"]),
+            )
+        return items, next_position
 
     def list_actionable_sessions(self, *, limit: int = 50) -> list[RemediationSession]:
         if limit <= 0 or limit > 100:
@@ -192,6 +223,19 @@ class RemediationStore:
                     expected_state.value,
                 ),
             )
+            if cursor.rowcount == 1:
+                self._append_event(
+                    conn,
+                    session_id=session_id,
+                    event_type="session.state_changed",
+                    payload={
+                        "from": expected_state.value,
+                        "to": target_state.value,
+                        "version": expected_version + 1,
+                        "stop_reason": stop_reason,
+                    },
+                    created_at=now,
+                )
         if cursor.rowcount != 1:
             raise RemediationConflict("remediation session version or state changed")
         return self.get_session(session_id)
@@ -251,7 +295,7 @@ class RemediationStore:
     ) -> AgentTurn:
         now = _now()
         with self.connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO remediation_turns (
                     turn_id, session_id, turn_index, state, source_run_id, advice_id,
@@ -270,6 +314,14 @@ class RemediationStore:
                     now,
                 ),
             )
+            if cursor.rowcount == 1:
+                self._append_event(
+                    conn,
+                    session_id=session_id,
+                    event_type="turn.created",
+                    payload={"turn_id": turn_id, "turn_index": turn_index, "state": state},
+                    created_at=now,
+                )
         turn = self.get_turn(turn_id)
         if (
             turn.session_id != session_id
@@ -312,8 +364,9 @@ class RemediationStore:
         policy_status: str,
         payload: dict[str, Any],
     ) -> ActionProposal:
+        created_at = _now()
         with self.connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO remediation_action_proposals (
                     proposal_id, session_id, turn_id, action_id, action_type, source,
@@ -331,9 +384,22 @@ class RemediationStore:
                     int(approval_required),
                     policy_status,
                     _json(payload),
-                    _now(),
+                    created_at,
                 ),
             )
+            if cursor.rowcount == 1:
+                self._append_event(
+                    conn,
+                    session_id=session_id,
+                    event_type="proposal.created",
+                    payload={
+                        "proposal_id": proposal_id,
+                        "action_type": action_type,
+                        "risk": risk,
+                        "policy_status": policy_status,
+                    },
+                    created_at=created_at,
+                )
         proposal = self.get_proposal(proposal_id)
         if (
             proposal.session_id != session_id
@@ -366,7 +432,7 @@ class RemediationStore:
 
     def append_decision(self, decision: ActionDecision) -> ActionDecision:
         with self.connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO remediation_action_decisions (
                     decision_id, session_id, proposal_id, actor, decision,
@@ -384,6 +450,18 @@ class RemediationStore:
                     decision.created_at,
                 ),
             )
+            if cursor.rowcount == 1:
+                self._append_event(
+                    conn,
+                    session_id=decision.session_id,
+                    event_type=f"decision.{decision.decision}",
+                    payload={
+                        "decision_id": decision.decision_id,
+                        "proposal_id": decision.proposal_id,
+                        "actor": decision.actor,
+                    },
+                    created_at=decision.created_at,
+                )
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT * FROM remediation_action_decisions WHERE decision_id = ?",
@@ -413,7 +491,7 @@ class RemediationStore:
 
     def append_execution(self, execution: ActionExecution) -> ActionExecution:
         with self.connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO remediation_action_executions (
                     execution_id, session_id, proposal_id, state, derived_contract_id,
@@ -433,6 +511,19 @@ class RemediationStore:
                     execution.updated_at,
                 ),
             )
+            if cursor.rowcount == 1:
+                self._append_event(
+                    conn,
+                    session_id=execution.session_id,
+                    event_type="execution.created",
+                    payload={
+                        "execution_id": execution.execution_id,
+                        "proposal_id": execution.proposal_id,
+                        "state": execution.state,
+                        "derived_run_id": execution.derived_run_id,
+                    },
+                    created_at=execution.created_at,
+                )
         stored = self.get_execution(execution.execution_id)
         if (
             stored.session_id != execution.session_id
@@ -462,6 +553,7 @@ class RemediationStore:
         error_message: str | None = None,
     ) -> ActionExecution:
         current = self.get_execution(execution_id)
+        updated_at = _now()
         with self.connect() as conn:
             conn.execute(
                 """
@@ -476,9 +568,16 @@ class RemediationStore:
                     derived_run_id or current.derived_run_id,
                     error_code,
                     error_message,
-                    _now(),
+                    updated_at,
                     execution_id,
                 ),
+            )
+            self._append_event(
+                conn,
+                session_id=current.session_id,
+                event_type="execution.updated",
+                payload={"execution_id": execution_id, "state": state},
+                created_at=updated_at,
             )
         return self.get_execution(execution_id)
 
@@ -495,7 +594,7 @@ class RemediationStore:
 
     def append_evaluation(self, evaluation: EvaluationResult) -> EvaluationResult:
         with self.connect() as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO remediation_evaluations (
                     evaluation_id, session_id, execution_id, source_run_id, derived_run_id,
@@ -515,6 +614,18 @@ class RemediationStore:
                     evaluation.created_at,
                 ),
             )
+            if cursor.rowcount == 1:
+                self._append_event(
+                    conn,
+                    session_id=evaluation.session_id,
+                    event_type="evaluation.created",
+                    payload={
+                        "evaluation_id": evaluation.evaluation_id,
+                        "execution_id": evaluation.execution_id,
+                        "outcome": evaluation.outcome.value,
+                    },
+                    created_at=evaluation.created_at,
+                )
         with self.connect() as conn:
             row = conn.execute(
                 "SELECT * FROM remediation_evaluations WHERE evaluation_id = ?",
@@ -541,6 +652,49 @@ class RemediationStore:
                 (session_id,),
             ).fetchall()
         return [_row_to_evaluation(row) for row in rows]
+
+    def list_events_page(
+        self,
+        session_id: str,
+        *,
+        after_event_id: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[RemediationEvent], int | None]:
+        if after_event_id < 0:
+            raise ValueError("after_event_id cannot be negative")
+        if limit <= 0 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM remediation_session_events
+                WHERE session_id = ? AND event_id > ?
+                ORDER BY event_id LIMIT ?
+                """,
+                (session_id, after_event_id, limit + 1),
+            ).fetchall()
+        selected = rows[:limit]
+        events = [_row_to_event(row) for row in selected]
+        next_event_id = events[-1].event_id if len(rows) > limit and events else None
+        return events, next_event_id
+
+    @staticmethod
+    def _append_event(
+        conn: sqlite3.Connection,
+        *,
+        session_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        created_at: str,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO remediation_session_events (
+                session_id, event_type, payload_json, created_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (session_id, event_type, _json(payload), created_at),
+        )
 
 
 def _row_to_session(row: sqlite3.Row) -> RemediationSession:
@@ -655,6 +809,16 @@ def _row_to_evaluation(row: sqlite3.Row) -> EvaluationResult:
         checks=tuple(checks),
         comparison=_object_json(row["comparison_json"]),
         evidence_refs=tuple(evidence_refs),
+        created_at=str(row["created_at"]),
+    )
+
+
+def _row_to_event(row: sqlite3.Row) -> RemediationEvent:
+    return RemediationEvent(
+        event_id=int(row["event_id"]),
+        session_id=str(row["session_id"]),
+        event_type=str(row["event_type"]),
+        payload=_object_json(row["payload_json"]),
         created_at=str(row["created_at"]),
     )
 

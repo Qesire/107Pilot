@@ -118,6 +118,71 @@ class RemediationApiTests(unittest.TestCase):
         self.assertEqual(replayed.status, 200)
         self.assertEqual(replayed.payload, cancelled.payload)
 
+    def test_list_cursor_is_filter_bound_and_get_supports_etag(self) -> None:
+        for request_key in ("page-a", "page-b"):
+            self.api.handle_post(
+                "/api/v1/runs/run_remediation_api/remediation-sessions",
+                body=_json({"request_key": request_key}),
+                headers=self.headers,
+            )
+        first = self.api.handle_get(
+            "/api/v1/remediation-sessions?limit=1",
+            headers=self.headers,
+        )
+        cursor = first.payload["page"]["next_cursor"]
+        second = self.api.handle_get(
+            f"/api/v1/remediation-sessions?limit=1&cursor={cursor}",
+            headers=self.headers,
+        )
+        mismatched = self.api.handle_get(
+            f"/api/v1/remediation-sessions?limit=1&state=cancelled&cursor={cursor}",
+            headers=self.headers,
+        )
+        detail_path = f"/api/v1/remediation-sessions/{first.payload['items'][0]['session_id']}"
+        detail = self.api.handle_get(detail_path, headers=self.headers)
+        not_modified = self.api.handle_get(
+            detail_path,
+            headers={**self.headers, "If-None-Match": detail.headers["ETag"]},
+        )
+
+        self.assertNotEqual(
+            first.payload["items"][0]["session_id"],
+            second.payload["items"][0]["session_id"],
+        )
+        self.assertEqual(mismatched.status, 400)
+        self.assertEqual(not_modified.status, 304)
+
+    def test_session_events_are_owner_scoped_and_incrementally_readable(self) -> None:
+        created = self.api.handle_post(
+            "/api/v1/runs/run_remediation_api/remediation-sessions",
+            body=_json({"request_key": "api-events"}),
+            headers=self.headers,
+        )
+        session_id = created.payload["session_id"]
+        self.api.handle_post(
+            f"/api/v1/remediation-sessions/{session_id}/cancel",
+            body=_json({"expected_version": created.payload["version"]}),
+            headers=self.headers,
+        )
+
+        first = self.api.handle_get(
+            f"/api/v1/remediation-sessions/{session_id}/events?limit=1",
+            headers=self.headers,
+        )
+        after = first.payload["page"]["next_after_event_id"]
+        second = self.api.handle_get(
+            f"/api/v1/remediation-sessions/{session_id}/events?after_event_id={after}",
+            headers=self.headers,
+        )
+        forbidden = self.api.handle_get(
+            f"/api/v1/remediation-sessions/{session_id}/events",
+            headers={"X-Pilot107-User": "bob"},
+        )
+
+        self.assertEqual(first.payload["items"][0]["event_type"], "session.created")
+        self.assertEqual(second.payload["items"][0]["event_type"], "session.state_changed")
+        self.assertEqual(forbidden.status, 403)
+
 
 def _json(value: object) -> bytes:
     return json.dumps(value).encode()

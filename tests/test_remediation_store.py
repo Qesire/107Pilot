@@ -90,6 +90,35 @@ class RemediationStoreTests(unittest.TestCase):
                 target_state=RemediationState.DIAGNOSING,
             )
 
+    def test_session_list_uses_stable_owner_scoped_keyset_pagination(self) -> None:
+        first, _ = self._create()
+        second, _ = self.store.create_session(
+            session_id="session_second",
+            owner="alice",
+            request_key="request-2",
+            state=RemediationState.WAITING_EVIDENCE,
+            source_run_id="run_source",
+            source_contract_id="contract_source",
+            source_diagnosis_digest="d" * 64,
+            source_evidence_digest="e" * 64,
+            automation_policy="manual_approval",
+            budget=RemediationBudget(),
+        )
+
+        page_one, cursor = self.store.list_sessions_page(owner="alice", limit=1)
+        page_two, final_cursor = self.store.list_sessions_page(
+            owner="alice",
+            before=cursor,
+            limit=1,
+        )
+
+        self.assertIsNotNone(cursor)
+        self.assertEqual(
+            {page_one[0].session_id, page_two[0].session_id},
+            {first.session_id, second.session_id},
+        )
+        self.assertIsNone(final_cursor)
+
     def test_terminal_transition_requires_stop_reason(self) -> None:
         session, _ = self._create()
         with self.assertRaises(ValueError):
@@ -177,6 +206,19 @@ class RemediationStoreTests(unittest.TestCase):
 
         self.assertEqual(self.store.list_turns(session.session_id), [turn])
         self.assertEqual(self.store.list_proposals(session.session_id), [proposal])
+        events, next_event_id = self.store.list_events_page(session.session_id)
+        self.assertIsNone(next_event_id)
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                "session.created",
+                "turn.created",
+                "proposal.created",
+                "decision.approve",
+                "execution.created",
+                "evaluation.created",
+            ],
+        )
 
     def test_deterministic_children_are_idempotent(self) -> None:
         session, _ = self._create()

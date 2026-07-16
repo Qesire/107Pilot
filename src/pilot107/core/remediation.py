@@ -211,6 +211,15 @@ class EvaluationResult:
     created_at: str = ""
 
 
+@dataclass(frozen=True)
+class RemediationEvent:
+    event_id: int
+    session_id: str
+    event_type: str
+    payload: dict[str, Any]
+    created_at: str
+
+
 _TRANSITIONS: dict[RemediationState, frozenset[RemediationState]] = {
     RemediationState.WAITING_EVIDENCE: frozenset(
         {RemediationState.DIAGNOSING, RemediationState.BLOCKED, RemediationState.CANCELLED}

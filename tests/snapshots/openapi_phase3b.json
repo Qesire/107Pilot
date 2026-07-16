@@ -206,6 +206,11 @@
             "in": "query",
             "name": "limit",
             "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false
           }
         ],
         "tags": [
@@ -266,6 +271,31 @@
             "in": "path",
             "name": "session_id",
             "required": true
+          }
+        ],
+        "tags": [
+          "remediation"
+        ]
+      }
+    },
+    "/api/v1/remediation-sessions/{session_id}/events": {
+      "get": {
+        "operationId": "list_remediation_session_events",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "after_event_id",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false
           }
         ],
         "tags": [
@@ -595,6 +625,11 @@
           {
             "in": "query",
             "name": "limit",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
             "required": false
           }
         ],

@@ -8,6 +8,13 @@ from typing import Any
 
 from pilot107.api.http_types import ApiResponse
 from pilot107.core.identity import UserIdentity
+from pilot107.core.pagination import (
+    CursorError,
+    CursorPosition,
+    cursor_scope,
+    decode_cursor,
+    encode_cursor,
+)
 from pilot107.core.remediation import (
     RemediationBudget,
     RemediationConflict,
@@ -34,19 +41,45 @@ class RemediationRoutes:
     ) -> ApiResponse | None:
         if len(parts) == 1 and parts[0] == "remediation-sessions":
             try:
+                _reject_unknown_params(params, {"state", "limit", "cursor"})
                 owner = _query_owner(params, identity)
                 states = _query_states(params)
                 limit = _query_limit(params)
-                items = self.service.remediation_store.list_sessions(
+                scope = cursor_scope(
+                    "remediation_sessions",
+                    {"owner": owner, "states": sorted(state.value for state in states)},
+                )
+                cursor = _query_cursor(params, scope=scope)
+                items, next_position = self.service.remediation_store.list_sessions_page(
                     owner=owner,
                     states=states,
+                    before=(cursor.primary, cursor.secondary) if cursor is not None else None,
                     limit=limit,
+                )
+                next_cursor = (
+                    None
+                    if next_position is None
+                    else encode_cursor(
+                        kind="remediation_sessions",
+                        scope=scope,
+                        position=CursorPosition(
+                            primary=next_position[0],
+                            secondary=next_position[1],
+                        ),
+                    )
                 )
                 return ApiResponse(
                     status=200,
-                    payload={"items": [remediation_session_payload(item) for item in items]},
+                    payload={
+                        "items": [remediation_session_payload(item) for item in items],
+                        "page": {
+                            "limit": limit,
+                            "has_more": next_cursor is not None,
+                            "next_cursor": next_cursor,
+                        },
+                    },
                 )
-            except (ValueError, RemediationInvariantError) as exc:
+            except (CursorError, ValueError, RemediationInvariantError) as exc:
                 return _error(400, "REMEDIATION.INVALID_QUERY", str(exc))
         if len(parts) == 2 and parts[0] == "remediation-sessions":
             try:
@@ -55,6 +88,56 @@ class RemediationRoutes:
                 return ApiResponse(status=200, payload=self.service.detail(parts[1], owner=owner))
             except KeyError:
                 return _error(404, "REMEDIATION.NOT_FOUND", "remediation session not found")
+            except RemediationServiceError as exc:
+                return _service_error(exc)
+        if (
+            len(parts) == 3
+            and parts[0] == "remediation-sessions"
+            and parts[2] == "events"
+        ):
+            try:
+                _reject_unknown_params(params, {"limit", "after_event_id"})
+                session = self.service.remediation_store.get_session(parts[1])
+                owner = identity.username if identity is not None else session.owner
+                if session.owner != owner:
+                    raise RemediationServiceError(
+                        "session belongs to another owner",
+                        code="AUTH.FORBIDDEN",
+                    )
+                limit = _query_limit(params)
+                after_event_id = _query_after_event_id(params)
+                events, next_event_id = self.service.remediation_store.list_events_page(
+                    session.session_id,
+                    after_event_id=after_event_id,
+                    limit=limit,
+                )
+                return ApiResponse(
+                    status=200,
+                    payload={
+                        "session_id": session.session_id,
+                        "items": [
+                            {
+                                "event_id": event.event_id,
+                                "event_type": event.event_type,
+                                "payload": event.payload,
+                                "created_at": event.created_at,
+                            }
+                            for event in events
+                        ],
+                        "page": {
+                            "limit": limit,
+                            "has_more": next_event_id is not None,
+                            "next_after_event_id": next_event_id,
+                            "last_event_id": (
+                                events[-1].event_id if events else after_event_id
+                            ),
+                        },
+                    },
+                )
+            except KeyError:
+                return _error(404, "REMEDIATION.NOT_FOUND", "remediation session not found")
+            except (ValueError, RemediationInvariantError) as exc:
+                return _error(400, "REMEDIATION.INVALID_QUERY", str(exc))
             except RemediationServiceError as exc:
                 return _service_error(exc)
         return None
@@ -193,6 +276,41 @@ def _query_limit(params: Mapping[str, list[str]]) -> int:
     if len(values) != 1:
         raise ValueError("limit must be provided once")
     return int(values[0])
+
+
+def _query_after_event_id(params: Mapping[str, list[str]]) -> int:
+    values = params.get("after_event_id", [])
+    if not values:
+        return 0
+    if len(values) != 1:
+        raise ValueError("after_event_id must be provided once")
+    value = int(values[0])
+    if value < 0:
+        raise ValueError("after_event_id cannot be negative")
+    return value
+
+
+def _query_cursor(
+    params: Mapping[str, list[str]],
+    *,
+    scope: str,
+) -> CursorPosition | None:
+    values = params.get("cursor", [])
+    if not values:
+        return None
+    if len(values) != 1:
+        raise ValueError("cursor must be provided once")
+    return decode_cursor(
+        value=values[0],
+        kind="remediation_sessions",
+        scope=scope,
+    )
+
+
+def _reject_unknown_params(params: Mapping[str, list[str]], allowed: set[str]) -> None:
+    unknown = sorted(set(params) - allowed)
+    if unknown:
+        raise ValueError(f"unsupported query parameters: {', '.join(unknown)}")
 
 
 def _required_string(payload: Mapping[str, Any], key: str) -> str:

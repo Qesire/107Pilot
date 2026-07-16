@@ -427,6 +427,12 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
                     "required": False,
                     "schema": {"type": "integer", "minimum": 1, "maximum": 100},
                 },
+                {
+                    "name": "cursor",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string", "maxLength": 2048},
+                },
             ]
         },
     )
@@ -465,6 +471,12 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
                     "required": False,
                     "schema": {"type": "integer", "minimum": 1, "maximum": 100},
                 },
+                {
+                    "name": "cursor",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string", "maxLength": 2048},
+                },
             ]
         },
     )
@@ -475,6 +487,30 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
         operation_id="get_remediation_session",
         tags=["remediation"],
         openapi_extra={"parameters": [_REMEDIATION_SESSION_PATH_PARAMETER]},
+    )
+    app.add_api_route(
+        "/api/v1/remediation-sessions/{session_id}/events",
+        forward_get,
+        methods=["GET"],
+        operation_id="list_remediation_session_events",
+        tags=["remediation"],
+        openapi_extra={
+            "parameters": [
+                _REMEDIATION_SESSION_PATH_PARAMETER,
+                {
+                    "name": "after_event_id",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "integer", "minimum": 0},
+                },
+                {
+                    "name": "limit",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+            ]
+        },
     )
     app.add_api_route(
         "/api/v1/runs/{run_id}/remediation-sessions",

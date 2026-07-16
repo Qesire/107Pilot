@@ -146,5 +146,35 @@ REMEDIATION_SESSION_MIGRATION = SchemaMigration(
     ),
 )
 
+REMEDIATION_EVENT_MIGRATION = SchemaMigration(
+    migration_id="003e.002.remediation_events",
+    statements=(
+        """
+        CREATE TABLE remediation_session_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL REFERENCES remediation_sessions(session_id)
+                ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE INDEX idx_remediation_events_session_id
+        ON remediation_session_events(session_id, event_id)
+        """,
+        """
+        INSERT INTO remediation_session_events (
+            session_id, event_type, payload_json, created_at
+        )
+        SELECT session_id, 'session.snapshot', '{"backfilled":true}', created_at
+        FROM remediation_sessions
+        """,
+    ),
+)
 
-REMEDIATION_MIGRATIONS = (REMEDIATION_SESSION_MIGRATION,)
+
+REMEDIATION_MIGRATIONS = (
+    REMEDIATION_SESSION_MIGRATION,
+    REMEDIATION_EVENT_MIGRATION,
+)
