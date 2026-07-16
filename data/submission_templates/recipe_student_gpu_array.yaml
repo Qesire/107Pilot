@@ -1,0 +1,117 @@
+template_id: recipe_student_gpu_array@1.0.0
+title: "学生 GPU Array 作业模板"
+description: "面向 107 GPU 分区的 array 作业模板，内置并发节流、分片 COMPLETE 和缺片恢复。"
+trust_level: L1
+parameter_schema:
+  required:
+    - project.workdir
+    - entry.command
+    - resources.partition
+    - resources.time_limit
+    - resources.array
+  entry.command:
+    type: plain_shell_command
+    raw_shell: false
+  project.workdir:
+    type: shared_path
+    prefix: /public/home/<user>/
+  resources.partition:
+    type: enum
+    allowed:
+      - Students
+      - GPU-A100
+      - GPU-RTX5090
+      - P107-A100
+      - P107-RTX5090
+  resources.array:
+    type: slurm_array
+    max_recommended_concurrency: 2
+compatibility:
+  slurm:
+    min_version: "23.0"
+  platform:
+    docker_l2: true
+    school_l3: true
+    requires_gpu: true
+  partitions:
+    default: Students
+    allowed:
+      - Students
+      - GPU-A100
+      - GPU-RTX5090
+      - P107-A100
+      - P107-RTX5090
+  qos:
+    default: qos_stu_medium_2gpu
+    allowed_by_partition:
+      Students:
+        - qos_stu_medium_2gpu
+        - qos_stu_medium
+      GPU-A100:
+        - qos_gpu-a100
+      GPU-RTX5090:
+        - qos_gpu-rtx5090
+      P107-A100:
+        - qos_p107-a100
+      P107-RTX5090:
+        - qos_p107-rtx5090
+sbatch_template: |
+  #!/bin/bash
+  #SBATCH --job-name={{job_name}}
+  #SBATCH --partition={{partition}}
+  #SBATCH --qos={{qos}}
+  #SBATCH --nodes=1
+  #SBATCH --ntasks=1
+  #SBATCH --cpus-per-task={{cpus_per_task}}
+  #SBATCH --gres=gpu:{{gpus_per_task}}
+  #SBATCH --time={{time_limit}}
+  #SBATCH --array={{array_expression}}%{{array_max_concurrency}}
+  #SBATCH --output={{workdir}}/logs/%x-%A_%a.out
+  #SBATCH --error={{workdir}}/logs/%x-%A_%a.err
+  #SBATCH --export=ALL,KIT_ROOT={{kit_root}}
+
+  set -Eeuo pipefail
+
+  test -n "${KIT_ROOT}"
+  test -d "${KIT_ROOT}"
+  cd "{{workdir}}"
+  mkdir -p logs shards complete
+
+  task_id="${SLURM_ARRAY_TASK_ID}"
+  tmp="shards/task_${task_id}.${SLURM_JOB_ID}.tmp"
+  final="shards/task_${task_id}.json"
+  marker="complete/task_${task_id}.COMPLETE"
+
+  {{entry_command}} --task-id "${task_id}" --output "${tmp}"
+  test -s "${tmp}"
+  mv -f "${tmp}" "${final}"
+  printf 'complete task=%s job=%s\n' "${task_id}" "${SLURM_JOB_ID}" > "${marker}"
+preflight_checks:
+  - check: workdir_shared
+    description: "工作目录必须在共享文件系统"
+  - check: qos_available
+    description: "QoS 必须允许 GPU 资源"
+  - check: dag_gpu_peak
+    description: "同一 DAG 层所有 GPU array throttle 之和不得超过 QoS GPU 上限"
+recovery:
+  strategy: resubmit_missing
+  description: "扫描缺失 task，只用 --array=<missing_ids> 重提缺片。"
+  scan_command: "python tools/scan_missing_tasks.py --workdir {{workdir}} --array '{{array_expression}}'"
+  resubmit_command: "sbatch --array=<missing_ids>%1 {{sbatch_script}}"
+success_protocol:
+  artifact_write: "per-task tmp -> validate -> atomic mv -> per-task COMPLETE"
+  marker: "complete/task_<id>.COMPLETE"
+  validation:
+    - "每个 shard 非空"
+    - "每个成功 task 有 COMPLETE"
+    - "merge 前按 task id 扫描完整性"
+  reconcile: "array 聚合作业 FAILED 时仍以 shard/COMPLETE 完整性为真源"
+risk_declaration:
+  gpu_concurrency: "{{array_max_concurrency}} * {{gpus_per_task}} per array; DAG 层需汇总"
+  estimated_runtime: "{{time_limit}}"
+  encoded_lessons:
+    - HF4-006
+    - HF4-007
+    - HF4-008
+    - HF4-013
+

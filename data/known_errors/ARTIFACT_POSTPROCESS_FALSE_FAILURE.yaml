@@ -1,0 +1,28 @@
+error_id: ARTIFACT.POSTPROCESS_FALSE_FAILURE
+category: filesystem_cwd
+severity: warn
+retryable: true
+stage: postprocess
+title: "产物完整但后处理退出错误"
+symptoms:
+  - "oserror: failed to make path absolute"
+  - "fatal python error: error evaluating path"
+  - "artifacts complete"
+  - "manifest complete"
+  - "success_with_postprocess_error"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - outputs/inventory.json
+  - slurm/accounting.json
+root_cause: "业务产物已经完整，后处理阶段因为 cwd/getpath 等非业务错误导致 Slurm 退出码失败。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "优先 reconcile 现有产物并补写 COMPLETE，不要重复生成。"
+  prevention: "业务成功判定基于产物完整性、manifest 和 COMPLETE，而不是单独依赖最终退出码。"
+  automation: "Evidence 检测产物完整时给出 success_with_postprocess_error 并建议 capsule 标记 degraded-success。"
+confidence: high
+kb_article: null
+

@@ -1,0 +1,32 @@
+error_id: SLURM.QOS_CONCURRENCY_EXCEEDED
+category: resource_policy
+severity: error
+retryable: false
+stage: preflight
+title: "GPU Array 并发叠加超过 QoS 总上限"
+symptoms:
+  - "两个独立 array 均设置 %2"
+  - "理论同时申请 4 张 gpu"
+  - "qos 上限为 2"
+  - "qosmaxgresperuserlimit"
+  - "qos max gres"
+  - "resources qos"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - slurm/job_detail.json
+  - slurm/accounting.json
+root_cause: "array throttle 是每个 array 的并发上限，不是用户全局上限；同一 DAG 层多个 array 的 GPU 峰值会叠加。"
+fix_template:
+  type: structured_patch
+  patch:
+    resources.array: null
+fix_guide:
+  fix: "会并行的 GPU array 使用更低 throttle，例如 MagR-prep 与 Smooth-quant 各 %1；恢复阶段默认 %1。"
+  prevention: "资源策略必须按 DAG 层计算总 GPU 峰值，而非只审计单个 sbatch。"
+  automation: "提交器生成 RESOURCE_POLICY 摘要并拒绝超过 QoS 的并发组合。"
+confidence: high
+kb_article: null
+source_record: HF4-006
+

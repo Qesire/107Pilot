@@ -1,0 +1,28 @@
+error_id: ARTIFACT.MARKER_MISSING
+category: marker_reconciliation
+severity: warn
+retryable: true
+stage: postprocess
+title: "成功产物存在但 COMPLETE 标记缺失"
+symptoms:
+  - "complete 标记缺失"
+  - "变体仍显示 missing"
+  - "恢复脚本准备重复占用 gpu"
+  - "missing_count=0"
+  - "replaced_count=400/400"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - outputs/inventory.json
+  - slurm/accounting.json
+root_cause: "业务计算成功后，标记写入之前发生退出阶段错误。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "运行 RECONCILE 脚本补写 COMPLETE；不要重新生成。"
+  prevention: "标记与产物采用可恢复提交协议，后处理可独立重放。"
+  automation: "扫描 attempt 目录，选择最新完整 attempt 自动对账。"
+confidence: high
+kb_article: null
+source_record: HF4-013
+

@@ -1,0 +1,27 @@
+error_id: LOG.NOISE_FUTURE_WARNING
+category: log_noise
+severity: info
+retryable: false
+stage: runtime
+title: "将非致命 FutureWarning 误判为失败"
+symptoms:
+  - "futurewarning"
+  - "torch.cuda.amp.autocast"
+  - "custom_fwd"
+  - "custom_bwd"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - submission/submit.stderr
+root_cause: "PyTorch API 弃用警告，不影响当前执行结果。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "记录为兼容性技术债，不触发重试。"
+  prevention: "错误分类器按 warning/error/fatal 分级。"
+  automation: "将 FutureWarning 标记为 ignore_for_retry=true。"
+confidence: high
+kb_article: null
+source_record: HF4-014
+

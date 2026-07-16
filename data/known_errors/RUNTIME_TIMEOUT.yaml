@@ -1,0 +1,30 @@
+# 迁移自 src/pilot107/core/diagnosis.py 第 173-183 行（硬编码规则）
+# 向后兼容：error_id / symptoms / fix_template.patch 与原规则完全一致
+# schema 扩展：terminal_state_match — 该规则除文本匹配外还通过 terminal_state == "TIMEOUT" 触发
+error_id: RUNTIME.TIMEOUT
+category: runtime
+severity: error
+retryable: true
+stage: runtime
+title: "作业达到 walltime 限制后被 Slurm 终止"
+symptoms:
+  - "timeout"
+terminal_state_match: "TIMEOUT"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - slurm/job_detail.json
+  - slurm/accounting.json
+root_cause: "作业达到 walltime 限制后被 Slurm 终止，可能是计算量估算不足或资源不足导致执行过慢。"
+fix_template:
+  type: structured_patch
+  patch:
+    resources.time_limit: null
+fix_guide:
+  fix: "提高 resources.time_limit，或优化作业以减少计算时间；重新提交。"
+  prevention: "提交前根据历史 walltime 与输入规模估算合理 time_limit，预留 20% 余量。"
+  automation: "CapabilityProfile 按分区最大 walltime 校验；超时后建议新 time_limit。"
+confidence: high
+kb_article: null

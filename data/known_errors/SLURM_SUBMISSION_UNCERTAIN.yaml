@@ -1,0 +1,28 @@
+error_id: SLURM.SUBMISSION_UNCERTAIN
+category: submission_reconcile
+severity: error
+retryable: true
+stage: submit
+title: "提交结果无法唯一对账"
+symptoms:
+  - "submission_uncertain"
+  - "reconcile uncertain"
+  - "multiple jobs match marker"
+  - "candidate job_ids"
+  - "idempotency reconcile"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - slurm/job_detail.json
+  - slurm/accounting.json
+root_cause: "提交请求返回前后网络或 REST 状态不确定，按 marker 和时间窗口找到多个候选作业，无法安全绑定。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "人工检查 candidate job_ids，确认 owner、name、submit_time 和 workdir 后绑定或取消重复作业。"
+  prevention: "为每个 run 使用唯一 job name/marker，并限制对账时间窗口。"
+  automation: "RunService 对 not_found 做有限重试；对 multiple candidates 返回 uncertain 并停止自动重提。"
+confidence: high
+kb_article: null
+

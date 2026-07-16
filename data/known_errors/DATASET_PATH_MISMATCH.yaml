@@ -1,0 +1,28 @@
+error_id: DATASET.PATH_MISMATCH
+category: dataset_path
+severity: warn
+retryable: false
+stage: preflight
+title: "校准数据路径与平台实际目录不一致"
+symptoms:
+  - "calib_eval_json: expected file"
+  - "calib_image_root: expected dir"
+  - "expected file"
+  - "expected dir"
+evidence_paths:
+  - submission/submit.stderr
+  - logs/stderr.tail.txt
+  - environment/summary.json
+  - outputs/inventory.json
+root_cause: "包默认数据集位置与平台实际目录不一致，或只存在 VBench 数据而没有固定校准 manifest。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "通过 cluster.env 或环境变量覆盖实际路径；没有固定 12 条 manifest 时，从现有 OpenS2V/VBench 构建确定性样本 manifest。"
+  prevention: "配置层不得硬编码数据集位置；预检输出所有解析后的绝对路径。"
+  automation: "按候选目录自动发现数据，并把最终选择写入 calibration_manifest.json。"
+confidence: high
+kb_article: null
+source_record: HF4-004
+

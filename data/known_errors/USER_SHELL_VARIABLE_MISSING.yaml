@@ -1,0 +1,29 @@
+error_id: USER_SHELL.VARIABLE_MISSING
+category: user_shell_state
+severity: warn
+retryable: true
+stage: preflight
+title: "新 Shell 中路径变量丢失"
+symptoms:
+  - "tee: /submit_"
+  - "permission denied"
+  - "bash: /start_"
+  - "no such file or directory"
+  - "regex:/(start|submit)_[^ ]*"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - environment/summary.json
+root_cause: "KIT、ARTIFACTS 等变量只在上一个 Shell 中定义；新 Shell 中变量为空，路径退化为根目录。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "使用自包含启动脚本，由脚本根据自身位置解析 KIT；或每次命令块重新定义 ROOT、ARTIFACTS、KIT。"
+  prevention: "禁止依赖交互 Shell 的历史环境变量；启动入口必须 set -Eeuo pipefail 并验证关键变量非空。"
+  automation: "在启动器中加入 require_nonempty_var，并拒绝关键路径退化为 /。"
+confidence: high
+kb_article: null
+source_record: HF4-001
+

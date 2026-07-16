@@ -1,0 +1,28 @@
+error_id: SHELL.UNBOUND_VARIABLE
+category: shell_strict_mode
+severity: error
+retryable: false
+stage: runtime
+title: "local 同行赋值触发 unbound variable"
+symptoms:
+  - "tag: unbound variable"
+  - "unbound variable"
+  - "magr-prep 2 秒失败"
+  - "q-smooth 多 task 0 秒失败"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+root_cause: "在 set -u 下执行 local tag=\"$1\" tmp=\"...${tag}\"；右侧展开时 tag 尚未完成赋值。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "拆成两行：local tag=\"$1\"；local tmp=\"...${tag}\"。"
+  prevention: "strict mode 下禁止在同一 local 声明中引用刚定义变量。"
+  automation: "shell lint 规则扫描同一 local 命令中的自引用。"
+confidence: high
+kb_article: null
+source_record: HF4-009
+

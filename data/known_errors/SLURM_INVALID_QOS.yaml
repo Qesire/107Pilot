@@ -1,0 +1,31 @@
+# 迁移自 src/pilot107/core/diagnosis.py 第 133-142 行（硬编码规则）
+# 向后兼容：error_id / symptoms / fix_template.patch 与原规则完全一致
+error_id: SLURM.INVALID_QOS
+category: resource_policy
+severity: error
+retryable: true
+stage: submit
+title: "QoS 不存在或不可用"
+symptoms:
+  - "invalid qos"
+  - "invalid qos specification"
+  - "invalidqos"
+  - "qosnotallowed"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - slurm/runtime_status.json
+  - slurm/job_detail.json
+root_cause: "提交时指定的 QoS 在集群上不存在或当前账号/分区无权使用。"
+fix_template:
+  type: structured_patch
+  patch:
+    resources.qos: null
+fix_guide:
+  fix: "将 resources.qos 改为集群支持的 QoS，或清空使用默认 QoS。"
+  prevention: "提交前通过 /api/v1/platform/capabilities 查询可用 QoS 列表。"
+  automation: "CapabilityProfile preflight 在提交前校验 QoS 是否在可用集合内。"
+confidence: high
+kb_article: null

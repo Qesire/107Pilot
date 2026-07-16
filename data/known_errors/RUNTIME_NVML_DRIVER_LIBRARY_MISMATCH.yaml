@@ -1,0 +1,25 @@
+error_id: RUNTIME.NVML_DRIVER_LIBRARY_MISMATCH
+category: gpu_runtime
+severity: error
+retryable: false
+stage: runtime
+title: "NVIDIA 驱动与 NVML 用户态库版本不一致"
+symptoms:
+  - "failed to initialize nvml: driver/library version mismatch"
+  - "nvml_error_lib_rm_version_mismatch"
+  - "driver/library version mismatch"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - environment/summary.json
+  - run/environment/gpu.json
+root_cause: "计算节点加载的 NVIDIA 内核驱动与作业可见的 NVML 用户态库版本不一致，通常需要节点级驱动修复或重启。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "停止自动重提并向平台管理员上报节点、作业和 GPU 探针证据；修复驱动/库一致性后再运行。"
+  prevention: "平台快照和 GPU 作业探针同时记录驱动、NVML 与 CUDA 可见性，并隔离探针失败的节点。"
+  automation: "Agent 仅创建管理员事件和迁移建议，不执行驱动安装、节点重启或无证据的重复提交。"
+confidence: high
+kb_article: "https://docs.nvidia.com/deploy/nvml-api/group__nvmlDeviceEnums.html"

@@ -1,0 +1,1102 @@
+"""Slurm backend contracts and local/simulator implementations."""
+
+import hashlib
+import json
+import posixpath
+import re
+import subprocess
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
+from typing import Any, Protocol
+
+from pilot107.core.paths import authorize_path
+from pilot107.core.resources import PreflightSeverity, ResourcePlan, validate_resource_plan
+from pilot107.core.rest_semantics import RestSemanticLevel, check_slurm_rest_semantics
+from pilot107.core.states import RunState, normalize_slurm_state
+
+_SAFE_SLURM_VALUE = re.compile(r"^[A-Za-z0-9_.:+/@=-]+$")
+_JOB_ID = re.compile(r"^[A-Za-z0-9_.+-]+$")
+
+
+class SubmissionStrategy(StrEnum):
+    REST_NATIVE = "rest_native"
+    COMMAND = "command"
+    IN_MEMORY = "in_memory"
+    DEMO = "demo"
+
+
+class RestAuthStyle(StrEnum):
+    BEARER = "bearer"
+    SLURM_HEADERS = "slurm_headers"
+
+
+class SlurmBackendError(RuntimeError):
+    """Base error for backend adapter failures."""
+
+
+class SlurmAuthError(SlurmBackendError):
+    """Raised when a user attempts to access a job they do not own."""
+
+
+class SlurmSubmissionRejected(SlurmBackendError):
+    """Raised when a job cannot be submitted due to validated input."""
+
+
+class SlurmTransportError(SlurmBackendError):
+    """Raised when the backend transport cannot complete a request."""
+
+
+@dataclass(frozen=True)
+class SubmitIntent:
+    user: str
+    workdir: Path
+    script: str
+    resource_plan: ResourcePlan
+    idempotency_key: str | None = None
+    dependency_job_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SubmitReceipt:
+    job_id: str
+    run_state: RunState
+    strategy: SubmissionStrategy
+    raw_response: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class JobSnapshot:
+    job_id: str
+    owner: str
+    run_state: RunState
+    raw_state_flags: list[str]
+    exit_code: str | None = None
+    reason: str | None = None
+    stdout_path: Path | None = None
+    stderr_path: Path | None = None
+    raw_response: dict[str, Any] = field(default_factory=dict)
+
+
+class SlurmBackend(Protocol):
+    def submit(self, intent: SubmitIntent) -> SubmitReceipt:
+        """Submit a job and return a durable Slurm job reference."""
+
+    def get_job(self, *, user: str, job_id: str) -> JobSnapshot:
+        """Read a job snapshot for an authorized user."""
+
+    def cancel(self, *, user: str, job_id: str) -> JobSnapshot:
+        """Cancel a job for an authorized user and return the resulting snapshot."""
+
+
+SlurmControlBackend = SlurmBackend
+
+
+@dataclass(frozen=True)
+class HttpResponse:
+    status: int
+    payload: dict[str, Any]
+
+
+class HttpTransport(Protocol):
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        token: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> HttpResponse:
+        """Send a JSON request to slurmrestd."""
+
+
+class UrllibHttpTransport:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout_seconds: float = 10.0,
+        auth_style: RestAuthStyle = RestAuthStyle.BEARER,
+        slurm_username: str | None = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+        self.auth_style = auth_style
+        self.slurm_username = slurm_username
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        token: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> HttpResponse:
+        body = None if payload is None else json.dumps(payload).encode("utf-8")
+        headers = {"Accept": "application/json"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        if token and self.auth_style == RestAuthStyle.BEARER:
+            headers["Authorization"] = f"Bearer {token}"
+        elif token and self.auth_style == RestAuthStyle.SLURM_HEADERS:
+            if not self.slurm_username:
+                raise SlurmTransportError("slurm_headers auth requires slurm_username")
+            headers["X-SLURM-USER-NAME"] = self.slurm_username
+            headers["X-SLURM-USER-TOKEN"] = token
+        request = urllib.request.Request(
+            url=f"{self.base_url}{path}",
+            data=body,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                raw = response.read()
+                parsed = json.loads(raw.decode("utf-8")) if raw else {}
+                return HttpResponse(status=response.status, payload=parsed)
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            try:
+                parsed = json.loads(raw.decode("utf-8")) if raw else {}
+            except json.JSONDecodeError:
+                parsed = {"errors": [{"description": raw.decode("utf-8", errors="replace")}]}
+            return HttpResponse(status=exc.code, payload=parsed)
+        except OSError as exc:
+            raise SlurmTransportError(str(exc)) from exc
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+class CommandRunner(Protocol):
+    def run(
+        self,
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        timeout_seconds: float,
+    ) -> CommandResult:
+        """Run an allowed command without invoking a shell."""
+
+
+class SubprocessCommandRunner:
+    def run(
+        self,
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        timeout_seconds: float,
+    ) -> CommandResult:
+        completed = subprocess.run(
+            argv,
+            cwd=str(cwd) if cwd else None,
+            timeout=timeout_seconds,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        return CommandResult(
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+
+
+@dataclass(frozen=True)
+class DockerComposeTarget:
+    compose_file: Path
+    env_file: Path
+    workdir: Path
+    service: str = "login-node-sim"
+
+
+class DockerComposeExecutor:
+    """Run structured commands inside a Docker Compose service."""
+
+    def __init__(self, target: DockerComposeTarget) -> None:
+        self.target = target
+
+    def build_exec_argv(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        user: str | None = None,
+    ) -> list[str]:
+        command = [
+            "docker",
+            "compose",
+            "--env-file",
+            str(self.target.env_file),
+            "-f",
+            str(self.target.compose_file),
+            "exec",
+            "-T",
+        ]
+        if user:
+            command.extend(["--user", user])
+        if cwd:
+            command.extend(["--workdir", cwd])
+        command.append(self.target.service)
+        command.extend(argv)
+        return command
+
+    def run(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        user: str | None = None,
+        stdin: str | None = None,
+        timeout_seconds: float = 10.0,
+    ) -> CommandResult:
+        completed = subprocess.run(
+            self.build_exec_argv(argv, cwd=cwd, user=user),
+            cwd=str(self.target.workdir),
+            input=stdin,
+            timeout=timeout_seconds,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        return CommandResult(
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+
+    def realpath(self, path: str, *, timeout_seconds: float = 10.0) -> str:
+        result = self.run(["realpath", "-m", path], timeout_seconds=timeout_seconds)
+        if result.returncode != 0:
+            raise SlurmTransportError(result.stderr.strip() or "realpath failed")
+        return result.stdout.strip()
+
+    def write_text(
+        self,
+        *,
+        path: str,
+        content: str,
+        owner: str,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        write_result = self.run(["tee", path], stdin=content, timeout_seconds=timeout_seconds)
+        if write_result.returncode != 0:
+            raise SlurmTransportError(write_result.stderr.strip() or "container write failed")
+        chown_result = self.run(
+            ["chown", f"{owner}:{owner}", path], timeout_seconds=timeout_seconds
+        )
+        if chown_result.returncode != 0:
+            raise SlurmTransportError(chown_result.stderr.strip() or "container chown failed")
+
+
+class SimulatorExecutor(Protocol):
+    def run(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        user: str | None = None,
+        stdin: str | None = None,
+        timeout_seconds: float = 10.0,
+    ) -> CommandResult:
+        """Run a structured command in the simulator execution boundary."""
+
+    def realpath(self, path: str, *, timeout_seconds: float = 10.0) -> str:
+        """Resolve a container path without following host paths."""
+
+    def write_text(
+        self,
+        *,
+        path: str,
+        content: str,
+        owner: str,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        """Write a text file in the simulator and assign ownership."""
+
+
+class HttpCommandGatewayExecutor:
+    """Run simulator commands through a narrow HTTP command gateway."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        token: str | None = None,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+        self.timeout_seconds = timeout_seconds
+
+    def run(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        user: str | None = None,
+        stdin: str | None = None,
+        timeout_seconds: float = 10.0,
+    ) -> CommandResult:
+        payload = self._request(
+            "/run",
+            {
+                "argv": argv,
+                "cwd": cwd,
+                "user": user,
+                "stdin": stdin,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return CommandResult(
+            returncode=int(payload.get("returncode", 1)),
+            stdout=str(payload.get("stdout", "")),
+            stderr=str(payload.get("stderr", "")),
+        )
+
+    def realpath(self, path: str, *, timeout_seconds: float = 10.0) -> str:
+        payload = self._request(
+            "/realpath",
+            {"path": path, "timeout_seconds": timeout_seconds},
+            timeout_seconds=timeout_seconds,
+        )
+        value = payload.get("path")
+        if not isinstance(value, str) or not value:
+            raise SlurmTransportError("gateway realpath response missing path")
+        return value
+
+    def write_text(
+        self,
+        *,
+        path: str,
+        content: str,
+        owner: str,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self._request(
+            "/write_text",
+            {
+                "path": path,
+                "content": content,
+                "owner": owner,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+
+    def _request(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        request = urllib.request.Request(
+            url=f"{self.base_url}{path}",
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=max(timeout_seconds, self.timeout_seconds),
+            ) as response:
+                raw = response.read()
+                parsed = json.loads(raw.decode("utf-8")) if raw else {}
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            try:
+                parsed = json.loads(raw.decode("utf-8")) if raw else {}
+            except json.JSONDecodeError:
+                parsed = {"error": raw.decode("utf-8", errors="replace")}
+            raise SlurmTransportError(f"gateway {path} failed: {parsed!r}") from exc
+        except OSError as exc:
+            raise SlurmTransportError(f"gateway {path} failed: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise SlurmTransportError(f"gateway {path} returned non-object JSON")
+        return parsed
+
+
+class SimulatorPathChecker:
+    """Probe path permissions inside the simulator as the owning Slurm user."""
+
+    def __init__(
+        self,
+        *,
+        executor: SimulatorExecutor,
+        user: str,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self.executor = executor
+        self.user = user
+        self.timeout_seconds = timeout_seconds
+
+    def exists(self, path: str | Path) -> bool:
+        return self._test("-e", path)
+
+    def is_dir(self, path: str | Path) -> bool:
+        return self._test("-d", path)
+
+    def readable(self, path: str | Path) -> bool:
+        return self._test("-r", path)
+
+    def executable(self, path: str | Path) -> bool:
+        return self._test("-x", path)
+
+    def writable(self, path: str | Path) -> bool:
+        return self._test("-w", path)
+
+    def _test(self, flag: str, path: str | Path) -> bool:
+        try:
+            result = self.executor.run(
+                ["test", flag, str(path)],
+                user=self.user,
+                timeout_seconds=self.timeout_seconds,
+            )
+        except SlurmTransportError:
+            return False
+        return result.returncode == 0
+
+
+@dataclass
+class _MemoryRecord:
+    owner: str
+    workdir: Path
+    script: str
+    resource_plan: ResourcePlan
+    state_flags: list[str]
+    exit_code: str | None = None
+    reason: str | None = None
+
+
+def _validate_submit_intent(intent: SubmitIntent) -> None:
+    if not intent.user.strip():
+        raise SlurmSubmissionRejected("user must not be empty")
+    if not intent.script.strip():
+        raise SlurmSubmissionRejected("script must not be empty")
+    for job_id in intent.dependency_job_ids:
+        _require_job_id(job_id)
+    blockers = [
+        finding
+        for finding in validate_resource_plan(intent.resource_plan)
+        if finding.severity == PreflightSeverity.BLOCK
+    ]
+    if blockers:
+        codes = ", ".join(finding.code for finding in blockers)
+        raise SlurmSubmissionRejected(f"resource plan failed preflight: {codes}")
+
+
+def _require_safe_slurm_value(name: str, value: str | None) -> None:
+    if value is None:
+        return
+    if not value or not _SAFE_SLURM_VALUE.fullmatch(value):
+        raise SlurmSubmissionRejected(f"unsafe Slurm {name}: {value!r}")
+
+
+def _require_job_id(job_id: str) -> None:
+    if not _JOB_ID.fullmatch(job_id):
+        raise SlurmSubmissionRejected(f"unsafe job_id: {job_id!r}")
+
+
+def _sbatch_options(plan: ResourcePlan) -> list[str]:
+    _require_safe_slurm_value("partition", plan.partition)
+    _require_safe_slurm_value("qos", plan.qos)
+    _require_safe_slurm_value("gpu_type", plan.gpu_type)
+    options = [
+        "--partition",
+        plan.partition,
+        "--nodes",
+        str(plan.nodes),
+        "--ntasks",
+        str(plan.ntasks),
+        "--cpus-per-task",
+        str(plan.cpus_per_task),
+        "--time",
+        str(plan.time_limit),
+    ]
+    if plan.qos:
+        options.extend(["--qos", plan.qos])
+    if plan.memory_value is not None and plan.memory_unit:
+        _require_safe_slurm_value("memory_unit", plan.memory_unit)
+        options.extend(["--mem", f"{plan.memory_value}{plan.memory_unit}"])
+    if plan.gpus_total is not None and plan.gpus_total > 0:
+        if plan.gpu_type:
+            options.extend(["--gres", f"gpu:{plan.gpu_type}:{plan.gpus_total}"])
+        else:
+            options.extend(["--gpus", str(plan.gpus_total)])
+    elif plan.gpus_per_node is not None and plan.gpus_per_node > 0:
+        if plan.gpu_type:
+            options.extend(["--gres", f"gpu:{plan.gpu_type}:{plan.gpus_per_node}"])
+        else:
+            options.extend(["--gpus-per-node", str(plan.gpus_per_node)])
+    if plan.array:
+        _require_safe_slurm_value("array", plan.array.expression)
+        array_value = plan.array.expression
+        if plan.array.max_concurrency:
+            array_value = f"{array_value}%{plan.array.max_concurrency}"
+        options.extend(["--array", array_value])
+    return options
+
+
+def _dependency_options(intent: SubmitIntent) -> list[str]:
+    if not intent.dependency_job_ids:
+        return []
+    return ["--dependency", "afterok:" + ":".join(intent.dependency_job_ids)]
+
+
+def _authorize_container_path(
+    *,
+    executor: SimulatorExecutor,
+    path: str,
+    allowed_roots: list[str],
+    timeout_seconds: float,
+) -> str:
+    if "\x00" in path:
+        raise SlurmSubmissionRejected("path contains NUL byte")
+    if not path.startswith("/"):
+        raise SlurmSubmissionRejected("container path must be absolute")
+
+    resolved = executor.realpath(path, timeout_seconds=timeout_seconds)
+    resolved_roots = [
+        executor.realpath(root, timeout_seconds=timeout_seconds).rstrip("/")
+        for root in allowed_roots
+    ]
+    for root in resolved_roots:
+        if resolved == root or resolved.startswith(f"{root}/"):
+            return resolved
+    raise SlurmSubmissionRejected("container path is outside allowed roots")
+
+
+class InMemorySlurmBackend:
+    """Deterministic backend for API/worker development before Docker is wired."""
+
+    def __init__(self) -> None:
+        self._next_job_id = 1000
+        self._jobs: dict[str, _MemoryRecord] = {}
+        self._idempotency: dict[str, str] = {}
+
+    def submit(self, intent: SubmitIntent) -> SubmitReceipt:
+        _validate_submit_intent(intent)
+
+        if intent.idempotency_key and intent.idempotency_key in self._idempotency:
+            job_id = self._idempotency[intent.idempotency_key]
+            state, _ = normalize_slurm_state(self._jobs[job_id].state_flags)
+            return SubmitReceipt(
+                job_id=job_id,
+                run_state=state,
+                strategy=SubmissionStrategy.IN_MEMORY,
+                raw_response={"idempotent_replay": True},
+            )
+
+        job_id = str(self._next_job_id)
+        self._next_job_id += 1
+        self._jobs[job_id] = _MemoryRecord(
+            owner=intent.user,
+            workdir=intent.workdir,
+            script=intent.script,
+            resource_plan=intent.resource_plan,
+            state_flags=["PENDING"],
+        )
+        if intent.idempotency_key:
+            self._idempotency[intent.idempotency_key] = job_id
+        return SubmitReceipt(
+            job_id=job_id,
+            run_state=RunState.PENDING,
+            strategy=SubmissionStrategy.IN_MEMORY,
+            raw_response={
+                "job_id": job_id,
+                "dependency_job_ids": list(intent.dependency_job_ids),
+            },
+        )
+
+    def get_job(self, *, user: str, job_id: str) -> JobSnapshot:
+        record = self._require_owned_job(user=user, job_id=job_id)
+        return self._snapshot(job_id, record)
+
+    def cancel(self, *, user: str, job_id: str) -> JobSnapshot:
+        record = self._require_owned_job(user=user, job_id=job_id)
+        record.state_flags = ["CANCELLED"]
+        record.reason = "cancelled by user"
+        return self._snapshot(job_id, record)
+
+    def advance_job(
+        self,
+        *,
+        job_id: str,
+        raw_state: str | list[str],
+        exit_code: str | None = None,
+        reason: str | None = None,
+    ) -> JobSnapshot:
+        record = self._jobs[job_id]
+        record.state_flags = [raw_state] if isinstance(raw_state, str) else list(raw_state)
+        record.exit_code = exit_code
+        record.reason = reason
+        return self._snapshot(job_id, record)
+
+    def _require_owned_job(self, *, user: str, job_id: str) -> _MemoryRecord:
+        try:
+            record = self._jobs[job_id]
+        except KeyError as exc:
+            raise SlurmBackendError(f"unknown job_id: {job_id}") from exc
+        if record.owner != user:
+            raise SlurmAuthError("job is not owned by user")
+        return record
+
+    def _snapshot(self, job_id: str, record: _MemoryRecord) -> JobSnapshot:
+        state, flags = normalize_slurm_state(record.state_flags)
+        return JobSnapshot(
+            job_id=job_id,
+            owner=record.owner,
+            run_state=state,
+            raw_state_flags=flags,
+            exit_code=record.exit_code,
+            reason=record.reason,
+            stdout_path=record.workdir / f"slurm-{job_id}.out",
+            stderr_path=record.workdir / f"slurm-{job_id}.err",
+            raw_response={"state": flags},
+        )
+
+
+class DemoSlurmBackend:
+    """Cross-process deterministic backend for the Web demonstration mode."""
+
+    def submit(self, intent: SubmitIntent) -> SubmitReceipt:
+        _validate_submit_intent(intent)
+        seed = intent.idempotency_key or f"{intent.user}:{intent.workdir}:{intent.script}"
+        digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+        job_id = f"demo-{digest}"
+        return SubmitReceipt(
+            job_id=job_id,
+            run_state=RunState.SUBMITTED,
+            strategy=SubmissionStrategy.DEMO,
+            raw_response={
+                "job_id": job_id,
+                "backend": "demo",
+                "note": "deterministic demo backend; no Slurm resources consumed",
+            },
+        )
+
+    def get_job(self, *, user: str, job_id: str) -> JobSnapshot:
+        _require_job_id(job_id)
+        if not job_id.startswith("demo-"):
+            raise SlurmTransportError(f"demo backend does not own job_id: {job_id}")
+        return JobSnapshot(
+            job_id=job_id,
+            owner=user,
+            run_state=RunState.SUCCEEDED,
+            raw_state_flags=["COMPLETED"],
+            exit_code="0:0",
+            reason="demo job completed",
+            raw_response={"backend": "demo", "job_id": job_id},
+        )
+
+    def cancel(self, *, user: str, job_id: str) -> JobSnapshot:
+        _require_job_id(job_id)
+        if not job_id.startswith("demo-"):
+            raise SlurmTransportError(f"demo backend does not own job_id: {job_id}")
+        return JobSnapshot(
+            job_id=job_id,
+            owner=user,
+            run_state=RunState.CANCELLED,
+            raw_state_flags=["CANCELLED"],
+            exit_code="0:0",
+            reason="demo job cancelled",
+            raw_response={"backend": "demo", "job_id": job_id},
+        )
+
+
+class RestNativeSlurmBackend:
+    """Slurm REST backend for simulator and future real-platform probes."""
+
+    def __init__(
+        self,
+        *,
+        transport: HttpTransport,
+        api_version: str = "v0.0.41",
+        token: str | None = None,
+    ) -> None:
+        self.transport = transport
+        self.api_version = api_version
+        self.token = token
+
+    def submit(self, intent: SubmitIntent) -> SubmitReceipt:
+        _validate_submit_intent(intent)
+        payload = {
+            "script": intent.script,
+            "job": self._job_payload(intent),
+        }
+        response = self.transport.request(
+            "POST",
+            f"/slurm/{self.api_version}/job/submit",
+            token=self.token,
+            payload=payload,
+        )
+        semantic = check_slurm_rest_semantics(response.payload, required_fields=[])
+        if response.status >= 400 or semantic.level == RestSemanticLevel.ERROR:
+            raise SlurmSubmissionRejected(f"REST submit rejected: {response.payload!r}")
+        job_id = _extract_job_id(response.payload)
+        if not job_id:
+            raise SlurmTransportError("REST submit response did not include job_id")
+        return SubmitReceipt(
+            job_id=job_id,
+            run_state=RunState.SUBMITTED,
+            strategy=SubmissionStrategy.REST_NATIVE,
+            raw_response=response.payload,
+        )
+
+    def get_job(self, *, user: str, job_id: str) -> JobSnapshot:
+        _require_job_id(job_id)
+        response = self.transport.request(
+            "GET",
+            f"/slurm/{self.api_version}/job/{job_id}",
+            token=self.token,
+        )
+        semantic = check_slurm_rest_semantics(response.payload)
+        if response.status >= 400 or semantic.level == RestSemanticLevel.ERROR:
+            raise SlurmTransportError(f"REST get job failed: {response.payload!r}")
+        return _snapshot_from_rest(user=user, job_id=job_id, payload=response.payload)
+
+    def cancel(self, *, user: str, job_id: str) -> JobSnapshot:
+        _require_job_id(job_id)
+        response = self.transport.request(
+            "DELETE",
+            f"/slurm/{self.api_version}/job/{job_id}",
+            token=self.token,
+        )
+        semantic = check_slurm_rest_semantics(response.payload)
+        if response.status >= 400 or semantic.level == RestSemanticLevel.ERROR:
+            raise SlurmTransportError(f"REST cancel failed: {response.payload!r}")
+        return JobSnapshot(
+            job_id=job_id,
+            owner=user,
+            run_state=RunState.CANCELLED,
+            raw_state_flags=["CANCELLED"],
+            reason="cancel requested",
+            raw_response=response.payload,
+        )
+
+    def _job_payload(self, intent: SubmitIntent) -> dict[str, Any]:
+        options = _sbatch_options(intent.resource_plan)
+        job: dict[str, Any] = {
+            "name": "pilot107-run",
+            "current_working_directory": str(intent.workdir),
+            "environment": ["PILOT107_RUN=1"],
+        }
+        option_pairs = zip(options[0::2], options[1::2], strict=True)
+        for key, value in option_pairs:
+            job[key.removeprefix("--").replace("-", "_")] = value
+        if intent.dependency_job_ids:
+            job["dependency"] = "afterok:" + ":".join(intent.dependency_job_ids)
+        return job
+
+
+class CommandSubmitBackend:
+    """Controlled command backend for the Docker simulator."""
+
+    def __init__(
+        self,
+        *,
+        allowed_roots: list[str | Path],
+        runner: CommandRunner | None = None,
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self.allowed_roots = allowed_roots
+        self.runner = runner or SubprocessCommandRunner()
+        self.timeout_seconds = timeout_seconds
+
+    def submit(self, intent: SubmitIntent) -> SubmitReceipt:
+        _validate_submit_intent(intent)
+        safe_workdir = authorize_path(str(intent.workdir), self.allowed_roots)
+        script_path = safe_workdir.resolved / _submission_script_name(intent)
+        script_path.write_text(intent.script, encoding="utf-8")
+        argv = [
+            "sbatch",
+            "--parsable",
+            "--chdir",
+            str(safe_workdir.resolved),
+            *_sbatch_options(intent.resource_plan),
+            *_dependency_options(intent),
+            str(script_path),
+        ]
+        result = self.runner.run(
+            argv, cwd=safe_workdir.resolved, timeout_seconds=self.timeout_seconds
+        )
+        if result.returncode != 0:
+            raise SlurmSubmissionRejected(result.stderr.strip() or "sbatch failed")
+        job_id = result.stdout.strip().splitlines()[0].split(";")[0].strip()
+        _require_job_id(job_id)
+        return SubmitReceipt(
+            job_id=job_id,
+            run_state=RunState.SUBMITTED,
+            strategy=SubmissionStrategy.COMMAND,
+            raw_response={"stdout": result.stdout, "stderr": result.stderr, "argv": argv},
+        )
+
+    def get_job(self, *, user: str, job_id: str) -> JobSnapshot:
+        _require_job_id(job_id)
+        result = self.runner.run(
+            ["squeue", "-h", "-j", job_id, "-o", "%i|%u|%T|%R"],
+            timeout_seconds=self.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError(result.stderr.strip() or "squeue failed")
+        line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+        if not line:
+            return self._get_finished_job(user=user, job_id=job_id)
+        found_job_id, owner, raw_state, reason = _split_command_row(line, expected_fields=4)
+        if found_job_id != job_id:
+            raise SlurmTransportError("squeue returned mismatched job_id")
+        _require_accounting_owner(owner=owner, user=user)
+        run_state, flags = normalize_slurm_state(raw_state)
+        return JobSnapshot(
+            job_id=job_id,
+            owner=owner,
+            run_state=run_state,
+            raw_state_flags=flags,
+            reason=reason,
+            raw_response={"stdout": result.stdout},
+        )
+
+    def cancel(self, *, user: str, job_id: str) -> JobSnapshot:
+        _require_job_id(job_id)
+        self.get_job(user=user, job_id=job_id)
+        result = self.runner.run(["scancel", job_id], timeout_seconds=self.timeout_seconds)
+        if result.returncode != 0:
+            raise SlurmTransportError(result.stderr.strip() or "scancel failed")
+        return JobSnapshot(
+            job_id=job_id,
+            owner=user,
+            run_state=RunState.CANCELLED,
+            raw_state_flags=["CANCELLED"],
+            reason="cancel requested",
+            raw_response={"stdout": result.stdout, "stderr": result.stderr},
+        )
+
+    def _get_finished_job(self, *, user: str, job_id: str) -> JobSnapshot:
+        result = self.runner.run(
+            ["sacct", "-n", "-j", job_id, "-X", "-o", "JobIDRaw,User,State,ExitCode"],
+            timeout_seconds=self.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError(result.stderr.strip() or "sacct failed")
+        line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+        if not line:
+            raise SlurmTransportError(f"job not found: {job_id}")
+        found_job_id, owner, raw_state, exit_code = _split_command_row(line, expected_fields=4)
+        if found_job_id != job_id:
+            raise SlurmTransportError("sacct returned mismatched job_id")
+        _require_accounting_owner(owner=owner, user=user)
+        run_state, flags = normalize_slurm_state(raw_state)
+        return JobSnapshot(
+            job_id=job_id,
+            owner=owner,
+            run_state=run_state,
+            raw_state_flags=flags,
+            exit_code=exit_code,
+            raw_response={"stdout": result.stdout},
+        )
+
+
+class DockerSimulatorCommandBackend:
+    """Command backend that executes against the local Docker Slurm simulator."""
+
+    def __init__(
+        self,
+        *,
+        executor: SimulatorExecutor,
+        allowed_roots: list[str],
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self.executor = executor
+        self.allowed_roots = allowed_roots
+        self.timeout_seconds = timeout_seconds
+
+    def submit(self, intent: SubmitIntent) -> SubmitReceipt:
+        _validate_submit_intent(intent)
+        workdir = _authorize_container_path(
+            executor=self.executor,
+            path=str(intent.workdir),
+            allowed_roots=self.allowed_roots,
+            timeout_seconds=self.timeout_seconds,
+        )
+        script_path = posixpath.join(workdir, _submission_script_name(intent))
+        self.executor.write_text(
+            path=script_path,
+            content=intent.script,
+            owner=intent.user,
+            timeout_seconds=self.timeout_seconds,
+        )
+        argv = [
+            "sbatch",
+            "--parsable",
+            "--chdir",
+            workdir,
+            *_sbatch_options(intent.resource_plan),
+            *_dependency_options(intent),
+            script_path,
+        ]
+        result = self.executor.run(
+            argv,
+            cwd=workdir,
+            user=intent.user,
+            timeout_seconds=self.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmSubmissionRejected(result.stderr.strip() or "sbatch failed")
+        job_id = result.stdout.strip().splitlines()[0].split(";")[0].strip()
+        _require_job_id(job_id)
+        return SubmitReceipt(
+            job_id=job_id,
+            run_state=RunState.SUBMITTED,
+            strategy=SubmissionStrategy.COMMAND,
+            raw_response={"stdout": result.stdout, "stderr": result.stderr, "argv": argv},
+        )
+
+    def get_job(self, *, user: str, job_id: str) -> JobSnapshot:
+        _require_job_id(job_id)
+        result = self.executor.run(
+            ["squeue", "-h", "-j", job_id, "-o", "%i|%u|%T|%R"],
+            user=user,
+            timeout_seconds=self.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError(result.stderr.strip() or "squeue failed")
+        line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+        if not line:
+            return self._get_finished_job(user=user, job_id=job_id)
+        found_job_id, owner, raw_state, reason = _split_command_row(line, expected_fields=4)
+        if found_job_id != job_id:
+            raise SlurmTransportError("squeue returned mismatched job_id")
+        _require_accounting_owner(owner=owner, user=user)
+        run_state, flags = normalize_slurm_state(raw_state)
+        return JobSnapshot(
+            job_id=job_id,
+            owner=owner,
+            run_state=run_state,
+            raw_state_flags=flags,
+            reason=reason,
+            raw_response={"stdout": result.stdout},
+        )
+
+    def cancel(self, *, user: str, job_id: str) -> JobSnapshot:
+        _require_job_id(job_id)
+        self.get_job(user=user, job_id=job_id)
+        result = self.executor.run(
+            ["scancel", job_id],
+            user=user,
+            timeout_seconds=self.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError(result.stderr.strip() or "scancel failed")
+        return JobSnapshot(
+            job_id=job_id,
+            owner=user,
+            run_state=RunState.CANCELLED,
+            raw_state_flags=["CANCELLED"],
+            reason="cancel requested",
+            raw_response={"stdout": result.stdout, "stderr": result.stderr},
+        )
+
+    def _get_finished_job(self, *, user: str, job_id: str) -> JobSnapshot:
+        result = self.executor.run(
+            ["sacct", "-nP", "-j", job_id, "-X", "-o", "JobIDRaw,User,State,ExitCode"],
+            user=user,
+            timeout_seconds=self.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError(result.stderr.strip() or "sacct failed")
+        line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+        if not line:
+            raise SlurmTransportError(f"job not found: {job_id}")
+        found_job_id, owner, raw_state, exit_code = _split_command_row(line, expected_fields=4)
+        if found_job_id != job_id:
+            raise SlurmTransportError("sacct returned mismatched job_id")
+        _require_accounting_owner(owner=owner, user=user)
+        run_state, flags = normalize_slurm_state(raw_state)
+        return JobSnapshot(
+            job_id=job_id,
+            owner=owner,
+            run_state=run_state,
+            raw_state_flags=flags,
+            exit_code=exit_code,
+            stdout_path=Path(f"/public/home/{user}/slurm-{job_id}.out"),
+            stderr_path=Path(f"/public/home/{user}/slurm-{job_id}.out"),
+            raw_response={"stdout": result.stdout},
+        )
+
+
+def _extract_job_id(payload: dict[str, Any]) -> str | None:
+    result = payload.get("result")
+    if isinstance(result, dict):
+        for key in ("job_id", "jobId", "id"):
+            value = result.get(key)
+            if value is not None:
+                return str(value)
+    for key in ("job_id", "jobId", "id"):
+        value = payload.get(key)
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _snapshot_from_rest(*, user: str, job_id: str, payload: dict[str, Any]) -> JobSnapshot:
+    job = payload
+    jobs = payload.get("jobs")
+    if isinstance(jobs, list) and jobs:
+        job = jobs[0]
+    raw_state = job.get("job_state") or job.get("state") or "UNKNOWN"
+    run_state, flags = normalize_slurm_state(raw_state)
+    owner = str(job.get("user_name") or job.get("user") or user)
+    if owner != user:
+        raise SlurmAuthError("job is not owned by user")
+    return JobSnapshot(
+        job_id=job_id,
+        owner=owner,
+        run_state=run_state,
+        raw_state_flags=flags,
+        exit_code=_string_or_none(job.get("exit_code")),
+        reason=_string_or_none(job.get("state_reason") or job.get("reason")),
+        raw_response=payload,
+    )
+
+
+def _require_accounting_owner(*, owner: str, user: str) -> None:
+    if not owner:
+        raise SlurmTransportError("sacct did not populate job owner yet")
+    if owner != user:
+        raise SlurmAuthError("job is not owned by user")
+
+
+def _split_command_row(line: str, *, expected_fields: int) -> list[str]:
+    fields = (
+        [field.strip() for field in line.split("|")] if "|" in line else line.split()
+    )
+    if len(fields) < expected_fields:
+        raise SlurmTransportError(f"unexpected command output row: {line!r}")
+    return fields[:expected_fields]
+
+
+def _string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _submission_script_name(intent: SubmitIntent) -> str:
+    raw = intent.idempotency_key or hashlib.sha256(intent.script.encode("utf-8")).hexdigest()[:16]
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw).strip("._-")
+    if not safe:
+        safe = hashlib.sha256(intent.script.encode("utf-8")).hexdigest()[:16]
+    return f"pilot107-submit-{safe[:80]}.sbatch"

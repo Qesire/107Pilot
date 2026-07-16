@@ -1,0 +1,32 @@
+# 迁移自 src/pilot107/core/diagnosis.py 第 163-172 行（硬编码规则）
+# 向后兼容：error_id / symptoms / fix_template.patch 与原规则完全一致
+# 增强：合并 Wan–HiF4 HF4-005（pytest 可选依赖缺失）的 optional_dependency 语义
+error_id: RUNTIME.PYTHON_PACKAGE_MISSING
+category: optional_dependency
+severity: error
+retryable: true
+stage: runtime
+title: "Python 运行环境缺少作业需要的包"
+symptoms:
+  - "modulenotfounderror"
+  - "no module named"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - slurm/job_detail.json
+root_cause: "Python 运行环境缺少作业需要的包；可能是 conda 环境未激活、包未安装或仅用于测试的可选依赖（如 pytest）缺失。"
+fix_template:
+  type: structured_patch
+  patch:
+    runtime.conda_env: null
+fix_guide:
+  fix: "将 runtime.conda_env 改为已安装所需包的环境，或清空使用默认环境；区分运行依赖与可选测试依赖（pytest 等）。"
+  prevention: "运行门禁不得强依赖非运行时可选包；提交前用 capability probe 校验关键 import。"
+  automation: "capability probe：import 失败时对可选包（pytest）自动降级到 standalone smoke，对必需包给出可执行安装命令。"
+confidence: high
+kb_article: null
+# 合并来源：HF4-005（No module named pytest）— 不再单独建规则
+merged_from:
+  - HF4-005

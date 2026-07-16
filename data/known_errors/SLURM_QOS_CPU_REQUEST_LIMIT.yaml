@@ -1,0 +1,25 @@
+error_id: SLURM.QOS_CPU_REQUEST_LIMIT
+category: resource_policy
+severity: error
+retryable: true
+stage: scheduling
+title: "作业 CPU 请求超过 QoS 单作业上限"
+symptoms:
+  - "qosmaxcpuperjoblimit"
+  - "qosmaxcpuminutesperjoblimit"
+evidence_paths:
+  - slurm/runtime_status.json
+  - slurm/job_detail.json
+  - submission/submit.stderr
+root_cause: "作业请求的总 CPU 或 CPU-minutes 超过所选 QoS 的单作业上限。"
+fix_template:
+  type: structured_patch
+  patch:
+    resources.cpus_per_task: null
+    resources.time_limit: null
+fix_guide:
+  fix: "根据 ntasks、cpus_per_task 与 time_limit 的乘积重新规划请求，或选择当前用户已授权且上限更高的 QoS。"
+  prevention: "提交前用最新 QoS CPU/CPU-minutes limit 校验物化后的总请求，不只检查单个表单字段。"
+  automation: "Agent 只能生成需确认的资源方案，不得自行降低并行度或运行时间后直接重提。"
+confidence: high
+kb_article: "https://slurm.schedmd.com/job_reason_codes.html"

@@ -1,0 +1,30 @@
+error_id: FILESYSTEM.CWD_INVALID
+category: filesystem_cwd
+severity: error
+retryable: true
+stage: postprocess
+title: "业务产物已成功但工作目录失效导致作业假失败"
+symptoms:
+  - "finished vbench generation: generated=1 failed=0"
+  - "runtime report 已写出"
+  - "oserror: failed to make path absolute"
+  - "fatal python error: error evaluating path"
+  - "getcwd"
+  - "getpath"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - slurm/job_detail.json
+  - outputs/inventory.json
+root_cause: "作业当前工作目录位于被清理、替换或暂时不可解析的目录；后处理启动新 Python 时 getcwd/getpath 失败。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "所有生成入口先 cd 到稳定 HOME；使用生成器绝对路径；根据产物补写 COMPLETE，不重复生成。"
+  prevention: "不得在会被 rm -rf/rename 的 attempt 或仓库目录中作为 cwd 启动长期任务。"
+  automation: "业务成功判定优先于进程最终退出码，并记录 success_with_postprocess_error。"
+confidence: high
+kb_article: null
+source_record: HF4-011
+

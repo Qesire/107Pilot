@@ -1,0 +1,28 @@
+error_id: SHELL.ERR_TRAP_BREAKS_RETRY
+category: shell_error_handling
+severity: error
+retryable: false
+stage: runtime
+title: "全局 ERR trap 使重试循环失效"
+symptoms:
+  - "配置了 3 次重试但第一次失败后立即退出"
+  - "没有 attempt=2 日志"
+  - "trap err"
+  - "attempt=1"
+evidence_paths:
+  - submission/submit.stderr
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - slurm/job_detail.json
+root_cause: "函数内部命令失败触发继承的 ERR trap，在 if/循环捕获返回码前终止脚本。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "关键命令显式使用 || return $?；外层使用 if run_one; then ... else rc=$?; fi。"
+  prevention: "重试函数内部不得依赖 set +e 抵消全局 ERR trap。"
+  automation: "测试注入一个必失败命令，验证确实产生 attempt=2。"
+confidence: high
+kb_article: null
+source_record: HF4-010
+

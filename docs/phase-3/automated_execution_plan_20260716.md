@@ -1,0 +1,315 @@
+# 107Pilot 自动执行任务计划
+
+日期：2026-07-16  
+状态：当前自动工程主线  
+目标：只列出开发代理可以在本机和受控 Docker 环境中独立完成、验证、评审和归档的任务。
+
+## 1. 范围
+
+本计划包括：
+
+- 代码、schema、迁移、API、前端和部署资产实现；
+- 单元、契约、权限、并发、迁移和故障测试；
+- 本机 Docker Slurm live smoke；
+- 使用 `pilot-browser` 的浏览器功能、错误状态和基础可访问性回归；
+- findings-first review、P0/P1 修复和阶段证据归档；
+- 本地 CPU-only 发布候选和离线部署包制作。
+
+本计划不包括：
+
+- 真人对视觉、术语、信任感和流程顺手程度的反馈；
+- 8C/16G VM 的实际上传和部署；
+- 真实 107 的 submit/cancel/evidence 操作；
+- 学校 OIDC、目录角色、真实用户映射和生产安全批准；
+- 需要真实密钥、证书、平台账户或组织授权的外部动作；
+- 生产 PTY。
+
+这些排除项不阻塞本计划中的本机工程，分别由用户反馈或外部准入轨处理。
+
+## 2. 统一自动质量门
+
+每个实现切片严格执行：
+
+```text
+设计/schema 冻结
+→ 最小纵向实现
+→ 定向测试
+→ 全量静态检查和回归
+→ Docker live smoke
+→ UI 切片的 pilot-browser 回归
+→ findings-first review
+→ 修复 P0/P1 和适用 P2
+→ 再次全量回归
+→ 更新状态与证据
+```
+
+常规验证集合：
+
+```bash
+uv run ruff check src tests scripts
+uv run mypy src
+uv run pytest
+npm run typecheck
+npm test -- --run
+bash scripts/check-sim-core.sh
+```
+
+具体切片再增加 migration、permission、concurrency、competition smoke 和浏览器用例。任何 P0/P1 未清零、迁移不可回放、重复提交或 owner 越权都阻断下一切片。
+
+## 3. A 轨：工程基线与扩展边界
+
+### A1 当前事实与文档收敛
+
+- 重新生成代码规模、测试数量、服务和路由清单；
+- 修正仍把历史 `0/5`、Docker GPU 或真实 107 探测写成当前能力的文档；
+- 建立单一阶段状态索引，历史 review 保留但明确是否被后续决策取代；
+- 生成自动验证命令清单和最新通过记录。
+
+退出条件：当前状态、自动计划、用户反馈协议和历史评审之间不存在未标注冲突。
+
+### A2 本地 Git 与 CI 基线
+
+- 在项目目录建立本地 Git 基线和适用的 `.gitignore`；
+- 不提交数据库、Evidence、Capsule、密钥、证书和构建缓存；
+- 添加最小 CI workflow：Python 静态检查/测试、前端类型/测试、Compose config 和镜像契约检查；
+- 在本机运行 CI 等价命令，确保 workflow 不依赖未声明的个人环境；
+- 不创建远端仓库、不 push、不发 PR。
+
+退出条件：本地变更可审计，CI 配置可解析，等价命令全通过，secret/large artifact 不进入版本控制候选集。
+
+### A3 API 领域拆分
+
+- 为现有 API 建立 golden contract tests；
+- 从 `api/http_app.py` 分离公共 auth/error/pagination、Run/Evidence、Template/Market、Platform 和 Agent 路由；
+- 保持 URL、状态码、错误 envelope、owner scope、ETag、request ID 和 SSE 行为兼容；
+- 将 ASGI/OpenAPI adapter 与领域 handler 的职责固定下来；
+- 在拆分完成前不向单体 handler 继续堆叠 3E 路由。
+
+退出条件：旧契约测试零变化；跨 owner 负面测试通过；模块边界可独立测试；Docker API/Web smoke 通过。
+
+### A4 前端自动化基线
+
+- 为 Market → Studio → prepare/confirm/submit → Run → Evidence 建组件和集成测试；
+- 覆盖 demo/fixed identity、403、404、stale、degraded、empty、loading 和 retry；
+- 增加关键页面的键盘焦点、长文本、窄屏和错误边界检查；
+- 建立稳定的 `pilot-browser` smoke，不使用脆弱的视觉坐标定位；
+- 不把自动化结果当作主观 UI 反馈。
+
+退出条件：核心金路径和主要错误状态都有自动回归；前端测试数量与核心页面风险相匹配。
+
+## 4. B 轨：Phase 3E 状态、存储与规则闭环
+
+### 3E-1 领域模型与迁移
+
+- 定义 `RemediationSession` 状态机；
+- 定义 `AgentTurn`、`ActionProposal`、`ActionDecision`、`ActionExecution` 和 `EvaluationResult`；
+- 固定 source/derived Run、Contract、Diagnosis、Evidence digest 和 lineage；
+- 定义 attempts、submissions、wall time、LLM calls/tokens budget；
+- 实现 schema migration、旧数据兼容和回放测试。
+
+退出条件：状态迁移非法路径被拒绝；迁移可重复执行；旧数据库可升级；owner scope 和序列化稳定。
+
+### 3E-2 Store、API 与事件
+
+- 实现 session/turn/proposal/decision/execution/evaluation store；
+- 增加 owner-scoped list/detail、keyset pagination、ETag 和事件 read model；
+- 增加创建、取消、输入、审批和拒绝的幂等 API；
+- owner/body/query 不能覆盖已认证身份；
+- 增加 OpenAPI/contract/permission/concurrency tests。
+
+退出条件：跨 owner 全部拒绝；重复请求不产生重复 decision/action；事件可补读；API contract 稳定。
+
+### 3E-3 规则优先的 session orchestration
+
+- Diagnosis 完成后按 automation policy 幂等创建 session；
+- 实现 waiting_evidence → diagnosing → planning → awaiting_*/ready 的确定性状态推进；
+- 先使用规则候选，不调用 LLM；
+- 实现 lease、CAS、超时、取消、崩溃恢复和 stop reason；
+- Worker 重启后从持久状态继续，不依赖进程内 task。
+
+退出条件：故障注入下不重复建 session、不重复执行 action；超预算和缺证据确定停止；Worker 重启可恢复。
+
+## 5. C 轨：Phase 3E 受控动作与结果评价
+
+### 3E-4 Policy 与 Action Executor
+
+按风险从低到高实现：
+
+1. `path_probe`、`runtime_probe` 等只读受限 probe；
+2. `contract_patch` 和 `environment_select` 的 preview；
+3. 明确审批后的 derived Contract；
+4. 受 submissions budget 限制的 `retry_run`；
+5. 高风险 `file_patch` 只做到受限范围、hash、diff、撤销和显式审批；
+6. `dependency_plan` 只生成计划，不在登录节点或共享基础环境安装。
+
+继续禁止任意 shell executor。所有 action 重新计算 policy、capability 和 preflight，不信任 proposal 自报风险。
+
+退出条件：未批准写操作为零；allowed roots/大小/后缀/diff/resource budget 全部 fail closed；重复执行为零。
+
+### 3E-5 Evaluator 与多轮闭环
+
+- 依次评估提交确定性、terminal state、Evidence 完整性、expected outputs、success protocol 和 source/derived diff；
+- 结果限定为 `verified_success`、`execution_success_unverified`、`failed`、`inconclusive`；
+- verified failure 在预算内进入下一轮；不确定结果停止或请求人工输入；
+- 保存前后 Contract、资源、日志、输出和规则结论差异；
+- 增加成功、失败、取消、Evidence 缺失、输出错误和 evaluator 超时 live cases。
+
+退出条件：Slurm success 不会自动等于业务成功；预算耗尽必定停止；每轮 lineage 和审计完整。
+
+## 6. D 轨：Phase 3E LLM proposal
+
+### 3E-6 Provider-neutral LLM adapter
+
+- 拆分 `AgentNarrativeV2` 与 `RemediationPlanV1` schema；
+- 实现 OpenAI-compatible adapter、timeout、retry、结构化解析和一次 repair；
+- 只向模型发送经过 allowlist、截断和 secret scan 的 Evidence；
+- 模型输出只进入 proposal，不直接进入 executor；
+- provider 不可用时规则诊断、手工审批和 Run 管理保持可用。
+
+退出条件：无 API key 时全套 fake-provider 测试可运行；真实 key 不写入 DB/Evidence/Capsule/log；模型不能扩大权限。
+
+### 3E-7 版本化 benchmark
+
+- 建立 partition/QoS、timeout、OOM、command/package/module/conda、path、CUDA/PyTorch、array/workflow 故障 corpus；
+- 增加 prompt injection、伪造 Evidence、越权 action、429/5xx、invalid JSON、截断和重复响应；
+- 自动计算 schema success、引用覆盖、policy escape、verified fix、误修和资源放大指标；
+- 输出按模型、prompt、schema、规则版本绑定的报告；
+- 没有真实 provider 凭据时只标记 fake/replay 验证等级，不阻塞其他工程。
+
+退出条件：越权 action 通过 policy 为零；引用可追溯；指标报告可重复；不把 fake/replay 宣称为真实模型表现。
+
+## 7. E 轨：Phase 3F Run/Agent 工作台
+
+### 3F-1 Run 工作台补全
+
+- 分页 Run 列表和保存筛选器；
+- timeline、Slurm state、DAG、retry/agent lineage；
+- stdout/stderr tail、Evidence tree、outputs、Capsule；
+- raw/normalized 视图；
+- cancel、retry、clone、compare 和安全 native command。
+
+### 3F-2 Agent 工作台
+
+- session queue：等待输入、审批、执行、接管和终态；
+- facts/inferences 分区和 Evidence 点击定位；
+- action 级 Contract/script/file diff；
+- 风险、预算、预期效果、回退和 actor/request ID；
+- prepare 与 execute 分离；
+- source/derived Run、Evidence、outputs 和资源对比。
+
+### 3F-3 终端协同的安全子集
+
+- 提供 Job ID、workdir 和可复制的 `squeue/scontrol/tail/scancel` 等价命令；
+- 支持配置化的平台终端 deep link；
+- 不实现 xterm.js/WebSocket PTY；
+- 不向浏览器下发长期 token。
+
+### 3F-4 自动 UI 验证
+
+- 组件、query/cache、权限和错误状态测试；
+- `pilot-browser` 验证基本流、失败诊断、Agent 审批、拒绝、预算耗尽和模型降级；
+- 键盘、焦点、窄屏、长路径、长中文和危险确认检查；
+- 自动截图只作为回归证据，不代替人的视觉偏好。
+
+退出条件：UI 与 API 事实一致；所有写操作对象级确认；基础作业不依赖终端；模型不可用路径完整。
+
+## 8. F 轨：可本机完成的 Phase 3G
+
+### 3G-1 PostgreSQL Repository
+
+- 固定 Repository protocol；
+- 实现 PostgreSQL migrations、事务、外键、锁和必要索引；
+- 保留 SQLite 本机/离线模式；
+- 建 SQLite/PostgreSQL contract parity suite；
+- 验证迁移、回滚策略和旧数据导入。
+
+### 3G-2 多实例一致性
+
+- submit/reconcile/collection/agent execution 使用 lease、fencing token 和 outbox；
+- 多 API、多 Worker 并发与进程崩溃测试；
+- 验证零重复提交、零重复 action 和事件最终可达；
+- 对 gateway/Slurm/DB 慢响应和网络中断实施退避与熔断。
+
+### 3G-3 可观测性与恢复
+
+- metrics 覆盖 API、queue、submit、reconcile、Evidence、Agent、LLM 和 SSE；
+- trace 使用 request/run/job/session ID 关联；
+- 结构化审计和 secret redaction；
+- SQLite/PostgreSQL、Evidence 和 Capsule 备份恢复脚本；
+- 自动重启、断点恢复和故障注入报告。
+
+### 3G-4 本地安全基线
+
+- CSP、CSRF、cookie、rate/body/response size 和 proxy trust contract；
+- dependency/secret/image/config 扫描；
+- header spoof、跨 owner、session fixation mock、过期凭据和撤销负面测试；
+- 不把 mock OIDC 测试升级为校园生产身份结论。
+
+退出条件：本地多实例和恢复目标通过；安全负面测试无 P0/P1；真实身份与平台准入仍明确保持外部未验证。
+
+## 9. G 轨：本地发布候选与比赛金路径
+
+### G1 CPU-only competition profile
+
+- 建立符合 8C/16G 目标 VM 的 CPU-only profile；
+- 移除 GPU partitions/QoS/templates 的可见能力；
+- 将模拟节点 CPU/内存声明和容器限制对齐；
+- 保留宿主机、DB、API/Worker 的资源余量；
+- 在本机验证轻量并发和资源预检真实性。
+
+### G2 可重复发布资产
+
+- 固定镜像 digest、migration version、初始化数据和配置 schema；
+- 生成离线镜像包、SHA256、SBOM/依赖清单、启动/停止/回滚脚本；
+- 确保默认 secret 不能进入发布模式；
+- 自动验证从空目录导入、启动、smoke、停止和恢复。
+
+### G3 自动比赛金路径
+
+在本机 Docker 环境自动验证：
+
+1. CPU 模板采用和成功作业；
+2. 高级 Contract 的 array/workflow；
+3. 错误 QoS 在提交前阻断；
+4. 规则/Agent proposal → 审批 → derived Run → output evaluation；
+5. 模型不可用降级；
+6. API/Worker/DB/gateway 重启恢复；
+7. 成功、失败、取消、重试的 Evidence/Capsule 完整性。
+
+所有证据标记为 D1 或本地 CPU profile，不冒充 VM、真实模型或真实 107。
+
+### G4 最终自动 review
+
+- 运行全量测试、静态检查、Docker smoke、浏览器回归、负载和故障套件；
+- 生成能力矩阵、已知限制、发布 manifest 和 findings-first 报告；
+- P0/P1 清零，P2/P3 有 owner、证据和处理决定；
+- 产出可供未来 VM 部署的固定发布候选，但不执行上传。
+
+## 10. 执行顺序
+
+```text
+A1 文档事实
+→ A2 Git/CI
+→ A3 API 拆分
+→ A4 前端自动化基线
+→ 3E-1/2/3 状态、API、规则闭环
+→ 3E-4/5 动作与评价
+→ 3E-6/7 LLM proposal 与 benchmark
+→ 3F-1/2/3/4 工作台与自动 UI 回归
+→ 3G-1/2/3/4 本地生产控制面
+→ G1/2/3/4 CPU 发布候选与金路径
+```
+
+用户反馈可以在任意稳定 UI 节点并行发生，但不改变上述自动主线的依赖关系。收到反馈后产生的具体 UI 修复可插入当前切片，仍由同一自动质量门验证。
+
+## 11. 自动执行停止条件
+
+只有以下情况暂停并请求用户决定：
+
+- 需要新增真实外部权限、付费资源、凭据或对外写操作；
+- 两种产品行为都合理，但会实质改变用户流程或风险接受；
+- 需要删除或不可逆迁移用户数据；
+- 需要部署 VM、访问真实 107 或启用生产身份；
+- 发现现有用户改动与计划任务不可安全合并。
+
+普通实现困难、测试失败、Docker 故障、依赖问题、代码重构和本地数据迁移不构成用户阻塞；开发代理应先自动诊断、修复和复验。

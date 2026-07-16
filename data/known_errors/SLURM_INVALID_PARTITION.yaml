@@ -1,0 +1,28 @@
+# 迁移自 src/pilot107/core/diagnosis.py 第 143-152 行（硬编码规则）
+# 向后兼容：error_id / symptoms / fix_template.patch 与原规则完全一致
+error_id: SLURM.INVALID_PARTITION
+category: resource_policy
+severity: error
+retryable: true
+stage: submit
+title: "分区不存在或不可用"
+symptoms:
+  - "invalid partition"
+  - "unknown partition"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - slurm/job_detail.json
+root_cause: "提交时指定的分区在集群上不存在或当前账号无权访问。"
+fix_template:
+  type: structured_patch
+  patch:
+    resources.partition: null
+fix_guide:
+  fix: "将 resources.partition 改为集群支持的分区，或清空使用默认分区。"
+  prevention: "提交前通过 /api/v1/platform/capabilities 查询可用分区列表；107 平台注意学生分区命名规则。"
+  automation: "CapabilityProfile preflight 在提交前校验分区是否在可用集合内。"
+confidence: high
+kb_article: null

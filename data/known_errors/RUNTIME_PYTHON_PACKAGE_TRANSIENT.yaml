@@ -1,0 +1,28 @@
+error_id: RUNTIME.PYTHON_PACKAGE_TRANSIENT
+category: filesystem_transient
+severity: warn
+retryable: true
+stage: runtime
+title: "Python 包文件瞬时不可读"
+symptoms:
+  - "filenotfounderror"
+  - "site-packages"
+  - "same env succeeds later"
+  - "同一环境"
+  - "后续可成功"
+  - "stale file handle"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - environment/summary.json
+root_cause: "共享文件系统上的 conda/site-packages 短暂不可读；不同于稳定的 ModuleNotFoundError。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "延迟重试该 task；先做 import probe，不要立即重装环境。"
+  prevention: "区分 FileNotFoundError 与 ModuleNotFoundError；对共享 FS 抖动设置 retry budget。"
+  automation: "Worker 将该签名标记为 retryable，并在同一环境后续成功时降低告警级别。"
+confidence: high
+kb_article: null
+

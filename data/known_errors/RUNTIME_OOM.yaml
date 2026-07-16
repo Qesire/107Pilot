@@ -1,0 +1,30 @@
+# 迁移自 src/pilot107/core/diagnosis.py 第 184-194 行（硬编码规则）
+# 向后兼容：error_id / symptoms / fix_template.patch 与原规则完全一致
+error_id: RUNTIME.OOM
+category: runtime
+severity: error
+retryable: true
+stage: runtime
+title: "作业疑似因内存不足被终止"
+symptoms:
+  - "out_of_memory"
+  - "oom"
+  - "oom-kill"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - slurm/job_detail.json
+  - slurm/accounting.json
+root_cause: "作业申请或实际使用内存超过分区/QoS 上限，被 Slurm 或内核 OOM killer 终止。"
+fix_template:
+  type: structured_patch
+  patch:
+    resources.memory: null
+fix_guide:
+  fix: "提高 resources.memory 至分区允许的上限，或优化作业减少峰值内存（分批、checkpoint）。"
+  prevention: "提交前参考历史内存使用估算；优先使用 --mem-per-gpu 而非 --mem。"
+  automation: "CapabilityProfile 按分区最大内存校验；OOM 后建议新内存值。"
+confidence: high
+kb_article: null

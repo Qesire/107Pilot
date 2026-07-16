@@ -1,0 +1,28 @@
+error_id: FILESYSTEM.TRANSIENT_IMPORT
+category: filesystem_transient
+severity: warn
+retryable: true
+stage: runtime
+title: "共享文件系统瞬时缺失 Python 包文件"
+symptoms:
+  - "filenotfounderror: transformers/models/longt5"
+  - "stale file handle"
+  - "i/o error"
+  - "同一环境和同一变体后续可成功"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - environment/summary.json
+  - slurm/job_detail.json
+root_cause: "Conda/site-packages 位于共享文件系统，目录读取出现瞬时抖动；不是依赖版本稳定缺失。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "任务开始前做 2-3 次轻量 import probe；将该签名列为可重试文件系统错误。"
+  prevention: "区分稳定 ModuleNotFoundError 与瞬时 FileNotFoundError；不要自动重装整个环境。"
+  automation: "对 longt5、Stale file handle、I/O error 使用延迟重试。"
+confidence: high
+kb_article: null
+source_record: HF4-012
+

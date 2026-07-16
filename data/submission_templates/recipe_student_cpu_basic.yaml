@@ -1,0 +1,107 @@
+template_id: recipe_student_cpu_basic@1.0.0
+title: "学生 CPU 基础作业模板"
+description: "面向 107 学生分区的 CPU 作业起点，强调共享 workdir、显式 KIT_ROOT 和原子产物协议。"
+trust_level: L1
+parameter_schema:
+  required:
+    - project.workdir
+    - entry.command
+    - resources.partition
+    - resources.time_limit
+  entry.command:
+    type: plain_shell_command
+    raw_shell: false
+  project.workdir:
+    type: shared_path
+    prefix: /public/home/<user>/
+  resources.partition:
+    type: enum
+    allowed:
+      - Students
+      - CPU-6530
+      - CPU-8358P
+      - debug
+  resources.time_limit:
+    type: slurm_time
+compatibility:
+  slurm:
+    min_version: "23.0"
+  platform:
+    docker_l2: true
+    school_l3: true
+    requires_gpu: false
+  partitions:
+    default: Students
+    allowed:
+      - Students
+      - CPU-6530
+      - CPU-8358P
+      - debug
+  qos:
+    default: qos_stu_cpu_long
+    allowed_by_partition:
+      Students:
+        - qos_stu_default
+        - qos_stu_small
+        - qos_stu_cpu_long
+      CPU-6530:
+        - qos_cpu-6530
+      CPU-8358P:
+        - qos_cpu-8358p
+      debug:
+        - normal
+sbatch_template: |
+  #!/bin/bash
+  #SBATCH --job-name={{job_name}}
+  #SBATCH --partition={{partition}}
+  #SBATCH --qos={{qos}}
+  #SBATCH --nodes=1
+  #SBATCH --ntasks={{ntasks}}
+  #SBATCH --cpus-per-task={{cpus_per_task}}
+  #SBATCH --time={{time_limit}}
+  #SBATCH --output={{workdir}}/logs/%x-%j.out
+  #SBATCH --error={{workdir}}/logs/%x-%j.err
+
+  set -Eeuo pipefail
+
+  export KIT_ROOT="{{kit_root}}"
+  test -n "${KIT_ROOT}"
+  test -d "${KIT_ROOT}"
+
+  cd "{{workdir}}"
+  mkdir -p logs outputs
+
+  tmp="outputs/result.${SLURM_JOB_ID}.tmp"
+  final="outputs/result.txt"
+
+  {{entry_command}} > "${tmp}"
+  test -s "${tmp}"
+  mv -f "${tmp}" "${final}"
+  printf 'complete job=%s\n' "${SLURM_JOB_ID}" > outputs/COMPLETE
+preflight_checks:
+  - check: workdir_shared
+    description: "工作目录必须在 /public/home/<user>/ 等共享文件系统下"
+  - check: qos_available
+    description: "QoS 必须属于当前 partition 的允许集合"
+  - check: kit_root_nonempty
+    description: "KIT_ROOT 必须由提交端显式传入，不能依赖 $0/BASH_SOURCE"
+recovery:
+  strategy: inspect_and_resubmit
+  description: "检查 logs 与 outputs/COMPLETE；缺少产物时重新提交整个 CPU 作业。"
+  scan_command: "test -s {{workdir}}/outputs/result.txt && test -f {{workdir}}/outputs/COMPLETE"
+success_protocol:
+  artifact_write: "tmp -> validate -> atomic mv -> COMPLETE"
+  marker: COMPLETE
+  validation:
+    - "产物非空"
+    - "退出码 0:0"
+    - "COMPLETE 存在"
+  reconcile: "校验产物完整性优先于 Slurm 最终退出码"
+risk_declaration:
+  gpu_concurrency: null
+  estimated_runtime: "{{time_limit}}"
+  encoded_lessons:
+    - HF4-001
+    - HF4-003
+    - HF4-013
+

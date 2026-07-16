@@ -1,0 +1,26 @@
+error_id: RUNTIME.CONDA_BATCH_NOT_INITIALIZED
+category: runtime_environment
+severity: error
+retryable: true
+stage: runtime
+title: "批处理 shell 未初始化 Conda 激活能力"
+symptoms:
+  - "run 'conda init' before 'conda activate'"
+  - "run \"conda init\" before \"conda activate\""
+  - "your shell has not been properly configured to use 'conda activate'"
+  - "conda: command not found"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - environment/summary.json
+  - run/environment/basic.json
+root_cause: "非交互批处理 shell 中没有 Conda shell function/hook，或 Conda 可执行文件不在该作业的 PATH 中。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "使用 107Pilot 生成的运行时段，先执行 conda shell.bash hook 再 activate；若 Conda 不在 PATH，改用平台确认的绝对路径或 conda run。"
+  prevention: "模板不得依赖交互式 shell 启动文件；提交前在同类非交互 shell 中验证环境激活和关键命令。"
+  automation: "Agent 可重新物化标准运行时段，但必须先确认 entitlement 与环境快照；不得修改用户 shell 配置。"
+confidence: high
+kb_article: "https://docs.conda.io/projects/conda/en/stable/commands/init.html"

@@ -1,0 +1,146 @@
+# Source-built Slurm 25.11 simulator image.
+#
+# The Ubuntu package image remains the 23.11 fallback. This Dockerfile builds
+# Slurm from the official SchedMD tarball so REST/API/auth behavior can track
+# the observed real107 Slurm version more closely.
+FROM ubuntu:24.04 AS slurm-builder
+
+ARG SLURM_VERSION=25.11.2
+ARG SLURM_TARBALL_URL=https://download.schedmd.com/slurm/slurm-${SLURM_VERSION}.tar.bz2
+ARG MAKE_JOBS=4
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        autoconf \
+        automake \
+        bzip2 \
+        ca-certificates \
+        curl \
+        file \
+        gcc \
+        g++ \
+        make \
+        munge \
+        libdbus-1-dev \
+        libhttp-parser-dev \
+        libjson-c-dev \
+        libjwt-dev \
+        liblz4-dev \
+        libmariadb-dev \
+        libmariadb-dev-compat \
+        libmunge-dev \
+        libpam0g-dev \
+        libreadline-dev \
+        libssl-dev \
+        libtool \
+        libyaml-dev \
+        lua5.4 \
+        pkg-config \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /tmp/slurm-src \
+    && curl -fsSL "$SLURM_TARBALL_URL" -o /tmp/slurm.tar.bz2 \
+    && tar -xjf /tmp/slurm.tar.bz2 -C /tmp/slurm-src --strip-components=1 \
+    && cd /tmp/slurm-src \
+    && ./configure \
+        --prefix=/usr/local \
+        --sysconfdir=/etc/slurm \
+        --localstatedir=/var \
+        --runstatedir=/run \
+        --with-jwt \
+        --with-munge \
+        --with-mysql_config=/usr/bin \
+        --enable-pam \
+    && make -j"$MAKE_JOBS" \
+    && make install DESTDIR=/opt/slurm-install
+
+FROM ubuntu:24.04
+
+ARG SLURM_VERSION=25.11.2
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        gosu \
+        libdbus-1-3 \
+        libhttp-parser2.9 \
+        libjson-c5 \
+        libjwt2 \
+        liblz4-1 \
+        libmariadb3 \
+        libmunge2 \
+        libpam0g \
+        libreadline8t64 \
+        libssl3t64 \
+        libyaml-0-2 \
+        mariadb-client \
+        mariadb-server \
+        munge \
+        python3 \
+        python-is-python3 \
+        tini \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=slurm-builder /opt/slurm-install/ /
+
+RUN printf '/usr/local/lib\n/usr/local/lib/slurm\n' > /etc/ld.so.conf.d/pilot107-slurm.conf \
+    && ldconfig \
+    && mkdir -p /public/home /var/lib/slurm /var/lib/pilot107 \
+    && getent group slurm >/dev/null || groupadd --gid 64030 slurm \
+    && id slurm >/dev/null 2>&1 || useradd --uid 64030 --gid slurm --home-dir /var/lib/slurm --create-home --shell /usr/sbin/nologin slurm \
+    && getent group pilot107 >/dev/null || groupadd --gid 10700 pilot107 \
+    && id pilot107 >/dev/null 2>&1 || useradd --uid 10700 --gid pilot107 --home-dir /var/lib/pilot107 --create-home --shell /bin/bash pilot107 \
+    && id alice >/dev/null 2>&1 || useradd --uid 11001 --create-home --home-dir /public/home/alice --shell /bin/bash alice \
+    && id bob >/dev/null 2>&1 || useradd --uid 11002 --create-home --home-dir /public/home/bob --shell /bin/bash bob
+
+RUN mkdir -p \
+        /etc/munge \
+        /run/munge \
+        /var/lib/munge \
+        /var/log/munge \
+        /var/log/slurm \
+        /run/mysqld \
+        /var/run/slurm \
+        /var/spool/slurm/ctld \
+        /var/spool/slurm/d \
+        /public/home/alice \
+        /public/home/bob \
+        /public/app \
+        /pilot107/evidence-derived \
+    && chown -R munge:munge /etc/munge /run/munge /var/lib/munge /var/log/munge \
+    && chown -R mysql:mysql /run/mysqld /var/lib/mysql \
+    && chown -R slurm:slurm /var/log/slurm /var/run/slurm /var/spool/slurm \
+    && chown alice:alice /public/home/alice \
+    && chown bob:bob /public/home/bob \
+    && chmod 0700 /public/home/alice /public/home/bob \
+    && chmod 0755 /public/app
+
+RUN mkdir -p /etc/pilot107
+
+COPY slurmdbd.conf /etc/slurm/slurmdbd.conf
+COPY version-manifest.25.11.json /etc/pilot107/slurm-sim-version-manifest.json
+RUN chown slurm:slurm /etc/slurm/slurmdbd.conf \
+    && chmod 0600 /etc/slurm/slurmdbd.conf \
+    && rm -f /etc/slurm/cgroup.conf
+
+RUN dd if=/dev/urandom of=/etc/slurm/jwt_hs256.key bs=32 count=1 \
+    && chown slurm:slurm /etc/slurm/jwt_hs256.key \
+    && chmod 0400 /etc/slurm/jwt_hs256.key
+
+COPY munge.key.base64 /tmp/munge.key.base64
+RUN base64 -d /tmp/munge.key.base64 > /etc/munge/munge.key \
+    && chown munge:munge /etc/munge/munge.key \
+    && chmod 0400 /etc/munge/munge.key \
+    && rm /tmp/munge.key.base64
+
+COPY docker-entrypoint.sh /usr/local/bin/pilot107-slurm-entrypoint
+RUN chmod 0755 /usr/local/bin/pilot107-slurm-entrypoint \
+    && slurmctld -V | grep -F "$SLURM_VERSION"
+
+ENTRYPOINT ["tini", "--", "pilot107-slurm-entrypoint"]
+CMD ["sleep", "infinity"]

@@ -1,0 +1,104 @@
+services:
+  pilot107-command-gateway:
+    image: ${SLURM_SIM_IMAGE:-pilot107/slurm-sim:25.11-real107}
+    profiles: ["competition"]
+    restart: unless-stopped
+    networks:
+      - sim
+    environment:
+      PILOT107_COMMAND_GATEWAY_TOKEN: ${PILOT107_COMMAND_GATEWAY_TOKEN:-competition-dev-token}
+      PILOT107_GATEWAY_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/alice}
+      PILOT107_GATEWAY_AUDIT_LOG: ${PILOT107_GATEWAY_AUDIT_LOG:-/var/log/slurm/pilot107-command-gateway-audit.jsonl}
+      PILOT107_GATEWAY_RATE_LIMIT_MAX: ${PILOT107_GATEWAY_RATE_LIMIT_MAX:-6000}
+      PILOT107_GATEWAY_RATE_LIMIT_WINDOW_SECONDS: ${PILOT107_GATEWAY_RATE_LIMIT_WINDOW_SECONDS:-60}
+    volumes:
+      - public:/public
+      - slurm-log:/var/log/slurm
+      - ./slurm/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./slurm/gres.conf:/etc/slurm/gres.conf:ro
+      - ./slurm/cgroup.conf:/etc/slurm/cgroup.conf:ro
+      - ./scripts/init-public.sh:/opt/pilot107/init-public.sh:ro
+      - ./scripts/command-gateway.py:/opt/pilot107/command-gateway.py:ro
+    command:
+      - python3
+      - /opt/pilot107/command-gateway.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8090"
+    depends_on:
+      - slurmctld
+      - worker-1
+      - worker-2
+    healthcheck:
+      test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2).read()\nPY"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  pilot107-api:
+    profiles: ["competition"]
+    environment:
+      PILOT107_API_BACKEND: command-gateway
+      PILOT107_COMMAND_GATEWAY_URL: http://pilot107-command-gateway:8090
+      PILOT107_COMMAND_GATEWAY_TOKEN: ${PILOT107_COMMAND_GATEWAY_TOKEN:-competition-dev-token}
+      PILOT107_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/alice}
+      PILOT107_CAPSULE_ROOT: /var/lib/pilot107/capsules
+    depends_on:
+      - pilot107-command-gateway
+
+  pilot107-worker:
+    profiles: ["competition"]
+    environment:
+      PILOT107_WORKER_BACKEND: command-gateway
+      PILOT107_COMMAND_GATEWAY_URL: http://pilot107-command-gateway:8090
+      PILOT107_COMMAND_GATEWAY_TOKEN: ${PILOT107_COMMAND_GATEWAY_TOKEN:-competition-dev-token}
+      PILOT107_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/alice}
+    depends_on:
+      - pilot107-command-gateway
+
+  pilot107-web:
+    profiles: ["competition"]
+    environment:
+      PILOT107_WEB_IDENTITY_MODE: fixed_user
+      PILOT107_WEB_FIXED_USER: ${PILOT107_WEB_FIXED_USER:-alice}
+
+  pilot107-reverse-proxy:
+    image: ${PILOT107_REVERSE_PROXY_IMAGE:-pilot107/web:local}
+    profiles: ["competition"]
+    restart: unless-stopped
+    user: "10700:10700"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - sim
+    ports:
+      - "${PILOT107_HTTP_PORT:-8088}:8080"
+      - "${PILOT107_HTTPS_PORT:-8443}:8443"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
+    command:
+      - python3
+      - -m
+      - pilot107.web.reverse_proxy
+      - --host
+      - 0.0.0.0
+      - --http-port
+      - "8080"
+      - --https-port
+      - "8443"
+      - --target
+      - http://pilot107-web:3000
+      - --cert
+      - /etc/nginx/certs/tls.crt
+      - --key
+      - /etc/nginx/certs/tls.key
+    depends_on:
+      - pilot107-web
+    healthcheck:
+      test: ["CMD-SHELL", "python3 - <<'PY'\nimport ssl, urllib.request\nctx = ssl._create_unverified_context()\nurllib.request.urlopen('https://127.0.0.1:8443/healthz', context=ctx, timeout=2).read()\nPY"]
+      interval: 10s
+      timeout: 5s
+      retries: 6

@@ -1,0 +1,28 @@
+error_id: CODE_PATCH.IDEMPOTENCY_BROKEN
+category: runtime
+severity: error
+retryable: false
+stage: preflight
+title: "重复 Patch 导致 Python 缩进错误"
+symptoms:
+  - "indentationerror: unexpected indent"
+  - "already patched"
+  - "py_compile failed"
+  - "py_compile 失败"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - environment/summary.json
+root_cause: "旧 patcher 以错误的 import 位置作为插入点，适配器代码被插入函数内部；标记检查没有验证语法。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "使用幂等 patcher：清理旧插入块、在顶层 import 区插入、内存 compile 成功后原子写回，并保留可编译备份。"
+  prevention: "任何源码 patch 后必须执行 py_compile 和 --help；Already patched 不能作为成功条件。"
+  automation: "建立 patch 前后哈希、AST/compile 门禁和自动回滚。"
+confidence: high
+kb_article: null
+source_record: HF4-002
+

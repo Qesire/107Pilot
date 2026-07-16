@@ -1,0 +1,32 @@
+# 迁移自 src/pilot107/core/diagnosis.py 第 195-206 行（硬编码规则）
+# 向后兼容：error_id / fix_template.patch 与原规则完全一致
+# schema 扩展：state_match — 该规则无 symptoms，通过 run.state == FAILED 且 exit_code not in {None, "0:0"} 触发
+error_id: RUNTIME.NONZERO_EXIT
+category: runtime
+severity: error
+retryable: true
+stage: runtime
+title: "作业以非零退出码结束"
+symptoms: []
+state_match:
+  state: "FAILED"
+  exit_code_not_in:
+    - null
+    - "0:0"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - slurm/job_detail.json
+  - slurm/accounting.json
+root_cause: "作业以非零退出码结束，但未匹配到更具体的错误模式；需人工查看日志定位根因。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "查看 evidence 中的 stderr_tail 与 job_detail，定位实际错误后再决定修复策略。"
+  prevention: "完善更具体的错误模式（如本错误库其他规则），减少落入此兜底规则的情况。"
+  automation: "诊断引擎按更具体规则优先匹配；本规则仅作兜底，触发后标记 needs_review=true。"
+confidence: high
+kb_article: null

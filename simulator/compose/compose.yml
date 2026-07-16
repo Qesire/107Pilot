@@ -1,0 +1,240 @@
+name: pilot107-sim
+
+x-slurm-common: &slurm-common
+  image: ${SLURM_SIM_IMAGE:-pilot107/slurm-sim:25.11-real107}
+  restart: unless-stopped
+  networks:
+    - sim
+  volumes:
+    - public:/public
+    - slurm-log:/var/log/slurm
+    - ./slurm/slurm.conf:/etc/slurm/slurm.conf:ro
+    - ./slurm/gres.conf:/etc/slurm/gres.conf:ro
+    - ./slurm/cgroup.conf:/etc/slurm/cgroup.conf:ro
+    - ./scripts/init-public.sh:/opt/pilot107/init-public.sh:ro
+
+services:
+  mariadb:
+    image: ${SLURM_SIM_IMAGE:-pilot107/slurm-sim:25.11-real107}
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-pilot107-root}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-slurm_acct_db}
+      MARIADB_USER: ${MARIADB_USER:-slurm}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-pilot107-slurm}
+    networks:
+      - sim
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    command: ["pilot107-mariadb"]
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -uroot --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  slurmdbd:
+    <<: *slurm-common
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    command: ["pilot107-slurmdbd"]
+    volumes:
+      - public:/public
+      - slurm-log:/var/log/slurm
+      - ./slurm/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./slurm/gres.conf:/etc/slurm/gres.conf:ro
+      - ./slurm/cgroup.conf:/etc/slurm/cgroup.conf:ro
+
+  slurmctld:
+    <<: *slurm-common
+    depends_on:
+      - slurmdbd
+    hostname: slurmctld
+    command: ["slurmctld", "-D", "-i", "-vvv"]
+
+  slurmrestd:
+    <<: *slurm-common
+    depends_on:
+      - slurmctld
+    ports:
+      - "${SLURMRESTD_PORT:-6820}:6820"
+    cap_add:
+      - SYS_ADMIN
+    environment:
+      SLURM_JWT: daemon
+    command: ["gosu", "pilot107", "slurmrestd", "-a", "rest_auth/jwt", "0.0.0.0:6820"]
+
+  login-node-sim:
+    <<: *slurm-common
+    depends_on:
+      - slurmctld
+    hostname: login-node-sim
+    command: ["sleep", "infinity"]
+
+  worker-1:
+    <<: *slurm-common
+    depends_on:
+      - slurmctld
+    hostname: anode16
+    command: ["slurmd", "-D", "-vvv"]
+    privileged: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    volumes:
+      - public:/public
+      - slurm-log:/var/log/slurm
+      - ./slurm/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./slurm/gres.conf:/etc/slurm/gres.conf:ro
+      - ./slurm/cgroup.conf:/etc/slurm/cgroup.conf:ro
+      - ./scripts/init-public.sh:/opt/pilot107/init-public.sh:ro
+
+  worker-2:
+    <<: *slurm-common
+    depends_on:
+      - slurmctld
+    hostname: anode17
+    command: ["slurmd", "-D", "-vvv"]
+    privileged: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    volumes:
+      - public:/public
+      - slurm-log:/var/log/slurm
+      - ./slurm/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./slurm/gres.conf:/etc/slurm/gres.conf:ro
+      - ./slurm/cgroup.conf:/etc/slurm/cgroup.conf:ro
+      - ./scripts/init-public.sh:/opt/pilot107/init-public.sh:ro
+
+  pilot107-api:
+    image: ${PILOT107_API_IMAGE:-pilot107/api:local}
+    profiles: ["apps"]
+    user: "10700:10700"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - sim
+    command:
+      - python3
+      - -m
+      - pilot107.api.dev_server
+      - --db-path
+      - /var/lib/pilot107/pilot107.db
+      - --evidence-root
+      - /var/lib/pilot107/evidence
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --auth-required
+    ports:
+      - "${PILOT107_API_PORT:-8080}:8080"
+    environment:
+      PILOT107_MODE: docker-sim
+      PILOT107_API_BACKEND: ${PILOT107_API_BACKEND:-demo}
+      PILOT107_DB_PATH: /var/lib/pilot107/pilot107.db
+      PILOT107_EVIDENCE_ROOT: /var/lib/pilot107/evidence
+      PILOT107_CAPSULE_ROOT: /var/lib/pilot107/capsules
+      PILOT107_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/alice,/public/home/bob}
+      PILOT107_AUTH_REQUIRED: "true"
+      PILOT107_CONTRACT_PROFILE: ${PILOT107_CONTRACT_PROFILE:-real107-sim}
+      PILOT107_SLURMRESTD_URL: http://slurmrestd:6820
+      PILOT107_REST_AUTH_STYLE: ${PILOT107_REST_AUTH_STYLE:-bearer}
+      PILOT107_SLURM_USER_NAME: ${PILOT107_SLURM_USER_NAME:-alice}
+      PILOT107_LLM_BASE_URL: ${PILOT107_LLM_BASE_URL:-}
+      PILOT107_LLM_API_KEY: ${PILOT107_LLM_API_KEY:-}
+      PILOT107_LLM_MODEL: ${PILOT107_LLM_MODEL:-}
+      PILOT107_LLM_TIMEOUT_SECONDS: ${PILOT107_LLM_TIMEOUT_SECONDS:-20}
+      PILOT107_LLM_MAX_TOKENS: ${PILOT107_LLM_MAX_TOKENS:-700}
+      PILOT107_LLM_STRUCTURED_OUTPUT_MODE: ${PILOT107_LLM_STRUCTURED_OUTPUT_MODE:-prompt_json}
+      PILOT107_LLM_MAX_ATTEMPTS: ${PILOT107_LLM_MAX_ATTEMPTS:-2}
+      PILOT107_TEMPLATE_REVIEWERS: ${PILOT107_TEMPLATE_REVIEWERS:-reviewer}
+      PILOT107_TEMPLATE_VERIFICATION_ENVIRONMENT: ${PILOT107_TEMPLATE_VERIFICATION_ENVIRONMENT:-docker}
+    volumes:
+      - public:/public:ro
+      - pilot107-data:/var/lib/pilot107
+    depends_on:
+      - slurmrestd
+    healthcheck:
+      test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()\nPY"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  pilot107-worker:
+    image: ${PILOT107_WORKER_IMAGE:-pilot107/worker:local}
+    profiles: ["apps"]
+    user: "10700:10700"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - sim
+    command: ["python3", "-m", "pilot107.worker.service"]
+    environment:
+      PILOT107_MODE: docker-sim
+      PILOT107_DB_PATH: /var/lib/pilot107/pilot107.db
+      PILOT107_EVIDENCE_ROOT: /var/lib/pilot107/evidence
+      PILOT107_WORKER_BACKEND: ${PILOT107_WORKER_BACKEND:-demo}
+      PILOT107_WORKER_HEALTH_PATH: /var/lib/pilot107/worker-health.json
+      PILOT107_SLURMRESTD_URL: http://slurmrestd:6820
+      PILOT107_REST_AUTH_STYLE: ${PILOT107_REST_AUTH_STYLE:-bearer}
+      PILOT107_SLURM_USER_NAME: ${PILOT107_SLURM_USER_NAME:-alice}
+    volumes:
+      - public:/public:ro
+      - pilot107-data:/var/lib/pilot107
+    depends_on:
+      - slurmrestd
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /var/lib/pilot107/worker-health.json"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  pilot107-web:
+    image: ${PILOT107_WEB_IMAGE:-pilot107/web:local}
+    profiles: ["apps"]
+    user: "10700:10700"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - sim
+    command:
+      - python3
+      - -m
+      - pilot107.web.server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "3000"
+      - --api-base-url
+      - http://pilot107-api:8080
+    ports:
+      - "${PILOT107_WEB_PORT:-3000}:3000"
+    environment:
+      PILOT107_WEB_API_BASE_URL: http://pilot107-api:8080
+      PILOT107_WEB_DEMO_USER: ${PILOT107_WEB_DEMO_USER:-alice}
+      PILOT107_WEB_IDENTITY_MODE: ${PILOT107_WEB_IDENTITY_MODE:-demo}
+      PILOT107_WEB_FIXED_USER: ${PILOT107_WEB_FIXED_USER:-}
+    depends_on:
+      - pilot107-api
+    healthcheck:
+      test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:3000/healthz', timeout=2).read()\nPY"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+networks:
+  sim:
+    driver: bridge
+
+volumes:
+  mariadb-data:
+  public:
+  slurm-log:
+  pilot107-data:

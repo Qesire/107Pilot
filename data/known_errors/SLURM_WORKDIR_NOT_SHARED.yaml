@@ -1,0 +1,26 @@
+error_id: SLURM.WORKDIR_NOT_SHARED
+category: resource_policy
+severity: error
+retryable: false
+stage: preflight
+title: "工作目录不在共享文件系统"
+symptoms:
+  - "workdir_not_shared"
+  - "workdir.local_only"
+  - "workdir.block"
+  - "not under shared root"
+evidence_paths:
+  - submission/submit.stderr
+  - environment/summary.json
+  - logs/stderr.tail.txt
+root_cause: "作业工作目录位于服务本地路径或临时目录，计算节点无法稳定访问。"
+fix_template:
+  type: structured_patch
+  patch:
+    project.workdir: "/public/home/<user>/pilot107-runs/<run_id>"
+fix_guide:
+  fix: "将 project.workdir 放到 /public/home/<user>/ 等平台共享路径下。"
+  prevention: "提交前执行 WorkDirPreflight，禁止 /tmp、服务本地目录和 path escape。"
+  automation: "API prepare 阶段自动阻断非共享 workdir，并返回可用 shared_roots。"
+confidence: high
+kb_article: null

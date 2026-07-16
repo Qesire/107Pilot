@@ -1,0 +1,28 @@
+error_id: ARTIFACT.PACKAGE_NOT_EXTRACTED
+category: artifact_deployment
+severity: info
+retryable: true
+stage: preflight
+title: "包未解压或 KIT 指向错误版本目录"
+symptoms:
+  - "diagnose_cache_smoke.sh: no such file or directory"
+  - "第二次解压"
+  - "修正 kit 后脚本存在"
+  - "script missing"
+evidence_paths:
+  - submission/submit.stderr
+  - logs/stderr.tail.txt
+  - environment/summary.json
+  - outputs/inventory.json
+root_cause: "只上传 ZIP 但未解压，或 KIT 仍指向旧版本目录。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "每次升级使用新版本目录，先 rm -rf 目标目录再解压并校验入口文件。"
+  prevention: "启动器打印 package_version、KIT 和 SHA256。"
+  automation: "入口缺失时给出可执行的解压命令，而非继续提交。"
+confidence: high
+kb_article: null
+source_record: HF4-016
+

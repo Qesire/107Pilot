@@ -1,0 +1,28 @@
+# 迁移自 src/pilot107/core/diagnosis.py 第 153-162 行（硬编码规则）
+# 向后兼容：error_id / symptoms / fix_template.patch 与原规则完全一致
+error_id: RUNTIME.COMMAND_NOT_FOUND
+category: runtime
+severity: error
+retryable: true
+stage: runtime
+title: "运行命令或路径不存在"
+symptoms:
+  - "command not found"
+  - "no such file or directory"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - slurm/job_detail.json
+root_cause: "运行环境中找不到脚本调用的命令或路径，可能是 PATH 未配置、conda 环境未激活或入口路径错误。"
+fix_template:
+  type: structured_patch
+  patch:
+    entry.command: null
+fix_guide:
+  fix: "将 entry.command 改为环境中存在的命令，或清空使用默认入口；确认 conda 环境已激活。"
+  prevention: "提交前在目标 conda 环境中执行 entry.command 的 dry-run 校验。"
+  automation: "preflight 对 entry.command 执行 which/lookup 校验。"
+confidence: high
+kb_article: null

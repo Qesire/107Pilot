@@ -1,0 +1,17 @@
+templates:
+  recipe_student_cpu_basic@1.0.0:
+    file: recipe_student_cpu_basic.yaml
+    title: "学生 CPU 基础作业模板"
+    trust_level: L1
+    requires_gpu: false
+  recipe_student_gpu_array@1.0.0:
+    file: recipe_student_gpu_array.yaml
+    title: "学生 GPU Array 作业模板"
+    trust_level: L1
+    requires_gpu: true
+  recipe_resilient_submission@1.0.0:
+    file: recipe_resilient_submission.yaml
+    title: "健壮 Slurm 提交模板"
+    trust_level: L1
+    requires_gpu: false
+

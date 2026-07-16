@@ -1,0 +1,29 @@
+error_id: SLURM.SCRIPT_PATH_FROM_ZERO
+category: slurm_runtime_path
+severity: error
+retryable: false
+stage: runtime
+title: "SBATCH 中通过 $0/BASH_SOURCE 推导包路径失败"
+symptoms:
+  - "/var/spool/slurmd"
+  - "common.sh: no such file or directory"
+  - "preflight 0 秒失败"
+  - "dirname \"$0\""
+  - "bash_source"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - slurm/job_detail.json
+root_cause: "Slurm 会把 sbatch 脚本复制为 /var/spool/slurmd/job*/slurm_script；$0 和 BASH_SOURCE 不再指向原实验包。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "提交器通过 --export=ALL,HIFX4_KIT_ROOT=<绝对路径> 显式传入包根目录；所有 sbatch 只使用该变量。"
+  prevention: "SBATCH 不允许依赖自身脚本位置定位资源；包路径必须由提交端显式导出。"
+  automation: "资源审计脚本扫描 dirname $0/BASH_SOURCE 用法。"
+confidence: high
+kb_article: null
+source_record: HF4-003
+

@@ -1,0 +1,289 @@
+schema: pilot107.simulator_real107_behavior.v1
+profile_id: simulator-real107-behavior
+description: "Scaled Docker Slurm simulator profile for real107 behavior semantics."
+
+slurm:
+  target_version: "25.11.2"
+  target_image: "pilot107/slurm-sim:25.11-real107"
+  fallback_version: "23.11.x"
+  fallback_image: "pilot107/slurm-sim:local"
+  api_version: "v0.0.41"
+  accounting: slurmdbd
+  accounting_storage_enforce: ["associations", "qos", "limits"]
+  select_type: cons_tres
+  auth:
+    control_plane: munge
+    rest_primary: jwt_bearer
+    simulator_fallback: trusted_header_simulated_users
+
+accounts:
+  - name: students
+    description: "Student account used by ordinary simulator users."
+    organization: pilot107
+  - name: competition
+    description: "Competition-only account; not granted to default simulator users."
+    organization: pilot107
+  - name: legacy
+    description: "Legacy debug compatibility account."
+    organization: pilot107
+
+users:
+  - name: alice
+    role: legal_student
+    account: students
+    home: "/public/home/alice"
+    default_partition: Students
+    default_qos: qos_stu_medium_2gpu
+    submit_qos:
+      - normal
+      - qos_stu001
+      - qos_stu_default
+      - qos_stu_small
+      - qos_stu_medium
+      - qos_stu_medium_2gpu
+      - qos_stu_long
+      - qos_stu_cpu_long
+    denied_qos:
+      - qos_p107-a100
+      - qos_p107-rtx5090
+      - definitely_not_allowed
+  - name: bob
+    role: limited_student
+    account: students
+    home: "/public/home/bob"
+    default_partition: Students
+    default_qos: qos_stu_default
+    submit_qos:
+      - normal
+      - qos_stu_default
+    denied_qos:
+      - qos_stu_medium_2gpu
+      - qos_p107-a100
+      - definitely_not_allowed
+  - name: pilot107
+    role: service_user
+    account: null
+    home: "/var/lib/pilot107"
+    default_partition: null
+    default_qos: null
+    submit_qos: []
+    denied_qos: []
+
+qos:
+  - name: normal
+    policy_class: legacy-debug
+    max_wall: "01:00:00"
+    max_cpus: 2
+    max_memory: "4G"
+    max_gpus: 0
+  - name: qos_cpu-6530
+    policy_class: cpu-fixture
+    max_wall: "3-00:00:00"
+    max_cpus: 32
+    max_memory: "128G"
+    max_gpus: 0
+  - name: qos_cpu-8358p
+    policy_class: cpu-fixture
+    max_wall: "3-00:00:00"
+    max_cpus: 32
+    max_memory: "128G"
+    max_gpus: 0
+  - name: qos_gpu-rtx5090
+    policy_class: gpu-fixture
+    max_wall: "3-00:00:00"
+    max_cpus: 16
+    max_memory: "64G"
+    max_gpus: 4
+  - name: qos_gpu-a100
+    policy_class: gpu-fixture
+    max_wall: "3-00:00:00"
+    max_cpus: 16
+    max_memory: "64G"
+    max_gpus: 2
+  - name: qos_p107-rtx5090
+    policy_class: competition-gpu
+    max_wall: "3-00:00:00"
+    max_cpus: 16
+    max_memory: "64G"
+    max_gpus: 4
+  - name: qos_p107-a100
+    policy_class: competition-gpu
+    max_wall: "3-00:00:00"
+    max_cpus: 16
+    max_memory: "64G"
+    max_gpus: 2
+  - name: qos_stu001
+    policy_class: student-observed
+    max_wall: "04:00:00"
+    max_cpus: 4
+    max_memory: "16G"
+    max_gpus: 1
+  - name: qos_stu_default
+    policy_class: student-default-small
+    max_wall: "04:00:00"
+    max_cpus: 4
+    max_memory: "16G"
+    max_gpus: 1
+  - name: qos_stu_small
+    policy_class: student-small
+    max_wall: "08:00:00"
+    max_cpus: 8
+    max_memory: "32G"
+    max_gpus: 1
+  - name: qos_stu_medium
+    policy_class: student-observed
+    max_wall: "12:00:00"
+    max_cpus: 16
+    max_memory: "64G"
+    max_gpus: 1
+  - name: qos_stu_medium_2gpu
+    policy_class: student-gpu-carrier
+    max_wall: "12:00:00"
+    max_cpus: 24
+    max_memory: "128G"
+    max_gpus: 2
+  - name: qos_stu_long
+    policy_class: student-long
+    max_wall: "3-00:00:00"
+    max_cpus: 16
+    max_memory: "64G"
+    max_gpus: 1
+  - name: qos_stu_cpu_long
+    policy_class: student-cpu-long
+    max_wall: "3-00:00:00"
+    max_cpus: 32
+    max_memory: "128G"
+    max_gpus: 0
+
+nodes:
+  - name: anode05
+    live: false
+    cpus: 32
+    memory_mb: 4096
+    gres:
+      - name: gpu
+        type: RTX5090
+        count: 4
+  - name: anode16
+    live: true
+    cpus: 32
+    memory_mb: 8192
+    gres:
+      - name: gpu
+        type: A100
+        count: 2
+  - name: anode17
+    live: true
+    cpus: 32
+    memory_mb: 8192
+    gres:
+      - name: gpu
+        type: A100
+        count: 2
+
+partitions:
+  - name: CPU-6530
+    nodes: "anode05"
+    default: false
+    max_time: "3-00:00:00"
+    allow_accounts: ["students"]
+    allow_qos: ["qos_cpu-6530"]
+  - name: CPU-8358P
+    nodes: "anode[16-17]"
+    default: false
+    max_time: "3-00:00:00"
+    allow_accounts: ["students"]
+    allow_qos: ["qos_cpu-8358p"]
+  - name: GPU-RTX5090
+    nodes: "anode05"
+    default: false
+    max_time: "3-00:00:00"
+    allow_accounts: ["students"]
+    allow_qos: ["qos_gpu-rtx5090"]
+  - name: GPU-A100
+    nodes: "anode[16-17]"
+    default: false
+    max_time: "3-00:00:00"
+    allow_accounts: ["students"]
+    allow_qos: ["qos_gpu-a100"]
+  - name: P107-RTX5090
+    nodes: "anode05"
+    default: false
+    max_time: "3-00:00:00"
+    allow_accounts: ["competition"]
+    allow_qos: ["qos_p107-rtx5090"]
+  - name: P107-A100
+    nodes: "anode[16-17]"
+    default: false
+    max_time: "3-00:00:00"
+    allow_accounts: ["competition"]
+    allow_qos: ["qos_p107-a100"]
+  - name: Students
+    nodes: "anode[16-17]"
+    default: true
+    max_time: "3-00:00:00"
+    allow_accounts: ["students"]
+    allow_qos:
+      - qos_stu001
+      - qos_stu_default
+      - qos_stu_small
+      - qos_stu_medium
+      - qos_stu_medium_2gpu
+      - qos_stu_long
+      - qos_stu_cpu_long
+  - name: debug
+    nodes: "anode[16-17]"
+    default: false
+    max_time: "01:00:00"
+    allow_accounts: ["students", "legacy"]
+    allow_qos: ["normal"]
+
+storage:
+  shared_paths:
+    - path: "/public"
+      semantics: shared_across_login_and_compute
+    - path: "/public/home/alice"
+      owner: alice
+      mode: "0700"
+    - path: "/public/home/bob"
+      owner: bob
+      mode: "0700"
+    - path: "/public/app"
+      semantics: shared_readable_app_root
+  local_paths:
+    - path: "/tmp"
+      semantics: node_local_not_persistent
+
+runtime_limitations:
+  - "Default Docker simulator has no real CUDA driver, NVML, A100, or RTX5090 device."
+  - "Fake GPU GRES exists for scheduler behavior only."
+  - "The retained Ubuntu 23.11 fallback must not be used for final parity claims."
+  - "REST API and JWT behavior are validated on the source-built Slurm 25.11.2 target image."
+
+behavior_matrix:
+  legal_student_gpu:
+    user: alice
+    partition: Students
+    qos: qos_stu_medium_2gpu
+    gres: "gpu:A100:1"
+    expected: accepted
+  limited_student_cpu:
+    user: bob
+    partition: Students
+    qos: qos_stu_default
+    expected: accepted
+  invalid_qos:
+    user: alice
+    partition: Students
+    qos: definitely_not_allowed
+    expected: rejected
+  limited_user_unauthorized_qos:
+    user: bob
+    partition: Students
+    qos: qos_stu_medium_2gpu
+    expected: rejected
+  student_competition_account_overreach:
+    user: alice
+    partition: P107-A100
+    qos: qos_p107-a100
+    expected: rejected

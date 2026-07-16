@@ -1,0 +1,25 @@
+error_id: SLURM.INVALID_ASSOCIATION
+category: resource_policy
+severity: error
+retryable: false
+stage: submit
+title: "用户缺少有效的 Slurm 账号/分区关联"
+symptoms:
+  - "invalid account or account/partition combination specified"
+  - "this user does not have a valid association"
+  - "invalidaccount"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - slurm/runtime_status.json
+  - slurm/job_detail.json
+root_cause: "作业请求的账号与分区不在当前用户的 Slurm association 中，或该 association 的作业限制阻止调度。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "从最新用户 entitlement 中选择允许的账号/分区组合；若没有有效组合，由平台管理员补充 association 或调整限制。"
+  prevention: "提交前同时校验用户 association、分区与 QoS，不以全局分区/QoS 列表代替个人权限。"
+  automation: "Agent 仅可推荐 entitlement 中已证实允许的组合；缺少权威快照时不得自动重提。"
+confidence: high
+kb_article: "https://slurm.schedmd.com/sacctmgr.html"

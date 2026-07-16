@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://107pilot.local/schemas/phase3d-novice-acceptance-v1.json",
+  "title": "107Pilot Phase 3D novice acceptance study",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "study_id", "evidence_source", "participants"],
+  "properties": {
+    "schema_version": { "const": "pilot107.novice-acceptance/v1" },
+    "study_id": { "type": "string", "minLength": 1 },
+    "evidence_source": { "const": "facilitated_human_study" },
+    "participants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "participant_id", "slurm_experience", "automated", "completed",
+          "used_terminal", "started_at", "first_success_at", "contract_id",
+          "success_run_id", "failure_run_id", "evidence_refs", "tasks"
+        ],
+        "properties": {
+          "participant_id": { "type": "string", "minLength": 1 },
+          "slurm_experience": { "const": "none" },
+          "automated": { "const": false },
+          "completed": { "const": true },
+          "used_terminal": { "const": false },
+          "started_at": { "type": "string", "format": "date-time" },
+          "first_success_at": { "type": "string", "format": "date-time" },
+          "contract_id": { "type": "string", "minLength": 1 },
+          "success_run_id": { "type": "string", "minLength": 1 },
+          "failure_run_id": { "type": "string", "minLength": 1 },
+          "evidence_refs": {
+            "type": "array",
+            "minItems": 3,
+            "items": { "type": "string", "pattern": "^evidence://runs/" }
+          },
+          "tasks": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "found_python_cpu_template", "adopted_template",
+              "modified_workdir_and_command", "understood_preflight",
+              "submitted_run", "located_logs", "located_results",
+              "located_failure_reason"
+            ],
+            "properties": {
+              "found_python_cpu_template": { "const": true },
+              "adopted_template": { "const": true },
+              "modified_workdir_and_command": { "const": true },
+              "understood_preflight": { "const": true },
+              "submitted_run": { "const": true },
+              "located_logs": { "const": true },
+              "located_results": { "const": true },
+              "located_failure_reason": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  }
+}

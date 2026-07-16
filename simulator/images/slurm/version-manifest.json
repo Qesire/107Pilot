@@ -1,0 +1,23 @@
+{
+  "schema": "pilot107.slurm_sim_image_manifest.v1",
+  "image_family": "pilot107/slurm-sim",
+  "target": {
+    "tag": "25.11-real107",
+    "slurm_version": "25.11.2",
+    "status": "planned",
+    "openapi_digest_required": true,
+    "auth_jwt_required": true
+  },
+  "fallback": {
+    "tag": "local",
+    "slurm_version": "23.11.x",
+    "base_image": "ubuntu:24.04",
+    "status": "current"
+  },
+  "runtime_fidelity": {
+    "scheduler_gres": "fake",
+    "cuda_driver": "unavailable",
+    "nvml": "unavailable",
+    "real_gpu_devices": "unavailable"
+  }
+}

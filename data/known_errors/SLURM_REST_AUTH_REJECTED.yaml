@@ -1,0 +1,30 @@
+error_id: SLURM.REST_AUTH_REJECTED
+category: slurm_rest_auth
+severity: error
+retryable: false
+stage: submit
+title: "Slurm REST JWT 认证失败"
+symptoms:
+  - "401"
+  - "authentication failure"
+  - "error_number"
+  - "7000"
+  - "jwt"
+  - "rest_auth"
+  - "slurmrestd"
+evidence_paths:
+  - submission/submit.stderr
+  - submission/submit.stderr.txt
+  - logs/stderr.tail.txt
+  - slurm/job_detail.json
+root_cause: "slurmrestd 未接受请求 token，常见原因是 SLURM_JWT=daemon、jwt_hs256.key、AuthAltTypes/auth_jwt.so 或 header 风格不一致。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "检查 SLURM_JWT=daemon、jwt_hs256.key 权限、AuthAltTypes=auth/jwt、rest_auth/jwt 和 X-SLURM-USER-* headers。"
+  prevention: "启动前运行 probe-sim-rest-auth.sh；真实 107 token 不进入日志和 Evidence。"
+  automation: "REST probe 将 no-token、bad-token、valid-token 分场景输出并阻断 unsupported profile。"
+confidence: high
+kb_article: null
+

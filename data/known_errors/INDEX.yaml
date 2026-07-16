@@ -1,0 +1,166 @@
+rules:
+  ARTIFACT.MARKER_MISSING:
+    file: ARTIFACT_MARKER_MISSING.yaml
+    category: marker_reconciliation
+    severity: warn
+    retryable: true
+  ARTIFACT.PACKAGE_NOT_EXTRACTED:
+    file: ARTIFACT_PACKAGE_NOT_EXTRACTED.yaml
+    category: artifact_deployment
+    severity: info
+    retryable: true
+  ARTIFACT.POSTPROCESS_FALSE_FAILURE:
+    file: ARTIFACT_POSTPROCESS_FALSE_FAILURE.yaml
+    category: filesystem_cwd
+    severity: warn
+    retryable: true
+  CODE_PATCH.IDEMPOTENCY_BROKEN:
+    file: CODE_PATCH_IDEMPOTENCY_BROKEN.yaml
+    category: runtime
+    severity: error
+    retryable: false
+  DATASET.PATH_MISMATCH:
+    file: DATASET_PATH_MISMATCH.yaml
+    category: dataset_path
+    severity: warn
+    retryable: false
+  FILESYSTEM.CWD_INVALID:
+    file: FILESYSTEM_CWD_INVALID.yaml
+    category: filesystem_cwd
+    severity: error
+    retryable: true
+  FILESYSTEM.TRANSIENT_IMPORT:
+    file: FILESYSTEM_TRANSIENT_IMPORT.yaml
+    category: filesystem_transient
+    severity: warn
+    retryable: true
+  LOG.NOISE_FUTURE_WARNING:
+    file: LOG_NOISE_FUTURE_WARNING.yaml
+    category: log_noise
+    severity: info
+    retryable: false
+  METRIC.WEIGHT_QDQ_EXPECTED_ZERO:
+    file: METRIC_WEIGHT_QDQ_EXPECTED_ZERO.yaml
+    category: metric_semantics
+    severity: info
+    retryable: false
+  RUNTIME.COMMAND_NOT_FOUND:
+    file: RUNTIME_COMMAND_NOT_FOUND.yaml
+    category: runtime
+    severity: error
+    retryable: true
+  RUNTIME.CONDA_BATCH_NOT_INITIALIZED:
+    file: RUNTIME_CONDA_BATCH_NOT_INITIALIZED.yaml
+    category: runtime_environment
+    severity: error
+    retryable: true
+  RUNTIME.NONZERO_EXIT:
+    file: RUNTIME_NONZERO_EXIT.yaml
+    category: runtime
+    severity: error
+    retryable: true
+  RUNTIME.OOM:
+    file: RUNTIME_OOM.yaml
+    category: runtime
+    severity: error
+    retryable: true
+  RUNTIME.PYTHON_PACKAGE_MISSING:
+    file: RUNTIME_PYTHON_PACKAGE_MISSING.yaml
+    category: optional_dependency
+    severity: error
+    retryable: true
+  RUNTIME.PYTHON_PACKAGE_TRANSIENT:
+    file: RUNTIME_PYTHON_PACKAGE_TRANSIENT.yaml
+    category: filesystem_transient
+    severity: warn
+    retryable: true
+  RUNTIME.TIMEOUT:
+    file: RUNTIME_TIMEOUT.yaml
+    category: runtime
+    severity: error
+    retryable: true
+  RUNTIME.NVML_DRIVER_LIBRARY_MISMATCH:
+    file: RUNTIME_NVML_DRIVER_LIBRARY_MISMATCH.yaml
+    category: gpu_runtime
+    severity: error
+    retryable: false
+  SHELL.ERR_TRAP_BREAKS_RETRY:
+    file: SHELL_ERR_TRAP_BREAKS_RETRY.yaml
+    category: shell_error_handling
+    severity: error
+    retryable: false
+  SHELL.UNBOUND_VARIABLE:
+    file: SHELL_UNBOUND_VARIABLE.yaml
+    category: shell_strict_mode
+    severity: error
+    retryable: false
+  SLURM.ARRAY_DEPENDENCY_NEVER_SATISFIED:
+    file: SLURM_ARRAY_DEPENDENCY_NEVER_SATISFIED.yaml
+    category: dag_recovery
+    severity: error
+    retryable: true
+  SLURM.ARRAY_PARTIAL_FAILURE:
+    file: SLURM_ARRAY_PARTIAL_FAILURE.yaml
+    category: dag_recovery
+    severity: warn
+    retryable: true
+  SLURM.INVALID_PARTITION:
+    file: SLURM_INVALID_PARTITION.yaml
+    category: resource_policy
+    severity: error
+    retryable: true
+  SLURM.INVALID_ASSOCIATION:
+    file: SLURM_INVALID_ASSOCIATION.yaml
+    category: resource_policy
+    severity: error
+    retryable: false
+  SLURM.INVALID_QOS:
+    file: SLURM_INVALID_QOS.yaml
+    category: resource_policy
+    severity: error
+    retryable: true
+  SLURM.QOS_CONCURRENCY_EXCEEDED:
+    file: SLURM_QOS_CONCURRENCY_EXCEEDED.yaml
+    category: resource_policy
+    severity: error
+    retryable: false
+  SLURM.QOS_WALLTIME_REQUEST_LIMIT:
+    file: SLURM_QOS_WALLTIME_REQUEST_LIMIT.yaml
+    category: resource_policy
+    severity: error
+    retryable: true
+  SLURM.QOS_CPU_REQUEST_LIMIT:
+    file: SLURM_QOS_CPU_REQUEST_LIMIT.yaml
+    category: resource_policy
+    severity: error
+    retryable: true
+  SLURM.QOS_CPU_CAPACITY_LIMIT:
+    file: SLURM_QOS_CPU_CAPACITY_LIMIT.yaml
+    category: resource_policy
+    severity: warn
+    retryable: true
+  SLURM.REST_AUTH_REJECTED:
+    file: SLURM_REST_AUTH_REJECTED.yaml
+    category: slurm_rest_auth
+    severity: error
+    retryable: false
+  SLURM.SCRIPT_PATH_FROM_ZERO:
+    file: SLURM_SCRIPT_PATH_FROM_ZERO.yaml
+    category: slurm_runtime_path
+    severity: error
+    retryable: false
+  SLURM.SUBMISSION_UNCERTAIN:
+    file: SLURM_SUBMISSION_UNCERTAIN.yaml
+    category: submission_reconcile
+    severity: error
+    retryable: true
+  SLURM.WORKDIR_NOT_SHARED:
+    file: SLURM_WORKDIR_NOT_SHARED.yaml
+    category: resource_policy
+    severity: error
+    retryable: false
+  USER_SHELL.VARIABLE_MISSING:
+    file: USER_SHELL_VARIABLE_MISSING.yaml
+    category: user_shell_state
+    severity: warn
+    retryable: true

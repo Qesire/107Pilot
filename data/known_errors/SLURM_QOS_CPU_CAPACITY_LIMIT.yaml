@@ -1,0 +1,24 @@
+error_id: SLURM.QOS_CPU_CAPACITY_LIMIT
+category: resource_policy
+severity: warn
+retryable: true
+stage: scheduling
+title: "用户或 QoS 的聚合 CPU 容量暂时已满"
+symptoms:
+  - "qosgrpcpulimit"
+  - "qosgrpcpuminuteslimit"
+  - "qosgrpcpurunminuteslimit"
+  - "qosmaxcpuperuserlimit"
+evidence_paths:
+  - slurm/runtime_status.json
+  - slurm/job_detail.json
+root_cause: "当前用户或 QoS 已达到聚合 CPU/CPU-minutes 容量；该原因可能随其他作业结束而解除。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "保留作业等待并观察 pending reason；急需运行时仅可切换到 entitlement 已确认允许的其他 QoS。"
+  prevention: "工作流提交前估算同一用户和 DAG 层的 CPU 峰值，避免同时制造大量长期 pending 作业。"
+  automation: "Worker 使用退避轮询并通知容量恢复；Agent 不因暂时容量已满而修改代码或重复提交。"
+confidence: high
+kb_article: "https://slurm.schedmd.com/job_reason_codes.html"

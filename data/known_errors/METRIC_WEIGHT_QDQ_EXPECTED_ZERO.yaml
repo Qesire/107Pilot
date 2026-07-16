@@ -1,0 +1,27 @@
+error_id: METRIC.WEIGHT_QDQ_EXPECTED_ZERO
+category: metric_semantics
+severity: info
+retryable: false
+stage: postprocess
+title: "运行期 weight_qdq_calls=0 被误判为未量化"
+symptoms:
+  - "weight_qdq_calls=0"
+  - "activation_qdq_calls>0"
+  - "setup report 为 400/400"
+  - "replaced_count=400/400"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - outputs/inventory.json
+  - environment/summary.json
+root_cause: "权重已在离线 cache 构建阶段完成 RTN/GPTQ-QDQ；生成期仅加载处理后的权重，不应再次执行 weight QDQ。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "将离线 weight_qdq 与运行期 activation_qdq 分开计数和展示。"
+  prevention: "指标定义中标注统计阶段。"
+  automation: "若 cache 模式且 setup 完整，weight_qdq_calls=0 判为 expected。"
+confidence: high
+kb_article: null
+source_record: HF4-015
+

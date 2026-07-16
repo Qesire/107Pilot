@@ -1,0 +1,31 @@
+error_id: SLURM.ARRAY_PARTIAL_FAILURE
+category: dag_recovery
+severity: warn
+retryable: true
+stage: runtime
+title: "Array 分片偶发失败或未留下有效产物"
+symptoms:
+  - "绝大多数 hessian task completed"
+  - "少数 failed"
+  - "slurm 显示完成但扫描仍缺"
+  - "missing_expert_block_tasks"
+  - "complete 标记"
+  - "regex:missing.*task"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - slurm/job_detail.json
+  - slurm/accounting.json
+  - outputs/inventory.json
+root_cause: "节点、文件系统或任务退出阶段偶发故障；也可能留下空文件或未完成文件。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "仅重跑缺失编号；输出先写 tmp.<job>.<task>.<attempt>，验证后原子 mv。"
+  prevention: "不能以文件存在作为成功条件；必须校验非空、结构和 COMPLETE。"
+  automation: "任务内有限重试 + 阶段级缺片恢复。"
+confidence: high
+kb_article: null
+source_record: HF4-008
+

@@ -1,0 +1,4 @@
+CREATE DATABASE IF NOT EXISTS slurm_acct_db;
+CREATE USER IF NOT EXISTS 'slurm'@'%' IDENTIFIED BY 'pilot107-slurm';
+GRANT ALL PRIVILEGES ON slurm_acct_db.* TO 'slurm'@'%';
+FLUSH PRIVILEGES;

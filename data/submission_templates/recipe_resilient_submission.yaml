@@ -1,0 +1,160 @@
+template_id: recipe_resilient_submission@1.0.0
+title: "健壮 Slurm 提交模板"
+description: "集中编码 Wan–HiF4 复盘中的路径、strict mode、重试、原子写和恢复协议。"
+trust_level: L1
+parameter_schema:
+  required:
+    - project.workdir
+    - entry.command
+    - resources.partition
+    - resources.time_limit
+  entry.command:
+    type: plain_shell_command
+    raw_shell: false
+  project.workdir:
+    type: shared_path
+    prefix: /public/home/<user>/
+  resources.partition:
+    type: enum
+    allowed:
+      - Students
+      - CPU-6530
+      - CPU-8358P
+      - GPU-A100
+      - GPU-RTX5090
+      - P107-A100
+      - P107-RTX5090
+      - debug
+compatibility:
+  slurm:
+    min_version: "23.0"
+  platform:
+    docker_l2: true
+    school_l3: true
+    requires_gpu: false
+  partitions:
+    default: Students
+    allowed:
+      - Students
+      - CPU-6530
+      - CPU-8358P
+      - GPU-A100
+      - GPU-RTX5090
+      - P107-A100
+      - P107-RTX5090
+      - debug
+  qos:
+    default: qos_stu_default
+    allowed_by_partition:
+      Students:
+        - qos_stu_default
+        - qos_stu_small
+        - qos_stu_medium
+        - qos_stu_medium_2gpu
+        - qos_stu_long
+        - qos_stu_cpu_long
+      debug:
+        - normal
+sbatch_template: |
+  #!/bin/bash
+  #SBATCH --job-name={{job_name}}
+  #SBATCH --partition={{partition}}
+  #SBATCH --qos={{qos}}
+  #SBATCH --nodes={{nodes}}
+  #SBATCH --ntasks={{ntasks}}
+  #SBATCH --cpus-per-task={{cpus_per_task}}
+  #SBATCH --time={{time_limit}}
+  #SBATCH --output={{workdir}}/logs/%x-%j.out
+  #SBATCH --error={{workdir}}/logs/%x-%j.err
+  #SBATCH --export=ALL,KIT_ROOT={{kit_root}},DATA_ROOT={{data_root}}
+
+  set -Eeuo pipefail
+
+  require_nonempty() {
+    local name="$1"
+    local value="${!name:-}"
+    if [[ -z "${value}" ]]; then
+      echo "required env is empty: ${name}" >&2
+      return 2
+    fi
+  }
+
+  run_with_retry() {
+    local max_attempts="$1"
+    shift
+    local attempt
+    for attempt in $(seq 1 "${max_attempts}"); do
+      echo "attempt=${attempt}"
+      "$@" && return 0
+      local rc="$?"
+      sleep $((attempt * 5))
+    done
+    return "${rc:-1}"
+  }
+
+  import_probe() {
+    python - <<'PY'
+  import importlib
+  for name in ("torch",):
+      importlib.import_module(name)
+  PY
+  }
+
+  require_nonempty KIT_ROOT
+  require_nonempty DATA_ROOT
+  test -d "${KIT_ROOT}"
+  test -d "${DATA_ROOT}"
+
+  cd "$HOME"
+  mkdir -p "{{workdir}}"/logs "{{workdir}}"/outputs "{{workdir}}"/complete
+
+  run_with_retry 3 import_probe || exit $?
+
+  tmp="{{workdir}}/outputs/result.${SLURM_JOB_ID}.tmp"
+  final="{{workdir}}/outputs/result.json"
+  {{entry_command}} --output "${tmp}" || exit $?
+  test -s "${tmp}"
+  mv -f "${tmp}" "${final}"
+  printf 'complete job=%s\n' "${SLURM_JOB_ID}" > "{{workdir}}/complete/COMPLETE"
+preflight_checks:
+  - check: workdir_shared
+    description: "工作目录必须在共享文件系统"
+  - check: qos_available
+    description: "QoS 在集群可用"
+  - check: data_path_exists
+    description: "DATA_ROOT 必须存在"
+  - check: env_var_nonempty
+    description: "KIT_ROOT 和 DATA_ROOT 不能为空"
+  - check: no_script_self_path
+    description: "SBATCH 不使用 $0/BASH_SOURCE 推导资源路径"
+recovery:
+  strategy: reconcile_then_resubmit_missing
+  description: "先校验 artifact integrity 和 COMPLETE；只补缺失 task 或补写 marker，不重复完整生成。"
+  scan_command: "python tools/reconcile_outputs.py --workdir {{workdir}} --write-complete-if-valid"
+success_protocol:
+  priority_order:
+    - "artifact integrity"
+    - "COMPLETE marker"
+    - "Slurm exit code"
+  artifact_write: "tmp -> validate -> atomic mv -> COMPLETE"
+  marker: COMPLETE
+  validation:
+    - "产物非空"
+    - "manifest 可解析"
+    - "COMPLETE 存在"
+  reconcile: "生成器 reported generated=N failed=0 后，退出阶段路径错误优先按产物完整性对账"
+risk_declaration:
+  gpu_concurrency: "如启用 GPU array，按 DAG 层汇总 throttle * gpus_per_task"
+  estimated_runtime: "{{time_limit}}"
+  encoded_lessons:
+    - HF4-001
+    - HF4-003
+    - HF4-006
+    - HF4-007
+    - HF4-008
+    - HF4-009
+    - HF4-010
+    - HF4-011
+    - HF4-012
+    - HF4-013
+    - HF4-014

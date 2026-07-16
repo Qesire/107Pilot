@@ -1,0 +1,41 @@
+[project]
+name = "pilot107"
+version = "0.1.0"
+description = "Evidence-backed Slurm workflow prototype for 107Pilot."
+requires-python = ">=3.12"
+dependencies = [
+  "Jinja2>=3.1.4",
+  "PyYAML>=6.0.2",
+]
+
+[project.optional-dependencies]
+api = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.8",
+]
+dev = [
+  "pytest>=8.2",
+  "ruff>=0.5",
+  "mypy>=1.10",
+  "types-PyYAML>=6.0.12",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["pilot107"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.setuptools.data-files]
+"share/pilot107/known_errors" = ["data/known_errors/*.yaml"]

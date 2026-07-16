@@ -1,0 +1,5 @@
+services:
+  pilot107-command-gateway:
+    ports:
+      - "${PILOT107_COMMAND_GATEWAY_PORT:-127.0.0.1:18090}:8090"
+

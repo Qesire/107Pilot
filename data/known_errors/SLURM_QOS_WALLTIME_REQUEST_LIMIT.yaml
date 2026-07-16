@@ -1,0 +1,23 @@
+error_id: SLURM.QOS_WALLTIME_REQUEST_LIMIT
+category: resource_policy
+severity: error
+retryable: true
+stage: scheduling
+title: "作业 walltime 超过 QoS 单作业上限"
+symptoms:
+  - "qosmaxwalldurationperjoblimit"
+evidence_paths:
+  - slurm/runtime_status.json
+  - slurm/job_detail.json
+  - submission/submit.stderr
+root_cause: "resources.time_limit 超过所选 QoS 允许的单作业最长时间，作业不会按当前请求开始运行。"
+fix_template:
+  type: structured_patch
+  patch:
+    resources.time_limit: null
+fix_guide:
+  fix: "把 resources.time_limit 降到平台确认的 QoS MaxWall 以内，或选择当前用户已获授权且时间上限更高的 QoS。"
+  prevention: "模板发布和提交前比较 time_limit 与最新 QoS limit；快照缺失时显示未知，不猜测上限。"
+  automation: "Agent 必须让用户确认新的 time_limit 或已授权 QoS，不得静默截断运行时间。"
+confidence: high
+kb_article: "https://slurm.schedmd.com/job_reason_codes.html"

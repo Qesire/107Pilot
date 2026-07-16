@@ -1,0 +1,322 @@
+{
+  "paths": {
+    "/api/v1/health/live": {
+      "get": {
+        "operationId": "get_liveness",
+        "parameters": [],
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/health/ready": {
+      "get": {
+        "operationId": "get_readiness",
+        "parameters": [],
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/v1/platform/capabilities": {
+      "get": {
+        "operationId": "get_platform_capabilities",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false
+          }
+        ],
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/platform/entitlements": {
+      "get": {
+        "operationId": "list_user_entitlements",
+        "parameters": [
+          {"in": "query", "name": "owner", "required": false},
+          {"in": "query", "name": "freshness", "required": false},
+          {"in": "query", "name": "as_of", "required": false},
+          {"in": "query", "name": "limit", "required": false},
+          {"in": "query", "name": "cursor", "required": false}
+        ],
+        "tags": ["platform"]
+      }
+    },
+    "/api/v1/platform/entitlements/latest": {
+      "get": {
+        "operationId": "get_latest_user_entitlement",
+        "parameters": [
+          {"in": "query", "name": "owner", "required": false}
+        ],
+        "tags": ["platform"]
+      }
+    },
+    "/api/v1/platform/entitlements/{snapshot_id}": {
+      "get": {
+        "operationId": "get_user_entitlement",
+        "parameters": [
+          {"in": "path", "name": "snapshot_id", "required": true},
+          {"in": "query", "name": "owner", "required": false}
+        ],
+        "tags": ["platform"]
+      }
+    },
+    "/api/v1/platform/snapshots": {
+      "get": {
+        "operationId": "list_platform_snapshots",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "source_type",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "freshness",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "as_of",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          }
+        ],
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/platform/snapshots/latest": {
+      "get": {
+        "operationId": "get_latest_platform_snapshot",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false
+          }
+        ],
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/platform/snapshots/{snapshot_id}": {
+      "get": {
+        "operationId": "get_platform_snapshot",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "snapshot_id",
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false
+          }
+        ],
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/template-drafts": {
+      "get": {
+        "operationId": "list_template_drafts",
+        "parameters": [
+          {"in": "query", "name": "owner", "required": false},
+          {"in": "query", "name": "limit", "required": false},
+          {"in": "query", "name": "cursor", "required": false}
+        ],
+        "tags": ["templates"]
+      },
+      "post": {
+        "operationId": "create_template_draft",
+        "parameters": [],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/template-drafts/{draft_id}": {
+      "get": {
+        "operationId": "get_template_draft",
+        "parameters": [
+          {"in": "path", "name": "draft_id", "required": true},
+          {"in": "query", "name": "owner", "required": false}
+        ],
+        "tags": ["templates"]
+      },
+      "patch": {
+        "operationId": "update_template_draft",
+        "parameters": [
+          {"in": "path", "name": "draft_id", "required": true}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/template-drafts/{draft_id}/publish": {
+      "post": {
+        "operationId": "publish_template_release",
+        "parameters": [
+          {"in": "path", "name": "draft_id", "required": true}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/template-drafts/{draft_id}/reviews": {
+      "post": {
+        "operationId": "submit_template_review",
+        "parameters": [
+          {"in": "path", "name": "draft_id", "required": true}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/template-drafts/{draft_id}/validate": {
+      "post": {
+        "operationId": "validate_template_draft",
+        "parameters": [
+          {"in": "path", "name": "draft_id", "required": true}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/template-reviews/{review_id}/decision": {
+      "post": {
+        "operationId": "decide_template_review",
+        "parameters": [
+          {"in": "path", "name": "review_id", "required": true}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/template-reviews": {
+      "get": {
+        "operationId": "list_template_reviews",
+        "parameters": [
+          {"in": "query", "name": "limit", "required": false},
+          {"in": "query", "name": "cursor", "required": false}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/templates": {
+      "get": {
+        "operationId": "list_template_market",
+        "parameters": [
+          {"in": "query", "name": "q", "required": false},
+          {"in": "query", "name": "visibility", "required": false},
+          {"in": "query", "name": "partition", "required": false},
+          {"in": "query", "name": "gpu", "required": false},
+          {"in": "query", "name": "verification_environment", "required": false},
+          {"in": "query", "name": "verified", "required": false},
+          {"in": "query", "name": "limit", "required": false},
+          {"in": "query", "name": "cursor", "required": false}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/templates/{template_id}/diff": {
+      "get": {
+        "operationId": "diff_template_releases",
+        "parameters": [
+          {"in": "path", "name": "template_id", "required": true},
+          {"in": "query", "name": "from", "required": true},
+          {"in": "query", "name": "to", "required": true}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/templates/{template_id}/releases/{release_version}": {
+      "get": {
+        "operationId": "get_template_release",
+        "parameters": [
+          {"in": "path", "name": "template_id", "required": true},
+          {"in": "path", "name": "release_version", "required": true}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/templates/{template_id}/releases/{release_version}/adopt": {
+      "post": {
+        "operationId": "adopt_template_release",
+        "parameters": [
+          {"in": "path", "name": "template_id", "required": true},
+          {"in": "path", "name": "release_version", "required": true}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/templates/{template_id}/releases/{release_version}/verifications": {
+      "get": {
+        "operationId": "list_template_verifications",
+        "parameters": [
+          {"in": "path", "name": "template_id", "required": true},
+          {"in": "path", "name": "release_version", "required": true},
+          {"in": "query", "name": "limit", "required": false}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/templates/{template_id}/releases/{release_version}/verify": {
+      "post": {
+        "operationId": "verify_template_release",
+        "parameters": [
+          {"in": "path", "name": "template_id", "required": true},
+          {"in": "path", "name": "release_version", "required": true}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/api/v1/templates/{template_id}/releases/{release_version}/withdraw": {
+      "post": {
+        "operationId": "withdraw_template_release",
+        "parameters": [
+          {"in": "path", "name": "template_id", "required": true},
+          {"in": "path", "name": "release_version", "required": true}
+        ],
+        "tags": ["templates"]
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "legacy_healthz",
+        "parameters": [],
+        "tags": [
+          "health"
+        ]
+      }
+    }
+  },
+  "title": "107Pilot Control API",
+  "version": "0.3.0"
+}
