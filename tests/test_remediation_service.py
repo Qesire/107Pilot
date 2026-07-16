@@ -116,6 +116,24 @@ class FakeAdviceService:
             updated_at=now,
         )
 
+    def reject(
+        self,
+        advice_id: str,
+        *,
+        expected_version: int,
+        actor: str,
+        note: str | None = None,
+    ) -> AgentAdviceRecord:
+        del note
+        if (
+            advice_id != self.record.advice_id
+            or expected_version != self.record.version
+            or actor != "alice"
+        ):
+            raise ValueError("invalid rejection")
+        self.record = replace(self.record, state="rejected", version=2)
+        return self.record
+
 
 class RemediationServiceTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -400,6 +418,50 @@ class RemediationServiceTests(unittest.TestCase):
 
         self.assertEqual(approved.state, RemediationState.READY)
         self.assertEqual(len(self.remediations.list_decisions(session.session_id)), 1)
+
+    def test_owner_can_reject_a_proposal(self) -> None:
+        session, _ = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-reject",
+        )
+        planned = self.service.advance(session.session_id, worker_id="worker-1")
+        proposal = self.remediations.list_proposals(session.session_id)[0]
+
+        rejected = self.service.reject(
+            session.session_id,
+            proposal_id=proposal.proposal_id,
+            actor="alice",
+            expected_version=planned.version,
+            note="not safe for this run",
+        )
+
+        self.assertEqual(rejected.state, RemediationState.BLOCKED)
+        self.assertEqual(rejected.stop_reason, "action_rejected")
+        self.assertEqual(self.remediations.list_decisions(session.session_id)[0].decision, "reject")
+
+    def test_owner_can_cancel_and_replay_is_idempotent(self) -> None:
+        session, _ = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-cancel",
+        )
+
+        cancelled = self.service.cancel(
+            session.session_id,
+            actor="alice",
+            expected_version=session.version,
+            note="take over manually",
+        )
+        replayed = self.service.cancel(
+            session.session_id,
+            actor="alice",
+            expected_version=session.version,
+        )
+
+        self.assertEqual(cancelled.state, RemediationState.CANCELLED)
+        self.assertEqual(cancelled.takeover_reason, "take over manually")
+        self.assertEqual(replayed, cancelled)
 
 
 if __name__ == "__main__":

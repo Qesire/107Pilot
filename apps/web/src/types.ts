@@ -214,6 +214,107 @@ export interface HealthReady {
 
 export type JsonObject = Record<string, unknown>;
 
+export type RemediationState =
+  | "waiting_evidence"
+  | "diagnosing"
+  | "planning"
+  | "awaiting_input"
+  | "awaiting_approval"
+  | "ready"
+  | "preparing"
+  | "executing"
+  | "evaluating"
+  | "succeeded"
+  | "exhausted"
+  | "blocked"
+  | "failed"
+  | "cancelled";
+
+export interface RemediationBudget {
+  max_attempts: number;
+  max_submissions: number;
+  max_wall_time_seconds: number;
+  max_llm_calls: number;
+  max_llm_tokens: number;
+}
+
+export interface RemediationUsage {
+  attempts: number;
+  submissions: number;
+  wall_time_seconds: number;
+  llm_calls: number;
+  llm_tokens: number;
+}
+
+export interface RemediationProposal {
+  proposal_id: string;
+  turn_id: string;
+  action_id: string;
+  action_type: string;
+  source: string;
+  risk: string;
+  approval_required: boolean;
+  policy_status: string;
+  payload: JsonObject;
+  created_at: string;
+}
+
+export interface RemediationDecision {
+  decision_id: string;
+  proposal_id: string;
+  actor: string;
+  decision: string;
+  note: string | null;
+  created_at: string;
+}
+
+export interface RemediationExecution {
+  execution_id: string;
+  proposal_id: string;
+  state: string;
+  derived_contract_id: string | null;
+  derived_run_id: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RemediationEvaluation {
+  evaluation_id: string;
+  execution_id: string;
+  source_run_id: string;
+  derived_run_id: string;
+  outcome: string;
+  checks: JsonObject[];
+  comparison: JsonObject;
+  evidence_refs: string[];
+  created_at: string;
+}
+
+export interface RemediationSession {
+  session_id: string;
+  owner: string;
+  state: RemediationState;
+  version: number;
+  source_run_id: string;
+  source_contract_id: string | null;
+  source_diagnosis_digest: string;
+  source_evidence_digest: string;
+  automation_policy: string;
+  budget: RemediationBudget;
+  usage: RemediationUsage;
+  stop_reason: string | null;
+  takeover_reason: string | null;
+  turns: JsonObject[];
+  proposals: RemediationProposal[];
+  decisions: RemediationDecision[];
+  executions: RemediationExecution[];
+  evaluations: RemediationEvaluation[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ContractRecordPayload {
   contract_id: string;
   owner: string;

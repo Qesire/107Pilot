@@ -14,6 +14,7 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { StatusBadge } from "./components";
+import { AgentPage } from "./AgentPage";
 import { useHealth, useWebSession } from "./query";
 import { ClusterPage, NotFoundPage, PlannedPage, RunsPage, WorkspacePage } from "./pages";
 import { MarketPage, TemplateDetailPage } from "./MarketPages";
@@ -74,7 +75,7 @@ export default function App() {
               >
                 <Icon aria-hidden="true" />
                 <span>{item.label}</span>
-                {["/agent", "/terminal"].includes(item.path) ? <small>下一切片</small> : null}
+                {item.path === "/terminal" ? <small>后续能力</small> : null}
               </a>
             );
           })}
@@ -82,7 +83,7 @@ export default function App() {
         <div className="sidebar-bottom">
           <button type="button" disabled title="帮助中心将在后续切片接入"><LifeBuoy aria-hidden="true" /><span>帮助与文档</span></button>
           <button type="button" disabled title="设置将在后续切片接入"><Settings aria-hidden="true" /><span>设置</span></button>
-          <p>Phase 3D · live read model</p>
+          <p>Phase 3F · remediation workbench</p>
         </div>
       </aside>
 
@@ -128,7 +129,8 @@ export default function App() {
                 <StudioPage user={user} location={location} navigate={navigate} />
               </Suspense>
             ) : null}
-            {location.pathname === "/agent" || location.pathname === "/terminal" ? <PlannedPage user={user} location={location} navigate={navigate} /> : null}
+            {location.pathname === "/agent" ? <AgentPage user={user} location={location} navigate={navigate} /> : null}
+            {location.pathname === "/terminal" ? <PlannedPage user={user} location={location} navigate={navigate} /> : null}
             {!isKnownPath(location.pathname) ? <NotFoundPage user={user} location={location} navigate={navigate} /> : null}
           </> : null}
         </main>

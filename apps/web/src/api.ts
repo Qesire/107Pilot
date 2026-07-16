@@ -10,6 +10,7 @@ import type {
   JsonObject,
   RecipeSummaryPayload,
   PreparedRun,
+  RemediationSession,
   EvidenceObjectPreview,
   RunCapsule,
   RunDiagnoses,
@@ -264,4 +265,77 @@ export const api = {
       {},
       signal,
     ),
+  remediationSessions: (user: string, state?: string, signal?: AbortSignal) =>
+    getJson<{ items: RemediationSession[] }>(
+      queryPath("/api/v1/remediation-sessions", { owner: user, state }),
+      user,
+      signal,
+    ),
+  remediationSession: (user: string, sessionId: string, signal?: AbortSignal) =>
+    getJson<RemediationSession>(
+      `/api/v1/remediation-sessions/${encodeURIComponent(sessionId)}`,
+      user,
+      signal,
+    ),
+  createRemediationSession: (user: string, runId: string, signal?: AbortSignal) =>
+    sendJson<RemediationSession>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/remediation-sessions`,
+      user,
+      { request_key: `ui:${runId}`, automation_policy: "manual_approval" },
+      signal,
+    ),
+  advanceRemediationSession: (user: string, sessionId: string, signal?: AbortSignal) =>
+    sendJson<RemediationSession>(
+      `/api/v1/remediation-sessions/${encodeURIComponent(sessionId)}/advance`,
+      user,
+      {},
+      signal,
+    ),
+  approveRemediationAction: (
+    user: string,
+    sessionId: string,
+    proposalId: string,
+    expectedVersion: number,
+    signal?: AbortSignal,
+  ) => sendJson<RemediationSession>(
+    `/api/v1/remediation-sessions/${encodeURIComponent(sessionId)}/approve`,
+    user,
+    { proposal_id: proposalId, expected_version: expectedVersion },
+    signal,
+  ),
+  rejectRemediationAction: (
+    user: string,
+    sessionId: string,
+    proposalId: string,
+    expectedVersion: number,
+    signal?: AbortSignal,
+  ) => sendJson<RemediationSession>(
+    `/api/v1/remediation-sessions/${encodeURIComponent(sessionId)}/reject`,
+    user,
+    { proposal_id: proposalId, expected_version: expectedVersion },
+    signal,
+  ),
+  cancelRemediationSession: (
+    user: string,
+    sessionId: string,
+    expectedVersion: number,
+    signal?: AbortSignal,
+  ) => sendJson<RemediationSession>(
+    `/api/v1/remediation-sessions/${encodeURIComponent(sessionId)}/cancel`,
+    user,
+    { expected_version: expectedVersion },
+    signal,
+  ),
+  executeRemediationAction: (
+    user: string,
+    sessionId: string,
+    proposalId: string,
+    expectedVersion: number,
+    signal?: AbortSignal,
+  ) => sendJson<RemediationSession>(
+    `/api/v1/remediation-sessions/${encodeURIComponent(sessionId)}/execute`,
+    user,
+    { proposal_id: proposalId, expected_version: expectedVersion, submit: true },
+    signal,
+  ),
 };

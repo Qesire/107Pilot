@@ -81,6 +81,33 @@ describe("API transport", () => {
       expect.objectContaining({ signal: controller.signal }),
     );
   });
+
+  it("keeps remediation identity and optimistic version in the request contract", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ session_id: "session_1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.createRemediationSession("alice", "run/a");
+    await api.approveRemediationAction("alice", "session/1", "proposal 1", 7);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/runs/run%2Fa/remediation-sessions",
+      expect.objectContaining({
+        body: JSON.stringify({
+          request_key: "ui:run/a",
+          automation_policy: "manual_approval",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/remediation-sessions/session%2F1/approve",
+      expect.objectContaining({
+        body: JSON.stringify({ proposal_id: "proposal 1", expected_version: 7 }),
+        headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+      }),
+    );
+  });
 });
 
 function jsonResponse(payload: unknown, status = 200, statusText = "OK"): Response {

@@ -172,3 +172,27 @@ export function useTemplateDiff(
     staleTime: 30_000,
   });
 }
+
+export function useRemediationSessions(user: string, state?: string) {
+  return useQuery({
+    queryKey: ["remediation-sessions", user, state ?? ""],
+    queryFn: ({ signal }) => api.remediationSessions(user, state, signal),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useRemediationSession(user: string, sessionId: string | null) {
+  return useQuery({
+    queryKey: ["remediation-session", user, sessionId],
+    queryFn: ({ signal }) => api.remediationSession(user, sessionId ?? "", signal),
+    enabled: Boolean(sessionId),
+    refetchInterval: (query) => [
+      "waiting_evidence",
+      "diagnosing",
+      "planning",
+      "preparing",
+      "executing",
+      "evaluating",
+    ].includes(query.state.data?.state ?? "") ? 3_000 : false,
+  });
+}

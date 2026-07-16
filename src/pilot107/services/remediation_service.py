@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from pilot107.core.advice import AdviceResult
 from pilot107.core.remediation import (
+    TERMINAL_REMEDIATION_STATES,
     ActionDecision,
     ActionExecution,
     ActionProposal,
@@ -61,6 +62,15 @@ class AdviceService(Protocol):
         *,
         expected_version: int,
         action_ids: list[str],
+        actor: str,
+        note: str | None = None,
+    ) -> AgentAdviceRecord: ...
+
+    def reject(
+        self,
+        advice_id: str,
+        *,
+        expected_version: int,
         actor: str,
         note: str | None = None,
     ) -> AgentAdviceRecord: ...
@@ -244,6 +254,93 @@ class RemediationService:
             expected_version=expected_version,
             expected_state=RemediationState.AWAITING_APPROVAL,
             target_state=RemediationState.READY,
+        )
+
+    def reject(
+        self,
+        session_id: str,
+        *,
+        proposal_id: str,
+        actor: str,
+        expected_version: int,
+        note: str | None = None,
+    ) -> RemediationSession:
+        session = self.remediation_store.get_session(session_id)
+        if session.owner != actor:
+            raise RemediationServiceError("session belongs to another owner", code="AUTH.FORBIDDEN")
+        if session.state != RemediationState.AWAITING_APPROVAL:
+            raise RemediationServiceError(
+                "session is not awaiting approval",
+                code="REMEDIATION.NOT_AWAITING_APPROVAL",
+            )
+        if session.version != expected_version:
+            raise RemediationConflict("remediation session version changed")
+        proposal = self.remediation_store.get_proposal(proposal_id)
+        if proposal.session_id != session_id:
+            raise RemediationServiceError(
+                "proposal belongs to another session",
+                code="AUTH.FORBIDDEN",
+            )
+        turn = self.remediation_store.get_turn(proposal.turn_id)
+        if turn.advice_id is None:
+            raise RemediationServiceError(
+                "proposal has no advice binding",
+                code="REMEDIATION.ADVICE_MISSING",
+            )
+        advice = self.advice_service.get(turn.advice_id)
+        if advice.state != "rejected":
+            self.advice_service.reject(
+                advice.advice_id,
+                expected_version=advice.version,
+                actor=actor,
+                note=note,
+            )
+        decision = ActionDecision(
+            decision_id="remdecision_"
+            + hashlib.sha256(
+                f"{session_id}\0{proposal_id}\0{expected_version}\0reject".encode()
+            ).hexdigest()[:32],
+            session_id=session_id,
+            proposal_id=proposal_id,
+            actor=actor,
+            decision="reject",
+            expected_session_version=expected_version,
+            note=_bounded_note(note),
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        self.remediation_store.append_decision(decision)
+        return self.remediation_store.transition(
+            session_id,
+            expected_version=expected_version,
+            expected_state=RemediationState.AWAITING_APPROVAL,
+            target_state=RemediationState.BLOCKED,
+            stop_reason="action_rejected",
+        )
+
+    def cancel(
+        self,
+        session_id: str,
+        *,
+        actor: str,
+        expected_version: int,
+        note: str | None = None,
+    ) -> RemediationSession:
+        session = self.remediation_store.get_session(session_id)
+        if session.owner != actor:
+            raise RemediationServiceError("session belongs to another owner", code="AUTH.FORBIDDEN")
+        if session.state == RemediationState.CANCELLED:
+            return session
+        if session.state in TERMINAL_REMEDIATION_STATES:
+            raise RemediationConflict("terminal remediation session cannot be cancelled")
+        if session.version != expected_version:
+            raise RemediationConflict("remediation session version changed")
+        return self.remediation_store.transition(
+            session_id,
+            expected_version=expected_version,
+            expected_state=session.state,
+            target_state=RemediationState.CANCELLED,
+            stop_reason="cancelled_by_owner",
+            takeover_reason=_bounded_note(note),
         )
 
     def execute(

@@ -258,9 +258,39 @@
         ]
       }
     },
+    "/api/v1/remediation-sessions/{session_id}/cancel": {
+      "post": {
+        "operationId": "cancel_remediation_session",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "remediation"
+        ]
+      }
+    },
     "/api/v1/remediation-sessions/{session_id}/execute": {
       "post": {
         "operationId": "execute_remediation_action",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "remediation"
+        ]
+      }
+    },
+    "/api/v1/remediation-sessions/{session_id}/reject": {
+      "post": {
+        "operationId": "reject_remediation_action",
         "parameters": [
           {
             "in": "path",

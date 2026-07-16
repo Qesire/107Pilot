@@ -93,6 +93,31 @@ class RemediationApiTests(unittest.TestCase):
         )
         self.assertEqual(listed.payload["items"], [])
 
+    def test_owner_can_cancel_session_and_replay_is_idempotent(self) -> None:
+        created = self.api.handle_post(
+            "/api/v1/runs/run_remediation_api/remediation-sessions",
+            body=_json({"request_key": "api-cancel"}),
+            headers=self.headers,
+        )
+        session_id = created.payload["session_id"]
+        body = _json({"expected_version": created.payload["version"]})
+
+        cancelled = self.api.handle_post(
+            f"/api/v1/remediation-sessions/{session_id}/cancel",
+            body=body,
+            headers=self.headers,
+        )
+        replayed = self.api.handle_post(
+            f"/api/v1/remediation-sessions/{session_id}/cancel",
+            body=body,
+            headers=self.headers,
+        )
+
+        self.assertEqual(cancelled.status, 200)
+        self.assertEqual(cancelled.payload["state"], "cancelled")
+        self.assertEqual(replayed.status, 200)
+        self.assertEqual(replayed.payload, cancelled.payload)
+
 
 def _json(value: object) -> bytes:
     return json.dumps(value).encode()

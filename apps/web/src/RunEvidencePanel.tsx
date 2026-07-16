@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   Boxes,
+  Bot,
   Bug,
   CheckCircle2,
   FileText,
@@ -85,6 +86,12 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
       void queryClient.invalidateQueries({ queryKey: ["run", user, run.run_id] });
     },
   });
+  const startRemediation = useMutation({
+    mutationFn: () => api.createRemediationSession(user, run.run_id),
+    onSuccess: (session) => navigate(
+      `/agent?user=${encodeURIComponent(user)}&session=${encodeURIComponent(session.session_id)}`,
+    ),
+  });
   const setView = (nextTab: EvidenceTab, objectId: string | null = null) =>
     navigate(withSearch(location.pathname, location.search, { tab: nextTab, object: objectId }));
 
@@ -98,7 +105,7 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
       </nav>
 
       <QueryBoundary pending={evidence.isPending} error={evidence.error}>
-        {tab === "overview" ? <Overview run={run} objects={objects} tasks={evidence.data?.tasks ?? []} /> : null}
+        {tab === "overview" ? <Overview run={run} objects={objects} tasks={evidence.data?.tasks ?? []} remediation={startRemediation} /> : null}
         {tab === "logs" ? (
           <ObjectPreviewView
             title="标准输出与标准错误"
@@ -160,7 +167,7 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
   );
 }
 
-function Overview({ run, objects, tasks }: { run: RunSummary; objects: EvidenceObject[]; tasks: Array<{ task_id: number; task_type: string; state: string; attempts: number; updated_at: string }> }) {
+function Overview({ run, objects, tasks, remediation }: { run: RunSummary; objects: EvidenceObject[]; tasks: Array<{ task_id: number; task_type: string; state: string; attempts: number; updated_at: string }>; remediation: { isPending: boolean; isError: boolean; error: Error | null; mutate: () => void } }) {
   const categories = [...new Set(objects.map((item) => item.category))];
   return (
     <div className="evidence-section">
@@ -178,6 +185,13 @@ function Overview({ run, objects, tasks }: { run: RunSummary; objects: EvidenceO
         <div><dt>Updated</dt><dd>{formatTimestamp(run.updated_at)}</dd></div>
       </dl>
       <section className="collection-tasks"><h3>Collection tasks</h3><ul>{tasks.map((task) => <li key={task.task_id}><FactState status={task.state} /><span>{task.task_type}</span><small>attempt {task.attempts}</small></li>)}</ul></section>
+      {["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED"].includes(run.state) ? (
+        <section className="run-agent-entry">
+          <div><Bot aria-hidden="true" /><span><strong>启动受控修复</strong><small>基于当前 Diagnosis 和 Evidence 创建 owner-scoped 会话。</small></span></div>
+          <button className="button secondary" type="button" disabled={remediation.isPending} onClick={() => remediation.mutate()}>{remediation.isPending ? "创建中" : "进入 Agent"}</button>
+          {remediation.isError ? <p role="alert">{remediation.error?.message ?? "创建修复会话失败"}</p> : null}
+        </section>
+      ) : null}
     </div>
   );
 }
