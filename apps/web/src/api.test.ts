@@ -88,6 +88,7 @@ describe("API transport", () => {
 
     await api.createRemediationSession("alice", "run/a");
     await api.approveRemediationAction("alice", "session/1", "proposal 1", 7);
+    await api.takeoverRemediationSession("alice", "session/1", 8, "manual handoff");
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -104,6 +105,14 @@ describe("API transport", () => {
       "/api/v1/remediation-sessions/session%2F1/approve",
       expect.objectContaining({
         body: JSON.stringify({ proposal_id: "proposal 1", expected_version: 7 }),
+        headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/remediation-sessions/session%2F1/takeover",
+      expect.objectContaining({
+        body: JSON.stringify({ expected_version: 8, note: "manual handoff" }),
         headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
       }),
     );

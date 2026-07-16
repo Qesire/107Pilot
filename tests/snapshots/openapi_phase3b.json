@@ -333,6 +333,21 @@
         ]
       }
     },
+    "/api/v1/remediation-sessions/{session_id}/takeover": {
+      "post": {
+        "operationId": "takeover_remediation_session",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "remediation"
+        ]
+      }
+    },
     "/api/v1/runs/{run_id}/remediation-sessions": {
       "post": {
         "operationId": "create_remediation_session",

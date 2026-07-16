@@ -183,6 +183,33 @@ class RemediationApiTests(unittest.TestCase):
         self.assertEqual(second.payload["items"][0]["event_type"], "session.state_changed")
         self.assertEqual(forbidden.status, 403)
 
+    def test_owner_can_record_manual_takeover_with_required_reason(self) -> None:
+        created = self.api.handle_post(
+            "/api/v1/runs/run_remediation_api/remediation-sessions",
+            body=_json({"request_key": "api-takeover"}),
+            headers=self.headers,
+        )
+        session_id = created.payload["session_id"]
+        missing_note = self.api.handle_post(
+            f"/api/v1/remediation-sessions/{session_id}/takeover",
+            body=_json({"expected_version": created.payload["version"]}),
+            headers=self.headers,
+        )
+        blocked = self.api.handle_post(
+            f"/api/v1/remediation-sessions/{session_id}/takeover",
+            body=_json(
+                {
+                    "expected_version": created.payload["version"],
+                    "note": "continue from a manually derived Contract",
+                }
+            ),
+            headers=self.headers,
+        )
+
+        self.assertEqual(missing_note.status, 400)
+        self.assertEqual(blocked.status, 200)
+        self.assertEqual(blocked.payload["stop_reason"], "manual_takeover")
+
 
 def _json(value: object) -> bytes:
     return json.dumps(value).encode()

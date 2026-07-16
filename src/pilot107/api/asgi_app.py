@@ -526,6 +526,7 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
         ("reject", "reject_remediation_action"),
         ("execute", "execute_remediation_action"),
         ("cancel", "cancel_remediation_session"),
+        ("takeover", "takeover_remediation_session"),
     ):
         app.add_api_route(
             f"/api/v1/remediation-sessions/{{session_id}}/{action}",

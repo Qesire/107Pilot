@@ -463,6 +463,30 @@ class RemediationServiceTests(unittest.TestCase):
         self.assertEqual(cancelled.takeover_reason, "take over manually")
         self.assertEqual(replayed, cancelled)
 
+    def test_owner_can_record_explicit_manual_takeover(self) -> None:
+        session, _ = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-takeover",
+        )
+
+        blocked = self.service.takeover(
+            session.session_id,
+            actor="alice",
+            expected_version=session.version,
+            note="derive a Contract in Studio and continue outside this session",
+        )
+        replayed = self.service.takeover(
+            session.session_id,
+            actor="alice",
+            expected_version=session.version,
+            note="ignored on replay",
+        )
+
+        self.assertEqual(blocked.state, RemediationState.BLOCKED)
+        self.assertEqual(blocked.stop_reason, "manual_takeover")
+        self.assertEqual(replayed, blocked)
+
 
 if __name__ == "__main__":
     unittest.main()

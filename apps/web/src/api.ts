@@ -326,6 +326,18 @@ export const api = {
     { expected_version: expectedVersion },
     signal,
   ),
+  takeoverRemediationSession: (
+    user: string,
+    sessionId: string,
+    expectedVersion: number,
+    note: string,
+    signal?: AbortSignal,
+  ) => sendJson<RemediationSession>(
+    `/api/v1/remediation-sessions/${encodeURIComponent(sessionId)}/takeover`,
+    user,
+    { expected_version: expectedVersion, note },
+    signal,
+  ),
   executeRemediationAction: (
     user: string,
     sessionId: string,

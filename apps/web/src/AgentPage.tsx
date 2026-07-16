@@ -154,6 +154,15 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
     ),
     onSuccess: refresh,
   });
+  const takeover = useMutation({
+    mutationFn: () => api.takeoverRemediationSession(
+      user,
+      session.session_id,
+      session.version,
+      "在 Contract Studio 中人工派生后继续",
+    ),
+    onSuccess: refresh,
+  });
   const execute = useMutation({
     mutationFn: (proposal: RemediationProposal) => api.executeRemediationAction(
       user,
@@ -163,7 +172,8 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
     ),
     onSuccess: refresh,
   });
-  const error = advance.error ?? approve.error ?? reject.error ?? cancel.error ?? execute.error;
+  const error = advance.error ?? approve.error ?? reject.error ?? cancel.error
+    ?? takeover.error ?? execute.error;
   const decided = new Set(session.decisions.filter((item) => item.decision === "approve").map((item) => item.proposal_id));
 
   return (
@@ -189,7 +199,10 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
           <div>
             <strong>规则缺少安全的具体值</strong>
             <p>请从 source Contract 派生新版本；系统不会猜测命令、路径或依赖。</p>
-            <a href={`/studio/${encodeURIComponent(session.source_contract_id)}?user=${encodeURIComponent(user)}`}>打开 Contract Studio</a>
+            <div className="agent-action-row">
+              <a href={`/studio/${encodeURIComponent(session.source_contract_id)}?user=${encodeURIComponent(user)}`}>打开 Contract Studio</a>
+              <button className="button secondary" type="button" disabled={takeover.isPending} onClick={() => takeover.mutate()}>标记人工接管</button>
+            </div>
           </div>
         </div>
       ) : null}

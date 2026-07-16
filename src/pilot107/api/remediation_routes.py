@@ -180,7 +180,7 @@ class RemediationRoutes:
         if len(parts) != 3 or parts[0] != "remediation-sessions":
             return None
         session_id, action = parts[1], parts[2]
-        if action not in {"advance", "approve", "reject", "execute", "cancel"}:
+        if action not in {"advance", "approve", "reject", "execute", "cancel", "takeover"}:
             return None
         payload, error = _json_body(body)
         if error is not None:
@@ -219,6 +219,14 @@ class RemediationRoutes:
                     actor=actor,
                     expected_version=_required_int(payload, "expected_version"),
                     note=_optional_string(payload, "note"),
+                )
+                return ApiResponse(status=200, payload=remediation_session_payload(updated))
+            if action == "takeover":
+                updated = self.service.takeover(
+                    session_id,
+                    actor=actor,
+                    expected_version=_required_int(payload, "expected_version"),
+                    note=_required_string(payload, "note"),
                 )
                 return ApiResponse(status=200, payload=remediation_session_payload(updated))
             updated, execution = self.service.execute(

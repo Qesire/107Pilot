@@ -343,6 +343,38 @@ class RemediationService:
             takeover_reason=_bounded_note(note),
         )
 
+    def takeover(
+        self,
+        session_id: str,
+        *,
+        actor: str,
+        expected_version: int,
+        note: str,
+    ) -> RemediationSession:
+        session = self.remediation_store.get_session(session_id)
+        if session.owner != actor:
+            raise RemediationServiceError("session belongs to another owner", code="AUTH.FORBIDDEN")
+        if session.state == RemediationState.BLOCKED and session.stop_reason == "manual_takeover":
+            return session
+        if session.state in TERMINAL_REMEDIATION_STATES:
+            raise RemediationConflict("terminal remediation session cannot be taken over")
+        if session.version != expected_version:
+            raise RemediationConflict("remediation session version changed")
+        reason = _bounded_note(note)
+        if reason is None:
+            raise RemediationServiceError(
+                "takeover note is required",
+                code="REMEDIATION.TAKEOVER_NOTE_REQUIRED",
+            )
+        return self.remediation_store.transition(
+            session_id,
+            expected_version=expected_version,
+            expected_state=session.state,
+            target_state=RemediationState.BLOCKED,
+            stop_reason="manual_takeover",
+            takeover_reason=reason,
+        )
+
     def execute(
         self,
         session_id: str,
