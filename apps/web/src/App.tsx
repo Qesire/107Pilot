@@ -17,7 +17,7 @@ import { StatusBadge } from "./components";
 import { useHealth, useWebSession } from "./query";
 import { ClusterPage, NotFoundPage, PlannedPage, RunsPage, WorkspacePage } from "./pages";
 import { MarketPage, TemplateDetailPage } from "./MarketPages";
-import { useLocationState, withSearch } from "./url";
+import { globalNavigationPath, useLocationState, withSearch } from "./url";
 
 const navigation = [
   { path: "/projects", label: "工作台", icon: FolderKanban },
@@ -49,7 +49,7 @@ export default function App() {
   const setUser = (nextUser: string) => {
     navigate(withSearch(location.pathname, location.search, { user: nextUser }), { replace: true });
   };
-  const go = (path: string) => navigate(withSearch(path, location.search, {}));
+  const go = (path: string) => navigate(globalNavigationPath(path, user));
   const activePath = navigation.find((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`))?.path;
 
   return (
@@ -67,7 +67,7 @@ export default function App() {
             return (
               <a
                 key={item.path}
-                href={withSearch(item.path, location.search, {})}
+                href={globalNavigationPath(item.path, user)}
                 className={active ? "active" : undefined}
                 aria-current={active ? "page" : undefined}
                 onClick={(event) => { event.preventDefault(); go(item.path); }}

@@ -13,6 +13,7 @@ from pilot107.core.template_market import (
     TemplateMarketStore,
     TemplateReviewState,
     TemplateVisibility,
+    _rebase_adopter_workdir,
 )
 from pilot107.core.template_market_migrations import TEMPLATE_MARKET_MIGRATIONS
 from pilot107.core.template_policy import (
@@ -74,7 +75,8 @@ class TemplateMarketStoreTests(unittest.TestCase):
         self.assertEqual(release.content_sha256, review.content_sha256)
         self.assertEqual(adopted.visibility, TemplateVisibility.PRIVATE)
         self.assertEqual(adopted.state, TemplateDraftState.EDITABLE)
-        self.assertEqual(adopted.payload, draft.payload)
+        self.assertEqual(adopted.payload["project"]["workdir"], "/public/home/bob")
+        self.assertEqual(draft.payload["project"]["workdir"], "/public/home/alice")
         self.assertEqual(
             adopted.payload["extensions"]["advanced"]["raw_sbatch"],
             "#SBATCH --exclusive",
@@ -89,6 +91,17 @@ class TemplateMarketStoreTests(unittest.TestCase):
         )
         self.assertEqual(contract.payload["entry"], release.payload["entry"])
         self.assertEqual(contract.payload["resources"], release.payload["resources"])
+        self.assertEqual(contract.payload["project"]["workdir"], "/public/home/bob")
+        self.assertTrue(contract.field_sources[0]["adopter_workdir_rebased"])
+
+    def test_adoption_rebases_any_foreign_personal_home(self) -> None:
+        payload = self._contract()
+        payload["project"]["workdir"] = "/public/home/bob/course/output"
+
+        rebased = _rebase_adopter_workdir(payload, adopter="alice")
+
+        self.assertEqual(rebased["project"]["workdir"], "/public/home/alice/course/output")
+        self.assertEqual(payload["project"]["workdir"], "/public/home/bob/course/output")
 
     def test_publish_rechecks_current_publication_policy(self) -> None:
         draft = self._draft(visibility=TemplateVisibility.PUBLIC)

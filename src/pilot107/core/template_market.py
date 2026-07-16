@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -1197,14 +1198,18 @@ class TemplateMarketStore:
                         finding.as_payload() for finding in current_gate.findings
                     ),
                 )
-            validation = self.contract_service.validate(release.payload)
+            payload = _rebase_adopter_workdir(
+                release.payload,
+                adopter=adopter,
+            )
+            validation = self.contract_service.validate(payload)
             if validation.status == "BLOCK":
                 raise TemplateMarketError(
                     "release cannot produce a canonical Contract",
                     code="TEMPLATE.CONTRACT_BLOCKED",
                 )
             compatibility = json.loads(_canonical_json(release.compatibility))
-            payload = json.loads(_canonical_json(release.payload))
+            payload = json.loads(_canonical_json(payload))
             digest = _content_digest(
                 title=release.title,
                 description=release.description,
@@ -1247,7 +1252,7 @@ class TemplateMarketStore:
             self.contract_service.store.create_contract(
                 owner=adopter,
                 recipe_version_id=recipe_version_id,
-                payload=release.payload,
+                payload=payload,
                 field_sources=[
                     {
                         "field": "*",
@@ -1256,6 +1261,7 @@ class TemplateMarketStore:
                         "source_template_id": release.template_id,
                         "source_release_version": release.release_version,
                         "needs_user_confirmation": False,
+                        "adopter_workdir_rebased": payload != release.payload,
                     }
                 ],
                 contract_id=target_contract_id,
@@ -1403,6 +1409,31 @@ def template_adoption_payload(record: TemplateAdoptionRecord) -> dict[str, Any]:
         "target_contract_id": record.target_contract_id,
         "created_at": record.created_at,
     }
+
+
+def _rebase_adopter_workdir(
+    payload: dict[str, Any],
+    *,
+    adopter: str,
+) -> dict[str, Any]:
+    """Copy a release payload and prevent adoption into another user's home root."""
+
+    rebased = deepcopy(payload)
+    project = rebased.get("project")
+    if not isinstance(project, dict):
+        return rebased
+    workdir = project.get("workdir")
+    if not isinstance(workdir, str):
+        return rebased
+    for root in ("/public/home", "/home"):
+        prefix = f"{root}/"
+        if workdir.startswith(prefix):
+            relative = workdir[len(prefix) :]
+            _owner, separator, remainder = relative.partition("/")
+            suffix = f"/{remainder}" if separator else ""
+            project["workdir"] = f"{root}/{adopter}{suffix}"
+            break
+    return rebased
 
 
 def template_verification_payload(record: TemplateVerificationRecord) -> dict[str, Any]:

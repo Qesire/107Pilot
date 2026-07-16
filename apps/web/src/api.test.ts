@@ -1,0 +1,93 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { api, ApiRequestError } from "./api";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("API transport", () => {
+  it("encodes identifiers, filters, and trusted identity headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [], page: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.runs("alice", { state: "FAILED", q: "空 格", limit: "10" });
+    await api.evidenceObject("alice", "run/a", "stderr #1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/runs?owner=alice&state=FAILED&q=%E7%A9%BA+%E6%A0%BC&limit=10",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/runs/run%2Fa/evidence/objects/stderr%20%231",
+      expect.any(Object),
+    );
+  });
+
+  it("sends JSON mutations with the fixed authenticated user", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ run_id: "run_1" }, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.submitRun("alice", "run_1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/runs/run_1/submit",
+      expect.objectContaining({
+        method: "POST",
+        body: "{}",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "X-Pilot107-User": "alice",
+        }),
+      }),
+    );
+  });
+
+  it("surfaces stable API error codes and fallback HTTP codes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: "AUTH.FORBIDDEN", message: "not yours" } }, 403),
+      )
+      .mockResolvedValueOnce(jsonResponse({}, 503, "Unavailable"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.run("bob", "run_alice")).rejects.toMatchObject({
+      name: "ApiRequestError",
+      status: 403,
+      code: "AUTH.FORBIDDEN",
+      message: "not yours",
+    } satisfies Partial<ApiRequestError>);
+    await expect(api.health("alice")).rejects.toMatchObject({
+      status: 503,
+      code: "HTTP.503",
+      message: "Unavailable",
+    });
+  });
+
+  it("forwards cancellation signals", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ status: "ready" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await api.health("alice", controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/health/ready",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+});
+
+function jsonResponse(payload: unknown, status = 200, statusText = "OK"): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText,
+    json: async () => payload,
+  } as Response;
+}

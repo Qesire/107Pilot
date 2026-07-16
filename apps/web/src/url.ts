@@ -50,3 +50,7 @@ export function withSearch(
   const encoded = next.toString();
   return encoded ? `${pathname}?${encoded}` : pathname;
 }
+
+export function globalNavigationPath(pathname: string, user: string): string {
+  return withSearch(pathname, new URLSearchParams(), { user });
+}
