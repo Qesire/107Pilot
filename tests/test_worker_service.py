@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from pilot107.adapters.slurm import SimulatorPathChecker, SubmissionStrategy, SubmitReceipt
+from pilot107.core.remediation import RemediationState
 from pilot107.core.resources import ResourcePlan
 from pilot107.core.run_service import RunService, RunSubmitRequest
 from pilot107.core.run_store import RunStore
@@ -117,6 +118,50 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(health["worker_id"], "worker-health-test")
         self.assertEqual(health["backend"], "in-memory")
         self.assertEqual(health["checked"], 0)
+        self.assertEqual(health["remediation_checked"], 0)
+        self.assertEqual(health["remediation_advanced"], 0)
+
+    def test_worker_advances_actionable_remediation_sessions(self) -> None:
+        service = build_worker_service(
+            config_from_env(
+                {
+                    "PILOT107_WORKER_BACKEND": "in-memory",
+                    "PILOT107_WORKER_ID": "remediation-worker-test",
+                },
+                project_root=self.root,
+            )
+        )
+        store = service.stack.store
+        store.create_run(
+            run_id="run_worker_remediation",
+            owner="alice",
+            workdir="/public/home/alice",
+            script="exit 1",
+        )
+        with store.connect() as conn:
+            conn.execute(
+                """
+                UPDATE runs
+                SET state = 'FAILED', collection_state = 'succeeded',
+                    diagnosis_state = 'skipped', exit_code = '1:0'
+                WHERE run_id = 'run_worker_remediation'
+                """
+            )
+        session, _ = service.stack.remediation_service.create(
+            owner="alice",
+            source_run_id="run_worker_remediation",
+            request_key="worker-advance",
+        )
+
+        service.run_once()
+
+        updated = service.stack.remediation_service.remediation_store.get_session(
+            session.session_id
+        )
+        self.assertEqual(updated.state, RemediationState.BLOCKED)
+        self.assertEqual(updated.stop_reason, "no_safe_action")
+        self.assertEqual(service.last_remediation_checked, 1)
+        self.assertEqual(service.last_remediation_advanced, 1)
 
     def test_demo_worker_reconciles_and_collects_evidence(self) -> None:
         db_path = self.root / "data" / "phase0" / "pilot107.db"

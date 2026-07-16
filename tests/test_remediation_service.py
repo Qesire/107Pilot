@@ -1,0 +1,406 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from dataclasses import replace
+from pathlib import Path
+
+from pilot107.core.advice import AdviceResult
+from pilot107.core.remediation import EvaluationOutcome, RemediationBudget, RemediationState
+from pilot107.core.remediation_store import RemediationStore
+from pilot107.core.run_store import (
+    AgentActionExecutionRecord,
+    AgentAdviceRecord,
+    RunStore,
+    utc_now_iso,
+)
+from pilot107.services.remediation_service import (
+    RemediationService,
+    RemediationServiceError,
+)
+
+
+class FakeAdviceService:
+    def __init__(self) -> None:
+        now = utc_now_iso()
+        self.record = AgentAdviceRecord(
+            advice_id="advice_fake",
+            run_id="run_source",
+            owner="alice",
+            request_key="fake",
+            state="ready",
+            version=1,
+            source_run_updated_at=now,
+            evidence_bundle_sha256="e" * 64,
+            provider="none",
+            model=None,
+            payload={
+                "schema_version": "AgentAdviceV1",
+                "summary": "increase time",
+                "actions": [
+                    {
+                        "action_id": "action_time",
+                        "type": "contract_patch_preview",
+                        "source": "diagnosis_rule",
+                        "risk": "medium",
+                        "approval_required": True,
+                        "policy_status": "allowed_preview",
+                        "proposed_patch": {"resources.time_limit": "00:10:00"},
+                    }
+                ],
+            },
+            created_at=now,
+            updated_at=now,
+        )
+
+    def advise(
+        self,
+        run_id: str,
+        *,
+        provider: str = "none",
+        idempotency_key: str | None = None,
+    ) -> AdviceResult:
+        del provider, idempotency_key
+        if run_id != self.record.run_id:
+            raise KeyError(run_id)
+        return AdviceResult(record=self.record, created=True)
+
+    def get(self, advice_id: str) -> AgentAdviceRecord:
+        if advice_id != self.record.advice_id:
+            raise KeyError(advice_id)
+        return self.record
+
+    def approve(
+        self,
+        advice_id: str,
+        *,
+        expected_version: int,
+        action_ids: list[str],
+        actor: str,
+        note: str | None = None,
+    ) -> AgentAdviceRecord:
+        del note
+        if (
+            advice_id != self.record.advice_id
+            or expected_version != self.record.version
+            or action_ids != ["action_time"]
+            or actor != "alice"
+        ):
+            raise ValueError("invalid approval")
+        self.record = replace(self.record, state="approved", version=2)
+        return self.record
+
+    def execute_action(
+        self,
+        advice_id: str,
+        *,
+        action_id: str,
+        actor: str,
+        submit: bool = True,
+    ) -> AgentActionExecutionRecord:
+        if advice_id != self.record.advice_id or action_id != "action_time" or actor != "alice":
+            raise ValueError("invalid execution")
+        now = utc_now_iso()
+        return AgentActionExecutionRecord(
+            execution_id="agentexec_fake",
+            advice_id=advice_id,
+            action_id=action_id,
+            owner=actor,
+            state="submitted" if submit else "prepared",
+            submit_requested=submit,
+            derived_contract_id="contract_derived",
+            run_id="run_derived",
+            error_code=None,
+            error_message=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+
+class RemediationServiceTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "pilot107.db"
+        self.runs = RunStore(self.db_path)
+        self.runs.create_run(
+            run_id="run_source",
+            owner="alice",
+            workdir="/public/home/alice",
+            script="exit 42",
+            contract_id="contract_source",
+        )
+        self.runs.create_run(
+            run_id="run_derived",
+            owner="alice",
+            workdir="/public/home/alice",
+            script="true",
+            parent_run_id="run_source",
+            lineage_reason="retry",
+        )
+        with self.runs.connect() as conn:
+            conn.execute(
+                """
+                UPDATE runs
+                SET state = 'FAILED', collection_state = 'succeeded',
+                    diagnosis_state = 'succeeded'
+                WHERE run_id = 'run_source'
+                """
+            )
+        self.remediations = RemediationStore(self.db_path)
+        self.advice = FakeAdviceService()
+        self.service = RemediationService(
+            run_store=self.runs,
+            remediation_store=self.remediations,
+            advice_service=self.advice,
+        )
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def test_create_plan_approve_and_execute(self) -> None:
+        created, was_created = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-1",
+        )
+        planned = self.service.advance(created.session_id, worker_id="worker-1")
+
+        self.assertTrue(was_created)
+        self.assertEqual(planned.state, RemediationState.AWAITING_APPROVAL)
+        proposals = self.remediations.list_proposals(created.session_id)
+        self.assertEqual([item.action_id for item in proposals], ["action_time"])
+
+        approved = self.service.approve(
+            created.session_id,
+            proposal_id=proposals[0].proposal_id,
+            actor="alice",
+            expected_version=planned.version,
+        )
+        executing, execution = self.service.execute(
+            created.session_id,
+            proposal_id=proposals[0].proposal_id,
+            actor="alice",
+            expected_version=approved.version,
+        )
+
+        self.assertEqual(executing.state, RemediationState.EXECUTING)
+        self.assertEqual(executing.usage.attempts, 1)
+        self.assertEqual(executing.usage.submissions, 1)
+        self.assertEqual(execution.derived_run_id, "run_derived")
+        detail = self.service.detail(created.session_id, owner="alice")
+        self.assertEqual(len(detail["turns"]), 1)
+        self.assertEqual(len(detail["proposals"]), 1)
+        self.assertEqual(len(detail["decisions"]), 1)
+        self.assertEqual(len(detail["executions"]), 1)
+
+        with self.runs.connect() as conn:
+            conn.execute(
+                """
+                UPDATE runs
+                SET state = 'SUCCEEDED', terminal_state = 'COMPLETED', exit_code = '0:0',
+                    collection_state = 'succeeded', diagnosis_state = 'skipped'
+                WHERE run_id = 'run_derived'
+                """
+            )
+        succeeded = self.service.advance(created.session_id, worker_id="worker-1")
+        self.assertEqual(succeeded.state, RemediationState.SUCCEEDED)
+        evaluation = self.remediations.list_evaluations(created.session_id)[0]
+        self.assertEqual(evaluation.outcome, EvaluationOutcome.VERIFIED_SUCCESS)
+
+    def test_failed_derived_run_returns_to_planning_until_budget_is_exhausted(self) -> None:
+        session, _ = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-retry",
+            budget=RemediationBudget(max_attempts=2),
+        )
+        planned = self.service.advance(session.session_id, worker_id="worker-1")
+        proposal = self.remediations.list_proposals(session.session_id)[0]
+        approved = self.service.approve(
+            session.session_id,
+            proposal_id=proposal.proposal_id,
+            actor="alice",
+            expected_version=planned.version,
+        )
+        self.service.execute(
+            session.session_id,
+            proposal_id=proposal.proposal_id,
+            actor="alice",
+            expected_version=approved.version,
+        )
+        with self.runs.connect() as conn:
+            conn.execute(
+                """
+                UPDATE runs
+                SET state = 'FAILED', terminal_state = 'TIMEOUT', exit_code = '1:0',
+                    collection_state = 'succeeded', diagnosis_state = 'succeeded'
+                WHERE run_id = 'run_derived'
+                """
+            )
+
+        retrying = self.service.advance(session.session_id, worker_id="worker-1")
+
+        self.assertEqual(retrying.state, RemediationState.PLANNING)
+        self.assertEqual(
+            self.remediations.list_evaluations(session.session_id)[0].outcome,
+            EvaluationOutcome.FAILED,
+        )
+
+    def test_success_with_degraded_evidence_requires_takeover(self) -> None:
+        session, _ = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-unverified",
+        )
+        planned = self.service.advance(session.session_id, worker_id="worker-1")
+        proposal = self.remediations.list_proposals(session.session_id)[0]
+        approved = self.service.approve(
+            session.session_id,
+            proposal_id=proposal.proposal_id,
+            actor="alice",
+            expected_version=planned.version,
+        )
+        self.service.execute(
+            session.session_id,
+            proposal_id=proposal.proposal_id,
+            actor="alice",
+            expected_version=approved.version,
+        )
+        with self.runs.connect() as conn:
+            conn.execute(
+                """
+                UPDATE runs
+                SET state = 'SUCCEEDED', terminal_state = 'COMPLETED', exit_code = '0:0',
+                    collection_state = 'degraded', diagnosis_state = 'succeeded'
+                WHERE run_id = 'run_derived'
+                """
+            )
+
+        blocked = self.service.advance(session.session_id, worker_id="worker-1")
+
+        self.assertEqual(blocked.state, RemediationState.BLOCKED)
+        self.assertEqual(blocked.stop_reason, "execution_success_unverified")
+
+    def test_create_is_owner_scoped_and_idempotent(self) -> None:
+        first, first_created = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-1",
+        )
+        duplicate, duplicate_created = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-1",
+        )
+        self.assertTrue(first_created)
+        self.assertFalse(duplicate_created)
+        self.assertEqual(first, duplicate)
+
+        with self.assertRaises(RemediationServiceError) as captured:
+            self.service.create(
+                owner="bob",
+                source_run_id="run_source",
+                request_key="request-bob",
+            )
+        self.assertEqual(captured.exception.code, "AUTH.FORBIDDEN")
+
+    def test_waits_for_evidence_without_creating_advice(self) -> None:
+        with self.runs.connect() as conn:
+            conn.execute(
+                """
+                UPDATE runs SET collection_state = 'pending', diagnosis_state = 'pending'
+                WHERE run_id = 'run_source'
+                """
+            )
+        session, _ = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-wait",
+        )
+        waiting = self.service.advance(session.session_id, worker_id="worker-1")
+        self.assertEqual(waiting.state, RemediationState.WAITING_EVIDENCE)
+        self.assertEqual(self.remediations.list_turns(session.session_id), [])
+
+    def test_zero_submission_budget_stops_before_action(self) -> None:
+        session, _ = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-budget",
+            budget=RemediationBudget(max_submissions=0),
+        )
+        planned = self.service.advance(session.session_id, worker_id="worker-1")
+        proposal = self.remediations.list_proposals(session.session_id)[0]
+        approved = self.service.approve(
+            session.session_id,
+            proposal_id=proposal.proposal_id,
+            actor="alice",
+            expected_version=planned.version,
+        )
+        with self.assertRaises(RemediationServiceError) as captured:
+            self.service.execute(
+                session.session_id,
+                proposal_id=proposal.proposal_id,
+                actor="alice",
+                expected_version=approved.version,
+            )
+        self.assertEqual(captured.exception.code, "REMEDIATION.BUDGET_EXHAUSTED")
+        self.assertEqual(
+            self.remediations.get_session(session.session_id).state,
+            RemediationState.EXHAUSTED,
+        )
+
+    def test_execute_recovers_from_preparing_state(self) -> None:
+        session, _ = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-preparing-recovery",
+        )
+        planned = self.service.advance(session.session_id, worker_id="worker-1")
+        proposal = self.remediations.list_proposals(session.session_id)[0]
+        approved = self.service.approve(
+            session.session_id,
+            proposal_id=proposal.proposal_id,
+            actor="alice",
+            expected_version=planned.version,
+        )
+        preparing = self.remediations.transition(
+            session.session_id,
+            expected_version=approved.version,
+            expected_state=RemediationState.READY,
+            target_state=RemediationState.PREPARING,
+        )
+
+        executing, execution = self.service.execute(
+            session.session_id,
+            proposal_id=proposal.proposal_id,
+            actor="alice",
+            expected_version=preparing.version,
+        )
+
+        self.assertEqual(executing.state, RemediationState.EXECUTING)
+        self.assertEqual(executing.usage.attempts, 1)
+        self.assertEqual(execution.derived_run_id, "run_derived")
+
+    def test_approval_recovers_when_underlying_advice_was_already_approved(self) -> None:
+        session, _ = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-approval-recovery",
+        )
+        planned = self.service.advance(session.session_id, worker_id="worker-1")
+        proposal = self.remediations.list_proposals(session.session_id)[0]
+        self.advice.record = replace(self.advice.record, state="approved", version=2)
+
+        approved = self.service.approve(
+            session.session_id,
+            proposal_id=proposal.proposal_id,
+            actor="alice",
+            expected_version=planned.version,
+        )
+
+        self.assertEqual(approved.state, RemediationState.READY)
+        self.assertEqual(len(self.remediations.list_decisions(session.session_id)), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

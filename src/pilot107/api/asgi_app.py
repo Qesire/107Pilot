@@ -139,6 +139,18 @@ _TEMPLATE_MARKET_PARAMETERS = [
         "schema": {"type": "string"},
     },
 ]
+_REMEDIATION_SESSION_PATH_PARAMETER = {
+    "name": "session_id",
+    "in": "path",
+    "required": True,
+    "schema": {"type": "string", "minLength": 1, "maxLength": 64},
+}
+_RUN_PATH_PARAMETER = {
+    "name": "run_id",
+    "in": "path",
+    "required": True,
+    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+}
 
 
 def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
@@ -430,6 +442,60 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
             operation_id=operation_id,
             tags=["templates"],
             openapi_extra={"parameters": _TEMPLATE_RELEASE_PARAMETERS},
+        )
+
+    app.add_api_route(
+        "/api/v1/remediation-sessions",
+        forward_get,
+        methods=["GET"],
+        operation_id="list_remediation_sessions",
+        tags=["remediation"],
+        openapi_extra={
+            "parameters": [
+                _OWNER_PARAMETER,
+                {
+                    "name": "state",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string"},
+                },
+                {
+                    "name": "limit",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+            ]
+        },
+    )
+    app.add_api_route(
+        "/api/v1/remediation-sessions/{session_id}",
+        forward_get,
+        methods=["GET"],
+        operation_id="get_remediation_session",
+        tags=["remediation"],
+        openapi_extra={"parameters": [_REMEDIATION_SESSION_PATH_PARAMETER]},
+    )
+    app.add_api_route(
+        "/api/v1/runs/{run_id}/remediation-sessions",
+        forward_post,
+        methods=["POST"],
+        operation_id="create_remediation_session",
+        tags=["remediation"],
+        openapi_extra={"parameters": [_RUN_PATH_PARAMETER]},
+    )
+    for action, operation_id in (
+        ("advance", "advance_remediation_session"),
+        ("approve", "approve_remediation_action"),
+        ("execute", "execute_remediation_action"),
+    ):
+        app.add_api_route(
+            f"/api/v1/remediation-sessions/{{session_id}}/{action}",
+            forward_post,
+            methods=["POST"],
+            operation_id=operation_id,
+            tags=["remediation"],
+            openapi_extra={"parameters": [_REMEDIATION_SESSION_PATH_PARAMETER]},
         )
 
     # Routes migrate to explicit OpenAPI operations incrementally while sharing

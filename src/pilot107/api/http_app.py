@@ -5,7 +5,6 @@ import json
 import re
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +16,8 @@ from uuid import uuid4
 from pilot107.adapters.slurm import SlurmBackendError
 from pilot107.api.evidence_query import EvidencePreviewUnavailable, EvidenceQueryService
 from pilot107.api.health import ApiHealthService
+from pilot107.api.http_types import ApiResponse as ApiResponse
+from pilot107.api.remediation_routes import RemediationRoutes
 from pilot107.core.advice import (
     AgentAdviceError,
     AgentAdviceService,
@@ -65,6 +66,7 @@ from pilot107.core.platform_snapshot_store import (
     PlatformSnapshotStore,
     SnapshotFreshness,
 )
+from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.resources import (
     ArraySpec,
     PreflightFinding,
@@ -99,16 +101,9 @@ from pilot107.core.template_market import (
 from pilot107.core.template_policy import TemplatePublicationGate, TemplateRoleDirectory
 from pilot107.core.template_verification import TemplateVerificationService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
+from pilot107.services.remediation_service import RemediationService
 from pilot107.worker.capsule import CapsuleError, RawCapsuleService
 from pilot107.worker.evidence import EvidenceStore, generated_execution_wrapper
-
-
-@dataclass(frozen=True)
-class ApiResponse:
-    status: int
-    payload: dict[str, Any]
-    headers: dict[str, str] | None = None
-
 
 _ADVICE_STATES = frozenset(
     {"ready", "needs_input", "no_safe_action", "approved", "rejected", "stale"}
@@ -132,6 +127,7 @@ class Pilot107HttpApi:
         diagnosis_service: DiagnosisService | None = None,
         agent_explain_service: AgentExplainService | None = None,
         agent_advice_service: AgentAdviceService | None = None,
+        remediation_service: RemediationService | None = None,
         capability_profile: CapabilityProfile | None = None,
         platform_snapshot_store: PlatformSnapshotStore | None = None,
         user_entitlement_store: UserEntitlementStore | None = None,
@@ -164,6 +160,12 @@ class Pilot107HttpApi:
             contract_service=contract_service,
             run_service=run_service,
         )
+        self.remediation_service = remediation_service or RemediationService(
+            run_store=store,
+            remediation_store=RemediationStore(store.db_path),
+            advice_service=self.agent_advice_service,
+        )
+        self.remediation_routes = RemediationRoutes(self.remediation_service)
         self.capability_profile = capability_profile or docker_sim_capability_profile()
         self.platform_snapshot_store = platform_snapshot_store
         self.user_entitlement_store = user_entitlement_store
@@ -213,6 +215,13 @@ class Pilot107HttpApi:
         parts = [unquote(part) for part in route.split("/") if part]
         if len(parts) >= 2 and parts[:2] == ["api", "v1"]:
             parts = parts[2:]
+        remediation_response = self.remediation_routes.handle_get(
+            parts,
+            params=params,
+            identity=identity,
+        )
+        if remediation_response is not None:
+            return remediation_response
         if len(parts) == 1 and parts[0] == "recipes":
             return ApiResponse(
                 status=200,
@@ -578,6 +587,13 @@ class Pilot107HttpApi:
         identity, auth_error = self._resolve_identity(headers)
         if auth_error is not None:
             return auth_error
+        remediation_response = self.remediation_routes.handle_post(
+            parts,
+            body=body,
+            identity=identity,
+        )
+        if remediation_response is not None:
+            return remediation_response
         if len(parts) == 1 and parts[0] == "template-drafts":
             return self._create_template_draft(body=body, identity=identity)
         if (

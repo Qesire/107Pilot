@@ -33,10 +33,16 @@ from pilot107.adapters.slurm import (
     SlurmBackend,
     UrllibHttpTransport,
 )
+from pilot107.core.advice import AgentAdviceService, AgentPolicyEngine
+from pilot107.core.agent import AgentExplainService
+from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
 from pilot107.core.diagnosis import DiagnosisService
+from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.preflight import LocalPathChecker, PathChecker
+from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
+from pilot107.services.remediation_service import RemediationService
 from pilot107.worker.evidence import (
     AuthorizedFilesystemEvidenceTransport,
     CollectionTaskHandler,
@@ -83,15 +89,20 @@ class WorkerServiceStack:
     store: RunStore
     service: RunService
     worker: RuntimeReconcileWorker
+    remediation_service: RemediationService
 
 
 class WorkerService:
     def __init__(self, *, config: WorkerServiceConfig, stack: WorkerServiceStack) -> None:
         self.config = config
         self.stack = stack
+        self.last_remediation_checked = 0
+        self.last_remediation_advanced = 0
+        self.last_remediation_errors: list[str] = []
 
     def run_once(self) -> WorkerTickResult:
         result = self.stack.worker.tick()
+        self._advance_remediations()
         self.write_health(result)
         return result
 
@@ -107,6 +118,7 @@ class WorkerService:
                 and result.checked == 0
                 and result.tasks_checked == 0
                 and result.diagnoses_checked == 0
+                and self.last_remediation_advanced == 0
             ):
                 break
             time.sleep(self.config.interval_seconds)
@@ -121,7 +133,12 @@ class WorkerService:
         if self.config.health_path is None:
             return
         payload = {
-            "ok": not result.errors and not result.task_errors and not result.diagnosis_errors,
+            "ok": not (
+                result.errors
+                or result.task_errors
+                or result.diagnosis_errors
+                or self.last_remediation_errors
+            ),
             "worker_id": self.config.worker_id,
             "backend": self.config.backend,
             "last_tick_unix": time.time(),
@@ -134,12 +151,35 @@ class WorkerService:
             "errors": [error.__dict__ for error in result.errors],
             "task_errors": [error.__dict__ for error in result.task_errors],
             "diagnosis_errors": [error.__dict__ for error in result.diagnosis_errors],
+            "remediation_checked": self.last_remediation_checked,
+            "remediation_advanced": self.last_remediation_advanced,
+            "remediation_errors": self.last_remediation_errors,
         }
         self.config.health_path.parent.mkdir(parents=True, exist_ok=True)
         self.config.health_path.write_text(
             json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+
+    def _advance_remediations(self) -> None:
+        sessions = self.stack.remediation_service.remediation_store.list_actionable_sessions(
+            limit=self.config.batch_size
+        )
+        advanced = 0
+        errors: list[str] = []
+        for session in sessions:
+            try:
+                updated = self.stack.remediation_service.advance(
+                    session.session_id,
+                    worker_id=self.config.worker_id,
+                )
+                if updated.version != session.version or updated.state != session.state:
+                    advanced += 1
+            except Exception as exc:
+                errors.append(f"{session.session_id}:{type(exc).__name__}:{exc}")
+        self.last_remediation_checked = len(sessions)
+        self.last_remediation_advanced = advanced
+        self.last_remediation_errors = errors
 
 
 def config_from_env(
@@ -221,6 +261,31 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         reconcile_backend=reconcile_backend,
         job_name_marker=DEFAULT_JOB_NAME_MARKER,
     )
+    contract_store = ContractStore(config.db_path)
+    contract_service = ContractService(
+        catalog=RecipeCatalog(store=contract_store),
+        store=contract_store,
+    )
+    explain_service = AgentExplainService(
+        store=store,
+        llm_provider=None,
+        evidence_binder=EvidenceBinder(
+            store=store,
+            evidence_root=config.evidence_root,
+        ),
+    )
+    advice_service = AgentAdviceService(
+        store=store,
+        explain_service=explain_service,
+        policy_engine=AgentPolicyEngine(contract_service=contract_service),
+        contract_service=contract_service,
+        run_service=run_service,
+    )
+    remediation_service = RemediationService(
+        run_store=store,
+        remediation_store=RemediationStore(config.db_path),
+        advice_service=advice_service,
+    )
     worker = RuntimeReconcileWorker(
         service=run_service,
         batch_size=config.batch_size,
@@ -231,7 +296,12 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     )
     return WorkerService(
         config=config,
-        stack=WorkerServiceStack(store=store, service=run_service, worker=worker),
+        stack=WorkerServiceStack(
+            store=store,
+            service=run_service,
+            worker=worker,
+            remediation_service=remediation_service,
+        ),
     )
 
 

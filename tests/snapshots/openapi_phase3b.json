@@ -37,32 +37,70 @@
       "get": {
         "operationId": "list_user_entitlements",
         "parameters": [
-          {"in": "query", "name": "owner", "required": false},
-          {"in": "query", "name": "freshness", "required": false},
-          {"in": "query", "name": "as_of", "required": false},
-          {"in": "query", "name": "limit", "required": false},
-          {"in": "query", "name": "cursor", "required": false}
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "freshness",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "as_of",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          }
         ],
-        "tags": ["platform"]
+        "tags": [
+          "platform"
+        ]
       }
     },
     "/api/v1/platform/entitlements/latest": {
       "get": {
         "operationId": "get_latest_user_entitlement",
         "parameters": [
-          {"in": "query", "name": "owner", "required": false}
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false
+          }
         ],
-        "tags": ["platform"]
+        "tags": [
+          "platform"
+        ]
       }
     },
     "/api/v1/platform/entitlements/{snapshot_id}": {
       "get": {
         "operationId": "get_user_entitlement",
         "parameters": [
-          {"in": "path", "name": "snapshot_id", "required": true},
-          {"in": "query", "name": "owner", "required": false}
+          {
+            "in": "path",
+            "name": "snapshot_id",
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false
+          }
         ],
-        "tags": ["platform"]
+        "tags": [
+          "platform"
+        ]
       }
     },
     "/api/v1/platform/snapshots": {
@@ -150,161 +188,429 @@
         ]
       }
     },
+    "/api/v1/remediation-sessions": {
+      "get": {
+        "operationId": "list_remediation_sessions",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false
+          }
+        ],
+        "tags": [
+          "remediation"
+        ]
+      }
+    },
+    "/api/v1/remediation-sessions/{session_id}": {
+      "get": {
+        "operationId": "get_remediation_session",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "remediation"
+        ]
+      }
+    },
+    "/api/v1/remediation-sessions/{session_id}/advance": {
+      "post": {
+        "operationId": "advance_remediation_session",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "remediation"
+        ]
+      }
+    },
+    "/api/v1/remediation-sessions/{session_id}/approve": {
+      "post": {
+        "operationId": "approve_remediation_action",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "remediation"
+        ]
+      }
+    },
+    "/api/v1/remediation-sessions/{session_id}/execute": {
+      "post": {
+        "operationId": "execute_remediation_action",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "remediation"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/remediation-sessions": {
+      "post": {
+        "operationId": "create_remediation_session",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "remediation"
+        ]
+      }
+    },
     "/api/v1/template-drafts": {
       "get": {
         "operationId": "list_template_drafts",
         "parameters": [
-          {"in": "query", "name": "owner", "required": false},
-          {"in": "query", "name": "limit", "required": false},
-          {"in": "query", "name": "cursor", "required": false}
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       },
       "post": {
         "operationId": "create_template_draft",
         "parameters": [],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/template-drafts/{draft_id}": {
       "get": {
         "operationId": "get_template_draft",
         "parameters": [
-          {"in": "path", "name": "draft_id", "required": true},
-          {"in": "query", "name": "owner", "required": false}
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       },
       "patch": {
         "operationId": "update_template_draft",
         "parameters": [
-          {"in": "path", "name": "draft_id", "required": true}
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/template-drafts/{draft_id}/publish": {
       "post": {
         "operationId": "publish_template_release",
         "parameters": [
-          {"in": "path", "name": "draft_id", "required": true}
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/template-drafts/{draft_id}/reviews": {
       "post": {
         "operationId": "submit_template_review",
         "parameters": [
-          {"in": "path", "name": "draft_id", "required": true}
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/template-drafts/{draft_id}/validate": {
       "post": {
         "operationId": "validate_template_draft",
         "parameters": [
-          {"in": "path", "name": "draft_id", "required": true}
+          {
+            "in": "path",
+            "name": "draft_id",
+            "required": true
+          }
         ],
-        "tags": ["templates"]
-      }
-    },
-    "/api/v1/template-reviews/{review_id}/decision": {
-      "post": {
-        "operationId": "decide_template_review",
-        "parameters": [
-          {"in": "path", "name": "review_id", "required": true}
-        ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/template-reviews": {
       "get": {
         "operationId": "list_template_reviews",
         "parameters": [
-          {"in": "query", "name": "limit", "required": false},
-          {"in": "query", "name": "cursor", "required": false}
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
+      }
+    },
+    "/api/v1/template-reviews/{review_id}/decision": {
+      "post": {
+        "operationId": "decide_template_review",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "review_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/templates": {
       "get": {
         "operationId": "list_template_market",
         "parameters": [
-          {"in": "query", "name": "q", "required": false},
-          {"in": "query", "name": "visibility", "required": false},
-          {"in": "query", "name": "partition", "required": false},
-          {"in": "query", "name": "gpu", "required": false},
-          {"in": "query", "name": "verification_environment", "required": false},
-          {"in": "query", "name": "verified", "required": false},
-          {"in": "query", "name": "limit", "required": false},
-          {"in": "query", "name": "cursor", "required": false}
+          {
+            "in": "query",
+            "name": "q",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "visibility",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "partition",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "gpu",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "verification_environment",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "verified",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/templates/{template_id}/diff": {
       "get": {
         "operationId": "diff_template_releases",
         "parameters": [
-          {"in": "path", "name": "template_id", "required": true},
-          {"in": "query", "name": "from", "required": true},
-          {"in": "query", "name": "to", "required": true}
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/templates/{template_id}/releases/{release_version}": {
       "get": {
         "operationId": "get_template_release",
         "parameters": [
-          {"in": "path", "name": "template_id", "required": true},
-          {"in": "path", "name": "release_version", "required": true}
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "release_version",
+            "required": true
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/templates/{template_id}/releases/{release_version}/adopt": {
       "post": {
         "operationId": "adopt_template_release",
         "parameters": [
-          {"in": "path", "name": "template_id", "required": true},
-          {"in": "path", "name": "release_version", "required": true}
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "release_version",
+            "required": true
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/templates/{template_id}/releases/{release_version}/verifications": {
       "get": {
         "operationId": "list_template_verifications",
         "parameters": [
-          {"in": "path", "name": "template_id", "required": true},
-          {"in": "path", "name": "release_version", "required": true},
-          {"in": "query", "name": "limit", "required": false}
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "release_version",
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/templates/{template_id}/releases/{release_version}/verify": {
       "post": {
         "operationId": "verify_template_release",
         "parameters": [
-          {"in": "path", "name": "template_id", "required": true},
-          {"in": "path", "name": "release_version", "required": true}
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "release_version",
+            "required": true
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/api/v1/templates/{template_id}/releases/{release_version}/withdraw": {
       "post": {
         "operationId": "withdraw_template_release",
         "parameters": [
-          {"in": "path", "name": "template_id", "required": true},
-          {"in": "path", "name": "release_version", "required": true}
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true
+          },
+          {
+            "in": "path",
+            "name": "release_version",
+            "required": true
+          }
         ],
-        "tags": ["templates"]
+        "tags": [
+          "templates"
+        ]
       }
     },
     "/healthz": {
