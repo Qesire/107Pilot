@@ -56,6 +56,27 @@ bash scripts/check-sim-core.sh
 
 具体切片再增加 migration、permission、concurrency、competition smoke 和浏览器用例。任何 P0/P1 未清零、迁移不可回放、重复提交或 owner 越权都阻断下一切片。
 
+## 2.1 2026-07-16 当前执行检查点
+
+已自动完成并形成 Git 基线：
+
+- A1–A4：事实收敛、Git/CI、路由边界、前端金路径测试；
+- 3E-1 与规则闭环核心：persistent session/turn/proposal/decision/execution/evaluation、预算、lease/CAS、Worker 推进和四态 evaluator；
+- 3E API 第一版：owner-scoped create/list/detail/advance/approve/reject/execute/cancel 与 OpenAPI contract；
+- 3F Agent 第一版：失败 Run 入口、session queue/detail、预算、等待输入提示、批准/拒绝/取消/执行和审计展示；
+- 本机 D1 回归：最新应用镜像、Web interaction smoke、Agent `awaiting_input → cancelled` 浏览器实测无页面错误。
+
+剩余自动主线按依赖收敛为六个工作包：
+
+1. **R1 — 3E contract completion**：keyset/ETag/events、input/takeover、并发幂等和专用 action 边界；
+2. **R2 — LLM safety plane**：provider-neutral schema/adapter、fake/replay corpus、安全 benchmark；
+3. **R3 — 3F completion**：Run timeline/lineage/compare、安全命令、Agent Evidence/diff/前后结果对比；
+4. **R4 — local 3G**：repository parity、多实例/outbox、observability/recovery/security；
+5. **R5 — CPU-only RC**：8C/16G profile、资源限制、离线包、SBOM、空目录恢复；
+6. **R6 — final gate**：全量回归、故障/负载/浏览器金路径、findings 与未上传 VM readiness manifest。
+
+真人使用不进入这些工作包的通过条件。可选的 U2/U3 只用于视觉、文案、信任感和交互取舍；VM 上传、真实 107 操作和生产身份仍需另行授权。
+
 ## 3. A 轨：工程基线与扩展边界
 
 ### A1 当前事实与文档收敛

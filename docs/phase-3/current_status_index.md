@@ -17,22 +17,22 @@
 
 | 项目 | 当前事实 |
 | --- | --- |
-| Python 源文件 | 57 |
-| Python 源码 | 24,443 行 |
-| Python 测试文件 | 59 |
-| Python/JS 测试源码 | 14,462 行 |
-| Web 源码 | 3,719 行 |
+| Python 源文件 | 63 |
+| Python 源码 | 26,791 行 |
+| Python 测试文件 | 63 |
+| Python 测试源码 | 14,782 行 |
+| Web 源码 | 4,458 行 |
 | Python/Shell 脚本 | 93 |
-| Python 测试 | 468 passed |
+| Python 测试 | 496 collected；最近完整 CI 492 passed，Agent 增量 18 passed |
 | Ruff | passed |
-| mypy strict | 57 source files passed |
+| mypy strict | 63 source files passed |
 | Web typecheck | passed |
-| Vitest | 4 files / 15 tests passed |
-| Web production build | 1,912 modules built |
+| Vitest | 8 files / 54 tests passed |
+| Web production build | 1,913 modules built |
 | Docker core | MariaDB/API/Web/Worker/Slurm core healthy |
 | Compose contracts | base/competition/slurm-host/app-node passed |
 
-Python 测试中有 6 项需要绑定本机回环端口验证 SSE/HTTP wire behavior；受限命令沙箱会拒绝 socket，但正常本机或 CI runner 上的完整测试为 468 passed。项目已在 `pyproject.toml` 固定 `src` import path，不再依赖隐式 `PYTHONPATH`。
+Python 测试中有 6 项需要绑定本机回环端口验证 SSE/HTTP wire behavior。最近一次完整 CI 在 Agent UI 切片前为 492 passed；该切片新增/修改的 remediation、API、ASGI 定向测试 18 passed，前端 54 passed，Docker Web smoke 与 `pilot-browser` live 回归通过。当前执行环境的完整 CI 再运行因工具审批额度暂停，不应误写为代码失败。项目已在 `pyproject.toml` 固定 `src` import path，不再依赖隐式 `PYTHONPATH`。
 
 ## 阶段状态
 
@@ -40,11 +40,11 @@ Python 测试中有 6 项需要绑定本机回环端口验证 SSE/HTTP wire beha
 | --- | --- |
 | Phase 0–2 | 既定本机范围完成 |
 | Phase 3A | owner-scoped read model/SSE/lineage 已评审 |
-| Phase 3B | 平台事实、entitlement、preflight 已评审；工程治理正在收敛 |
+| Phase 3B | 平台事实、entitlement、preflight 已评审；工程治理基线已收敛 |
 | Phase 3C | Template/Market/Adoption 本地纵向链路已评审 |
 | Phase 3D | 工程纵向链路已评审；用户反馈无人数门禁、非阻塞 |
-| Phase 3E | 尚未实现 RemediationSession；当前下一产品主线 |
-| Phase 3F | Run Evidence 已有；Agent/Terminal 工作台未完成 |
+| Phase 3E | persistent RemediationSession、预算、lease/CAS、规则闭环、审批执行与 evaluator 核心已实现；事件/输入 API、动作覆盖与 LLM benchmark 待补 |
+| Phase 3F | Run Evidence 已有；Agent queue/detail/预算/批准/拒绝/取消/执行第一版已通过本地浏览器回归，Run compare 与安全命令待补 |
 | Phase 3G | SQLite 单机能力已有；PostgreSQL/多实例/生产控制面未完成 |
 | Phase 3H | 本地比赛链路部分完成；真实 107 仅只读兼容探测 |
 
@@ -61,9 +61,9 @@ Docker、fake/replay LLM 和本地 command gateway 的结果不得表述为真�
 
 ## 当前工程风险
 
-1. `api/http_app.py` 约 3,304 行，需在 Phase 3E 路由进入前拆分；
-2. 前端仅 15 项 Vitest，核心错误状态与纵向路径覆盖不足；
-3. 尚无 RemediationSession、多轮 evaluator 和受控修复闭环；
-4. 当前存储以 SQLite 为主，多 Worker 一致性和 outbox 未完成；
+1. Remediation list/detail 仍缺 keyset pagination、ETag、事件补读和安全的 `awaiting_input` 恢复协议；
+2. 受控 action 仍需扩大专用 probe/diff/rollback 覆盖，LLM proposal benchmark 尚未完成；
+3. Run/Agent 工作台尚缺前后 Run/Evidence/outputs 对比、安全 native command 和完整错误状态回归；
+4. 当前存储以 SQLite 为主，多 Worker 一致性、outbox、恢复和可观测性未完成；
 5. 当前 simulator 宣称模拟 GPU/64 CPU，不适合直接作为纯 CPU VM 发布配置；
 6. VM、真实身份和真实 107 均不在当前已验证能力内。
