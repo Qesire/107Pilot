@@ -53,7 +53,7 @@
 
 - D0：本机单元、契约、权限、迁移测试；
 - D1：本机 Docker Slurm simulator live behavior；
-- S1：未来 8C/16G CPU VM 固定发布候选，当前未部署；
+- S1：8C/16G CPU VM 已部署并 G3 功能链通过（见 `s1_vm_deployment_evidence_20260718.md`）；固定发布候选在线运行；
 - R0：开发者个人 SSH 辅助只读 probe；
 - R1：107Pilot 真实平台集成，当前不具备条件；
 - 校园多用户生产：NO-GO。
@@ -64,5 +64,5 @@ Docker、fake/replay LLM 和本地 command gateway 的结果不得表述为真�
 
 1. Run、Remediation、Template 等业务 Store 仍以 SQLite 为主，尚未完成全领域 PostgreSQL parity/接线；
 2. Prometheus 长期 retention/firing 与在线供应链扫描仍需目标运维/CI 环境验证；
-3. CPU-RC 已与 GPU simulator 分离，但尚未在实际 8C/16G VM 上验证资源和磁盘性能；
-4. VM、真实身份和真实 107 均不在当前已验证能力内。
+3. CPU-RC 已在 S1 (8C/16G VM) 部署并通过 G3 功能链（资源/磁盘性能已验证，见 `s1_vm_deployment_evidence_20260718.md`）；
+4. 真实身份和真实 107 均不在当前已验证能力内；VM 已在 S1 部署并通过 G3 功能链（Docker Slurm 模拟器，非真实 107）。
