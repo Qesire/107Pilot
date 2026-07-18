@@ -68,6 +68,14 @@ class CpuReleaseCandidateProfileTests(unittest.TestCase):
         self.assertIn("PILOT107_API_IMAGE=pilot107/api:cpu-rc", env)
         self.assertEqual(profile["schema"], "pilot107.capability_profile.v1")
 
+    def test_fresh_accounting_profile_is_seeded_before_controller_validation(self) -> None:
+        script = (ROOT / "scripts/apply-cpu-rc-profile.sh").read_text()
+
+        self.assertIn("exec -T slurmdbd sacctmgr", script)
+        self.assertLess(script.index("add qos qos_cpu_rc"), script.index("scontrol ping"))
+        self.assertIn("set QOS=qos_cpu_rc || true", script)
+        self.assertIn("set DefaultQOS=qos_cpu_rc || true", script)
+
 
 if __name__ == "__main__":
     unittest.main()
