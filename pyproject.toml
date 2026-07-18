@@ -14,6 +14,9 @@ api = [
   "uvicorn[standard]>=0.30",
   "pydantic>=2.8",
 ]
+postgres = [
+  "psycopg[binary]>=3.2,<4",
+]
 dev = [
   "pytest>=8.2",
   "ruff>=0.5",

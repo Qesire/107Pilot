@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -11,6 +12,7 @@ from pilot107.core.control_repository import (
     ControlRepositoryConflict,
     SQLiteControlRepository,
 )
+from pilot107.core.postgres_control_repository import PostgresControlRepository
 
 
 class MutableClock:
@@ -25,14 +27,19 @@ class MutableClock:
 
 
 class SQLiteControlRepositoryTests(unittest.TestCase):
+    store: ControlRepository
+
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.db_path = Path(self.tempdir.name) / "pilot107.db"
         self.clock = MutableClock()
-        self.store = SQLiteControlRepository(self.db_path, clock=self.clock)
+        self.store = self.make_repository()
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
+
+    def make_repository(self) -> ControlRepository:
+        return SQLiteControlRepository(self.db_path, clock=self.clock)
 
     def test_implements_backend_neutral_contract(self) -> None:
         repository: ControlRepository = self.store
@@ -69,13 +76,16 @@ class SQLiteControlRepositoryTests(unittest.TestCase):
 
     def test_concurrent_lease_claim_has_exactly_one_winner(self) -> None:
         def claim(owner: str) -> bool:
-            repository = SQLiteControlRepository(self.db_path, clock=self.clock)
-            return repository.acquire_lease(
-                resource_kind="collection",
-                resource_id="task-1",
-                owner=owner,
-                lease_seconds=30,
-            ) is not None
+            repository = self.make_repository()
+            return (
+                repository.acquire_lease(
+                    resource_kind="collection",
+                    resource_id="task-1",
+                    owner=owner,
+                    lease_seconds=30,
+                )
+                is not None
+            )
 
         with ThreadPoolExecutor(max_workers=4) as executor:
             results = list(executor.map(claim, ("worker-a", "worker-b", "worker-c", "worker-d")))
@@ -114,9 +124,7 @@ class SQLiteControlRepositoryTests(unittest.TestCase):
         )
         first = self.store.claim_outbox(owner="worker-a", limit=10, lease_seconds=10)[0]
         self.assertEqual(first.attempts, 1)
-        self.assertEqual(
-            self.store.claim_outbox(owner="worker-b", limit=10, lease_seconds=10), []
-        )
+        self.assertEqual(self.store.claim_outbox(owner="worker-b", limit=10, lease_seconds=10), [])
 
         self.clock.advance(11)
         reclaimed = self.store.claim_outbox(owner="worker-b", limit=10, lease_seconds=10)[0]
@@ -168,6 +176,85 @@ class SQLiteControlRepositoryTests(unittest.TestCase):
         self.assertEqual(dead.last_error, "gateway still unavailable")
         self.clock.advance(10)
         self.assertEqual(self.store.claim_outbox(owner="worker-c", limit=1, lease_seconds=10), [])
+
+    def test_topic_filter_leaves_other_due_messages_unclaimed(self) -> None:
+        self.store.enqueue(
+            message_id="submit-1",
+            topic="run.submit",
+            aggregate_id="run_1",
+            payload={"run_id": "run_1"},
+        )
+        self.store.enqueue(
+            message_id="agent-1",
+            topic="agent.execute",
+            aggregate_id="session_1",
+            payload={"session_id": "session_1"},
+        )
+
+        claimed = self.store.claim_outbox(
+            owner="submit-worker",
+            limit=10,
+            lease_seconds=30,
+            topics=("run.submit",),
+        )
+
+        self.assertEqual([message.message_id for message in claimed], ["submit-1"])
+        self.assertEqual(self.store.get_outbox("agent-1").state, "pending")
+
+    def test_concurrent_outbox_claim_delivers_each_message_once(self) -> None:
+        for index in range(40):
+            self.store.enqueue(
+                message_id=f"message-{index}",
+                topic="collection.execute",
+                aggregate_id=f"task-{index}",
+                payload={"task_id": index},
+            )
+
+        def claim(owner: str) -> list[str]:
+            repository = self.make_repository()
+            return [
+                message.message_id
+                for message in repository.claim_outbox(
+                    owner=owner,
+                    limit=10,
+                    lease_seconds=30,
+                    topics=("collection.execute",),
+                )
+            ]
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            batches = list(
+                executor.map(claim, ("worker-a", "worker-b", "worker-c", "worker-d"))
+            )
+        claimed_ids = [message_id for batch in batches for message_id in batch]
+        self.assertEqual(len(claimed_ids), 40)
+        self.assertEqual(len(set(claimed_ids)), 40)
+        self.assertTrue(
+            all(self.store.get_outbox(message_id).attempts == 1 for message_id in claimed_ids)
+        )
+
+
+@unittest.skipUnless(
+    os.environ.get("PILOT107_TEST_POSTGRES_DSN")
+    and os.environ.get("PILOT107_TEST_POSTGRES_ALLOW_RESET") == "1",
+    "set a dedicated PILOT107_TEST_POSTGRES_DSN and explicit reset opt-in",
+)
+class PostgresControlRepositoryContractTests(SQLiteControlRepositoryTests):
+    """Runs the exact SQLite contract suite against a dedicated PostgreSQL DB."""
+
+    def setUp(self) -> None:
+        self.clock = MutableClock()
+        self.dsn = os.environ["PILOT107_TEST_POSTGRES_DSN"]
+        repository = PostgresControlRepository(self.dsn, clock=self.clock)
+        with repository.connect() as conn:
+            conn.execute("TRUNCATE control_outbox, control_leases")
+        self.store = repository
+
+    def tearDown(self) -> None:
+        pass
+
+    def make_repository(self) -> ControlRepository:
+        return PostgresControlRepository(self.dsn, clock=self.clock)
 
 
 if __name__ == "__main__":

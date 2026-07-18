@@ -83,6 +83,15 @@ bash scripts/check-sim-core.sh
 - R3 review：[phase3f_run_agent_workbench_review.md](phase3f_run_agent_workbench_review.md)；
 - 当前进入 R4：PostgreSQL repository parity、多实例/outbox/fencing、可观测性/恢复和本地安全基线。
 
+### 2026-07-18 R4 控制面 Repository 检查点
+
+- 已固定 backend-neutral `ControlRepository`：lease acquire/renew/release、单调 fencing token、幂等 outbox、topic claim、退避和 dead-letter；
+- SQLite 参考实现与 PostgreSQL 实现共用同一套契约测试；PostgreSQL 使用 advisory migration lock、事务、JSONB、`FOR UPDATE` 和 `SKIP LOCKED`；
+- 真实 PostgreSQL 16 临时实例完成 16/16 双后端契约，40 条消息由 4 个并发 worker 恰好领取一次；
+- PostgreSQL 非 UTF-8 配置明确 fail closed；迁移 checksum 与重复初始化已在真实实例验证；
+- review：[phase3g_control_repository_review.md](phase3g_control_repository_review.md)；
+- R4 尚未完成：下一切片将 Run submit/reconcile/collection 和 Agent execution 接入该 substrate，再做多进程 crash/reclaim 与外部副作用零重复证明。
+
 真人使用不进入这些工作包的通过条件。可选的 U2/U3 只用于视觉、文案、信任感和交互取舍；VM 上传、真实 107 操作和生产身份仍需另行授权。
 
 ## 3. A 轨：工程基线与扩展边界
