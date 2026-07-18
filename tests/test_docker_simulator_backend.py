@@ -152,6 +152,27 @@ class DockerSimulatorCommandBackendTests(unittest.TestCase):
         self.assertIn("run-one_submit", executor.writes[0][0])
         self.assertIn("run-two_submit", executor.writes[1][0])
 
+    def test_submit_passes_explicit_job_name_to_container_argv(self) -> None:
+        executor = FakeDockerExecutor()
+        backend = DockerSimulatorCommandBackend(
+            executor=executor,  # type: ignore[arg-type]
+            allowed_roots=["/public/home/alice"],
+        )
+
+        backend.submit(
+            SubmitIntent(
+                user="alice",
+                workdir=Path("/public/home/alice"),
+                script="#!/bin/bash\nhostname\n",
+                resource_plan=_plan(),
+                job_name="pilot107-run-0123456789abcdef",
+            )
+        )
+
+        argv = executor.calls[0][0]
+        name_index = argv.index("--job-name")
+        self.assertEqual(argv[name_index + 1], "pilot107-run-0123456789abcdef")
+
     def test_submit_rejects_container_path_outside_allowed_roots(self) -> None:
         executor = FakeDockerExecutor()
         backend = DockerSimulatorCommandBackend(

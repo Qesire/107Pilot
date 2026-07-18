@@ -31,6 +31,7 @@ from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
+from pilot107.core.control_repository import ControlRepository, SQLiteControlRepository
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.identity import is_safe_username
 from pilot107.core.platform import (
@@ -177,9 +178,10 @@ def config_from_env(
 
 def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     store = RunStore(config.db_path)
+    control_repository = SQLiteControlRepository(config.db_path)
     contract_store = ContractStore(config.db_path)
     catalog = RecipeCatalog(store=contract_store)
-    run_service = _build_run_service(config, store)
+    run_service = _build_run_service(config, store, control_repository)
     capability_profile = _build_capability_profile(config)
     platform_snapshot_store = PlatformSnapshotStore(config.db_path)
     user_entitlement_store = UserEntitlementStore(config.db_path)
@@ -250,26 +252,37 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     )
 
 
-def _build_run_service(config: ApiServiceConfig, store: RunStore) -> RunService | None:
+def _build_run_service(
+    config: ApiServiceConfig,
+    store: RunStore,
+    control_repository: ControlRepository,
+) -> RunService | None:
     if config.backend == "none":
         return None
     if config.backend == "in-memory":
         return RunService(
             store=store,
             backend=InMemorySlurmBackend(),
+            control_repository=control_repository,
             **_run_flags(config, backend_kind="in-memory"),
         )
     if config.backend == "demo":
         return RunService(
             store=store,
             backend=DemoSlurmBackend(),
+            control_repository=control_repository,
             **_run_flags(config, backend_kind="demo"),
         )
     if config.backend == "rest-native":
-        return RunService(store=store, **_rest_native_kwargs(config))
+        return RunService(
+            store=store,
+            control_repository=control_repository,
+            **_rest_native_kwargs(config),
+        )
     if config.backend == "command":
         return RunService(
             store=store,
+            control_repository=control_repository,
             backend=CommandSubmitBackend(
                 allowed_roots=[Path(root) for root in config.allowed_roots],
                 timeout_seconds=config.command_timeout_seconds,
@@ -293,6 +306,7 @@ def _build_run_service(config: ApiServiceConfig, store: RunStore) -> RunService 
         )
         return RunService(
             store=store,
+            control_repository=control_repository,
             backend=DockerSimulatorCommandBackend(
                 executor=executor,
                 allowed_roots=list(config.allowed_roots),
@@ -308,6 +322,7 @@ def _build_run_service(config: ApiServiceConfig, store: RunStore) -> RunService 
         )
         return RunService(
             store=store,
+            control_repository=control_repository,
             backend=DockerSimulatorCommandBackend(
                 executor=gateway_executor,
                 allowed_roots=list(config.allowed_roots),

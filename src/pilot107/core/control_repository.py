@@ -88,6 +88,14 @@ class ControlRepository(Protocol):
         topics: tuple[str, ...] = (),
     ) -> list[OutboxMessage]: ...
 
+    def claim_outbox_message(
+        self,
+        *,
+        message_id: str,
+        owner: str,
+        lease_seconds: int,
+    ) -> OutboxMessage | None: ...
+
     def acknowledge(self, *, message_id: str, owner: str, fencing_token: int) -> None: ...
 
     def retry(
@@ -395,6 +403,61 @@ class SQLiteControlRepository:
                 if current is not None:
                     claimed.append(_row_to_outbox(current))
         return claimed
+
+    def claim_outbox_message(
+        self,
+        *,
+        message_id: str,
+        owner: str,
+        lease_seconds: int,
+    ) -> OutboxMessage | None:
+        _validate_key(message_id, "message_id", _IDENTIFIER)
+        _validate_key(owner, "owner", _IDENTIFIER)
+        _require_positive(lease_seconds, "lease_seconds")
+        now = self._now()
+        expires_at = self._after(lease_seconds)
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT * FROM control_outbox
+                WHERE message_id = ?
+                  AND ((state = 'pending' AND available_at <= ?)
+                       OR (state = 'running' AND lease_expires_at <= ?))
+                """,
+                (message_id, now, now),
+            ).fetchone()
+            if row is None:
+                return None
+            token = int(row["fencing_token"]) + 1
+            result = conn.execute(
+                """
+                UPDATE control_outbox
+                SET state = 'running', lease_owner = ?, lease_expires_at = ?,
+                    fencing_token = ?, attempts = attempts + 1, updated_at = ?
+                WHERE message_id = ? AND fencing_token = ?
+                  AND ((state = 'pending' AND available_at <= ?)
+                       OR (state = 'running' AND lease_expires_at <= ?))
+                """,
+                (
+                    owner,
+                    expires_at,
+                    token,
+                    now,
+                    message_id,
+                    int(row["fencing_token"]),
+                    now,
+                    now,
+                ),
+            )
+            if result.rowcount != 1:
+                return None
+            current = conn.execute(
+                "SELECT * FROM control_outbox WHERE message_id = ?", (message_id,)
+            ).fetchone()
+        if current is None:
+            raise RuntimeError("claimed outbox message disappeared")
+        return _row_to_outbox(current)
 
     def acknowledge(self, *, message_id: str, owner: str, fencing_token: int) -> None:
         self._finish(

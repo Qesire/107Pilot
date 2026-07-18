@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,6 +22,11 @@ from pilot107.adapters.slurm import (
     SubmitIntent,
     SubmitReceipt,
 )
+from pilot107.core.control_repository import (
+    ControlRepository,
+    ControlRepositoryConflict,
+    OutboxMessage,
+)
 from pilot107.core.preflight import PathChecker, preflight_workdir_fs, preflight_workdir_paths
 from pilot107.core.resources import (
     ArraySpec,
@@ -28,7 +35,7 @@ from pilot107.core.resources import (
     ResourcePlan,
     validate_resource_plan,
 )
-from pilot107.core.run_store import RunRecord, RunStore
+from pilot107.core.run_store import RunRecord, RunStore, RunStoreFenceConflict
 from pilot107.core.states import RunState
 from pilot107.core.submission_reconcile import ReconcileBackend, reconcile_submission
 
@@ -147,6 +154,25 @@ class SubmissionInProgressError(SlurmBackendError):
     pass
 
 
+class SubmissionRecoveryRequiredError(SlurmBackendError):
+    pass
+
+
+@dataclass(frozen=True)
+class SubmissionDispatchError:
+    message_id: str
+    run_id: str
+    message: str
+    error_type: str
+
+
+@dataclass(frozen=True)
+class SubmissionDispatchBatch:
+    checked: int
+    succeeded: list[RunRecord]
+    errors: list[SubmissionDispatchError]
+
+
 class RunService:
     def __init__(
         self,
@@ -163,6 +189,11 @@ class RunService:
         reconcile_backend: ReconcileBackend | None = None,
         job_name_marker: str = "pilot107-run",
         reconcile_time_window_seconds: float = 60.0,
+        control_repository: ControlRepository | None = None,
+        dispatcher_id: str | None = None,
+        submission_lease_seconds: int = 60,
+        submission_retry_delay_seconds: int = 5,
+        submission_max_attempts: int = 5,
     ) -> None:
         self.store = store
         self.backend = backend
@@ -180,6 +211,17 @@ class RunService:
         self.reconcile_backend = reconcile_backend
         self.job_name_marker = job_name_marker
         self.reconcile_time_window_seconds = reconcile_time_window_seconds
+        self.control_repository = control_repository
+        self.dispatcher_id = dispatcher_id or f"submitter-{uuid4().hex}"
+        if submission_lease_seconds <= 0:
+            raise ValueError("submission_lease_seconds must be positive")
+        if submission_retry_delay_seconds < 0:
+            raise ValueError("submission_retry_delay_seconds must not be negative")
+        if submission_max_attempts <= 0:
+            raise ValueError("submission_max_attempts must be positive")
+        self.submission_lease_seconds = submission_lease_seconds
+        self.submission_retry_delay_seconds = submission_retry_delay_seconds
+        self.submission_max_attempts = submission_max_attempts
 
     def submit(self, request: RunSubmitRequest) -> RunRecord:
         run = self.prepare(request)
@@ -225,6 +267,91 @@ class RunService:
         return created
 
     def submit_prepared(self, run_id: str) -> RunRecord:
+        if self.control_repository is None:
+            return self._submit_prepared_inline(run_id)
+        existing = self.store.get_run(run_id)
+        if existing.job_id is not None:
+            return existing
+        message = self.enqueue_submission(run_id)
+        run = self.store.get_run(run_id)
+        if run.job_id is not None:
+            return run
+        claimed = self.control_repository.claim_outbox_message(
+            message_id=message.message_id,
+            owner=self.dispatcher_id,
+            lease_seconds=self.submission_lease_seconds,
+        )
+        if claimed is None:
+            current = self.store.get_run(run_id)
+            if current.job_id is not None:
+                return current
+            raise SubmissionInProgressError("run submission is already in progress")
+        return self._execute_submission_message(claimed)
+
+    def enqueue_submission(self, run_id: str) -> OutboxMessage:
+        if self.control_repository is None:
+            raise RuntimeError("control repository is unavailable")
+        run = self.store.get_run(run_id)
+        if run.job_id is not None:
+            message_id = _submission_message_id(run_id)
+            try:
+                return self.control_repository.get_outbox(message_id)
+            except KeyError:
+                message, _ = self.control_repository.enqueue(
+                    message_id=message_id,
+                    topic="run.submit",
+                    aggregate_id=run_id,
+                    payload={"run_id": run_id},
+                )
+                return message
+        if run.state not in {RunState.VALIDATED, RunState.SUBMITTING}:
+            raise SlurmBackendError(f"run cannot be submitted from state: {run.state}")
+        if run.state == RunState.VALIDATED:
+            self._submission_intent(run, record_dependency_event=False)
+        message, _ = self.control_repository.enqueue(
+            message_id=_submission_message_id(run_id),
+            topic="run.submit",
+            aggregate_id=run_id,
+            payload={"run_id": run_id},
+        )
+        return message
+
+    def dispatch_due_submissions(self, *, limit: int = 50) -> SubmissionDispatchBatch:
+        if self.control_repository is None:
+            return SubmissionDispatchBatch(checked=0, succeeded=[], errors=[])
+        messages = self.control_repository.claim_outbox(
+            owner=self.dispatcher_id,
+            limit=limit,
+            lease_seconds=self.submission_lease_seconds,
+            topics=("run.submit",),
+        )
+        succeeded: list[RunRecord] = []
+        errors: list[SubmissionDispatchError] = []
+        for message in messages:
+            run_id = message.aggregate_id
+            try:
+                run_id = _message_run_id(message)
+                dispatched = self._execute_submission_message(message)
+                if dispatched.job_id is not None:
+                    succeeded.append(dispatched)
+            except Exception as exc:
+                with suppress(ControlRepositoryConflict, RuntimeError):
+                    self._retry_submission_message(message, str(exc))
+                errors.append(
+                    SubmissionDispatchError(
+                        message_id=message.message_id,
+                        run_id=run_id,
+                        message=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                )
+        return SubmissionDispatchBatch(
+            checked=len(messages),
+            succeeded=succeeded,
+            errors=errors,
+        )
+
+    def _submit_prepared_inline(self, run_id: str) -> RunRecord:
         run = self.store.get_run(run_id)
         if run.job_id is not None:
             return run
@@ -235,21 +362,12 @@ class RunService:
         if not run.resource_plan:
             raise SlurmBackendError("run has no resource_plan")
         self._require_retry_due(run)
-        dependency_job_ids = self._resolve_dependency_job_ids(run)
-        self._run_preflight(run)
+        intent = self._submission_intent(run)
         if not self.store.claim_submission(run_id):
             current = self.store.get_run(run_id)
             if current.job_id is not None:
                 return current
             raise SubmissionInProgressError("run submission is already in progress")
-        intent = SubmitIntent(
-            user=run.owner,
-            workdir=Path(run.workdir),
-            script=run.script,
-            resource_plan=_resource_plan_from_dict(run.resource_plan),
-            idempotency_key=f"{run_id}:submit",
-            dependency_job_ids=dependency_job_ids,
-        )
         submitted_after = time.time()
         try:
             receipt = self.backend.submit(intent)
@@ -266,6 +384,247 @@ class RunService:
             )
             raise
         return self.store.apply_submit_receipt(run_id, receipt)
+
+    def _execute_submission_message(self, message: OutboxMessage) -> RunRecord:
+        if self.control_repository is None:
+            raise RuntimeError("control repository is unavailable")
+        run_id = _message_run_id(message)
+        run = self.store.get_run(run_id)
+        if run.job_id is not None:
+            self._acknowledge_submission(message)
+            return run
+        if run.state in {RunState.SUBMIT_FAILED, RunState.SUBMISSION_UNCERTAIN}:
+            self._acknowledge_submission(message)
+            return run
+        if run.state not in {RunState.VALIDATED, RunState.SUBMITTING}:
+            self._retry_submission_message(
+                message,
+                f"run cannot be submitted from state: {run.state}",
+            )
+            raise SlurmBackendError(f"run cannot be submitted from state: {run.state}")
+
+        recovering = run.state == RunState.SUBMITTING
+        intent = self._submission_intent(run)
+        assert message.lease_owner is not None
+        if not self.store.claim_submission(
+            run_id,
+            lease_owner=message.lease_owner,
+            fencing_token=message.fencing_token,
+        ):
+            current = self.store.get_run(run_id)
+            if current.job_id is not None:
+                self._acknowledge_submission(message)
+                return current
+            raise SubmissionInProgressError("submission fence is owned by another dispatcher")
+
+        if recovering:
+            recovered = self._recover_submission_before_replay(message, run, intent)
+            if recovered is not None:
+                return recovered
+
+        submitted_after = time.time()
+        try:
+            receipt = self.backend.submit(intent)
+        except SlurmTransportError:
+            return self._reconcile_fenced_submission(
+                message,
+                run,
+                intent,
+                submitted_after,
+            )
+        except SlurmBackendError:
+            self._fail_fenced_submission(
+                message,
+                run_id=run_id,
+                state=RunState.SUBMIT_FAILED,
+                event_type="run.submit_failed",
+            )
+            raise
+        try:
+            submitted = self.store.apply_submit_receipt(
+                run_id,
+                receipt,
+                lease_owner=message.lease_owner,
+                fencing_token=message.fencing_token,
+            )
+        except RunStoreFenceConflict as exc:
+            raise SubmissionInProgressError(str(exc)) from exc
+        self._acknowledge_submission(message)
+        return submitted
+
+    def _submission_intent(
+        self,
+        run: RunRecord,
+        *,
+        record_dependency_event: bool = True,
+    ) -> SubmitIntent:
+        if not run.resource_plan:
+            raise SlurmBackendError("run has no resource_plan")
+        self._require_retry_due(run)
+        dependency_job_ids = self._resolve_dependency_job_ids(
+            run,
+            record_event=record_dependency_event,
+        )
+        self._run_preflight(run)
+        return SubmitIntent(
+            user=run.owner,
+            workdir=Path(run.workdir),
+            script=run.script,
+            resource_plan=_resource_plan_from_dict(run.resource_plan),
+            idempotency_key=f"{run.run_id}:submit",
+            dependency_job_ids=dependency_job_ids,
+            job_name=_submission_job_name(self.job_name_marker, run.run_id),
+        )
+
+    def _recover_submission_before_replay(
+        self,
+        message: OutboxMessage,
+        run: RunRecord,
+        intent: SubmitIntent,
+    ) -> RunRecord | None:
+        if not self.idempotency_reconcile_enabled or self.reconcile_backend is None:
+            retried = self._retry_submission_message(
+                message,
+                "submission recovery requires an idempotency reconciliation backend",
+            )
+            if retried.state == "dead_letter":
+                self._fail_fenced_submission(
+                    message,
+                    run_id=run.run_id,
+                    state=RunState.SUBMISSION_UNCERTAIN,
+                    event_type="run.submission_uncertain",
+                    acknowledge=False,
+                )
+            raise SubmissionRecoveryRequiredError(
+                "submission recovery requires an idempotency reconciliation backend"
+            )
+        submitted_after = datetime.fromisoformat(message.created_at).timestamp()
+        return self._reconcile_fenced_submission(
+            message,
+            run,
+            intent,
+            submitted_after,
+        )
+
+    def _reconcile_fenced_submission(
+        self,
+        message: OutboxMessage,
+        run: RunRecord,
+        intent: SubmitIntent,
+        submitted_after: float,
+    ) -> RunRecord:
+        if not self.idempotency_reconcile_enabled or self.reconcile_backend is None:
+            self._fail_fenced_submission(
+                message,
+                run_id=run.run_id,
+                state=RunState.SUBMIT_FAILED,
+                event_type="run.submit_failed",
+            )
+            raise SlurmTransportError("submission transport failed without reconciliation")
+        result = reconcile_submission(
+            backend=self.reconcile_backend,
+            user=run.owner,
+            job_name_marker=intent.job_name or self.job_name_marker,
+            submitted_after=submitted_after,
+            time_window_seconds=self.reconcile_time_window_seconds,
+        )
+        if result.state == "bound" and result.job_id is not None:
+            receipt = SubmitReceipt(
+                job_id=result.job_id,
+                run_state=RunState.SUBMITTED,
+                strategy=SubmissionStrategy.REST_NATIVE,
+                raw_response={"reconciled": True, "job_id": result.job_id},
+            )
+            assert message.lease_owner is not None
+            submitted = self.store.apply_submit_receipt(
+                run.run_id,
+                receipt,
+                lease_owner=message.lease_owner,
+                fencing_token=message.fencing_token,
+            )
+            self._acknowledge_submission(message)
+            return submitted
+        if result.state == "not_found":
+            retried = self._retry_submission_message(
+                message,
+                "submission outcome is not visible yet; reconciliation required",
+            )
+            if retried.state == "dead_letter":
+                self._fail_fenced_submission(
+                    message,
+                    run_id=run.run_id,
+                    state=RunState.SUBMISSION_UNCERTAIN,
+                    event_type="run.submission_uncertain",
+                    acknowledge=False,
+                )
+            raise SubmissionRecoveryRequiredError(
+                "submission outcome is not visible yet; refusing automatic resubmit"
+            )
+        self._fail_fenced_submission(
+            message,
+            run_id=run.run_id,
+            state=RunState.SUBMISSION_UNCERTAIN,
+            event_type="run.submission_uncertain",
+        )
+        self.store.append_event(
+            run_id=run.run_id,
+            event_type="run.submission_candidates",
+            payload={"candidate_job_ids": list(result.matches)},
+        )
+        raise SubmissionUncertainError(job_ids=list(result.matches))
+
+    def _fail_fenced_submission(
+        self,
+        message: OutboxMessage,
+        *,
+        run_id: str,
+        state: RunState,
+        event_type: str,
+        acknowledge: bool = True,
+    ) -> None:
+        assert message.lease_owner is not None
+        try:
+            self.store.fail_submission(
+                run_id,
+                state=state,
+                event_type=event_type,
+                lease_owner=message.lease_owner,
+                fencing_token=message.fencing_token,
+            )
+        except RunStoreFenceConflict as exc:
+            raise SubmissionInProgressError(str(exc)) from exc
+        if acknowledge:
+            self._acknowledge_submission(message)
+
+    def _acknowledge_submission(self, message: OutboxMessage) -> None:
+        if self.control_repository is None or message.lease_owner is None:
+            return
+        try:
+            self.control_repository.acknowledge(
+                message_id=message.message_id,
+                owner=message.lease_owner,
+                fencing_token=message.fencing_token,
+            )
+        except ControlRepositoryConflict:
+            # A newer dispatcher owns the outbox fence. The Run row is itself
+            # fenced, so the new owner can safely observe/ack the terminal fact.
+            return
+
+    def _retry_submission_message(
+        self,
+        message: OutboxMessage,
+        error: str,
+    ) -> OutboxMessage:
+        if self.control_repository is None or message.lease_owner is None:
+            raise RuntimeError("submission outbox ownership is unavailable")
+        return self.control_repository.retry(
+            message_id=message.message_id,
+            owner=message.lease_owner,
+            fencing_token=message.fencing_token,
+            error=error,
+            delay_seconds=self.submission_retry_delay_seconds,
+            max_attempts=self.submission_max_attempts,
+        )
 
     def get(self, run_id: str) -> RunRecord:
         return self.store.get_run(run_id)
@@ -318,7 +677,12 @@ class RunService:
         if blockers:
             raise WorkDirPreflightError(findings)
 
-    def _resolve_dependency_job_ids(self, run: RunRecord) -> tuple[str, ...]:
+    def _resolve_dependency_job_ids(
+        self,
+        run: RunRecord,
+        *,
+        record_event: bool = True,
+    ) -> tuple[str, ...]:
         policy = WorkflowPolicy.from_payload(run.workflow)
         job_ids: list[str] = []
         for dependency_id in policy.dependencies:
@@ -343,7 +707,7 @@ class RunService:
                     f"workflow dependency has not been submitted: {dependency_id}"
                 )
             job_ids.append(dependency.job_id)
-        if policy.dependencies:
+        if policy.dependencies and record_event:
             self.store.append_event(
                 run_id=run.run_id,
                 event_type="workflow.dependencies_resolved",
@@ -446,7 +810,7 @@ class RunService:
         result = reconcile_submission(
             backend=self.reconcile_backend,
             user=run.owner,
-            job_name_marker=self.job_name_marker,
+            job_name_marker=intent.job_name or self.job_name_marker,
             submitted_after=submitted_after,
             time_window_seconds=self.reconcile_time_window_seconds,
         )
@@ -503,6 +867,27 @@ def _resource_plan_to_dict(plan: ResourcePlan) -> dict[str, Any]:
             "max_concurrency": plan.array.max_concurrency,
         }
     return payload
+
+
+def _submission_job_name(prefix: str, run_id: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", prefix):
+        raise ValueError("job_name_marker must use safe Slurm name characters")
+    digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:20]
+    return f"{prefix}-{digest}"
+
+
+def _submission_message_id(run_id: str) -> str:
+    digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
+    return f"run-submit:{digest}"
+
+
+def _message_run_id(message: OutboxMessage) -> str:
+    run_id = message.payload.get("run_id")
+    if not isinstance(run_id, str) or not run_id:
+        raise SlurmBackendError("run submission outbox payload is invalid")
+    if message.topic != "run.submit" or message.aggregate_id != run_id:
+        raise SlurmBackendError("run submission outbox identity is inconsistent")
+    return run_id
 
 
 def _resource_plan_from_dict(payload: dict[str, Any]) -> ResourcePlan:

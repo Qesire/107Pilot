@@ -22,6 +22,10 @@ from pilot107.core.states import (
 )
 
 
+class RunStoreFenceConflict(RuntimeError):
+    """Raised when a stale submission worker attempts to persist a result."""
+
+
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -197,6 +201,8 @@ class RunStore:
                     terminal_state TEXT,
                     submit_strategy TEXT,
                     submit_response_json TEXT NOT NULL DEFAULT '{}',
+                    submission_owner TEXT,
+                    submission_fencing_token INTEGER NOT NULL DEFAULT 0,
                     resource_plan_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -362,6 +368,18 @@ class RunStore:
             self._ensure_column(
                 conn,
                 table="runs",
+                column="submission_owner",
+                definition="TEXT",
+            )
+            self._ensure_column(
+                conn,
+                table="runs",
+                column="submission_fencing_token",
+                definition="INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                conn,
+                table="runs",
                 column="parent_run_id",
                 definition="TEXT",
             )
@@ -521,37 +539,105 @@ class RunStore:
     def mark_submitting(self, run_id: str) -> RunRecord:
         return self.update_state(run_id, RunState.SUBMITTING, event_type="run.submitting")
 
-    def claim_submission(self, run_id: str) -> bool:
+    def claim_submission(
+        self,
+        run_id: str,
+        *,
+        lease_owner: str | None = None,
+        fencing_token: int | None = None,
+    ) -> bool:
         """Atomically reserve one validated run for a single submitter."""
 
+        if (lease_owner is None) != (fencing_token is None):
+            raise ValueError("lease_owner and fencing_token must be provided together")
+        if fencing_token is not None and fencing_token <= 0:
+            raise ValueError("fencing_token must be positive")
         now = utc_now_iso()
         with self.connect() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE runs
-                SET state = ?, updated_at = ?
-                WHERE run_id = ? AND state = ? AND job_id IS NULL
-                """,
-                (
-                    RunState.SUBMITTING.value,
-                    now,
-                    run_id,
-                    RunState.VALIDATED.value,
-                ),
-            )
+            if lease_owner is None:
+                cursor = conn.execute(
+                    """
+                    UPDATE runs
+                    SET state = ?, updated_at = ?
+                    WHERE run_id = ? AND state = ? AND job_id IS NULL
+                    """,
+                    (
+                        RunState.SUBMITTING.value,
+                        now,
+                        run_id,
+                        RunState.VALIDATED.value,
+                    ),
+                )
+            else:
+                assert fencing_token is not None
+                cursor = conn.execute(
+                    """
+                    UPDATE runs
+                    SET state = ?, submission_owner = ?, submission_fencing_token = ?,
+                        updated_at = ?
+                    WHERE run_id = ? AND job_id IS NULL
+                      AND (
+                        state = ?
+                        OR (state = ? AND submission_fencing_token < ?)
+                      )
+                    """,
+                    (
+                        RunState.SUBMITTING.value,
+                        lease_owner,
+                        fencing_token,
+                        now,
+                        run_id,
+                        RunState.VALIDATED.value,
+                        RunState.SUBMITTING.value,
+                        fencing_token,
+                    ),
+                )
             if cursor.rowcount == 1:
                 self._append_event(
                     conn,
                     run_id=run_id,
                     event_type="run.submitting",
-                    payload={"state": RunState.SUBMITTING.value},
+                    payload={
+                        "state": RunState.SUBMITTING.value,
+                        "lease_owner": lease_owner,
+                        "fencing_token": fencing_token,
+                    },
                 )
         return cursor.rowcount == 1
 
-    def apply_submit_receipt(self, run_id: str, receipt: SubmitReceipt) -> RunRecord:
+    def apply_submit_receipt(
+        self,
+        run_id: str,
+        receipt: SubmitReceipt,
+        *,
+        lease_owner: str | None = None,
+        fencing_token: int | None = None,
+    ) -> RunRecord:
+        if (lease_owner is None) != (fencing_token is None):
+            raise ValueError("lease_owner and fencing_token must be provided together")
         now = utc_now_iso()
         with self.connect() as conn:
-            conn.execute(
+            parameters: tuple[Any, ...] = (
+                RunState.SUBMITTED.value,
+                receipt.job_id,
+                receipt.strategy.value,
+                json.dumps(receipt.raw_response, sort_keys=True),
+                now,
+                run_id,
+            )
+            fence_clause = ""
+            if lease_owner is not None:
+                assert fencing_token is not None
+                fence_clause = (
+                    " AND state = ? AND submission_owner = ? "
+                    "AND submission_fencing_token = ? AND job_id IS NULL"
+                )
+                parameters += (
+                    RunState.SUBMITTING.value,
+                    lease_owner,
+                    fencing_token,
+                )
+            result = conn.execute(
                 """
                 UPDATE runs
                 SET state = ?,
@@ -560,16 +646,12 @@ class RunStore:
                     submit_response_json = ?,
                     updated_at = ?
                 WHERE run_id = ?
-                """,
-                (
-                    RunState.SUBMITTED.value,
-                    receipt.job_id,
-                    receipt.strategy.value,
-                    json.dumps(receipt.raw_response, sort_keys=True),
-                    now,
-                    run_id,
-                ),
+                """
+                + fence_clause,
+                parameters,
             )
+            if result.rowcount != 1:
+                raise RunStoreFenceConflict(f"submission result is fenced: {run_id}")
             self._append_event(
                 conn,
                 run_id=run_id,
@@ -578,10 +660,56 @@ class RunStore:
                     "job_id": receipt.job_id,
                     "strategy": receipt.strategy.value,
                     "raw_response": receipt.raw_response,
+                    "lease_owner": lease_owner,
+                    "fencing_token": fencing_token,
                 },
             )
             self._ensure_task(conn, run_id=run_id, task_type="submission_snapshot")
             self._ensure_task(conn, run_id=run_id, task_type="runtime_status")
+        return self.get_run(run_id)
+
+    def fail_submission(
+        self,
+        run_id: str,
+        *,
+        state: RunState,
+        event_type: str,
+        lease_owner: str,
+        fencing_token: int,
+    ) -> RunRecord:
+        if state not in {RunState.SUBMIT_FAILED, RunState.SUBMISSION_UNCERTAIN}:
+            raise ValueError("submission failure state is invalid")
+        if fencing_token <= 0:
+            raise ValueError("fencing_token must be positive")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            result = conn.execute(
+                """
+                UPDATE runs SET state = ?, updated_at = ?
+                WHERE run_id = ? AND state = ? AND submission_owner = ?
+                  AND submission_fencing_token = ? AND job_id IS NULL
+                """,
+                (
+                    state.value,
+                    now,
+                    run_id,
+                    RunState.SUBMITTING.value,
+                    lease_owner,
+                    fencing_token,
+                ),
+            )
+            if result.rowcount != 1:
+                raise RunStoreFenceConflict(f"submission failure is fenced: {run_id}")
+            self._append_event(
+                conn,
+                run_id=run_id,
+                event_type=event_type,
+                payload={
+                    "state": state.value,
+                    "lease_owner": lease_owner,
+                    "fencing_token": fencing_token,
+                },
+            )
         return self.get_run(run_id)
 
     def apply_snapshot(self, run_id: str, snapshot: JobSnapshot) -> RunRecord:

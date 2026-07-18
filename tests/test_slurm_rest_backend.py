@@ -93,6 +93,24 @@ class RestNativeSlurmBackendTests(unittest.TestCase):
         payload = transport.calls[0][2]
         self.assertEqual(payload["job"]["dependency"], "afterok:120:121")
 
+    def test_submit_uses_explicit_per_run_job_name(self) -> None:
+        transport = FakeTransport([HttpResponse(200, {"job_id": 1236, "errors": []})])
+        backend = RestNativeSlurmBackend(transport=transport)
+        intent = _valid_intent()
+        intent = SubmitIntent(
+            user=intent.user,
+            workdir=intent.workdir,
+            script=intent.script,
+            resource_plan=intent.resource_plan,
+            idempotency_key="run-one:submit",
+            job_name="pilot107-run-0123456789abcdef",
+        )
+
+        backend.submit(intent)
+
+        payload = transport.calls[0][2]
+        self.assertEqual(payload["job"]["name"], "pilot107-run-0123456789abcdef")
+
     def test_submit_rejects_semantic_errors(self) -> None:
         transport = FakeTransport([HttpResponse(200, {"errors": [{"description": "bad qos"}]})])
         backend = RestNativeSlurmBackend(transport=transport)

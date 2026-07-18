@@ -92,6 +92,16 @@ bash scripts/check-sim-core.sh
 - review：[phase3g_control_repository_review.md](phase3g_control_repository_review.md)；
 - R4 尚未完成：下一切片将 Run submit/reconcile/collection 和 Agent execution 接入该 substrate，再做多进程 crash/reclaim 与外部副作用零重复证明。
 
+### 2026-07-18 R4 Run Submit Outbox 检查点
+
+- Run submit 生产 builder 已接入 durable outbox、持久化 submission owner/fencing token 和 Worker dispatcher；
+- 每个 Run 使用稳定且唯一的 Slurm job name，reconciliation 不再混淆同用户并发提交；
+- 模糊 transport 结果只重试 reconciliation，永不自动发送第二次外部 submit；预算耗尽进入 `SUBMISSION_UNCERTAIN`；
+- 两线程、两个 spawn 进程、enqueue-only crash、外部 submit 后 crash、DB write 后 ack 前 crash 契约通过；
+- Docker demo 跨容器接管通过：`run_live_outbox_recovery_fixed_20260718` 由独立 Worker 提交并完成 Evidence collection；
+- review：[phase3g_submission_outbox_review.md](phase3g_submission_outbox_review.md)；
+- 下一步迁移 collection 与 Agent execution 到统一 lease/fencing/outbox，并补 PostgreSQL 业务接线和 crash matrix。
+
 真人使用不进入这些工作包的通过条件。可选的 U2/U3 只用于视觉、文案、信任感和交互取舍；VM 上传、真实 107 操作和生产身份仍需另行授权。
 
 ## 3. A 轨：工程基线与扩展边界

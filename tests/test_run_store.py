@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from pilot107.adapters.slurm import JobSnapshot, SubmissionStrategy, SubmitReceipt
-from pilot107.core.run_store import RunStore
+from pilot107.core.run_store import RunStore, RunStoreFenceConflict
 from pilot107.core.states import CollectionState, RunState
 
 
@@ -124,6 +124,56 @@ class RunStoreTests(unittest.TestCase):
             ),
             1,
         )
+
+    def test_submission_result_rejects_stale_fencing_token_after_reclaim(self) -> None:
+        run = self.store.create_run(
+            run_id="run_fenced_claim",
+            owner="alice",
+            workdir="/public/home/alice",
+            script="echo once",
+        )
+        self.assertTrue(
+            self.store.claim_submission(
+                run.run_id,
+                lease_owner="worker-a",
+                fencing_token=1,
+            )
+        )
+        self.assertFalse(
+            self.store.claim_submission(
+                run.run_id,
+                lease_owner="worker-b",
+                fencing_token=1,
+            )
+        )
+        self.assertTrue(
+            self.store.claim_submission(
+                run.run_id,
+                lease_owner="worker-b",
+                fencing_token=2,
+            )
+        )
+        receipt = SubmitReceipt(
+            job_id="1234",
+            run_state=RunState.SUBMITTED,
+            strategy=SubmissionStrategy.IN_MEMORY,
+            raw_response={"job_id": "1234"},
+        )
+        with self.assertRaises(RunStoreFenceConflict):
+            self.store.apply_submit_receipt(
+                run.run_id,
+                receipt,
+                lease_owner="worker-a",
+                fencing_token=1,
+            )
+
+        submitted = self.store.apply_submit_receipt(
+            run.run_id,
+            receipt,
+            lease_owner="worker-b",
+            fencing_token=2,
+        )
+        self.assertEqual(submitted.job_id, "1234")
 
     def test_agent_remediation_requires_approved_action_for_parent(self) -> None:
         parent = self.store.create_run(

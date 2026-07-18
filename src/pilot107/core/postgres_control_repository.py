@@ -329,6 +329,46 @@ class PostgresControlRepository:
                     claimed.append(_row_to_outbox(current))
         return claimed
 
+    def claim_outbox_message(
+        self,
+        *,
+        message_id: str,
+        owner: str,
+        lease_seconds: int,
+    ) -> OutboxMessage | None:
+        _validate_key(message_id, "message_id", _IDENTIFIER)
+        _validate_key(owner, "owner", _IDENTIFIER)
+        _require_positive(lease_seconds, "lease_seconds")
+        now = self._now()
+        expires_at = now + timedelta(seconds=lease_seconds)
+        with self.connect() as conn, conn.transaction():
+            row = conn.execute(
+                """
+                SELECT * FROM control_outbox
+                WHERE message_id = %s
+                  AND ((state = 'pending' AND available_at <= %s)
+                       OR (state = 'running' AND lease_expires_at <= %s))
+                FOR UPDATE SKIP LOCKED
+                """,
+                (message_id, now, now),
+            ).fetchone()
+            if row is None:
+                return None
+            token = int(row["fencing_token"]) + 1
+            current = conn.execute(
+                """
+                UPDATE control_outbox
+                SET state = 'running', lease_owner = %s, lease_expires_at = %s,
+                    fencing_token = %s, attempts = attempts + 1, updated_at = %s
+                WHERE message_id = %s
+                RETURNING *
+                """,
+                (owner, expires_at, token, now, message_id),
+            ).fetchone()
+        if current is None:
+            raise RuntimeError("claimed outbox message disappeared")
+        return _row_to_outbox(current)
+
     def acknowledge(self, *, message_id: str, owner: str, fencing_token: int) -> None:
         self._finish(
             message_id=message_id,

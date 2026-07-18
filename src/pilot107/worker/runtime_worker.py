@@ -67,6 +67,9 @@ class WorkerTickResult:
     diagnoses_checked: int = 0
     diagnoses_succeeded: int = 0
     diagnosis_errors: list[WorkerDiagnosisError] = field(default_factory=list)
+    submissions_checked: int = 0
+    submissions_succeeded: int = 0
+    submission_errors: list[WorkerRunError] = field(default_factory=list)
 
 
 class RuntimeReconcileWorker:
@@ -94,6 +97,16 @@ class RuntimeReconcileWorker:
         self.task_lease_seconds = task_lease_seconds
 
     def tick(self) -> WorkerTickResult:
+        submission_batch = self.service.dispatch_due_submissions(limit=self.batch_size)
+        submission_errors = [
+            WorkerRunError(
+                run_id=error.run_id,
+                message=error.message,
+                code="SUBMISSION.DISPATCH_ERROR",
+                retryable=True,
+            )
+            for error in submission_batch.errors
+        ]
         runs = self.service.store.list_active_job_runs(limit=self.batch_size)
         terminal = 0
         errors: list[WorkerRunError] = []
@@ -133,7 +146,10 @@ class RuntimeReconcileWorker:
         retry_runs = self.service.store.list_due_workflow_retries(limit=self.batch_size)
         for retry_run in retry_runs:
             try:
-                self.service.submit_prepared(retry_run.run_id)
+                if self.service.control_repository is None:
+                    self.service.submit_prepared(retry_run.run_id)
+                else:
+                    self.service.enqueue_submission(retry_run.run_id)
             except SlurmBackendError as exc:
                 classification = classify_worker_exception(
                     exc,
@@ -248,6 +264,9 @@ class RuntimeReconcileWorker:
             diagnoses_checked=diagnoses_checked,
             diagnoses_succeeded=diagnoses_succeeded,
             diagnosis_errors=diagnosis_errors,
+            submissions_checked=submission_batch.checked,
+            submissions_succeeded=len(submission_batch.succeeded),
+            submission_errors=submission_errors,
         )
 
     def run_until_idle(
@@ -271,11 +290,20 @@ class RuntimeReconcileWorker:
                 diagnoses_checked=aggregate.diagnoses_checked + result.diagnoses_checked,
                 diagnoses_succeeded=aggregate.diagnoses_succeeded + result.diagnoses_succeeded,
                 diagnosis_errors=[*aggregate.diagnosis_errors, *result.diagnosis_errors],
+                submissions_checked=(aggregate.submissions_checked + result.submissions_checked),
+                submissions_succeeded=(
+                    aggregate.submissions_succeeded + result.submissions_succeeded
+                ),
+                submission_errors=[
+                    *aggregate.submission_errors,
+                    *result.submission_errors,
+                ],
             )
             if (
                 result.checked == 0
                 and result.tasks_checked == 0
                 and result.diagnoses_checked == 0
+                and result.submissions_checked == 0
             ):
                 break
             time.sleep(interval_seconds)

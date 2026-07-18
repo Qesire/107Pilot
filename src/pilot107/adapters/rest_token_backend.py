@@ -40,11 +40,9 @@ from pilot107.adapters.slurm import (
     SubmitReceipt,
 )
 
-# The simulator adapter hardcodes the Slurm job name to this value (see
-# ``RestNativeSlurmBackend._job_payload``). Reconciliation filters by this
-# marker plus user plus submit-time window. Lane 5 may introduce a unique
-# per-run marker; until then two concurrent same-user submits inside the
-# reconcile window will resolve to ``uncertain`` (documented limitation).
+# RunService treats this as a safe prefix and appends a stable digest of the
+# run_id. Every adapter carries that explicit per-run name into Slurm, so
+# reconciliation does not conflate concurrent submits from the same user.
 DEFAULT_JOB_NAME_MARKER = "pilot107-run"
 
 

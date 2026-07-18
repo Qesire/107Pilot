@@ -310,6 +310,25 @@ class WorkDirPreflightIntegrationTests(unittest.TestCase):
 
 
 class IdempotencyReconcileTests(unittest.TestCase):
+    def test_concurrent_runs_use_distinct_stable_reconciliation_markers(self) -> None:
+        inner = _RecordingInnerBackend()
+        service, _, _tmp = _make_service(backend=inner)  # type: ignore[arg-type]
+        request = RunSubmitRequest(
+            owner="alice",
+            workdir=Path("/public/home/alice"),
+            script="#!/bin/bash\nhostname\n",
+            resource_plan=_plan(),
+        )
+        first = service.prepare(request, run_id="run_first")
+        second = service.prepare(request, run_id="run_second")
+
+        service.submit_prepared(first.run_id)
+        service.submit_prepared(second.run_id)
+
+        markers = [intent.job_name for intent in inner.submit_calls]
+        self.assertEqual(len(set(markers)), 2)
+        self.assertTrue(all(marker and marker.startswith("pilot107-run-") for marker in markers))
+
     def test_timeout_then_single_match_binds_job(self) -> None:
         inner = _RecordingInnerBackend(
             fail_submit_with=SlurmTransportError("timeout"),
@@ -336,6 +355,10 @@ class IdempotencyReconcileTests(unittest.TestCase):
         # The original submit was attempted, then reconcile found one match
         self.assertEqual(len(inner.submit_calls), 1)
         self.assertEqual(len(reconcile_backend.calls), 1)
+        marker = reconcile_backend.calls[0]["job_name_marker"]
+        self.assertIsInstance(marker, str)
+        self.assertRegex(marker, r"^pilot107-run-[0-9a-f]{20}$")
+        self.assertEqual(inner.submit_calls[0].job_name, marker)
 
     def test_timeout_then_zero_matches_retries_submit(self) -> None:
         # First submit raises transport error; reconcile finds nothing;

@@ -89,6 +89,24 @@ class CommandSubmitBackendTests(unittest.TestCase):
         dependency_index = argv.index("--dependency")
         self.assertEqual(argv[dependency_index + 1], "afterok:120:121")
 
+    def test_submit_passes_explicit_job_name_as_argv(self) -> None:
+        runner = FakeRunner([CommandResult(0, "4323\n", "")])
+        backend = CommandSubmitBackend(allowed_roots=[self.root], runner=runner)
+
+        backend.submit(
+            SubmitIntent(
+                user="alice",
+                workdir=self.workdir,
+                script="#!/bin/bash\nhostname\n",
+                resource_plan=_plan(),
+                job_name="pilot107-run-0123456789abcdef",
+            )
+        )
+
+        argv = runner.calls[0]
+        name_index = argv.index("--job-name")
+        self.assertEqual(argv[name_index + 1], "pilot107-run-0123456789abcdef")
+
     def test_rejects_workdir_outside_allowed_roots(self) -> None:
         runner = FakeRunner([CommandResult(0, "4321\n", "")])
         backend = CommandSubmitBackend(allowed_roots=[self.root / "other"], runner=runner)

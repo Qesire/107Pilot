@@ -57,6 +57,7 @@ class SubmitIntent:
     resource_plan: ResourcePlan
     idempotency_key: str | None = None
     dependency_job_ids: tuple[str, ...] = ()
+    job_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -488,6 +489,9 @@ def _validate_submit_intent(intent: SubmitIntent) -> None:
         raise SlurmSubmissionRejected("script must not be empty")
     for job_id in intent.dependency_job_ids:
         _require_job_id(job_id)
+    _require_safe_slurm_value("job_name", intent.job_name)
+    if intent.job_name is not None and len(intent.job_name) > 128:
+        raise SlurmSubmissionRejected("Slurm job_name exceeds 128 characters")
     blockers = [
         finding
         for finding in validate_resource_plan(intent.resource_plan)
@@ -790,7 +794,7 @@ class RestNativeSlurmBackend:
     def _job_payload(self, intent: SubmitIntent) -> dict[str, Any]:
         options = _sbatch_options(intent.resource_plan)
         job: dict[str, Any] = {
-            "name": "pilot107-run",
+            "name": intent.job_name or "pilot107-run",
             "current_working_directory": str(intent.workdir),
             "environment": ["PILOT107_RUN=1"],
         }
@@ -824,6 +828,8 @@ class CommandSubmitBackend:
         argv = [
             "sbatch",
             "--parsable",
+            "--job-name",
+            intent.job_name or "pilot107-run",
             "--chdir",
             str(safe_workdir.resolved),
             *_sbatch_options(intent.resource_plan),
@@ -941,6 +947,8 @@ class DockerSimulatorCommandBackend:
         argv = [
             "sbatch",
             "--parsable",
+            "--job-name",
+            intent.job_name or "pilot107-run",
             "--chdir",
             workdir,
             *_sbatch_options(intent.resource_plan),

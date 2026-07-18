@@ -36,6 +36,7 @@ from pilot107.adapters.slurm import (
 from pilot107.core.advice import AgentAdviceService, AgentPolicyEngine
 from pilot107.core.agent import AgentExplainService
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
+from pilot107.core.control_repository import SQLiteControlRepository
 from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.preflight import LocalPathChecker, PathChecker
@@ -118,6 +119,7 @@ class WorkerService:
                 and result.checked == 0
                 and result.tasks_checked == 0
                 and result.diagnoses_checked == 0
+                and result.submissions_checked == 0
                 and self.last_remediation_advanced == 0
             ):
                 break
@@ -137,6 +139,7 @@ class WorkerService:
                 result.errors
                 or result.task_errors
                 or result.diagnosis_errors
+                or result.submission_errors
                 or self.last_remediation_errors
             ),
             "worker_id": self.config.worker_id,
@@ -148,9 +151,12 @@ class WorkerService:
             "tasks_succeeded": result.tasks_succeeded,
             "diagnoses_checked": result.diagnoses_checked,
             "diagnoses_succeeded": result.diagnoses_succeeded,
+            "submissions_checked": result.submissions_checked,
+            "submissions_succeeded": result.submissions_succeeded,
             "errors": [error.__dict__ for error in result.errors],
             "task_errors": [error.__dict__ for error in result.task_errors],
             "diagnosis_errors": [error.__dict__ for error in result.diagnosis_errors],
+            "submission_errors": [error.__dict__ for error in result.submission_errors],
             "remediation_checked": self.last_remediation_checked,
             "remediation_advanced": self.last_remediation_advanced,
             "remediation_errors": self.last_remediation_errors,
@@ -243,6 +249,7 @@ def config_from_env(
 
 def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     store = RunStore(config.db_path)
+    control_repository = SQLiteControlRepository(config.db_path)
     evidence_store = EvidenceStore(config.evidence_root)
     backend, task_handler, reconcile_backend = _build_backend_and_task_handler(
         config, store, evidence_store
@@ -260,6 +267,8 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         idempotency_reconcile_enabled=config.idempotency_reconcile_enabled,
         reconcile_backend=reconcile_backend,
         job_name_marker=DEFAULT_JOB_NAME_MARKER,
+        control_repository=control_repository,
+        dispatcher_id=config.worker_id,
     )
     contract_store = ContractStore(config.db_path)
     contract_service = ContractService(
@@ -310,6 +319,11 @@ def _worker_preflight_checkers(
 ) -> tuple[PathChecker | None, Callable[[str], PathChecker] | None]:
     if not config.workdir_preflight_enabled:
         return None, None
+    if config.backend in {"in-memory", "demo"}:
+        # These backends never access the filesystem. Match the API builder's
+        # pure-path authorization contract instead of evaluating container UID
+        # permissions for a simulated user home.
+        return None, None
     if config.backend == "command-gateway":
         executor = HttpCommandGatewayExecutor(
             base_url=config.command_gateway_url,
@@ -355,7 +369,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print(_tick_summary(result))
-    return 1 if result.errors or result.task_errors else 0
+    return (
+        1
+        if (
+            result.errors
+            or result.task_errors
+            or result.diagnosis_errors
+            or result.submission_errors
+            or worker_service.last_remediation_errors
+        )
+        else 0
+    )
 
 
 def _build_backend_and_task_handler(
@@ -499,6 +523,9 @@ def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> Work
         diagnoses_checked=left.diagnoses_checked + right.diagnoses_checked,
         diagnoses_succeeded=left.diagnoses_succeeded + right.diagnoses_succeeded,
         diagnosis_errors=[*left.diagnosis_errors, *right.diagnosis_errors],
+        submissions_checked=left.submissions_checked + right.submissions_checked,
+        submissions_succeeded=left.submissions_succeeded + right.submissions_succeeded,
+        submission_errors=[*left.submission_errors, *right.submission_errors],
     )
 
 
@@ -508,8 +535,10 @@ def _tick_summary(result: WorkerTickResult) -> str:
         f"checked={result.checked} terminal={result.terminal} "
         f"tasks={result.tasks_succeeded}/{result.tasks_checked} "
         f"diagnoses={result.diagnoses_succeeded}/{result.diagnoses_checked} "
+        f"submissions={result.submissions_succeeded}/{result.submissions_checked} "
         f"errors={len(result.errors)} task_errors={len(result.task_errors)} "
-        f"diagnosis_errors={len(result.diagnosis_errors)}"
+        f"diagnosis_errors={len(result.diagnosis_errors)} "
+        f"submission_errors={len(result.submission_errors)}"
     )
 
 

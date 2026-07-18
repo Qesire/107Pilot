@@ -4,7 +4,13 @@ import unittest
 from pathlib import Path
 from typing import Any, NoReturn
 
-from pilot107.adapters.slurm import SimulatorPathChecker, SubmissionStrategy, SubmitReceipt
+from pilot107.adapters.slurm import (
+    DemoSlurmBackend,
+    SimulatorPathChecker,
+    SubmissionStrategy,
+    SubmitReceipt,
+)
+from pilot107.core.control_repository import SQLiteControlRepository
 from pilot107.core.remediation import RemediationState
 from pilot107.core.resources import ResourcePlan
 from pilot107.core.run_service import RunService, RunSubmitRequest
@@ -99,6 +105,20 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertIsInstance(checker, SimulatorPathChecker)
         self.assertEqual(checker.user, "bob")
 
+    def test_demo_worker_uses_pure_path_preflight_for_simulated_user_home(self) -> None:
+        service = build_worker_service(
+            config_from_env(
+                {
+                    "PILOT107_WORKER_BACKEND": "demo",
+                    "PILOT107_WORKER_ID": "demo-path-worker",
+                },
+                project_root=self.root,
+            )
+        )
+
+        self.assertIsNone(service.stack.service.preflight_path_checker)
+        self.assertIsNone(service.stack.service.preflight_path_checker_factory)
+
     def test_run_once_writes_health_file(self) -> None:
         config = config_from_env(
             {
@@ -162,6 +182,53 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(updated.stop_reason, "no_safe_action")
         self.assertEqual(service.last_remediation_checked, 1)
         self.assertEqual(service.last_remediation_advanced, 1)
+
+    def test_worker_dispatches_submission_left_pending_by_api_process(self) -> None:
+        db_path = self.root / "data" / "phase0" / "pilot107.db"
+        store = RunStore(db_path)
+        producer = RunService(
+            store=store,
+            backend=DemoSlurmBackend(),
+            control_repository=SQLiteControlRepository(db_path),
+            dispatcher_id="api-crashed",
+        )
+        run = producer.prepare(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=Path("/public/home/alice"),
+                script="#!/bin/bash\necho durable\n",
+                resource_plan=ResourcePlan(
+                    partition="debug",
+                    qos="normal",
+                    nodes=1,
+                    ntasks=1,
+                    cpus_per_task=1,
+                    time_limit="00:05:00",
+                ),
+            ),
+            run_id="run_pending_outbox",
+        )
+        producer.enqueue_submission(run.run_id)
+        worker = build_worker_service(
+            config_from_env(
+                {
+                    "PILOT107_WORKER_BACKEND": "demo",
+                    "PILOT107_WORKER_ID": "submission-worker-test",
+                    "PILOT107_WORKDIR_PREFLIGHT": "0",
+                },
+                project_root=self.root,
+            )
+        )
+
+        result = worker.run_once()
+
+        self.assertEqual(result.submissions_checked, 1)
+        self.assertEqual(result.submission_errors, [])
+        self.assertEqual(result.submissions_succeeded, 1)
+        self.assertEqual(store.get_run(run.run_id).state, RunState.SUCCEEDED)
+        health = json.loads((self.root / "data" / "phase0" / "worker-health.json").read_text())
+        self.assertEqual(health["submissions_checked"], 1)
+        self.assertEqual(health["submissions_succeeded"], 1)
 
     def test_demo_worker_reconciles_and_collects_evidence(self) -> None:
         db_path = self.root / "data" / "phase0" / "pilot107.db"

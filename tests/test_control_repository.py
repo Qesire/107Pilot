@@ -143,6 +143,39 @@ class SQLiteControlRepositoryTests(unittest.TestCase):
         )
         self.assertEqual(self.store.get_outbox("message-1").state, "succeeded")
 
+    def test_specific_outbox_claim_does_not_consume_an_older_message(self) -> None:
+        self.store.enqueue(
+            message_id="message-old",
+            topic="run.submit",
+            aggregate_id="run_old",
+            payload={"run_id": "run_old"},
+        )
+        self.clock.advance(1)
+        self.store.enqueue(
+            message_id="message-target",
+            topic="run.submit",
+            aggregate_id="run_target",
+            payload={"run_id": "run_target"},
+        )
+
+        claimed = self.store.claim_outbox_message(
+            message_id="message-target",
+            owner="api-a",
+            lease_seconds=30,
+        )
+
+        assert claimed is not None
+        self.assertEqual(claimed.message_id, "message-target")
+        self.assertEqual(claimed.attempts, 1)
+        self.assertEqual(self.store.get_outbox("message-old").state, "pending")
+        self.assertIsNone(
+            self.store.claim_outbox_message(
+                message_id="message-target",
+                owner="api-b",
+                lease_seconds=30,
+            )
+        )
+
     def test_retry_delays_delivery_and_dead_letters_at_attempt_budget(self) -> None:
         self.store.enqueue(
             message_id="message-1",
