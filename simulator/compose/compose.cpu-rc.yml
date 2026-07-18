@@ -15,6 +15,7 @@ services:
     mem_limit: 384m
     volumes:
       - ./slurm-cpu-rc/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurmctld-state:/var/spool/slurm/ctld
 
   slurmrestd:
     cpus: 0.25
@@ -53,3 +54,6 @@ services:
   pilot107-reverse-proxy:
     cpus: 0.25
     mem_limit: 384m
+
+volumes:
+  slurmctld-state:

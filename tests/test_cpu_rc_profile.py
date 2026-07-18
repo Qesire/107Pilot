@@ -36,6 +36,7 @@ class CpuReleaseCandidateProfileTests(unittest.TestCase):
         self.assertIn('PILOT107_ALLOW_GPU_RECIPES: "false"', compose)
         self.assertIn("cpus: 4.0", compose)
         self.assertNotIn("worker-2:", compose)
+        self.assertIn("slurmctld-state:/var/spool/slurm/ctld", compose)
 
     def test_cpu_api_hides_gpu_recipes_and_reports_only_cpu_capability(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
