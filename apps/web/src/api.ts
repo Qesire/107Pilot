@@ -322,11 +322,16 @@ export const api = {
       { request_key: `ui:${runId}`, automation_policy: "manual_approval" },
       signal,
     ),
-  advanceRemediationSession: (user: string, sessionId: string, signal?: AbortSignal) =>
+  advanceRemediationSession: (
+    user: string,
+    sessionId: string,
+    signal?: AbortSignal,
+    options?: { provider?: "local" | "none" },
+  ) =>
     sendJson<RemediationSession>(
       `/api/v1/remediation-sessions/${encodeURIComponent(sessionId)}/advance`,
       user,
-      {},
+      { provider: options?.provider ?? "local" },
       signal,
     ),
   approveRemediationAction: (

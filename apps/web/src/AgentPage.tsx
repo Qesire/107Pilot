@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { ArrowRight, Ban, Bot, CheckCircle2, Play, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 import { api } from "./api";
 import { QueryBoundary, SectionHeading, StatusBadge, formatTimestamp } from "./components";
@@ -114,6 +115,7 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
 
 function SessionDetail({ user, session }: { user: string; session: RemediationSession }) {
   const queryClient = useQueryClient();
+  const [provider, setProvider] = useState<LlmProvider>("local");
   const refresh = (updated?: RemediationSession) => {
     if (updated) queryClient.setQueryData(
       ["remediation-session", user, session.session_id],
@@ -125,7 +127,12 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
     });
   };
   const advance = useMutation({
-    mutationFn: () => api.advanceRemediationSession(user, session.session_id),
+    mutationFn: () => api.advanceRemediationSession(
+      user,
+      session.session_id,
+      undefined,
+      { provider },
+    ),
     onSuccess: refresh,
   });
   const approve = useMutation({
@@ -183,9 +190,24 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
         {!terminalStates.has(session.state) ? (
           <div className="agent-session-controls">
             {activeStates.has(session.state) ? (
-              <button className="button secondary" type="button" disabled={advance.isPending} onClick={() => advance.mutate()}>
-                <RefreshCw aria-hidden="true" size={15} className={advance.isPending ? "spin" : undefined} />推进状态
-              </button>
+              <>
+                <label className="select-field">
+                  <Bot aria-hidden="true" size={16} />
+                  <span className="sr-only">LLM provider</span>
+                  <select
+                    value={provider}
+                    onChange={(event) => setProvider(event.target.value as LlmProvider)}
+                    aria-label="LLM provider"
+                    className="llm-provider-select"
+                  >
+                    <option value="local">{providerLabel("local")}</option>
+                    <option value="none">{providerLabel("none")}</option>
+                  </select>
+                </label>
+                <button className="button secondary" type="button" disabled={advance.isPending} onClick={() => advance.mutate()}>
+                  <RefreshCw aria-hidden="true" size={15} className={advance.isPending ? "spin" : undefined} />推进状态
+                </button>
+              </>
             ) : null}
             <button className="button danger" type="button" disabled={cancel.isPending} onClick={() => cancel.mutate()}><Ban aria-hidden="true" size={15} />取消会话</button>
           </div>
@@ -260,6 +282,16 @@ function ProposalDiff({ payload }: { payload: Record<string, unknown> }) {
       {rows.map((row) => <div key={row.field}><dt>{row.field}</dt><dd className="mono wrap-anywhere">{row.value}</dd></div>)}
     </dl>
   );
+}
+
+export type LlmProvider = "local" | "none";
+
+export function defaultProvider(opts: { llmConfigured: boolean }): LlmProvider {
+  return opts.llmConfigured ? "local" : "none";
+}
+
+export function providerLabel(provider: LlmProvider): string {
+  return provider === "local" ? "USTC LLM (glm-5.2-107)" : "确定性规则（无 LLM）";
 }
 
 export function proposalPatchRows(payload: Record<string, unknown>) {
