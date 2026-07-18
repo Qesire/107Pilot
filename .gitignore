@@ -38,3 +38,4 @@ simulator/compose/certs/*
 simulator/compose/secrets/*
 !simulator/compose/secrets/README.md
 simulator/compose/slurm/jwt_hs256.key
+.worktrees/
