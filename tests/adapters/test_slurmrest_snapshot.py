@@ -135,3 +135,36 @@ def test_partition_from_slurm_parses_qos_and_state():
 def test_node_state_from_slurm_normalizes_lowercase():
     assert _node_state_from_slurm(["IDLE"]) == ("idle",)
     assert _node_state_from_slurm(["MIXED", "COMPLETING"]) == ("mixed", "completing")
+
+
+class TokenRecordingTransport(FakeHttpTransport):
+    """Records tokens passed to ``request`` for assertion."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.tokens: list[str | None] = []
+
+    def request(self, method, path, *, token=None, payload=None) -> HttpResponse:
+        self.tokens.append(token)
+        return super().request(method, path, token=token, payload=payload)
+
+
+def test_collect_passes_token_to_transport(partitions_payload, nodes_payload, captured_at):
+    """Collector forwards configured JWT to transport.request."""
+    transport = TokenRecordingTransport(
+        partitions_payload=partitions_payload, nodes_payload=nodes_payload
+    )
+    collector = SlurmrestSnapshotCollector(transport=transport, token="jwt-abc-123")
+    collector.collect(captured_at=captured_at)
+    assert len(transport.tokens) == 2  # partitions + nodes
+    assert all(t == "jwt-abc-123" for t in transport.tokens)
+
+
+def test_collect_passes_none_token_by_default(partitions_payload, nodes_payload, captured_at):
+    """When no token configured, requests send token=None (current behavior)."""
+    transport = TokenRecordingTransport(
+        partitions_payload=partitions_payload, nodes_payload=nodes_payload
+    )
+    collector = SlurmrestSnapshotCollector(transport=transport)
+    collector.collect(captured_at=captured_at)
+    assert all(t is None for t in transport.tokens)

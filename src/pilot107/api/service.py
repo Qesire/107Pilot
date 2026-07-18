@@ -265,6 +265,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     snapshot_collector = SlurmrestSnapshotCollector(
         transport=snapshot_transport,
         api_version="v0.0.41",
+        token=config.slurm_token,
     )
 
     def _collect_and_store_snapshot() -> None:

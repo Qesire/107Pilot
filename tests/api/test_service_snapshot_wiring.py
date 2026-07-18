@@ -72,6 +72,26 @@ def test_build_api_service_starts_background_refresh_thread(cpu_rc_env):
     assert all(t.daemon for t in new_threads), "refresh thread must be daemon"
 
 
+def test_build_api_service_passes_slurm_token_to_collector(cpu_rc_env, monkeypatch):
+    """config.slurm_token should flow into SlurmrestSnapshotCollector."""
+    monkeypatch.setenv("PILOT107_SLURM_TOKEN", "test-jwt-token")
+    service_module = _reload_service_module()
+    captured: dict = {}
+    real_init = service_module.SlurmrestSnapshotCollector.__init__
+
+    def spy_init(self, *args, **kwargs):
+        captured["token"] = kwargs.get("token")
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(service_module.SlurmrestSnapshotCollector, "__init__", spy_init)
+    try:
+        service_module.build_api_service(service_module.config_from_env())
+    except Exception:
+        pass
+    assert captured.get("token") == "test-jwt-token"
+
+
+
 def test_build_api_service_uses_slurm_username_as_snapshot_owner(
     cpu_rc_env, monkeypatch
 ):

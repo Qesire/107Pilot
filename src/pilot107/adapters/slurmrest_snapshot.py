@@ -114,17 +114,19 @@ class SlurmrestSnapshotCollector:
         transport: _HttpTransport,
         api_version: str = "v0.0.41",
         collector_version: str = "pilot107.slurmrest_snapshot.v1",
+        token: str | None = None,
     ) -> None:
         self.transport = transport
         self.api_version = api_version
         self.collector_version = collector_version
+        self.token = token
 
     def collect(self, *, captured_at: str | None = None) -> PlatformSnapshot:
         timestamp = captured_at or datetime.now(UTC).isoformat()
         limitations: list[str] = []
 
         part_response = self.transport.request(
-            "GET", f"/slurm/{self.api_version}/partitions"
+            "GET", f"/slurm/{self.api_version}/partitions", token=self.token
         )
         partitions: tuple[PartitionSnapshot, ...] = ()
         if part_response.status == 200:
@@ -138,7 +140,7 @@ class SlurmrestSnapshotCollector:
             limitations.append(f"/partitions returned HTTP {part_response.status}")
 
         node_response = self.transport.request(
-            "GET", f"/slurm/{self.api_version}/nodes"
+            "GET", f"/slurm/{self.api_version}/nodes", token=self.token
         )
         nodes: tuple[NodeSnapshot, ...] = ()
         if node_response.status == 200:
