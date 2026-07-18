@@ -63,10 +63,13 @@ do
 done
 
 rm -f "$work_dir/simulator/compose/.env.cpu-rc"
+find "$work_dir/simulator/compose" -maxdepth 1 -type f -name '.env*' ! -name '*.example' -delete
 rm -rf "$work_dir/simulator/compose/certs" "$work_dir/simulator/compose/secrets"
 mkdir -p "$work_dir/simulator/compose/certs" "$work_dir/simulator/compose/secrets"
 cp "$root/simulator/compose/certs/README.md" "$work_dir/simulator/compose/certs/"
 cp "$root/simulator/compose/secrets/README.md" "$work_dir/simulator/compose/secrets/"
+rm -f "$work_dir/simulator/compose/slurm/jwt_hs256.key"
+find "$work_dir" -type d \( -name node_modules -o -name '*.egg-info' \) -prune -exec rm -rf {} +
 find "$work_dir" -type d -name __pycache__ -prune -exec rm -rf {} +
 find "$work_dir" -type f -name '*.pyc' -delete
 
