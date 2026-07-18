@@ -8,6 +8,7 @@ from pilot107.web.server import (
     WebIdentityMode,
     config_from_env,
     is_safe_demo_user,
+    is_safe_terminal_deep_link,
     resolve_proxy_user,
     resolve_static_request,
 )
@@ -69,6 +70,24 @@ class WebServerTests(unittest.TestCase):
     def test_fixed_identity_mode_requires_explicit_user(self) -> None:
         with self.assertRaisesRegex(ValueError, "PILOT107_WEB_FIXED_USER is required"):
             config_from_env({"PILOT107_WEB_IDENTITY_MODE": "fixed_user"})
+
+    def test_terminal_deep_link_is_configured_and_scheme_restricted(self) -> None:
+        config = config_from_env(
+            {
+                "PILOT107_WEB_API_BASE_URL": "http://api:8080",
+                "PILOT107_WEB_TERMINAL_DEEP_LINK": "https://terminal.example.edu/session",
+            }
+        )
+
+        self.assertEqual(
+            config.terminal_deep_link,
+            "https://terminal.example.edu/session",
+        )
+        self.assertTrue(is_safe_terminal_deep_link("http://127.0.0.1:7681/"))
+        self.assertFalse(is_safe_terminal_deep_link("javascript:alert(1)"))
+        self.assertFalse(is_safe_terminal_deep_link("https://user:pass@example.edu"))
+        with self.assertRaisesRegex(ValueError, "absolute HTTP"):
+            config_from_env({"PILOT107_WEB_TERMINAL_DEEP_LINK": "javascript:alert(1)"})
 
     def test_static_assets_exist(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src" / "pilot107" / "web" / "static"

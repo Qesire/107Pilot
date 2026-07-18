@@ -28,6 +28,20 @@ describe("API transport", () => {
     );
   });
 
+  it("passes opaque Run cursors without changing the authenticated scope", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [], page: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.runs("alice", { limit: "20", cursor: "opaque+/=" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/runs?owner=alice&limit=20&cursor=opaque%2B%2F%3D",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+      }),
+    );
+  });
+
   it("sends JSON mutations with the fixed authenticated user", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ run_id: "run_1" }, 202));
     vi.stubGlobal("fetch", fetchMock);
@@ -114,6 +128,63 @@ describe("API transport", () => {
       expect.objectContaining({
         body: JSON.stringify({ expected_version: 8, note: "manual handoff" }),
         headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+      }),
+    );
+  });
+
+  it("binds remediation list identity only through the trusted header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [], page: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.remediationSessions("alice", "blocked");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/remediation-sessions?state=blocked",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+      }),
+    );
+  });
+
+  it("keeps Run lineage reads and retry mutations owner scoped", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [], page: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.runEvents("alice", "run/1");
+    await api.runLineage("alice", "run/1");
+    await api.cancelRun("alice", "run/1");
+    await api.prepareRetry("alice", {
+      run_id: "run/1",
+      contract_id: "contract/1",
+      state: "FAILED",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/runs/run%2F1/events?limit=100",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/runs/run%2F1/lineage",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/runs/run%2F1/cancel",
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/v1/runs/prepare",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          contract_id: "contract/1",
+          parent_run_id: "run/1",
+          lineage_reason: "manual_retry",
+        }),
       }),
     );
   });

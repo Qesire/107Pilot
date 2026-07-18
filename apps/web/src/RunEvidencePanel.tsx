@@ -5,11 +5,18 @@ import {
   Bot,
   Bug,
   CheckCircle2,
+  Copy,
   FileText,
   FolderTree,
+  GitCompare,
+  ListTree,
+  RotateCcw,
   ScrollText,
   ShieldCheck,
+  Upload,
+  XCircle,
 } from "lucide-react";
+import { useState } from "react";
 import { api } from "./api";
 import { FactState, QueryBoundary, StatusBadge, formatTimestamp } from "./components";
 import {
@@ -20,7 +27,15 @@ import {
   previewContent,
   selectActiveEvidenceObject,
 } from "./evidence-state";
-import { useEvidenceObject, useRunCapsule, useRunDiagnoses, useRunEvidence } from "./query";
+import {
+  useEvidenceObject,
+  useRun,
+  useRunCapsule,
+  useRunDiagnoses,
+  useRunEvidence,
+  useRunEvents,
+  useRunLineage,
+} from "./query";
 import type {
   DiagnosisRecordPayload,
   EvidenceObject,
@@ -31,10 +46,12 @@ import type {
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
 
-type EvidenceTab = "overview" | "logs" | "results" | "diagnosis" | "capsule" | "objects";
+type EvidenceTab = "overview" | "timeline" | "compare" | "logs" | "results" | "diagnosis" | "capsule" | "objects";
 
 const tabs: Array<{ id: EvidenceTab; label: string; icon: typeof FileText }> = [
   { id: "overview", label: "摘要", icon: FileText },
+  { id: "timeline", label: "时间线", icon: ListTree },
+  { id: "compare", label: "对比", icon: GitCompare },
   { id: "logs", label: "日志", icon: ScrollText },
   { id: "results", label: "结果", icon: Boxes },
   { id: "diagnosis", label: "诊断", icon: Bug },
@@ -58,10 +75,16 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
   const evidence = useRunEvidence(user, run.run_id);
   const diagnoses = useRunDiagnoses(user, run.run_id);
   const capsule = useRunCapsule(user, run.run_id);
+  const events = useRunEvents(user, tab === "timeline" ? run.run_id : null);
+  const lineage = useRunLineage(user, tab === "timeline" || tab === "compare" ? run.run_id : null);
+  const compareRunId = location.search.get("compare") ?? run.parent_run_id ?? null;
+  const comparisonRun = useRun(user, tab === "compare" ? compareRunId : null);
+  const comparisonEvidence = useRunEvidence(user, tab === "compare" ? compareRunId : null);
   const objects = evidence.data?.objects ?? [];
   const logs = objects.filter((item) => item.category === "logs");
   const outputs = objects.filter((item) => item.category === "outputs");
-  const activeObject = selectActiveEvidenceObject(objects, tab, requestedObjectId);
+  const objectTab = tab === "timeline" || tab === "compare" ? "overview" : tab;
+  const activeObject = selectActiveEvidenceObject(objects, objectTab, requestedObjectId);
   const preview = useEvidenceObject(user, run.run_id, activeObject?.object_id ?? null);
   const resultSummary = objects.find(
     (item) => item.logical_path === "derived/result_summary.v1.json",
@@ -92,11 +115,37 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
       `/agent?user=${encodeURIComponent(user)}&session=${encodeURIComponent(session.session_id)}`,
     ),
   });
+  const cancelRun = useMutation({
+    mutationFn: () => api.cancelRun(user, run.run_id),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["run", user, run.run_id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["runs", user] });
+    },
+  });
+  const retryRun = useMutation({
+    mutationFn: () => api.prepareRetry(user, run),
+    onSuccess: (prepared) => navigate(
+      `/runs/${encodeURIComponent(prepared.run_id)}?user=${encodeURIComponent(user)}&tab=overview`,
+    ),
+  });
+  const submitPrepared = useMutation({
+    mutationFn: () => api.submitRun(user, run.run_id),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["run", user, run.run_id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["runs", user] });
+    },
+  });
   const setView = (nextTab: EvidenceTab, objectId: string | null = null) =>
     navigate(withSearch(location.pathname, location.search, { tab: nextTab, object: objectId }));
 
   return (
     <div className="evidence-workbench">
+      <RunControls
+        run={run}
+        cancel={cancelRun}
+        retry={retryRun}
+        submit={submitPrepared}
+      />
       <nav className="evidence-tabs" aria-label="Run Evidence 视图">
         {tabs.map((item) => {
           const Icon = item.icon;
@@ -105,7 +154,34 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
       </nav>
 
       <QueryBoundary pending={evidence.isPending} error={evidence.error}>
-        {tab === "overview" ? <Overview run={run} objects={objects} tasks={evidence.data?.tasks ?? []} remediation={startRemediation} /> : null}
+        {tab === "overview" ? <Overview user={user} run={run} objects={objects} tasks={evidence.data?.tasks ?? []} remediation={startRemediation} /> : null}
+        {tab === "timeline" ? (
+          <TimelineView
+            events={events}
+            lineage={lineage}
+            currentRunId={run.run_id}
+            onCompare={(runId) => navigate(withSearch(location.pathname, location.search, {
+              tab: "compare",
+              compare: runId,
+              object: null,
+            }))}
+          />
+        ) : null}
+        {tab === "compare" ? (
+          <CompareView
+            current={run}
+            currentObjects={objects}
+            comparison={comparisonRun}
+            comparisonEvidence={comparisonEvidence}
+            candidates={lineage.data?.nodes ?? []}
+            compareRunId={compareRunId}
+            onSelect={(runId) => navigate(withSearch(location.pathname, location.search, {
+              compare: runId,
+              tab: "compare",
+              object: null,
+            }))}
+          />
+        ) : null}
         {tab === "logs" ? (
           <ObjectPreviewView
             title="标准输出与标准错误"
@@ -167,7 +243,137 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
   );
 }
 
-function Overview({ run, objects, tasks, remediation }: { run: RunSummary; objects: EvidenceObject[]; tasks: Array<{ task_id: number; task_type: string; state: string; attempts: number; updated_at: string }>; remediation: { isPending: boolean; isError: boolean; error: Error | null; mutate: () => void } }) {
+interface RunMutationView {
+  isPending: boolean;
+  isError: boolean;
+  error: Error | null;
+  mutate: () => void;
+}
+
+function RunControls({ run, cancel, retry, submit }: {
+  run: RunSummary;
+  cancel: RunMutationView;
+  retry: RunMutationView;
+  submit: RunMutationView;
+}) {
+  const [armed, setArmed] = useState<"cancel" | "retry" | "submit" | null>(null);
+  const active = ["SUBMITTED", "PENDING", "RUNNING", "COMPLETING"].includes(run.state);
+  const retryable = ["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED", "CANCELLED"].includes(
+    run.state,
+  );
+  const cloneable = ["SUCCEEDED", "FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED", "CANCELLED"]
+    .includes(run.state) && Boolean(run.contract_id);
+  const prepared = run.state === "VALIDATED";
+  const perform = (action: "cancel" | "retry" | "submit", mutation: RunMutationView) => {
+    if (armed !== action) {
+      setArmed(action);
+      return;
+    }
+    mutation.mutate();
+    setArmed(null);
+  };
+  if (!active && !cloneable && !prepared) return null;
+  const error = cancel.error ?? retry.error ?? submit.error;
+  return (
+    <section className="run-controls" aria-label="Run 写操作">
+      <div>
+        <strong>对象级确认</strong>
+        <span>{armed ? `再次点击确认 ${armed}` : "第一次点击只会进入确认状态。"}</span>
+      </div>
+      <div className="agent-action-row">
+        {active ? <button className="button danger" type="button" disabled={cancel.isPending} onClick={() => perform("cancel", cancel)}><XCircle aria-hidden="true" size={15} />{armed === "cancel" ? `确认取消 ${run.job_id ?? run.run_id}` : "取消 Run"}</button> : null}
+        {cloneable ? <button className="button secondary" type="button" disabled={retry.isPending} onClick={() => perform("retry", retry)}><RotateCcw aria-hidden="true" size={15} />{armed === "retry" ? "确认创建派生 Run" : retryable ? "准备重试" : "克隆 Run"}</button> : null}
+        {prepared ? <button className="button primary" type="button" disabled={submit.isPending} onClick={() => perform("submit", submit)}><Upload aria-hidden="true" size={15} />{armed === "submit" ? "确认提交此 Run" : "提交 Run"}</button> : null}
+      </div>
+      {error ? <p role="alert">{error.message}</p> : null}
+    </section>
+  );
+}
+
+function TimelineView({ events, lineage, currentRunId, onCompare }: {
+  events: ReturnType<typeof useRunEvents>;
+  lineage: ReturnType<typeof useRunLineage>;
+  currentRunId: string;
+  onCompare: (runId: string) => void;
+}) {
+  return (
+    <div className="evidence-section timeline-view">
+      <header><h3>状态时间线与 lineage</h3><p>事件按服务器 event ID 排序；依赖边和重试边来自持久 Run graph。</p></header>
+      <QueryBoundary pending={events.isPending || lineage.isPending} error={events.error ?? lineage.error}>
+        <div className="lineage-nodes">
+          {(lineage.data?.nodes ?? []).map((node) => (
+            <article key={node.run_id} className={node.run_id === currentRunId ? "current" : undefined}>
+              <span><StatusBadge label={node.state} tone={node.state === "SUCCEEDED" ? "success" : node.state === "FAILED" ? "danger" : "info"} /><small>attempt {node.attempt ?? 1}</small></span>
+              <strong className="mono wrap-anywhere">{node.run_id}</strong>
+              <small>{node.lineage_reason ?? "root"}</small>
+              {node.run_id !== currentRunId ? <button type="button" onClick={() => onCompare(node.run_id)}>与当前 Run 对比</button> : null}
+            </article>
+          ))}
+        </div>
+        {(lineage.data?.edges.length ?? 0) > 0 ? <ul className="lineage-edges">{lineage.data?.edges.map((edge) => <li key={`${edge.source_run_id}:${edge.target_run_id}:${edge.type}`}><span className="mono">{edge.source_run_id}</span><strong>{edge.type}</strong><span className="mono">{edge.target_run_id}</span><small>{edge.reason ?? "—"}</small></li>)}</ul> : null}
+        <ol className="run-event-list">
+          {(events.data?.items ?? []).map((event) => (
+            <li key={event.event_id}>
+              <span>#{event.event_id}</span>
+              <div><strong>{event.event_type}</strong><small>{formatTimestamp(event.created_at)}</small><pre><code>{JSON.stringify(event.payload, null, 2)}</code></pre></div>
+            </li>
+          ))}
+        </ol>
+      </QueryBoundary>
+    </div>
+  );
+}
+
+function CompareView({ current, currentObjects, comparison, comparisonEvidence, candidates, compareRunId, onSelect }: {
+  current: RunSummary;
+  currentObjects: EvidenceObject[];
+  comparison: ReturnType<typeof useRun>;
+  comparisonEvidence: ReturnType<typeof useRunEvidence>;
+  candidates: RunSummary[];
+  compareRunId: string | null;
+  onSelect: (runId: string) => void;
+}) {
+  const alternatives = candidates.filter((item) => item.run_id !== current.run_id);
+  const rows = comparison.data
+    ? runComparisonRows(current, currentObjects, comparison.data, comparisonEvidence.data?.objects ?? [])
+    : [];
+  return (
+    <div className="evidence-section compare-view">
+      <header><h3>Run / Evidence 对比</h3><p>只比较服务器事实；差异本身不等于修复成功。</p></header>
+      <label className="select-field compare-selector"><GitCompare aria-hidden="true" size={16} /><span className="sr-only">选择对比 Run</span><select value={compareRunId ?? ""} onChange={(event) => event.target.value && onSelect(event.target.value)}><option value="">选择 lineage 中的 Run</option>{alternatives.map((item) => <option key={item.run_id} value={item.run_id}>{item.run_id} · {item.state}</option>)}</select></label>
+      <QueryBoundary pending={Boolean(compareRunId) && (comparison.isPending || comparisonEvidence.isPending)} error={comparison.error ?? comparisonEvidence.error} empty={!compareRunId} emptyTitle="没有可对比 Run" emptyDetail="从 timeline 选择同一 lineage 的 source 或 derived Run。">
+        {comparison.data ? <div className="comparison-table"><div className="comparison-head"><span>字段</span><strong>当前</strong><strong>对比</strong></div>{rows.map((row) => <div key={row.label} className={row.changed ? "changed" : undefined}><span>{row.label}</span><code>{row.current}</code><code>{row.other}</code></div>)}</div> : null}
+      </QueryBoundary>
+    </div>
+  );
+}
+
+export function runComparisonRows(
+  current: RunSummary,
+  currentObjects: EvidenceObject[],
+  other: RunSummary,
+  otherObjects: EvidenceObject[],
+) {
+  const values = [
+    ["State", current.state, other.state],
+    ["Terminal", current.terminal_state ?? "—", other.terminal_state ?? "—"],
+    ["Exit", current.exit_code ?? "—", other.exit_code ?? "—"],
+    ["Result", current.result_status, other.result_status],
+    ["Collection", current.collection_state, other.collection_state],
+    ["Diagnosis", current.diagnosis_state, other.diagnosis_state],
+    ["Contract", current.contract_id ?? "—", other.contract_id ?? "—"],
+    ["Evidence objects", String(currentObjects.length), String(otherObjects.length)],
+    ["Finalized evidence", String(currentObjects.filter((item) => item.finalized_at).length), String(otherObjects.filter((item) => item.finalized_at).length)],
+  ] as const;
+  return values.map(([label, currentValue, otherValue]) => ({
+    label,
+    current: currentValue,
+    other: otherValue,
+    changed: currentValue !== otherValue,
+  }));
+}
+
+function Overview({ user, run, objects, tasks, remediation }: { user: string; run: RunSummary; objects: EvidenceObject[]; tasks: Array<{ task_id: number; task_type: string; state: string; attempts: number; updated_at: string }>; remediation: { isPending: boolean; isError: boolean; error: Error | null; mutate: () => void } }) {
   const categories = [...new Set(objects.map((item) => item.category))];
   return (
     <div className="evidence-section">
@@ -184,6 +390,7 @@ function Overview({ run, objects, tasks, remediation }: { run: RunSummary; objec
         <div><dt>Result</dt><dd>{run.result_status}</dd></div>
         <div><dt>Updated</dt><dd>{formatTimestamp(run.updated_at)}</dd></div>
       </dl>
+      {run.job_id ? <NativeCommands user={user} run={run} /> : null}
       <section className="collection-tasks"><h3>Collection tasks</h3><ul>{tasks.map((task) => <li key={task.task_id}><FactState status={task.state} /><span>{task.task_type}</span><small>attempt {task.attempts}</small></li>)}</ul></section>
       {["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED"].includes(run.state) ? (
         <section className="run-agent-entry">
@@ -194,6 +401,45 @@ function Overview({ run, objects, tasks, remediation }: { run: RunSummary; objec
       ) : null}
     </div>
   );
+}
+
+function NativeCommands({ user, run }: { user: string; run: RunSummary }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const commands = nativeRunCommands(run.job_id ?? "", run.workdir ?? null);
+  if (!commands.length) return null;
+  const copy = async (label: string, command: string) => {
+    await navigator.clipboard.writeText(command);
+    setCopied(label);
+  };
+  return (
+    <section className="native-commands">
+      <header><div><h3>原生命令</h3><p>仅复制到剪贴板，不在浏览器或登录节点自动执行。</p></div><a href={`/terminal?user=${encodeURIComponent(user)}&run=${encodeURIComponent(run.run_id)}`}>终端协同</a></header>
+      {commands.map((item) => <div key={item.label}><span><strong>{item.label}</strong>{item.dangerous ? <small>会修改作业状态</small> : null}</span><code>{item.command}</code><button type="button" aria-label={`复制 ${item.label}`} onClick={() => void copy(item.label, item.command)}><Copy aria-hidden="true" size={14} />{copied === item.label ? "已复制" : "复制"}</button></div>)}
+    </section>
+  );
+}
+
+export function nativeRunCommands(jobId: string, workdir: string | null = null) {
+  if (!/^[A-Za-z0-9_.\[\]-]{1,128}$/.test(jobId)) return [];
+  const value = shellQuote(jobId);
+  const commands = [
+    { label: "Queue", command: `squeue --jobs ${value} --format='%i %T %R %M %l'`, dangerous: false },
+    { label: "Detail", command: `scontrol show job ${value}`, dangerous: false },
+    { label: "Accounting", command: `sacct --jobs ${value} --format=JobID,State,ExitCode,Elapsed,AllocTRES`, dangerous: false },
+    { label: "Cancel", command: `scancel -- ${value}`, dangerous: true },
+  ];
+  if (workdir?.startsWith("/") && workdir.length <= 4096 && !/[\r\n\0]/.test(workdir)) {
+    commands.splice(3, 0, {
+      label: "Output tail",
+      command: `tail -n 200 -- ${shellQuote(`${workdir.replace(/\/$/, "")}/slurm-${jobId}.out`)}`,
+      dangerous: false,
+    });
+  }
+  return commands;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function ObjectPreviewView({ title, detail, objects, selected, preview, onSelect, contentMode }: { title: string; detail: string; objects: EvidenceObject[]; selected: EvidenceObject | null; preview: ReturnType<typeof useEvidenceObject>; onSelect: (item: EvidenceObject) => void; contentMode: "log" | "raw" }) {

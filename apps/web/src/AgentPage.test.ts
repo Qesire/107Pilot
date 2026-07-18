@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { remediationStateLabel, remediationStateTone } from "./AgentPage";
+import { proposalPatchRows, remediationStateLabel, remediationStateTone } from "./AgentPage";
 import type { RemediationState } from "./types";
 
 describe("Agent remediation state presentation", () => {
@@ -21,5 +21,27 @@ describe("Agent remediation state presentation", () => {
   ])("maps %s to %s/%s", (state, label, tone) => {
     expect(remediationStateLabel(state)).toBe(label);
     expect(remediationStateTone(state)).toBe(tone);
+  });
+});
+
+describe("Agent proposal diff", () => {
+  it("extracts deterministic rule patches and marks unresolved values", () => {
+    expect(proposalPatchRows({
+      proposed_patch: {
+        "resources.partition": "Students",
+        "entry.command": null,
+      },
+    })).toEqual([
+      { field: "entry.command", value: "需要输入" },
+      { field: "resources.partition", value: "Students" },
+    ]);
+  });
+
+  it("extracts model proposal patch parameters without treating other fields as diffs", () => {
+    expect(proposalPatchRows({
+      parameters: { patch: { "resources.qos": "qos_stu_default" } },
+      rationale: "bounded",
+    })).toEqual([{ field: "resources.qos", value: "qos_stu_default" }]);
+    expect(proposalPatchRows({ parameters: { probe_kind: "cuda" } })).toEqual([]);
   });
 });

@@ -226,6 +226,7 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
             <article key={proposal.proposal_id}>
               <header><div><StatusBadge label={proposal.risk} tone={proposal.risk === "high" ? "danger" : "warning"} /><strong>{proposal.action_type}</strong></div><small>{proposal.policy_status}</small></header>
               <p>来源：{proposal.source} · action {proposal.action_id}</p>
+              <ProposalDiff payload={proposal.payload} />
               <pre><code>{JSON.stringify(proposal.payload, null, 2)}</code></pre>
               <div className="agent-action-row">
                 {session.state === "awaiting_approval" && !approved ? (
@@ -245,9 +246,41 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
       {session.executions.length ? <AuditSection title="执行记录" values={session.executions} /> : null}
       {session.evaluations.length ? <AuditSection title="评价结果" values={session.evaluations} /> : null}
       {session.executions.some((item) => item.derived_run_id) ? (
-        <a className="button secondary" href={`/runs/${session.executions.at(-1)?.derived_run_id}?user=${encodeURIComponent(user)}`}>查看派生 Run <ArrowRight aria-hidden="true" size={15} /></a>
+        <a className="button secondary" href={`/runs/${session.executions.at(-1)?.derived_run_id}?user=${encodeURIComponent(user)}&tab=compare&compare=${encodeURIComponent(session.source_run_id)}`}>对比派生 Run <ArrowRight aria-hidden="true" size={15} /></a>
       ) : null}
     </div>
+  );
+}
+
+function ProposalDiff({ payload }: { payload: Record<string, unknown> }) {
+  const rows = proposalPatchRows(payload);
+  if (!rows.length) return null;
+  return (
+    <dl className="agent-proposal-diff">
+      {rows.map((row) => <div key={row.field}><dt>{row.field}</dt><dd className="mono wrap-anywhere">{row.value}</dd></div>)}
+    </dl>
+  );
+}
+
+export function proposalPatchRows(payload: Record<string, unknown>) {
+  const direct = payload.proposed_patch;
+  const parameters = payload.parameters;
+  const nested = parameters && typeof parameters === "object" && !Array.isArray(parameters)
+    ? (parameters as Record<string, unknown>).patch
+    : null;
+  const patch = direct && typeof direct === "object" && !Array.isArray(direct)
+    ? direct as Record<string, unknown>
+    : nested && typeof nested === "object" && !Array.isArray(nested)
+      ? nested as Record<string, unknown>
+      : null;
+  if (!patch) return [];
+  return Object.entries(patch).sort(([left], [right]) => left.localeCompare(right)).map(
+    ([field, value]) => ({
+      field,
+      value: value === null ? "需要输入" : typeof value === "string"
+        ? value
+        : JSON.stringify(value),
+    }),
   );
 }
 

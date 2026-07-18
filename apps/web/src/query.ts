@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 
 export function useWebSession(requestedUser: string) {
@@ -50,12 +50,45 @@ export function useRuns(user: string, state?: string, search?: string, limit = "
   });
 }
 
+export function useRunPages(user: string, state?: string, search?: string) {
+  return useInfiniteQuery({
+    queryKey: ["runs", user, "pages", state ?? "", search ?? ""],
+    queryFn: ({ signal, pageParam }) => api.runs(user, {
+      state,
+      q: search,
+      limit: "20",
+      cursor: pageParam ?? undefined,
+    }, signal),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.page.next_cursor ?? undefined,
+    refetchInterval: 15_000,
+  });
+}
+
 export function useRun(user: string, runId: string | null) {
   return useQuery({
     queryKey: ["run", user, runId],
     queryFn: ({ signal }) => api.run(user, runId ?? "", signal),
     enabled: Boolean(runId),
     refetchInterval: 10_000,
+  });
+}
+
+export function useRunEvents(user: string, runId: string | null) {
+  return useQuery({
+    queryKey: ["run-events", user, runId],
+    queryFn: ({ signal }) => api.runEvents(user, runId ?? "", signal),
+    enabled: Boolean(runId),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useRunLineage(user: string, runId: string | null) {
+  return useQuery({
+    queryKey: ["run-lineage", user, runId],
+    queryFn: ({ signal }) => api.runLineage(user, runId ?? "", signal),
+    enabled: Boolean(runId),
+    refetchInterval: 15_000,
   });
 }
 

@@ -442,6 +442,7 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(response.payload["run_id"], run.run_id)
         self.assertEqual(response.payload["state"], "SUBMITTED")
         self.assertEqual(response.payload["job_id"], "456")
+        self.assertEqual(response.payload["workdir"], "/public/home/alice")
         self.assertEqual(response.payload["collection_state"], "pending")
         self.assertIn("created_at", response.payload)
 

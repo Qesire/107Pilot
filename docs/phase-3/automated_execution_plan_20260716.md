@@ -75,6 +75,14 @@ bash scripts/check-sim-core.sh
 5. **R5 — CPU-only RC**：8C/16G profile、资源限制、离线包、SBOM、空目录恢复；
 6. **R6 — final gate**：全量回归、故障/负载/浏览器金路径、findings 与未上传 VM readiness manifest。
 
+### 2026-07-18 恢复检查点
+
+- R1 已完成：Remediation keyset/ETag/events、input/takeover、幂等与专用 action 边界；
+- R2 已完成：provider-neutral `RemediationPlanV1`、Evidence-bound input、secret/prompt-injection fail closed 和 fake/replay benchmark；
+- R3 已完成并通过 findings-first review：Run keyset/保存筛选、timeline/lineage/compare、对象级写操作、Agent diff/预算/接管、安全命令与 Terminal deep link；
+- R3 review：[phase3f_run_agent_workbench_review.md](phase3f_run_agent_workbench_review.md)；
+- 当前进入 R4：PostgreSQL repository parity、多实例/outbox/fencing、可观测性/恢复和本地安全基线。
+
 真人使用不进入这些工作包的通过条件。可选的 U2/U3 只用于视觉、文案、信任感和交互取舍；VM 上传、真实 107 操作和生产身份仍需另行授权。
 
 ## 3. A 轨：工程基线与扩展边界

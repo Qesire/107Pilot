@@ -20,6 +20,7 @@ export interface WebSession {
   identity_mode: "demo" | "fixed_user" | string;
   user: string;
   switchable: boolean;
+  terminal_deep_link: string | null;
 }
 
 export interface RunSummary {
@@ -41,6 +42,30 @@ export interface RunSummary {
   recipe_version_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface RunEvent {
+  event_id: number;
+  run_id: string;
+  event_type: string;
+  payload: JsonObject;
+  created_at: string;
+}
+
+export interface RunLineageEdge {
+  source_run_id: string;
+  target_run_id: string;
+  type: "lineage" | "workflow_dependency" | string;
+  reason: string | null;
+}
+
+export interface RunLineage {
+  run_id: string;
+  root_run_id: string;
+  lineage: RunSummary[];
+  children: RunSummary[];
+  nodes: RunSummary[];
+  edges: RunLineageEdge[];
 }
 
 export interface EvidenceTask {

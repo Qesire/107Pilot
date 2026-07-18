@@ -2829,6 +2829,7 @@ def _run_summary(run: RunRecord) -> dict[str, Any]:
         "diagnosis_state": run.diagnosis_state.value,
         "capsule_state": run.capsule_state.value,
         "job_id": run.job_id,
+        "workdir": run.workdir,
         "submit_strategy": run.submit_strategy,
         "created_at": run.created_at,
         "updated_at": run.updated_at,

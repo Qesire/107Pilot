@@ -6,6 +6,8 @@ import type {
   HealthReady,
   PagePayload,
   PlatformSnapshot,
+  RunEvent,
+  RunLineage,
   RunSummary,
   JsonObject,
   RecipeSummaryPayload,
@@ -128,6 +130,7 @@ export const api = {
       state?: string | undefined;
       q?: string | undefined;
       limit?: string | undefined;
+      cursor?: string | undefined;
     },
     signal?: AbortSignal,
   ) =>
@@ -137,12 +140,25 @@ export const api = {
         state: filters.state,
         q: filters.q,
         limit: filters.limit ?? "20",
+        cursor: filters.cursor,
       }),
       user,
       signal,
     ),
   run: (user: string, runId: string, signal?: AbortSignal) =>
     getJson<RunSummary>(`/api/v1/runs/${encodeURIComponent(runId)}`, user, signal),
+  runEvents: (user: string, runId: string, signal?: AbortSignal) =>
+    getJson<PagePayload<RunEvent>>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/events?limit=100`,
+      user,
+      signal,
+    ),
+  runLineage: (user: string, runId: string, signal?: AbortSignal) =>
+    getJson<RunLineage>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/lineage`,
+      user,
+      signal,
+    ),
   runEvidence: (user: string, runId: string, signal?: AbortSignal) =>
     getJson<RunEvidence>(
       `/api/v1/runs/${encodeURIComponent(runId)}/evidence`,
@@ -265,9 +281,31 @@ export const api = {
       {},
       signal,
     ),
+  cancelRun: (user: string, runId: string, signal?: AbortSignal) =>
+    sendJson<RunSummary>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/cancel`,
+      user,
+      {},
+      signal,
+    ),
+  prepareRetry: (
+    user: string,
+    run: Pick<RunSummary, "run_id" | "contract_id" | "state">,
+    signal?: AbortSignal,
+  ) => sendJson<PreparedRun>(
+    "/api/v1/runs/prepare",
+    user,
+    {
+      contract_id: run.contract_id,
+      parent_run_id: run.run_id,
+      lineage_reason: ["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED", "CANCELLED"]
+        .includes(run.state) ? "manual_retry" : "manual_clone",
+    },
+    signal,
+  ),
   remediationSessions: (user: string, state?: string, signal?: AbortSignal) =>
     getJson<{ items: RemediationSession[] }>(
-      queryPath("/api/v1/remediation-sessions", { owner: user, state }),
+      queryPath("/api/v1/remediation-sessions", { state }),
       user,
       signal,
     ),

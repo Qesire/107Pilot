@@ -16,7 +16,7 @@ import {
 import { StatusBadge } from "./components";
 import { AgentPage } from "./AgentPage";
 import { useHealth, useWebSession } from "./query";
-import { ClusterPage, NotFoundPage, PlannedPage, RunsPage, WorkspacePage } from "./pages";
+import { ClusterPage, NotFoundPage, RunsPage, TerminalCollaborationPage, WorkspacePage } from "./pages";
 import { MarketPage, TemplateDetailPage } from "./MarketPages";
 import { globalNavigationPath, useLocationState, withSearch } from "./url";
 
@@ -75,7 +75,7 @@ export default function App() {
               >
                 <Icon aria-hidden="true" />
                 <span>{item.label}</span>
-                {item.path === "/terminal" ? <small>后续能力</small> : null}
+                {item.path === "/terminal" ? <small>安全协同</small> : null}
               </a>
             );
           })}
@@ -130,7 +130,7 @@ export default function App() {
               </Suspense>
             ) : null}
             {location.pathname === "/agent" ? <AgentPage user={user} location={location} navigate={navigate} /> : null}
-            {location.pathname === "/terminal" ? <PlannedPage user={user} location={location} navigate={navigate} /> : null}
+            {location.pathname === "/terminal" ? <TerminalCollaborationPage user={user} location={location} navigate={navigate} terminalDeepLink={session.data.terminal_deep_link} /> : null}
             {!isKnownPath(location.pathname) ? <NotFoundPage user={user} location={location} navigate={navigate} /> : null}
           </> : null}
         </main>

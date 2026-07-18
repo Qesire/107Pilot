@@ -38,6 +38,7 @@ class WebConfig:
     fixed_user: str | None = None
     trusted_user_header: str = "X-Pilot107-User"
     identity_mode: WebIdentityMode = WebIdentityMode.DEMO
+    terminal_deep_link: str | None = None
 
     def __post_init__(self) -> None:
         if not is_safe_demo_user(self.demo_user):
@@ -48,6 +49,10 @@ class WebConfig:
             raise ValueError(
                 "PILOT107_WEB_FIXED_USER is required and must be a safe username"
             )
+        if self.terminal_deep_link is not None and not is_safe_terminal_deep_link(
+            self.terminal_deep_link
+        ):
+            raise ValueError("PILOT107_WEB_TERMINAL_DEEP_LINK must be an absolute HTTP(S) URL")
 
 
 def config_from_env(env: Mapping[str, str] | None = None) -> WebConfig:
@@ -60,6 +65,7 @@ def config_from_env(env: Mapping[str, str] | None = None) -> WebConfig:
         identity_mode=WebIdentityMode(
             values.get("PILOT107_WEB_IDENTITY_MODE", WebIdentityMode.DEMO.value)
         ),
+        terminal_deep_link=values.get("PILOT107_WEB_TERMINAL_DEEP_LINK") or None,
     )
 
 
@@ -122,6 +128,7 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
                     "identity_mode": config.identity_mode.value,
                     "user": user,
                     "switchable": config.identity_mode == WebIdentityMode.DEMO,
+                    "terminal_deep_link": config.terminal_deep_link,
                 },
                 ensure_ascii=False,
             ).encode("utf-8") + b"\n"
@@ -218,6 +225,18 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
                 self.wfile.write(body)
 
     return Handler
+
+
+def is_safe_terminal_deep_link(value: str) -> bool:
+    if any(ord(character) < 32 for character in value):
+        return False
+    parsed = urlparse(value)
+    return (
+        parsed.scheme in {"http", "https"}
+        and bool(parsed.hostname)
+        and parsed.username is None
+        and parsed.password is None
+    )
 
 
 def run_web_server(*, config: WebConfig, host: str, port: int) -> None:

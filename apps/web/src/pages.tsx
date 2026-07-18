@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import {
   ArrowRight,
   Blocks,
@@ -25,9 +26,10 @@ import {
   SectionHeading,
   StatusBadge,
 } from "./components";
-import { useCapabilities, useLatestEntitlement, useLatestPlatform, useRun, useRuns } from "./query";
+import { useCapabilities, useLatestEntitlement, useLatestPlatform, useRun, useRunPages, useRuns } from "./query";
 import { RunTable } from "./RunTable";
-import { RunEvidencePanel } from "./RunEvidencePanel";
+import { nativeRunCommands, RunEvidencePanel } from "./RunEvidencePanel";
+import { clearRunFilters, loadRunFilters, saveRunFilters } from "./run-filters";
 import { runStateLabel, runTone } from "./run-status";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
@@ -175,7 +177,10 @@ export function RunsPage({ user, location, navigate }: PageProps) {
   const selectedRunId = location.pathname.startsWith("/runs/")
     ? decodeURIComponent(location.pathname.slice("/runs/".length))
     : null;
-  const runs = useRuns(user, state || undefined, search || undefined);
+  const runs = useRunPages(user, state || undefined, search || undefined);
+  const items = runs.data?.pages.flatMap((page) => page.items) ?? [];
+  const [savedFilters, setSavedFilters] = useState(() => loadRunFilters(user));
+  useEffect(() => setSavedFilters(loadRunFilters(user)), [user]);
   const selectedRun = useRun(user, selectedRunId);
   const updateFilters = (updates: Record<string, string | null>) =>
     navigate(withSearch("/runs", location.search, updates));
@@ -209,25 +214,45 @@ export function RunsPage({ user, location, navigate }: PageProps) {
             <option value="CANCELLED">已取消</option>
           </select>
         </label>
+        <div className="filter-actions">
+          <button type="button" onClick={() => {
+            const next = { state, search };
+            saveRunFilters(user, next);
+            setSavedFilters(next);
+          }}>保存筛选</button>
+          <button type="button" disabled={!savedFilters} onClick={() => savedFilters && updateFilters({
+            state: savedFilters.state || null,
+            q: savedFilters.search || null,
+          })}>应用已保存</button>
+          <button type="button" disabled={!savedFilters} onClick={() => {
+            clearRunFilters(user);
+            setSavedFilters(null);
+          }}>清除保存</button>
+        </div>
       </section>
 
       <div className={`runs-layout ${selectedRunId ? "has-detail" : ""}`}>
         <section className="panel" aria-labelledby="runs-table-heading">
           <div className="panel-heading">
-            <div><p className="panel-kicker">Live read model</p><h2 id="runs-table-heading">{runs.data?.items.length ?? 0} 个结果</h2></div>
+            <div><p className="panel-kicker">Live read model</p><h2 id="runs-table-heading">已加载 {items.length} 个结果</h2></div>
             {runs.isFetching ? <StatusBadge label="同步中" tone="info" /> : <StatusBadge label="已同步" tone="success" />}
           </div>
           <QueryBoundary
             pending={runs.isPending}
             error={runs.error}
-            empty={(runs.data?.items.length ?? 0) === 0}
+            empty={items.length === 0}
             emptyTitle="没有匹配的 Run"
             emptyDetail="调整状态或搜索词；筛选不会改变服务器数据。"
           >
             <RunTable
-              runs={runs.data?.items ?? []}
+              runs={items}
               onSelect={(runId) => navigate(withSearch(`/runs/${runId}`, location.search, { tab: "overview", object: null }))}
             />
+            {runs.hasNextPage ? (
+              <button className="button secondary pagination-more" type="button" disabled={runs.isFetchingNextPage} onClick={() => void runs.fetchNextPage()}>
+                {runs.isFetchingNextPage ? "正在加载" : "加载更多"}
+              </button>
+            ) : null}
           </QueryBoundary>
         </section>
 
@@ -248,6 +273,48 @@ export function RunsPage({ user, location, navigate }: PageProps) {
             </QueryBoundary>
           </aside>
         ) : null}
+      </div>
+    </>
+  );
+}
+
+export function TerminalCollaborationPage({ user, location, navigate, terminalDeepLink }: PageProps & { terminalDeepLink: string | null }) {
+  const runId = location.search.get("run");
+  const run = useRun(user, runId);
+  const [copied, setCopied] = useState<string | null>(null);
+  const commands = run.data?.job_id
+    ? nativeRunCommands(run.data.job_id, run.data.workdir ?? null)
+    : [];
+  return (
+    <>
+      <SectionHeading
+        eyebrow="Terminal / safe collaboration"
+        title="与平台终端协同，不在浏览器内执行 shell"
+        detail="这里只显示服务器事实和可复制的受限命令；107Pilot 不提供生产 PTY，也不会向浏览器下发长期凭据。"
+      />
+      <div className="terminal-collaboration-grid">
+        <section className="panel">
+          <div className="panel-heading"><div><p className="panel-kicker">Selected Run</p><h2>对象绑定</h2></div></div>
+          <QueryBoundary pending={Boolean(runId) && run.isPending} error={run.error} empty={!runId} emptyTitle="尚未选择 Run" emptyDetail="从 Run 摘要中的“终端协同”进入，命令才会绑定明确 Job ID。">
+            {run.data ? <>
+              <dl className="fact-list">
+                <div><dt>Run</dt><dd className="mono wrap-anywhere">{run.data.run_id}</dd></div>
+                <div><dt>Job</dt><dd className="mono">{run.data.job_id ?? "尚未提交"}</dd></div>
+                <div><dt>Workdir</dt><dd className="mono wrap-anywhere">{run.data.workdir ?? "未记录"}</dd></div>
+                <div><dt>State</dt><dd>{runStateLabel(run.data.state)}</dd></div>
+              </dl>
+              <button className="button secondary" type="button" onClick={() => navigate(`/runs/${encodeURIComponent(run.data?.run_id ?? "")}?user=${encodeURIComponent(user)}&tab=overview`)}>返回 Run</button>
+            </> : null}
+          </QueryBoundary>
+        </section>
+        <section className="panel native-commands terminal-command-panel">
+          <header><h2>可复制命令</h2><p>复制不会执行命令；`Cancel` 仍需在目标终端中由已授权用户主动运行。</p></header>
+          {commands.length ? commands.map((item) => <div key={item.label}><span><strong>{item.label}</strong>{item.dangerous ? <small>会修改作业状态</small> : null}</span><code>{item.command}</code><button type="button" onClick={() => void navigator.clipboard.writeText(item.command).then(() => setCopied(item.label))}>{copied === item.label ? "已复制" : "复制"}</button></div>) : <p className="no-findings">当前 Run 尚无 Job ID，因此不会生成命令。</p>}
+        </section>
+        <section className="panel">
+          <div className="panel-heading"><div><p className="panel-kicker">Platform terminal</p><h2>配置化 deep link</h2></div></div>
+          {terminalDeepLink ? <a className="button primary" href={terminalDeepLink} target="_blank" rel="noreferrer">打开平台终端</a> : <p className="limitation">部署未配置平台终端 URL；不会猜测地址或生成伪链接。</p>}
+        </section>
       </div>
     </>
   );
