@@ -19,11 +19,13 @@
 | --- | --- |
 | Python 源文件 | 73 |
 | Python 源码 | 33,210 行 |
-| Python 测试文件 | 74 |
-| Python 测试源码 | 18,253 行 |
+| Python 测试文件 | 76 |
+| Python 测试源码 | 18,617 行 |
 | Web 源码 | 5,235 行 |
-| Python/Shell 脚本 | 105 |
-| Python 测试 | 594 passed，13 PostgreSQL integration skipped，2 subtests passed |
+| Python/Shell 脚本 | 106 |
+| Python 测试 | 608 passed，13 PostgreSQL integration skipped，5 subtests passed |
+| Recipe 模板 | 6 个；含 structured preflight、GPU shard array、fail-closed merge gate |
+| 已知错误规则 | 37 条 |
 | Ruff | passed |
 | mypy strict | 73 source files passed |
 | Vitest | 10 files / 64 tests passed |
@@ -45,7 +47,7 @@
 | Phase 3E | Remediation 事件/输入/takeover、专用 action、provider-neutral LLM 安全 benchmark 已完成 |
 | Phase 3F | Run timeline/lineage/compare、安全命令与 Agent Evidence/diff/执行/前后结果工作台已完成 |
 | Phase 3G | ControlRepository PostgreSQL parity/运行时选择、Run/collection/Agent outbox fencing、恢复、持久 trace、LLM/SSE metrics 与安全基线完成；全领域业务 Store PG parity 仍进行中 |
-| Phase 3H | CPU-only 本地候选功能闭环完成；离线包收尾中；真实 107 仅只读历史兼容探测 |
+| Phase 3H | CPU-only 固定 revision 离线候选完成；真实 107 仅只读历史兼容探测 |
 
 ## 环境声明
 

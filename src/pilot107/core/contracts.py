@@ -1213,6 +1213,7 @@ def _validate_recipe_requirements(
     for field in required:
         if not isinstance(field, str) or not _has_dotted_value(payload, field):
             findings.append(_block("CONTRACT.REQUIRED_FIELD", f"{field} is required"))
+    findings.extend(_validate_recipe_parameter_limits(payload, recipe.parameter_schema))
     allowed_partitions = recipe.compatibility.get("partitions", {}).get("allowed", [])
     resources = payload.get("resources", {})
     partition = resources.get("partition") if isinstance(resources, dict) else None
@@ -1223,6 +1224,50 @@ def _validate_recipe_requirements(
                 f"partition {partition} is not compatible with {recipe.recipe_version_id}",
             )
         )
+    return findings
+
+
+def _validate_recipe_parameter_limits(
+    payload: dict[str, Any],
+    parameter_schema: dict[str, Any],
+) -> list[PreflightFinding]:
+    findings: list[PreflightFinding] = []
+    for field, specification in parameter_schema.items():
+        if field == "required" or not isinstance(specification, dict):
+            continue
+        value = _dotted_value(payload, field)
+        if value is None:
+            continue
+        minimum = specification.get("minimum")
+        maximum = specification.get("maximum")
+        if minimum is not None and isinstance(value, (int, float)) and value < minimum:
+            findings.append(
+                _block(
+                    "RECIPE.PARAMETER_BELOW_MINIMUM",
+                    f"{field} must be at least {minimum}",
+                )
+            )
+        if maximum is not None and isinstance(value, (int, float)) and value > maximum:
+            findings.append(
+                _block(
+                    "RECIPE.PARAMETER_ABOVE_MAXIMUM",
+                    f"{field} must be at most {maximum}",
+                )
+            )
+        if field == "resources.array" and isinstance(value, dict):
+            max_concurrency = specification.get("max_concurrency")
+            actual = value.get("max_concurrency")
+            if (
+                isinstance(max_concurrency, int)
+                and isinstance(actual, int)
+                and actual > max_concurrency
+            ):
+                findings.append(
+                    _block(
+                        "RECIPE.ARRAY_CONCURRENCY_EXCEEDED",
+                        f"resources.array.max_concurrency must be at most {max_concurrency}",
+                    )
+                )
     return findings
 
 
@@ -1246,12 +1291,17 @@ def _v2_capability_findings(payload: dict[str, Any]) -> list[PreflightFinding]:
 
 
 def _has_dotted_value(payload: dict[str, Any], field: str) -> bool:
+    value = _dotted_value(payload, field)
+    return value is not None and value != ""
+
+
+def _dotted_value(payload: dict[str, Any], field: str) -> Any:
     value: Any = payload
     for part in field.split("."):
         if not isinstance(value, dict) or part not in value:
-            return False
+            return None
         value = value[part]
-    return value is not None and value != ""
+    return value
 
 
 def _recipe_version_id(payload: dict[str, Any]) -> str:

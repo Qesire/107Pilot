@@ -1,0 +1,28 @@
+error_id: RUNTIME.EFFECTIVE_CONFIG_MISSING
+category: runtime_contract
+severity: error
+retryable: false
+stage: runtime
+title: "Pipeline 有效配置缺少运行必需字段"
+symptoms:
+  - "keyerror: 'target_video_length'"
+  - "keyerror: target_video_length"
+  - "auto_calc_config"
+  - "effective pipeline config"
+  - "regex:KeyError.*(resize_mode|aspect_ratio|target_video_length)"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - run/environment/basic.json
+  - outputs/inventory.json
+root_cause: "请求字段过滤与 generator 配置字段发生碰撞，或加载模型配置后冻结运行契约未被重新覆盖，导致 preflight 通过但真实 runner 缺字段。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "由单一 adapter/builder 从默认配置装配完整 effective config，在 auto-calc 前注入契约，并在模型配置加载后重新覆盖冻结字段。"
+  prevention: "CPU/GPU preflight 与生产入口调用同一 builder；禁止生产入口绕过 builder 直接 create_generator。"
+  automation: "在不加载模型的结构化 gate 中校验全部必需字段及来源。"
+confidence: high
+kb_article: null
+source_record: HIFX4-v4.9.2-HF12

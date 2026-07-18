@@ -43,6 +43,7 @@ for script in \
   import-competition-images.sh \
   load_competition.py \
   preflight-competition-vm.sh \
+  scan-array-artifacts.py \
   smoke_competition_web.py \
   start-competition-app-node.sh \
   start-competition.sh \

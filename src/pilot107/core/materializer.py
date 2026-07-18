@@ -94,17 +94,20 @@ def _template_script(
     array = resources.get("array") or {}
     context: dict[str, Any] = {
         "job_name": _job_name(payload, recipe.recipe_id),
+        "account": environment.get("SLURM_ACCOUNT"),
         "partition": resources.get("partition"),
         "qos": resources.get("qos"),
         "nodes": resources.get("nodes", 1),
         "ntasks": resources.get("ntasks", 1),
         "cpus_per_task": resources.get("cpus_per_task", 1),
+        "memory": resources.get("memory"),
         "time_limit": resources.get("time_limit"),
         "workdir": payload["project"].get("workdir"),
         "entry_command": payload["entry"].get("command"),
         "kit_root": environment.get("KIT_ROOT"),
         "data_root": environment.get("DATA_ROOT"),
         "gpus_per_task": resources.get("gpus_per_node") or resources.get("gpus_total"),
+        "gpu_type": resources.get("gpu_type"),
         "array_expression": array.get("expression"),
         "array_max_concurrency": array.get("max_concurrency") or 1,
     }

@@ -1,0 +1,174 @@
+template_id: recipe_gpu_shard_array_atomic@2.0.0
+title: "GPU 缺片恢复 Array 模板"
+description: "面向长时 GPU 分片任务：显式资源、GPU allocation guard、节点本地临时输出、有限重试、共享文件系统原子提交和缺片重提。"
+trust_level: L1
+parameter_schema:
+  required:
+    - project.workdir
+    - entry.command
+    - runtime.environment.SLURM_ACCOUNT
+    - runtime.environment.KIT_ROOT
+    - runtime.environment.DATA_ROOT
+    - runtime.environment.EXPECTED_TASKS
+    - resources.partition
+    - resources.qos
+    - resources.memory
+    - resources.gpu_type
+    - resources.gpus_per_node
+    - resources.time_limit
+    - resources.array
+  entry.command:
+    type: shard_command
+    contract: "命令必须接受 --task-id <n> --output <path>"
+    raw_shell: false
+  resources.array:
+    type: slurm_array
+    max_concurrency: 2
+  resources.gpus_per_node:
+    type: integer
+    minimum: 1
+compatibility:
+  slurm:
+    min_version: "23.0"
+  platform:
+    docker_l2: true
+    school_l3: true
+    requires_gpu: true
+  partitions:
+    default: Students
+    allowed:
+      - Students
+      - GPU-A100
+      - GPU-RTX5090
+      - P107-A100
+      - P107-RTX5090
+  qos:
+    default: qos_stu_medium_2gpu
+    allowed_by_partition:
+      Students:
+        - qos_stu_medium_2gpu
+        - qos_stu_medium
+      GPU-A100:
+        - qos_gpu-a100
+      GPU-RTX5090:
+        - qos_gpu-rtx5090
+      P107-A100:
+        - qos_p107-a100
+      P107-RTX5090:
+        - qos_p107-rtx5090
+sbatch_template: |
+  #!/bin/bash
+  #SBATCH --account={{account}}
+  #SBATCH --job-name={{job_name}}
+  #SBATCH --partition={{partition}}
+  #SBATCH --qos={{qos}}
+  #SBATCH --nodes=1
+  #SBATCH --ntasks=1
+  #SBATCH --cpus-per-task={{cpus_per_task}}
+  #SBATCH --mem={{memory}}
+  #SBATCH --gres=gpu:{{gpu_type}}:{{gpus_per_task}}
+  #SBATCH --time={{time_limit}}
+  #SBATCH --array={{array_expression}}%{{array_max_concurrency}}
+  #SBATCH --output={{workdir}}/logs/%x-%A_%a.out
+  #SBATCH --error={{workdir}}/logs/%x-%A_%a.err
+
+  set -Eeuo pipefail
+  trap 'rc=$?; echo "[SHARD ERROR] task=${SLURM_ARRAY_TASK_ID:-none} line=$LINENO exit=$rc" >&2; exit "$rc"' ERR
+
+  : "${SLURM_JOB_ID:?array must run through Slurm}"
+  : "${SLURM_ARRAY_TASK_ID:?}"
+  : "${CUDA_VISIBLE_DEVICES:?GPU allocation is required}"
+  [[ "$CUDA_VISIBLE_DEVICES" != NoDevFiles ]]
+  : "${KIT_ROOT:?}"
+  : "${DATA_ROOT:?}"
+  : "${EXPECTED_TASKS:?}"
+  [[ "$EXPECTED_TASKS" =~ ^[1-9][0-9]*$ ]]
+  (( SLURM_ARRAY_TASK_ID >= 0 && SLURM_ARRAY_TASK_ID < EXPECTED_TASKS ))
+
+  unset PWD OLDPWD || true
+  builtin cd -- "${HOME:-/tmp}" 2>/dev/null || builtin cd -- /tmp
+  test -d "$KIT_ROOT"
+  test -d "$DATA_ROOT"
+
+  task="$SLURM_ARRAY_TASK_ID"
+  local_root="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}/pilot107-shard-${SLURM_JOB_ID}-${task}"
+  local_output="$local_root/output.bin"
+  final="{{workdir}}/shards/task_${task}.bin"
+  metadata="{{workdir}}/shards/task_${task}.json"
+  marker="{{workdir}}/complete/task_${task}.COMPLETE"
+  mkdir -p "$local_root" "{{workdir}}/logs" "{{workdir}}/shards" "{{workdir}}/complete"
+
+  if [[ -s "$final" && -s "$metadata" && -s "$marker" && "${REBUILD_SHARDS:-0}" != 1 ]]; then
+    echo "REUSE task=$task artifact=$final"
+    exit 0
+  fi
+
+  rc=1
+  for attempt in 1 2 3; do
+    rm -f "$local_output"
+    if {{entry_command}} --task-id "$task" --output "$local_output"; then rc=0; break; else rc=$?; fi
+    (( attempt < 3 )) && sleep $((attempt * 10))
+  done
+  [[ "$rc" -eq 0 && -s "$local_output" ]]
+
+  shared_tmp="${final}.tmp.${SLURM_JOB_ID}.${task}"
+  metadata_tmp="${metadata}.tmp.${SLURM_JOB_ID}.${task}"
+  marker_tmp="${marker}.tmp.${SLURM_JOB_ID}.${task}"
+  cp -a "$local_output" "$shared_tmp"
+  test -s "$shared_tmp"
+  python3 - "$shared_tmp" "$metadata_tmp" "$task" <<'PY'
+  import hashlib, json, pathlib, sys
+  artifact = pathlib.Path(sys.argv[1])
+  output = pathlib.Path(sys.argv[2])
+  digest = hashlib.sha256()
+  with artifact.open("rb") as handle:
+      for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+          digest.update(chunk)
+  payload = {
+      "schema": "pilot107.shard.v1",
+      "task": int(sys.argv[3]),
+      "size": artifact.stat().st_size,
+      "sha256": digest.hexdigest(),
+  }
+  output.write_text(json.dumps(payload, sort_keys=True) + "\n")
+  PY
+  test -s "$metadata_tmp"
+  mv -f "$shared_tmp" "$final"
+  mv -f "$metadata_tmp" "$metadata"
+  printf 'completed_at=%s\njob_id=%s\narray_task_id=%s\n' \
+    "$(date -Is)" "$SLURM_JOB_ID" "$task" > "$marker_tmp"
+  mv -f "$marker_tmp" "$marker"
+preflight_checks:
+  - check: slurm_gpu_guard
+    description: "重任务拒绝在非 Slurm 或无 CUDA_VISIBLE_DEVICES 时运行"
+  - check: explicit_resource_directives
+    description: "account/partition/QoS/GPU type/count/memory 各出现一次"
+  - check: array_bounds
+    description: "task id 必须落在 EXPECTED_TASKS 范围"
+  - check: dag_gpu_peak
+    description: "按 DAG 同层汇总 throttle × gpus_per_task，不只检查单个 array"
+  - check: node_local_then_atomic_shared_publish
+    description: "重计算先写节点本地，复制到共享 tmp 并验证后同目录 atomic mv"
+recovery:
+  strategy: resubmit_missing_only
+  description: "artifact、metadata、COMPLETE 三者共同判定完成，只提交缺失编号。"
+  scan_command: "python {{kit_root}}/scripts/scan-array-artifacts.py --root {{workdir}} --expected-tasks $EXPECTED_TASKS --metadata-pattern 'shards/task_{task}.json'"
+  resubmit_command: "sbatch --array=<missing_array_spec>%1 <materialized-script>"
+success_protocol:
+  artifact_write: "node-local output -> shared tmp -> size/hash metadata -> atomic mv -> per-task COMPLETE"
+  marker: "complete/task_<id>.COMPLETE"
+  validation:
+    - "artifact 非空"
+    - "metadata 含 size 与 SHA-256"
+    - "COMPLETE 非空"
+  reconcile: "Slurm array 聚合状态不是唯一真源；三件套完整性决定复用或缺片重提"
+risk_declaration:
+  gpu_concurrency: "{{array_max_concurrency}} * {{gpus_per_task}} for this array; sum all arrays in the same DAG layer"
+  estimated_runtime: "{{time_limit}}"
+  evidence_source: "HIFX4 v4.9.2 production shard/retry/marker protocol"
+  encoded_lessons:
+    - bounded_array_concurrency
+    - finite_retry
+    - atomic_shard_publish
+    - missing_task_recovery
+    - gpu_allocation_guard

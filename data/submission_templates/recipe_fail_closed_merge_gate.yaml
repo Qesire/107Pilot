@@ -1,0 +1,145 @@
+template_id: recipe_fail_closed_merge_gate@1.0.0
+title: "Fail-closed 分片合并 Gate 模板"
+description: "在合并前严格扫描 artifact/metadata/COMPLETE 三件套；任何缺片都拒绝 partial merge，并输出可直接用于 array 重提的缺失编号。"
+trust_level: L1
+parameter_schema:
+  required:
+    - project.workdir
+    - entry.command
+    - runtime.environment.SLURM_ACCOUNT
+    - runtime.environment.KIT_ROOT
+    - runtime.environment.SHARD_ROOT
+    - runtime.environment.EXPECTED_TASKS
+    - resources.partition
+    - resources.qos
+    - resources.memory
+    - resources.time_limit
+  entry.command:
+    type: merge_command
+    contract: "命令必须接受 --input-dir <dir> --output <path>，默认禁止 partial"
+    raw_shell: false
+compatibility:
+  slurm:
+    min_version: "23.0"
+  platform:
+    docker_l2: true
+    school_l3: true
+    requires_gpu: false
+  partitions:
+    default: Students
+    allowed:
+      - Students
+      - CPU-6530
+      - CPU-8358P
+      - debug
+  qos:
+    default: qos_stu_cpu_long
+    allowed_by_partition:
+      Students:
+        - qos_stu_default
+        - qos_stu_small
+        - qos_stu_cpu_long
+      CPU-6530:
+        - qos_cpu-6530
+      CPU-8358P:
+        - qos_cpu-8358p
+      debug:
+        - normal
+sbatch_template: |
+  #!/bin/bash
+  #SBATCH --account={{account}}
+  #SBATCH --job-name={{job_name}}
+  #SBATCH --partition={{partition}}
+  #SBATCH --qos={{qos}}
+  #SBATCH --nodes=1
+  #SBATCH --ntasks=1
+  #SBATCH --cpus-per-task={{cpus_per_task}}
+  #SBATCH --mem={{memory}}
+  #SBATCH --time={{time_limit}}
+  #SBATCH --output={{workdir}}/logs/%x-%j.out
+  #SBATCH --error={{workdir}}/logs/%x-%j.err
+
+  set -Eeuo pipefail
+  trap 'rc=$?; echo "[MERGE GATE ERROR] line=$LINENO exit=$rc" >&2; exit "$rc"' ERR
+
+  : "${SLURM_JOB_ID:?merge must run through Slurm}"
+  : "${KIT_ROOT:?}"
+  : "${SHARD_ROOT:?}"
+  : "${EXPECTED_TASKS:?}"
+  [[ "$EXPECTED_TASKS" =~ ^[1-9][0-9]*$ ]]
+  test -d "$SHARD_ROOT"
+
+  unset PWD OLDPWD || true
+  builtin cd -- "${HOME:-/tmp}" 2>/dev/null || builtin cd -- /tmp
+  mkdir -p "{{workdir}}/logs" "{{workdir}}/merged" "{{workdir}}/gate"
+  scan_report="{{workdir}}/gate/shard-scan.json"
+  set +e
+  missing="$(python3 "$KIT_ROOT/scripts/scan-array-artifacts.py" \
+    --root "$SHARD_ROOT" --expected-tasks "$EXPECTED_TASKS" \
+    --metadata-pattern 'shards/task_{task}.json' --output "$scan_report" --require-complete)"
+  scan_rc=$?
+  set -e
+  if [[ "$scan_rc" -ne 0 ]]; then
+    echo "merge blocked; resubmit missing array tasks: $missing" >&2
+    exit 40
+  fi
+
+  local_root="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}/pilot107-merge-${SLURM_JOB_ID}"
+  local_output="$local_root/merged.bin"
+  final="{{workdir}}/merged/result.bin"
+  mkdir -p "$local_root"
+  {{entry_command}} --input-dir "$SHARD_ROOT/shards" --output "$local_output"
+  test -s "$local_output"
+  shared_tmp="${final}.tmp.${SLURM_JOB_ID}"
+  cp -a "$local_output" "$shared_tmp"
+  test -s "$shared_tmp"
+  mv -f "$shared_tmp" "$final"
+  python3 - "$final" "{{workdir}}/merged/result.manifest.json.tmp.${SLURM_JOB_ID}" "$EXPECTED_TASKS" <<'PY'
+  import hashlib, json, pathlib, sys
+  artifact = pathlib.Path(sys.argv[1])
+  digest = hashlib.sha256()
+  with artifact.open("rb") as handle:
+      for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+          digest.update(chunk)
+  payload = {
+      "schema": "pilot107.merged_artifact.v1",
+      "expected_tasks": int(sys.argv[3]),
+      "size": artifact.stat().st_size,
+      "sha256": digest.hexdigest(),
+  }
+  pathlib.Path(sys.argv[2]).write_text(json.dumps(payload, sort_keys=True) + "\n")
+  PY
+  mv -f "{{workdir}}/merged/result.manifest.json.tmp.${SLURM_JOB_ID}" "{{workdir}}/merged/result.manifest.json"
+  printf 'completed_at=%s\njob_id=%s\nexpected_tasks=%s\n' \
+    "$(date -Is)" "$SLURM_JOB_ID" "$EXPECTED_TASKS" > "{{workdir}}/gate/COMPLETE.tmp.${SLURM_JOB_ID}"
+  mv -f "{{workdir}}/gate/COMPLETE.tmp.${SLURM_JOB_ID}" "{{workdir}}/gate/COMPLETE"
+preflight_checks:
+  - check: afterok_dependency
+    description: "merge Run 必须依赖全部上游 shard Run 的成功或复用判定"
+  - check: complete_shard_set
+    description: "每个 task 同时具备非空 artifact、metadata 和 COMPLETE"
+  - check: partial_merge_forbidden
+    description: "缺片时输出 missing array spec 并退出，不提供静默 allow-partial"
+  - check: merged_manifest
+    description: "最终产物记录 expected task count、size 和 SHA-256"
+recovery:
+  strategy: repair_upstream_then_merge
+  description: "先重提缺失 array task；三件套全部完整后重新运行 merge gate。"
+  scan_command: "python {{kit_root}}/scripts/scan-array-artifacts.py --root $SHARD_ROOT --expected-tasks $EXPECTED_TASKS --metadata-pattern 'shards/task_{task}.json'"
+success_protocol:
+  artifact_write: "complete-set scan -> node-local merge -> shared tmp -> atomic mv -> manifest -> gate COMPLETE"
+  marker: gate/COMPLETE
+  validation:
+    - "missing_array_spec 为空"
+    - "合并产物非空"
+    - "manifest size/hash 与产物一致"
+  reconcile: "缺片只修复上游；不以 partial merge 绕过 afterok gate"
+risk_declaration:
+  gpu_concurrency: null
+  estimated_runtime: "{{time_limit}}"
+  evidence_source: "HIFX4 v4.9.2 strict Hessian/cache merge and gate patterns"
+  encoded_lessons:
+    - fail_closed_dependency
+    - complete_set_scan
+    - partial_merge_forbidden
+    - atomic_gate_marker

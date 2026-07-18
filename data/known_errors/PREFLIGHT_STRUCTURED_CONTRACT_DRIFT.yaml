@@ -1,0 +1,28 @@
+error_id: PREFLIGHT.STRUCTURED_CONTRACT_DRIFT
+category: contract_consistency
+severity: error
+retryable: false
+stage: preflight
+title: "结构化运行契约与有效配置或资源报告漂移"
+symptoms:
+  - "preflight artifact consistency"
+  - "contract mismatch"
+  - "scheduler report mismatch"
+  - "weight layout mismatch"
+  - "regex:effective.*config.*mismatch"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - outputs/inventory.json
+  - run/environment/basic.json
+root_cause: "提交配置、runtime adapter、有效 pipeline 配置或产物报告不再来自同一结构化事实源；源码文本搜索也可能在重构后产生假失败。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "比较 JSON 契约、effective config 与报告中的具体字段，修复唯一事实源或装配器；不要通过放宽字符串搜索绕过。"
+  prevention: "预检和实际入口调用同一有效配置 builder，并将冻结契约快照与 SHA-256 写入 Evidence。"
+  automation: "给每个字段输出 expected/actual/source，漂移时 fail closed。"
+confidence: high
+kb_article: null
+source_record: HIFX4-v4.9.2-HF9-HF11

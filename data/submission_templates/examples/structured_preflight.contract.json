@@ -1,0 +1,40 @@
+{
+  "schema_version": "pilot107.contract/v2",
+  "recipe_version_id": "recipe_structured_preflight_gate@1.0.0",
+  "project": {
+    "name": "pipeline-preflight",
+    "workdir": "/public/home/alice/experiments/pipeline"
+  },
+  "entry": {
+    "command": "python tools/validate_pipeline.py"
+  },
+  "runtime": {
+    "conda_env": "project-runtime",
+    "environment": {
+      "SLURM_ACCOUNT": "stu",
+      "KIT_ROOT": "/public/home/alice/project-kit",
+      "DATA_ROOT": "/public/home/alice/datasets/project",
+      "CONTRACT_PATH": "/public/home/alice/project-kit/config/runtime-contract.json"
+    }
+  },
+  "resources": {
+    "partition": "Students",
+    "qos": "qos_stu_cpu_long",
+    "nodes": 1,
+    "ntasks": 1,
+    "cpus_per_task": 4,
+    "memory": "16G",
+    "time_limit": "01:00:00"
+  },
+  "outputs": {
+    "expected": [
+      "preflight/report.json",
+      "preflight/effective-contract.json",
+      "preflight/COMPLETE"
+    ],
+    "success_conditions": [
+      "artifact_integrity",
+      "complete_marker"
+    ]
+  }
+}

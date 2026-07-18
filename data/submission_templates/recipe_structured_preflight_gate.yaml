@@ -1,0 +1,162 @@
+template_id: recipe_structured_preflight_gate@1.0.0
+title: "结构化 Preflight Gate 模板"
+description: "在计算节点执行结构化运行契约、数据路径和依赖检查，将有效配置与报告原子发布后才允许重任务进入 DAG。"
+trust_level: L1
+parameter_schema:
+  required:
+    - project.workdir
+    - entry.command
+    - runtime.environment.SLURM_ACCOUNT
+    - runtime.environment.KIT_ROOT
+    - runtime.environment.DATA_ROOT
+    - runtime.environment.CONTRACT_PATH
+    - resources.partition
+    - resources.qos
+    - resources.memory
+    - resources.time_limit
+  entry.command:
+    type: report_command
+    contract: "命令必须接受 --output <json>，且输出 JSON object"
+    raw_shell: false
+  runtime.environment.CONTRACT_PATH:
+    type: shared_file
+    contract: "JSON 单一事实源，不以源码文本搜索代替结构化字段校验"
+compatibility:
+  slurm:
+    min_version: "23.0"
+  platform:
+    docker_l2: true
+    school_l3: true
+    requires_gpu: false
+  partitions:
+    default: Students
+    allowed:
+      - Students
+      - CPU-6530
+      - CPU-8358P
+      - debug
+  qos:
+    default: qos_stu_cpu_long
+    allowed_by_partition:
+      Students:
+        - qos_stu_default
+        - qos_stu_small
+        - qos_stu_cpu_long
+      CPU-6530:
+        - qos_cpu-6530
+      CPU-8358P:
+        - qos_cpu-8358p
+      debug:
+        - normal
+sbatch_template: |
+  #!/bin/bash
+  #SBATCH --account={{account}}
+  #SBATCH --job-name={{job_name}}
+  #SBATCH --partition={{partition}}
+  #SBATCH --qos={{qos}}
+  #SBATCH --nodes=1
+  #SBATCH --ntasks=1
+  #SBATCH --cpus-per-task={{cpus_per_task}}
+  #SBATCH --mem={{memory}}
+  #SBATCH --time={{time_limit}}
+  #SBATCH --output={{workdir}}/logs/%x-%j.out
+  #SBATCH --error={{workdir}}/logs/%x-%j.err
+
+  set -Eeuo pipefail
+  trap 'rc=$?; echo "[PREFLIGHT ERROR] line=$LINENO exit=$rc" >&2; exit "$rc"' ERR
+
+  : "${SLURM_JOB_ID:?preflight must run through Slurm}"
+  : "${KIT_ROOT:?}"
+  : "${DATA_ROOT:?}"
+  : "${CONTRACT_PATH:?}"
+
+  safe_cwd() {
+    unset PWD OLDPWD || true
+    builtin cd -- "${HOME:-/tmp}" 2>/dev/null || builtin cd -- /tmp
+    /bin/pwd -P >/dev/null
+  }
+  require_path() {
+    local kind="$1" path="$2" attempt
+    for attempt in 1 2 3 4 5; do
+      if [[ "$kind" == file && -s "$path" ]] || [[ "$kind" == dir && -d "$path" ]]; then
+        stat -L "$path" >/dev/null 2>&1 && return 0
+      fi
+      (( attempt < 5 )) && sleep 2
+    done
+    echo "required $kind unavailable: $path" >&2
+    return 10
+  }
+  validate_json_object() {
+    python3 - "$1" <<'PY'
+  import json, sys
+  with open(sys.argv[1], encoding="utf-8") as handle:
+      value = json.load(handle)
+  if not isinstance(value, dict):
+      raise SystemExit("expected a JSON object")
+  PY
+  }
+
+  safe_cwd
+  require_path dir "$KIT_ROOT"
+  require_path dir "$DATA_ROOT"
+  require_path file "$CONTRACT_PATH"
+  validate_json_object "$CONTRACT_PATH"
+
+  local_root="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}/pilot107-preflight-${SLURM_JOB_ID}"
+  report_local="$local_root/preflight-report.json"
+  contract_local="$local_root/effective-contract.json"
+  mkdir -p "$local_root" "{{workdir}}/logs" "{{workdir}}/preflight"
+  cp -a "$CONTRACT_PATH" "$contract_local"
+
+  rc=1
+  for attempt in 1 2 3; do
+    if {{entry_command}} --output "$report_local"; then rc=0; break; else rc=$?; fi
+    (( attempt < 3 )) && sleep $((attempt * 5))
+  done
+  [[ "$rc" -eq 0 ]]
+  require_path file "$report_local"
+  validate_json_object "$report_local"
+
+  report_final="{{workdir}}/preflight/report.json"
+  contract_final="{{workdir}}/preflight/effective-contract.json"
+  cp -a "$report_local" "${report_final}.tmp.${SLURM_JOB_ID}"
+  cp -a "$contract_local" "${contract_final}.tmp.${SLURM_JOB_ID}"
+  validate_json_object "${report_final}.tmp.${SLURM_JOB_ID}"
+  validate_json_object "${contract_final}.tmp.${SLURM_JOB_ID}"
+  mv -f "${report_final}.tmp.${SLURM_JOB_ID}" "$report_final"
+  mv -f "${contract_final}.tmp.${SLURM_JOB_ID}" "$contract_final"
+  printf 'completed_at=%s\njob_id=%s\ncontract_sha256=%s\n' \
+    "$(date -Is)" "$SLURM_JOB_ID" "$(sha256sum "$contract_final" | awk '{print $1}')" \
+    > "{{workdir}}/preflight/COMPLETE.tmp.${SLURM_JOB_ID}"
+  mv -f "{{workdir}}/preflight/COMPLETE.tmp.${SLURM_JOB_ID}" "{{workdir}}/preflight/COMPLETE"
+preflight_checks:
+  - check: login_node_control_only
+    description: "重依赖 import、数据哈希和模型检查必须在 Slurm CPU 作业执行"
+  - check: structured_contract_consistency
+    description: "比较 contract、effective config 和报告字段，不搜索源码字面量"
+  - check: source_tree_import_closure
+    description: "源码树运行依赖必须显式加入 runtime，并与计算节点 import 一致"
+  - check: report_persistence
+    description: "临时目录报告验证后才原子发布到共享 workdir"
+recovery:
+  strategy: rerun_preflight_only
+  description: "Preflight 无业务重产物；修复具体结构化 finding 后仅重跑本 gate。"
+  scan_command: "test -s {{workdir}}/preflight/report.json && test -s {{workdir}}/preflight/effective-contract.json && test -s {{workdir}}/preflight/COMPLETE"
+success_protocol:
+  artifact_write: "node-local report -> JSON validate -> shared tmp -> validate -> atomic mv -> COMPLETE"
+  marker: preflight/COMPLETE
+  validation:
+    - "运行报告是 JSON object"
+    - "有效契约是 JSON object"
+    - "COMPLETE 记录 contract SHA-256"
+  reconcile: "只有结构化报告、有效契约和 marker 三者一致才允许下游 afterok"
+risk_declaration:
+  gpu_concurrency: null
+  estimated_runtime: "{{time_limit}}"
+  evidence_source: "HIFX4 v4.9.2 HF9-HF12 production runbook patterns"
+  encoded_lessons:
+    - single_source_runtime_contract
+    - source_tree_bootstrap
+    - structured_preflight
+    - effective_pipeline_config
+    - login_node_control_only

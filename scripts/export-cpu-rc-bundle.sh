@@ -55,6 +55,7 @@ for script in \
   import-cpu-rc-images.sh \
   init-local-secrets.sh \
   load_competition.py \
+  scan-array-artifacts.py \
   smoke_competition_web.py \
   start-cpu-rc.sh \
   stop-cpu-rc.sh

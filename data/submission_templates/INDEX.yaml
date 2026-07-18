@@ -14,4 +14,18 @@ templates:
     title: "健壮 Slurm 提交模板"
     trust_level: L1
     requires_gpu: false
-
+  recipe_structured_preflight_gate@1.0.0:
+    file: recipe_structured_preflight_gate.yaml
+    title: "结构化 Preflight Gate 模板"
+    trust_level: L1
+    requires_gpu: false
+  recipe_gpu_shard_array_atomic@2.0.0:
+    file: recipe_gpu_shard_array_atomic.yaml
+    title: "GPU 缺片恢复 Array 模板"
+    trust_level: L1
+    requires_gpu: true
+  recipe_fail_closed_merge_gate@1.0.0:
+    file: recipe_fail_closed_merge_gate.yaml
+    title: "Fail-closed 分片合并 Gate 模板"
+    trust_level: L1
+    requires_gpu: false

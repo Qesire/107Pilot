@@ -135,9 +135,13 @@ class ContractV2Tests(unittest.TestCase):
 
         versions = catalog.list_versions()
         packaged = [recipe for recipe in versions if recipe.source.startswith("packaged:")]
+        template_dir = Path(__file__).resolve().parents[1] / "data/submission_templates"
+        expected_packaged = len(
+            [path for path in template_dir.glob("*.yaml") if path.name != "INDEX.yaml"]
+        )
 
-        self.assertEqual(len(packaged), 3)
-        self.assertEqual(len(store.list_recipe_versions()), 4)
+        self.assertEqual(len(packaged), expected_packaged)
+        self.assertEqual(len(store.list_recipe_versions()), expected_packaged + 1)
         self.assertTrue(all(len(recipe.content_sha256) == 64 for recipe in packaged))
         self.assertTrue(all(recipe.materializer == "sbatch_template_v1" for recipe in packaged))
 

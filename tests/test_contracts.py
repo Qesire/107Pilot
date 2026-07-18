@@ -24,9 +24,10 @@ class ContractServiceTests(unittest.TestCase):
 
     def test_lists_builtin_recipe(self) -> None:
         summaries = self.service.catalog.list_summaries()
+        by_id = {summary.recipe_id: summary for summary in summaries}
 
-        self.assertEqual(summaries[0].recipe_id, "recipe_python_cpu")
-        self.assertEqual(summaries[0].latest_version, "1.0.0")
+        self.assertIn("recipe_python_cpu", by_id)
+        self.assertEqual(by_id["recipe_python_cpu"].latest_version, "1.0.0")
 
     def test_validate_returns_effective_request(self) -> None:
         result = self.service.validate(_contract_payload())

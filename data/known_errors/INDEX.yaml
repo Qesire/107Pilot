@@ -1,4 +1,9 @@
 rules:
+  ARTIFACT.SHARD_SET_INCOMPLETE:
+    file: ARTIFACT_SHARD_SET_INCOMPLETE.yaml
+    category: artifact_integrity
+    severity: error
+    retryable: true
   ARTIFACT.MARKER_MISSING:
     file: ARTIFACT_MARKER_MISSING.yaml
     category: marker_reconciliation
@@ -39,6 +44,11 @@ rules:
     category: log_noise
     severity: info
     retryable: false
+  PREFLIGHT.STRUCTURED_CONTRACT_DRIFT:
+    file: PREFLIGHT_STRUCTURED_CONTRACT_DRIFT.yaml
+    category: contract_consistency
+    severity: error
+    retryable: false
   METRIC.WEIGHT_QDQ_EXPECTED_ZERO:
     file: METRIC_WEIGHT_QDQ_EXPECTED_ZERO.yaml
     category: metric_semantics
@@ -59,6 +69,11 @@ rules:
     category: runtime
     severity: error
     retryable: true
+  RUNTIME.EFFECTIVE_CONFIG_MISSING:
+    file: RUNTIME_EFFECTIVE_CONFIG_MISSING.yaml
+    category: runtime_contract
+    severity: error
+    retryable: false
   RUNTIME.OOM:
     file: RUNTIME_OOM.yaml
     category: runtime
@@ -73,6 +88,11 @@ rules:
     file: RUNTIME_PYTHON_PACKAGE_TRANSIENT.yaml
     category: filesystem_transient
     severity: warn
+    retryable: true
+  RUNTIME.SOURCE_TREE_IMPORT_MISSING:
+    file: RUNTIME_SOURCE_TREE_IMPORT_MISSING.yaml
+    category: runtime_environment
+    severity: error
     retryable: true
   RUNTIME.TIMEOUT:
     file: RUNTIME_TIMEOUT.yaml

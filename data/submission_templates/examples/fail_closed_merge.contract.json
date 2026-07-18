@@ -1,0 +1,45 @@
+{
+  "schema_version": "pilot107.contract/v2",
+  "recipe_version_id": "recipe_fail_closed_merge_gate@1.0.0",
+  "project": {
+    "name": "pipeline-merge-gate",
+    "workdir": "/public/home/alice/experiments/pipeline"
+  },
+  "entry": {
+    "command": "python tools/merge_shards.py"
+  },
+  "runtime": {
+    "conda_env": "project-runtime",
+    "environment": {
+      "SLURM_ACCOUNT": "stu",
+      "KIT_ROOT": "/public/home/alice/project-kit",
+      "SHARD_ROOT": "/public/home/alice/experiments/pipeline",
+      "EXPECTED_TASKS": "80"
+    }
+  },
+  "resources": {
+    "partition": "Students",
+    "qos": "qos_stu_cpu_long",
+    "nodes": 1,
+    "ntasks": 1,
+    "cpus_per_task": 8,
+    "memory": "128G",
+    "time_limit": "04:00:00"
+  },
+  "workflow": {
+    "dependencies": [
+      "run_gpu_shards"
+    ]
+  },
+  "outputs": {
+    "expected": [
+      "merged/result.bin",
+      "merged/result.manifest.json",
+      "gate/COMPLETE"
+    ],
+    "success_conditions": [
+      "artifact_integrity",
+      "complete_marker"
+    ]
+  }
+}

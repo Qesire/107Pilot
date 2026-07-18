@@ -87,6 +87,10 @@ class DiagnosisTests(unittest.TestCase):
         self.assertIn("SLURM.SCRIPT_PATH_FROM_ZERO", by_id)
         self.assertIn("SLURM.WORKDIR_NOT_SHARED", by_id)
         self.assertIn("ARTIFACT.POSTPROCESS_FALSE_FAILURE", by_id)
+        self.assertIn("ARTIFACT.SHARD_SET_INCOMPLETE", by_id)
+        self.assertIn("PREFLIGHT.STRUCTURED_CONTRACT_DRIFT", by_id)
+        self.assertIn("RUNTIME.EFFECTIVE_CONFIG_MISSING", by_id)
+        self.assertIn("RUNTIME.SOURCE_TREE_IMPORT_MISSING", by_id)
         self.assertGreaterEqual(len(rules), 27)
 
     def test_platform_specific_rules_use_precise_evidence_and_safe_remediation(self) -> None:
@@ -142,6 +146,31 @@ class DiagnosisTests(unittest.TestCase):
             item for item in qos_limits if item.rule_id == "SLURM.QOS_CPU_CAPACITY_LIMIT"
         )
         self.assertEqual(capacity.suggested_patch, {})
+
+    def test_runbook_derived_rules_distinguish_contract_and_artifact_failures(self) -> None:
+        run = self._failed_run(exit_code="1:0", terminal_state="FAILED")
+
+        diagnoses = diagnose_run(
+            run,
+            evidence_text={
+                "logs/stderr.tail.txt": (
+                    "No module named 'HiFloat4'\n"
+                    "KeyError: 'target_video_length' in auto_calc_config\n"
+                    "preflight artifact consistency contract mismatch\n"
+                    "merge blocked; resubmit missing array tasks: 2-4\n"
+                )
+            },
+        )
+        rule_ids = {item.rule_id for item in diagnoses}
+
+        self.assertTrue(
+            {
+                "ARTIFACT.SHARD_SET_INCOMPLETE",
+                "PREFLIGHT.STRUCTURED_CONTRACT_DRIFT",
+                "RUNTIME.EFFECTIVE_CONFIG_MISSING",
+                "RUNTIME.SOURCE_TREE_IMPORT_MISSING",
+            }.issubset(rule_ids)
+        )
 
     def test_context_builder_includes_runtime_and_gpu_probe_evidence(self) -> None:
         paths = DiagnosisContextBuilder(store=self.store).logical_paths

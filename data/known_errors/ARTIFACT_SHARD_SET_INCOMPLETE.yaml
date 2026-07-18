@@ -1,0 +1,28 @@
+error_id: ARTIFACT.SHARD_SET_INCOMPLETE
+category: artifact_integrity
+severity: error
+retryable: true
+stage: merge
+title: "合并前分片三件套不完整"
+symptoms:
+  - "merge blocked; resubmit missing array tasks"
+  - "missing_array_spec"
+  - "missing shard metadata"
+  - "missing complete marker"
+  - "regex:expected_tasks.*complete_tasks"
+evidence_paths:
+  - outputs/inventory.json
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - slurm/accounting.json
+root_cause: "至少一个 task 缺少非空 artifact、结构化 metadata 或 COMPLETE；只检查文件名会把空文件和中断提交误判为完成。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "读取 missing_array_spec，只重提缺失 task；三件套全部完整后重新运行 merge gate。"
+  prevention: "节点本地写入，复制到共享 tmp，校验 size/hash，再原子 mv 并最后写 COMPLETE。"
+  automation: "使用 scan-array-artifacts.py 生成缺片范围；禁止 allow-partial 绕过。"
+confidence: high
+kb_article: null
+source_record: HIFX4-v4.9.2-shard-merge-gate

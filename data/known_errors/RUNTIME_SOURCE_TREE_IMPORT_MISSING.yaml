@@ -1,0 +1,28 @@
+error_id: RUNTIME.SOURCE_TREE_IMPORT_MISSING
+category: runtime_environment
+severity: error
+retryable: true
+stage: preflight
+title: "计算节点未建立源码树 import closure"
+symptoms:
+  - "no module named 'hifloat4'"
+  - "no module named 'lightx2v'"
+  - "no module named 'quant'"
+  - "source tree bootstrap"
+  - "pythonpath"
+evidence_paths:
+  - logs/stderr.tail.txt
+  - logs/stderr.tail.json
+  - run/environment/basic.json
+  - submission/materialized-script.sh
+root_cause: "项目按源码树运行而非 pip 安装，但 PYTHONPATH 只在登录 shell 或部分入口设置，计算节点实际 Python 未包含全部仓库根。"
+fix_template:
+  type: structured_patch
+  patch: {}
+fix_guide:
+  fix: "在公共 runtime bootstrap 和每个生产 Python 入口导入前，以确定顺序加入全部源码根，并记录 sys.executable/PYTHONPATH/import origin。"
+  prevention: "计算节点 preflight 使用与生产作业相同的 Python 和 bootstrap，比较模块实际 __file__ 与批准源码根。"
+  automation: "缺 import 时先区分源码树 closure 与缺包；不要盲目 pip install 覆盖活动源码。"
+confidence: high
+kb_article: null
+source_record: HIFX4-v4.9.2-HF10

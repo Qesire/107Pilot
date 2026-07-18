@@ -1,7 +1,7 @@
 # Phase 1 已知错误库
 
 > 状态：implemented
-> 日期：2026-07-14
+> 日期：2026-07-18
 > 数据目录：`data/known_errors/`
 > API：`GET /api/v1/diagnosis/known-errors`
 
@@ -20,7 +20,7 @@
 
 ## 当前覆盖
 
-当前 `data/known_errors/` 共 27 条规则：
+当前 `data/known_errors/` 共 37 条规则：
 
 - 旧 7 条规则完整迁移：
   - `SLURM.INVALID_QOS`
@@ -40,6 +40,11 @@
   - `SLURM.SUBMISSION_UNCERTAIN`
   - `RUNTIME.PYTHON_PACKAGE_TRANSIENT`
   - `ARTIFACT.POSTPROCESS_FALSE_FAILURE`
+- HIFX4 v4.9.2 实际工程新增抽象：
+  - `RUNTIME.SOURCE_TREE_IMPORT_MISSING`
+  - `PREFLIGHT.STRUCTURED_CONTRACT_DRIFT`
+  - `RUNTIME.EFFECTIVE_CONFIG_MISSING`
+  - `ARTIFACT.SHARD_SET_INCOMPLETE`
 
 `data/known_errors/INDEX.yaml` 是人工可读索引；运行时加载器会跳过该索引，直接读取每条规则 YAML。
 
@@ -86,4 +91,3 @@ Run Diagnostics 前端会展示 `category`、`stage`、`suggested_patch`、`retr
 - 症状文本应保持小写，技术术语可保留原拼写；
 - `regex:` 只用于受信任规则文件，不接受用户输入；
 - token、绝对个人路径和敏感输出不得写入 root cause 或 fix guide。
-

@@ -491,8 +491,9 @@ class HttpApiTests(unittest.TestCase):
         response = self.api.handle_get("/api/v1/recipes")
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(response.payload["items"][0]["recipe_id"], "recipe_python_cpu")
-        self.assertEqual(response.payload["items"][0]["latest_version"], "1.0.0")
+        by_id = {item["recipe_id"]: item for item in response.payload["items"]}
+        self.assertIn("recipe_python_cpu", by_id)
+        self.assertEqual(by_id["recipe_python_cpu"]["latest_version"], "1.0.0")
 
     def test_get_recipe_version_with_api_v1_prefix(self) -> None:
         response = self.api.handle_get("/api/v1/recipes/recipe_python_cpu/versions/1.0.0")
