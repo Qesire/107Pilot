@@ -110,7 +110,18 @@ bash scripts/check-sim-core.sh
 - 两线程、两个 spawn 进程竞争均证明每个任务只执行一次；任务成功写库后 ack 前崩溃只补 ack；
 - Docker 跨容器金路径 `run_4c0ac2cde0c340cb872b7f60024467cf` 完成 7/7 fenced collection outbox 和 20 个 Evidence objects；
 - review：[phase3g_collection_outbox_review.md](phase3g_collection_outbox_review.md)；
-- 下一步迁移 Agent execution，再补 PostgreSQL 业务接线、可观测性和 crash matrix。
+- collection 子切片提交：`1686aa4 feat: add fenced collection outbox`。
+
+### 2026-07-18 R4 Agent Execution Outbox 检查点
+
+- production API/Worker 已使用 `agent.execute` durable outbox；prepare/submit 采用独立确定性 phase message；
+- execution 行持久化 phase、dispatcher owner 与 fencing token，同 phase reclaim 和跨 phase stale writer 均被拒绝；
+- Agent 派生合同/Run 使用确定性 ID，真正外部提交继续由嵌套 `run.submit` outbox 保护；
+- 两线程、两个 spawn 进程、enqueue-only crash、execution write 后 ack crash 与 terminal replay 契约通过；
+- Run/Agent dispatcher 同步修复 batch 预领取租约过期窗口，改为完成一条再领取下一条；
+- Docker 跨容器接管：execution `agentexec_a7f75f2668a36d762af1d519bd87e0ec` 派生 Run `run_agent_55f45c5355509bdfb80b0b1517c2352e`，最终 SUCCEEDED；
+- review：[phase3g_agent_execution_outbox_review.md](phase3g_agent_execution_outbox_review.md)；
+- R4-2 完成；下一步进入 R4-3 PostgreSQL 业务接线、可观测性、恢复演练与本地安全基线。
 
 真人使用不进入这些工作包的通过条件。可选的 U2/U3 只用于视觉、文案、信任感和交互取舍；VM 上传、真实 107 操作和生产身份仍需另行授权。
 

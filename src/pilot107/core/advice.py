@@ -12,12 +12,22 @@ from typing import Any
 
 from pilot107.core.agent import AgentExplainService, AgentExplanation
 from pilot107.core.contracts import ContractError, ContractService
-from pilot107.core.run_service import RunService
+from pilot107.core.control_repository import (
+    ControlRepository,
+    ControlRepositoryConflict,
+    OutboxMessage,
+)
+from pilot107.core.run_service import (
+    RunService,
+    SubmissionInProgressError,
+    SubmissionRecoveryRequiredError,
+)
 from pilot107.core.run_store import (
     AgentActionExecutionRecord,
     AgentAdviceConflict,
     AgentAdviceRecord,
     AgentDecisionRecord,
+    AgentExecutionFenceConflict,
     DiagnosisRecord,
     RunRecord,
     RunStore,
@@ -54,6 +64,21 @@ class AgentAdviceError(ValueError):
 class AdviceResult:
     record: AgentAdviceRecord
     created: bool
+
+
+@dataclass(frozen=True)
+class AgentExecutionDispatchError:
+    message_id: str
+    execution_id: str
+    message: str
+    error_type: str
+
+
+@dataclass(frozen=True)
+class AgentExecutionDispatchBatch:
+    checked: int
+    succeeded: list[AgentActionExecutionRecord]
+    errors: list[AgentExecutionDispatchError]
 
 
 class AgentPolicyEngine:
@@ -154,12 +179,32 @@ class AgentAdviceService:
         policy_engine: AgentPolicyEngine,
         contract_service: ContractService | None = None,
         run_service: RunService | None = None,
+        control_repository: ControlRepository | None = None,
+        dispatcher_id: str | None = None,
+        execution_lease_seconds: int = 60,
+        execution_retry_delay_seconds: int = 2,
+        execution_max_attempts: int = 5,
     ) -> None:
         self.store = store
         self.explain_service = explain_service
         self.policy_engine = policy_engine
         self.contract_service = contract_service or policy_engine.contract_service
         self.run_service = run_service
+        self.control_repository = control_repository or (
+            run_service.control_repository if run_service is not None else None
+        )
+        self.dispatcher_id = dispatcher_id or (
+            run_service.dispatcher_id if run_service is not None else "agent-dispatcher"
+        )
+        if execution_lease_seconds <= 0:
+            raise ValueError("execution_lease_seconds must be positive")
+        if execution_retry_delay_seconds < 0:
+            raise ValueError("execution_retry_delay_seconds must not be negative")
+        if execution_max_attempts <= 0:
+            raise ValueError("execution_max_attempts must be positive")
+        self.execution_lease_seconds = execution_lease_seconds
+        self.execution_retry_delay_seconds = execution_retry_delay_seconds
+        self.execution_max_attempts = execution_max_attempts
 
     def advise(
         self,
@@ -304,6 +349,191 @@ class AgentAdviceService:
         actor: str,
         submit: bool = True,
     ) -> AgentActionExecutionRecord:
+        if self.control_repository is None:
+            return self._execute_action_now(
+                advice_id,
+                action_id=action_id,
+                actor=actor,
+                submit=submit,
+                message=None,
+            )
+        _, _, execution_id = self._execution_context(
+            advice_id,
+            action_id=action_id,
+            actor=actor,
+        )
+        phase = "submit" if submit else "prepare"
+        message, _ = self.control_repository.enqueue(
+            message_id=_agent_execution_message_id(execution_id, phase),
+            topic="agent.execute",
+            aggregate_id=execution_id,
+            payload={
+                "execution_id": execution_id,
+                "advice_id": advice_id,
+                "action_id": action_id,
+                "actor": actor,
+                "submit": submit,
+                "phase": phase,
+            },
+        )
+        claimed = self.control_repository.claim_outbox_message(
+            message_id=message.message_id,
+            owner=self.dispatcher_id,
+            lease_seconds=self.execution_lease_seconds,
+        )
+        if claimed is None:
+            try:
+                existing = self.store.get_agent_action_execution(execution_id)
+            except KeyError as exc:
+                raise AgentAdviceError(
+                    "agent execution is already in progress",
+                    code="AGENT.EXECUTION_IN_PROGRESS",
+                ) from exc
+            if existing.state in {"prepared", "submitted", "failed"}:
+                return existing
+            raise AgentAdviceError(
+                "agent execution is already in progress",
+                code="AGENT.EXECUTION_IN_PROGRESS",
+            )
+        try:
+            return self._execute_action_message(claimed)
+        except (SubmissionInProgressError, SubmissionRecoveryRequiredError) as exc:
+            self._retry_execution_message(claimed, str(exc))
+            raise AgentAdviceError(
+                "agent execution is queued for recovery",
+                code="AGENT.EXECUTION_IN_PROGRESS",
+            ) from exc
+
+    def dispatch_due_executions(self, *, limit: int = 50) -> AgentExecutionDispatchBatch:
+        if self.control_repository is None:
+            return AgentExecutionDispatchBatch(checked=0, succeeded=[], errors=[])
+        if limit <= 0 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        checked = 0
+        succeeded: list[AgentActionExecutionRecord] = []
+        errors: list[AgentExecutionDispatchError] = []
+        for _ in range(limit):
+            claimed = self.control_repository.claim_outbox(
+                owner=self.dispatcher_id,
+                limit=1,
+                lease_seconds=self.execution_lease_seconds,
+                topics=("agent.execute",),
+            )
+            if not claimed:
+                break
+            message = claimed[0]
+            checked += 1
+            execution_id = message.aggregate_id
+            try:
+                execution = self._execute_action_message(message)
+                if execution.state in {"prepared", "submitted"}:
+                    succeeded.append(execution)
+            except Exception as exc:
+                with suppress(ControlRepositoryConflict, RuntimeError):
+                    self._retry_execution_message(message, str(exc))
+                errors.append(
+                    AgentExecutionDispatchError(
+                        message_id=message.message_id,
+                        execution_id=execution_id,
+                        message=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                )
+        return AgentExecutionDispatchBatch(
+            checked=checked,
+            succeeded=succeeded,
+            errors=errors,
+        )
+
+    def _execute_action_message(
+        self,
+        message: OutboxMessage,
+    ) -> AgentActionExecutionRecord:
+        identity = _agent_execution_message_identity(message)
+        return self._execute_action_now(
+            identity[1],
+            action_id=identity[2],
+            actor=identity[3],
+            submit=identity[4],
+            message=message,
+        )
+
+    def _execute_action_now(
+        self,
+        advice_id: str,
+        *,
+        action_id: str,
+        actor: str,
+        submit: bool,
+        message: OutboxMessage | None,
+    ) -> AgentActionExecutionRecord:
+        advice, action, execution_id = self._execution_context(
+            advice_id,
+            action_id=action_id,
+            actor=actor,
+        )
+        phase = "submit" if submit else "prepare"
+        if message is not None:
+            if message.lease_owner is None:
+                raise AgentAdviceError(
+                    "agent execution message has no active lease",
+                    code="AGENT.EXECUTION_FENCED",
+                )
+            execution, owns_execution = self.store.claim_agent_action_execution_fenced(
+                execution_id=execution_id,
+                advice_id=advice_id,
+                action_id=action_id,
+                owner=advice.owner,
+                submit_requested=submit,
+                execution_phase=phase,
+                execution_owner=message.lease_owner,
+                fencing_token=message.fencing_token,
+            )
+        else:
+            execution, owns_execution = self.store.claim_agent_action_execution(
+                execution_id=execution_id,
+                advice_id=advice_id,
+                action_id=action_id,
+                owner=advice.owner,
+                submit_requested=submit,
+            )
+        if execution.state in {"submitted", "failed"}:
+            if message is not None:
+                self._acknowledge_execution(message)
+            return execution
+        if not owns_execution:
+            if execution.state == "prepared" and not submit:
+                if message is not None:
+                    self._acknowledge_execution(message)
+                return execution
+            if message is None and execution.state == "prepared" and submit:
+                execution, owns_execution = self.store.begin_agent_action_execution(
+                    execution.execution_id,
+                    expected_state="prepared",
+                    submit_requested=True,
+                )
+            if not owns_execution:
+                raise AgentAdviceError(
+                    "agent execution is already in progress",
+                    code="AGENT.EXECUTION_IN_PROGRESS",
+                )
+
+        return self._perform_claimed_execution(
+            advice=advice,
+            action=action,
+            execution=execution,
+            action_id=action_id,
+            submit=submit,
+            message=message,
+        )
+
+    def _execution_context(
+        self,
+        advice_id: str,
+        *,
+        action_id: str,
+        actor: str,
+    ) -> tuple[AgentAdviceRecord, dict[str, Any], str]:
         if self.contract_service is None or self.run_service is None:
             raise AgentAdviceError(
                 "agent action execution service is unavailable",
@@ -342,41 +572,34 @@ class AgentAdviceService:
             f"{advice_id}\0{action_id}".encode()
         ).hexdigest()[:32]
         try:
-            existing_execution = self.store.get_agent_action_execution(execution_id)
+            existing = self.store.get_agent_action_execution(execution_id)
         except KeyError:
-            existing_execution = None
-        if existing_execution is not None and existing_execution.state in {"submitted", "failed"}:
-            return existing_execution
-        current_run = self.store.get_run(advice.run_id)
-        current = self.explain_service.explain(advice.run_id, provider="none")
-        if (
-            current_run.updated_at != advice.source_run_updated_at
-            or (current.evidence_bundle_sha256 or "") != advice.evidence_bundle_sha256
-        ):
-            raise AgentAdviceError(
-                "run or evidence changed after action approval",
-                code="AGENT.APPROVED_ACTION_STALE",
-            )
+            existing = None
+        if existing is None or existing.state not in {"submitted", "failed"}:
+            current_run = self.store.get_run(advice.run_id)
+            current = self.explain_service.explain(advice.run_id, provider="none")
+            if (
+                current_run.updated_at != advice.source_run_updated_at
+                or (current.evidence_bundle_sha256 or "") != advice.evidence_bundle_sha256
+            ):
+                raise AgentAdviceError(
+                    "run or evidence changed after action approval",
+                    code="AGENT.APPROVED_ACTION_STALE",
+                )
+        return advice, action, execution_id
 
-        execution, owns_execution = self.store.claim_agent_action_execution(
-            execution_id=execution_id,
-            advice_id=advice_id,
-            action_id=action_id,
-            owner=advice.owner,
-            submit_requested=submit,
-        )
-        if execution.state in {"submitted", "failed"}:
-            return execution
-        if not owns_execution:
-            if execution.state != "prepared" or not submit:
-                return execution
-            execution, owns_execution = self.store.begin_agent_action_execution(
-                execution.execution_id,
-                expected_state="prepared",
-                submit_requested=True,
-            )
-            if not owns_execution:
-                return execution
+    def _perform_claimed_execution(
+        self,
+        *,
+        advice: AgentAdviceRecord,
+        action: dict[str, Any],
+        execution: AgentActionExecutionRecord,
+        action_id: str,
+        submit: bool,
+        message: OutboxMessage | None,
+    ) -> AgentActionExecutionRecord:
+        execution_id = execution.execution_id
+        assert self.contract_service is not None and self.run_service is not None
         try:
             source_run = self.store.get_run(advice.run_id)
             if source_run.contract_id is None:
@@ -404,7 +627,7 @@ class AgentAdviceService:
                 source=source_contract,
                 payload=candidate["contract"],
                 contract_id=derived_contract_id,
-                advice_id=advice_id,
+                advice_id=advice.advice_id,
                 action_id=action_id,
                 patched_fields=list(patch),
             )
@@ -412,7 +635,7 @@ class AgentAdviceService:
                 derived,
                 parent_run_id=source_run.run_id,
                 lineage_reason="agent_remediation",
-                remediation_plan_id=f"{advice_id}:{action_id}",
+                remediation_plan_id=f"{advice.advice_id}:{action_id}",
             )
             derived_run_id = "run_agent_" + hashlib.sha256(
                 execution_id.encode()
@@ -422,17 +645,19 @@ class AgentAdviceService:
                 run_id=derived_run_id,
                 idempotent=True,
             )
-            execution = self.store.update_agent_action_execution(
+            execution = self._update_execution(
                 execution_id,
-                state="prepared",
+                message=message,
+                state="executing" if submit else "prepared",
                 submit_requested=submit,
                 derived_contract_id=derived.contract_id,
                 run_id=derived_run.run_id,
             )
             if submit:
                 submitted = self.run_service.submit_prepared(derived_run.run_id)
-                execution = self.store.update_agent_action_execution(
+                execution = self._update_execution(
                     execution_id,
+                    message=message,
                     state="submitted",
                     submit_requested=True,
                     derived_contract_id=derived.contract_id,
@@ -449,26 +674,99 @@ class AgentAdviceService:
                     "state": execution.state,
                 },
             )
+            if message is not None:
+                self._acknowledge_execution(message)
             return execution
         except AgentAdviceError as exc:
-            self.store.update_agent_action_execution(
+            self._update_execution(
                 execution_id,
+                message=message,
                 state="failed",
                 error_code=exc.code,
                 error_message=str(exc)[:1000],
             )
+            if message is not None:
+                self._acknowledge_execution(message)
+            raise
+        except (SubmissionInProgressError, SubmissionRecoveryRequiredError):
+            raise
+        except AgentExecutionFenceConflict:
             raise
         except Exception as exc:
-            self.store.update_agent_action_execution(
+            self._update_execution(
                 execution_id,
+                message=message,
                 state="failed",
                 error_code="AGENT.EXECUTION_FAILED",
                 error_message=str(exc)[:1000],
             )
+            if message is not None:
+                self._acknowledge_execution(message)
             raise AgentAdviceError(
                 "approved action execution failed",
                 code="AGENT.EXECUTION_FAILED",
             ) from exc
+
+    def _update_execution(
+        self,
+        execution_id: str,
+        *,
+        message: OutboxMessage | None,
+        state: str,
+        submit_requested: bool | None = None,
+        derived_contract_id: str | None = None,
+        run_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> AgentActionExecutionRecord:
+        kwargs: dict[str, Any] = {}
+        if message is not None:
+            assert message.lease_owner is not None
+            _, _, _, _, submit, phase = _agent_execution_message_identity(message)
+            expected_phase = "submit" if submit else "prepare"
+            if phase != expected_phase:
+                raise AgentExecutionFenceConflict("agent execution phase is inconsistent")
+            kwargs = {
+                "execution_phase": phase,
+                "execution_owner": message.lease_owner,
+                "fencing_token": message.fencing_token,
+            }
+        return self.store.update_agent_action_execution(
+            execution_id,
+            state=state,
+            submit_requested=submit_requested,
+            derived_contract_id=derived_contract_id,
+            run_id=run_id,
+            error_code=error_code,
+            error_message=error_message,
+            **kwargs,
+        )
+
+    def _acknowledge_execution(self, message: OutboxMessage) -> None:
+        if self.control_repository is None or message.lease_owner is None:
+            return
+        with suppress(ControlRepositoryConflict):
+            self.control_repository.acknowledge(
+                message_id=message.message_id,
+                owner=message.lease_owner,
+                fencing_token=message.fencing_token,
+            )
+
+    def _retry_execution_message(
+        self,
+        message: OutboxMessage,
+        error: str,
+    ) -> OutboxMessage:
+        if self.control_repository is None or message.lease_owner is None:
+            raise RuntimeError("agent execution outbox ownership is unavailable")
+        return self.control_repository.retry(
+            message_id=message.message_id,
+            owner=message.lease_owner,
+            fencing_token=message.fencing_token,
+            error=error,
+            delay_seconds=self.execution_retry_delay_seconds,
+            max_attempts=self.execution_max_attempts,
+        )
 
     def _invalidate_stale(self, record: AgentAdviceRecord, *, actor: str) -> None:
         with suppress(AgentAdviceConflict):
@@ -498,6 +796,43 @@ class AgentAdviceService:
             sort_keys=True,
         )
         return "auto:" + hashlib.sha256(material.encode()).hexdigest()
+
+
+def _agent_execution_message_id(execution_id: str, phase: str) -> str:
+    if phase not in {"prepare", "submit"}:
+        raise ValueError("agent execution phase is invalid")
+    return f"agent:{execution_id}:{phase}"
+
+
+def _agent_execution_message_identity(
+    message: OutboxMessage,
+) -> tuple[str, str, str, str, bool, str]:
+    execution_id = message.payload.get("execution_id")
+    advice_id = message.payload.get("advice_id")
+    action_id = message.payload.get("action_id")
+    actor = message.payload.get("actor")
+    submit = message.payload.get("submit")
+    phase = message.payload.get("phase")
+    if (
+        message.topic != "agent.execute"
+        or not isinstance(execution_id, str)
+        or not execution_id
+        or message.aggregate_id != execution_id
+        or not isinstance(advice_id, str)
+        or not advice_id
+        or not isinstance(action_id, str)
+        or not action_id
+        or not isinstance(actor, str)
+        or not actor
+        or not isinstance(submit, bool)
+        or phase not in {"prepare", "submit"}
+        or phase != ("submit" if submit else "prepare")
+    ):
+        raise AgentAdviceError(
+            "agent execution outbox identity is invalid",
+            code="AGENT.INVALID_EXECUTION_MESSAGE",
+        )
+    return execution_id, advice_id, action_id, actor, submit, str(phase)
 
 
 def advice_payload(

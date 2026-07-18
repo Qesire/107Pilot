@@ -319,15 +319,22 @@ class RunService:
     def dispatch_due_submissions(self, *, limit: int = 50) -> SubmissionDispatchBatch:
         if self.control_repository is None:
             return SubmissionDispatchBatch(checked=0, succeeded=[], errors=[])
-        messages = self.control_repository.claim_outbox(
-            owner=self.dispatcher_id,
-            limit=limit,
-            lease_seconds=self.submission_lease_seconds,
-            topics=("run.submit",),
-        )
+        if limit <= 0 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        checked = 0
         succeeded: list[RunRecord] = []
         errors: list[SubmissionDispatchError] = []
-        for message in messages:
+        for _ in range(limit):
+            claimed = self.control_repository.claim_outbox(
+                owner=self.dispatcher_id,
+                limit=1,
+                lease_seconds=self.submission_lease_seconds,
+                topics=("run.submit",),
+            )
+            if not claimed:
+                break
+            message = claimed[0]
+            checked += 1
             run_id = message.aggregate_id
             try:
                 run_id = _message_run_id(message)
@@ -346,7 +353,7 @@ class RunService:
                     )
                 )
         return SubmissionDispatchBatch(
-            checked=len(messages),
+            checked=checked,
             succeeded=succeeded,
             errors=errors,
         )

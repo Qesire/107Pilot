@@ -9,6 +9,7 @@ from enum import StrEnum
 from threading import Event, Thread
 
 from pilot107.adapters.slurm import SlurmAuthError, SlurmBackendError, SlurmTransportError
+from pilot107.core.advice import AgentAdviceService
 from pilot107.core.control_repository import (
     ControlRepository,
     ControlRepositoryConflict,
@@ -78,6 +79,9 @@ class WorkerTickResult:
     submissions_checked: int = 0
     submissions_succeeded: int = 0
     submission_errors: list[WorkerRunError] = field(default_factory=list)
+    agent_executions_checked: int = 0
+    agent_executions_succeeded: int = 0
+    agent_execution_errors: list[WorkerRunError] = field(default_factory=list)
 
 
 class RuntimeReconcileWorker:
@@ -93,6 +97,7 @@ class RuntimeReconcileWorker:
         worker_id: str = "runtime-worker",
         task_lease_seconds: int = 300,
         collection_max_attempts: int = 5,
+        agent_advice_service: AgentAdviceService | None = None,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -107,6 +112,7 @@ class RuntimeReconcileWorker:
         self.worker_id = worker_id
         self.task_lease_seconds = task_lease_seconds
         self.collection_max_attempts = collection_max_attempts
+        self.agent_advice_service = agent_advice_service
 
     def tick(self) -> WorkerTickResult:
         submission_batch = self.service.dispatch_due_submissions(limit=self.batch_size)
@@ -118,6 +124,20 @@ class RuntimeReconcileWorker:
                 retryable=True,
             )
             for error in submission_batch.errors
+        ]
+        agent_batch = (
+            self.agent_advice_service.dispatch_due_executions(limit=self.batch_size)
+            if self.agent_advice_service is not None
+            else None
+        )
+        agent_execution_errors = [
+            WorkerRunError(
+                run_id=error.execution_id,
+                message=error.message,
+                code="AGENT.EXECUTION_DISPATCH_ERROR",
+                retryable=True,
+            )
+            for error in (agent_batch.errors if agent_batch is not None else [])
         ]
         runs = self.service.store.list_active_job_runs(limit=self.batch_size)
         terminal = 0
@@ -232,6 +252,11 @@ class RuntimeReconcileWorker:
             submissions_checked=submission_batch.checked,
             submissions_succeeded=len(submission_batch.succeeded),
             submission_errors=submission_errors,
+            agent_executions_checked=agent_batch.checked if agent_batch is not None else 0,
+            agent_executions_succeeded=(
+                len(agent_batch.succeeded) if agent_batch is not None else 0
+            ),
+            agent_execution_errors=agent_execution_errors,
         )
 
     def _dispatch_collection_tasks(
@@ -489,12 +514,24 @@ class RuntimeReconcileWorker:
                     *aggregate.submission_errors,
                     *result.submission_errors,
                 ],
+                agent_executions_checked=(
+                    aggregate.agent_executions_checked + result.agent_executions_checked
+                ),
+                agent_executions_succeeded=(
+                    aggregate.agent_executions_succeeded
+                    + result.agent_executions_succeeded
+                ),
+                agent_execution_errors=[
+                    *aggregate.agent_execution_errors,
+                    *result.agent_execution_errors,
+                ],
             )
             if (
                 result.checked == 0
                 and result.tasks_checked == 0
                 and result.diagnoses_checked == 0
                 and result.submissions_checked == 0
+                and result.agent_executions_checked == 0
             ):
                 break
             time.sleep(interval_seconds)

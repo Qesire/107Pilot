@@ -30,6 +30,10 @@ class CollectionTaskFenceConflict(RuntimeError):
     """Raised when a stale collection worker attempts to persist a result."""
 
 
+class AgentExecutionFenceConflict(RuntimeError):
+    """Raised when a stale Agent execution worker attempts to persist a result."""
+
+
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -166,6 +170,9 @@ class AgentActionExecutionRecord:
     error_message: str | None
     created_at: str
     updated_at: str
+    execution_phase: str | None = None
+    execution_owner: str | None = None
+    execution_fencing_token: int = 0
 
 
 class RunStore:
@@ -340,6 +347,9 @@ class RunStore:
                     run_id TEXT,
                     error_code TEXT,
                     error_message TEXT,
+                    execution_phase TEXT,
+                    execution_owner TEXT,
+                    execution_fencing_token INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE(advice_id, action_id)
@@ -396,6 +406,24 @@ class RunStore:
                 table="collection_tasks",
                 column="generation",
                 definition="INTEGER NOT NULL DEFAULT 1",
+            )
+            self._ensure_column(
+                conn,
+                table="agent_action_executions",
+                column="execution_phase",
+                definition="TEXT",
+            )
+            self._ensure_column(
+                conn,
+                table="agent_action_executions",
+                column="execution_owner",
+                definition="TEXT",
+            )
+            self._ensure_column(
+                conn,
+                table="agent_action_executions",
+                column="execution_fencing_token",
+                definition="INTEGER NOT NULL DEFAULT 0",
             )
             self._ensure_column(
                 conn,
@@ -1389,6 +1417,101 @@ class RunStore:
             )
         return self.get_agent_action_execution(execution_id), cursor.rowcount == 1
 
+    def claim_agent_action_execution_fenced(
+        self,
+        *,
+        execution_id: str,
+        advice_id: str,
+        action_id: str,
+        owner: str,
+        submit_requested: bool,
+        execution_phase: str,
+        execution_owner: str,
+        fencing_token: int,
+    ) -> tuple[AgentActionExecutionRecord, bool]:
+        if execution_phase not in {"prepare", "submit"}:
+            raise ValueError("agent execution phase is invalid")
+        if fencing_token <= 0:
+            raise ValueError("fencing_token must be positive")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            inserted = conn.execute(
+                """
+                INSERT OR IGNORE INTO agent_action_executions (
+                    execution_id, advice_id, action_id, owner, state,
+                    submit_requested, execution_phase, execution_owner,
+                    execution_fencing_token, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'executing', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    execution_id,
+                    advice_id,
+                    action_id,
+                    owner,
+                    1 if submit_requested else 0,
+                    execution_phase,
+                    execution_owner,
+                    fencing_token,
+                    now,
+                    now,
+                ),
+            )
+            claimed = inserted.rowcount == 1
+            if not claimed:
+                if execution_phase == "submit":
+                    result = conn.execute(
+                        """
+                        UPDATE agent_action_executions
+                        SET state = 'executing', submit_requested = 1,
+                            execution_phase = ?, execution_owner = ?,
+                            execution_fencing_token = ?, updated_at = ?
+                        WHERE execution_id = ? AND state = 'prepared'
+                        """,
+                        (
+                            execution_phase,
+                            execution_owner,
+                            fencing_token,
+                            now,
+                            execution_id,
+                        ),
+                    )
+                    claimed = result.rowcount == 1
+                if not claimed:
+                    result = conn.execute(
+                        """
+                        UPDATE agent_action_executions
+                        SET submit_requested = ?, execution_owner = ?,
+                            execution_fencing_token = ?, updated_at = ?
+                        WHERE execution_id = ? AND state = 'executing'
+                          AND execution_phase = ?
+                          AND execution_fencing_token < ?
+                        """,
+                        (
+                            1 if submit_requested else 0,
+                            execution_owner,
+                            fencing_token,
+                            now,
+                            execution_id,
+                            execution_phase,
+                            fencing_token,
+                        ),
+                    )
+                    claimed = result.rowcount == 1
+            row = conn.execute(
+                "SELECT * FROM agent_action_executions WHERE execution_id = ?",
+                (execution_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("failed to claim fenced agent action execution")
+        record = _row_to_agent_action_execution(row)
+        if (
+            record.advice_id != advice_id
+            or record.action_id != action_id
+            or record.owner != owner
+        ):
+            raise ValueError("agent action execution idempotency conflict")
+        return record, claimed
+
     def update_agent_action_execution(
         self,
         execution_id: str,
@@ -1399,32 +1522,52 @@ class RunStore:
         run_id: str | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
+        execution_phase: str | None = None,
+        execution_owner: str | None = None,
+        fencing_token: int | None = None,
     ) -> AgentActionExecutionRecord:
+        if fencing_token is not None and (
+            execution_phase is None or execution_owner is None
+        ):
+            raise ValueError("fenced update requires execution phase and owner")
         existing = self.get_agent_action_execution(execution_id)
         effective_submit_requested = (
             submit_requested if submit_requested is not None else existing.submit_requested
         )
         with self.connect() as conn:
-            conn.execute(
+            parameters: tuple[Any, ...] = (
+                state,
+                1 if effective_submit_requested else 0,
+                derived_contract_id
+                if derived_contract_id is not None
+                else existing.derived_contract_id,
+                run_id if run_id is not None else existing.run_id,
+                error_code,
+                error_message,
+                utc_now_iso(),
+                execution_id,
+            )
+            fence_clause = ""
+            if fencing_token is not None:
+                fence_clause = (
+                    " AND state = 'executing' AND execution_phase = ? "
+                    "AND execution_owner = ? AND execution_fencing_token = ?"
+                )
+                parameters += (execution_phase, execution_owner, fencing_token)
+            result = conn.execute(
                 """
                 UPDATE agent_action_executions
                 SET state = ?, submit_requested = ?, derived_contract_id = ?,
                     run_id = ?, error_code = ?, error_message = ?, updated_at = ?
                 WHERE execution_id = ?
-                """,
-                (
-                    state,
-                    1 if effective_submit_requested else 0,
-                    derived_contract_id
-                    if derived_contract_id is not None
-                    else existing.derived_contract_id,
-                    run_id if run_id is not None else existing.run_id,
-                    error_code,
-                    error_message,
-                    utc_now_iso(),
-                    execution_id,
-                ),
+                """
+                + fence_clause,
+                parameters,
             )
+            if result.rowcount != 1:
+                raise AgentExecutionFenceConflict(
+                    f"agent execution result is fenced: {execution_id}"
+                )
         return self.get_agent_action_execution(execution_id)
 
     def get_agent_action_execution(self, execution_id: str) -> AgentActionExecutionRecord:
@@ -2272,6 +2415,13 @@ def _row_to_agent_action_execution(row: sqlite3.Row) -> AgentActionExecutionReco
         error_message=(
             None if row["error_message"] is None else str(row["error_message"])
         ),
+        execution_phase=(
+            None if row["execution_phase"] is None else str(row["execution_phase"])
+        ),
+        execution_owner=(
+            None if row["execution_owner"] is None else str(row["execution_owner"])
+        ),
+        execution_fencing_token=int(row["execution_fencing_token"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )

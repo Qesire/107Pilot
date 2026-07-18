@@ -120,6 +120,7 @@ class WorkerService:
                 and result.tasks_checked == 0
                 and result.diagnoses_checked == 0
                 and result.submissions_checked == 0
+                and result.agent_executions_checked == 0
                 and self.last_remediation_advanced == 0
             ):
                 break
@@ -140,6 +141,7 @@ class WorkerService:
                 or result.task_errors
                 or result.diagnosis_errors
                 or result.submission_errors
+                or result.agent_execution_errors
                 or self.last_remediation_errors
             ),
             "worker_id": self.config.worker_id,
@@ -157,6 +159,11 @@ class WorkerService:
             "task_errors": [error.__dict__ for error in result.task_errors],
             "diagnosis_errors": [error.__dict__ for error in result.diagnosis_errors],
             "submission_errors": [error.__dict__ for error in result.submission_errors],
+            "agent_executions_checked": result.agent_executions_checked,
+            "agent_executions_succeeded": result.agent_executions_succeeded,
+            "agent_execution_errors": [
+                error.__dict__ for error in result.agent_execution_errors
+            ],
             "remediation_checked": self.last_remediation_checked,
             "remediation_advanced": self.last_remediation_advanced,
             "remediation_errors": self.last_remediation_errors,
@@ -302,6 +309,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         diagnosis_service=DiagnosisService(store=store),
         worker_id=config.worker_id,
         task_lease_seconds=config.task_lease_seconds,
+        agent_advice_service=advice_service,
     )
     return WorkerService(
         config=config,
@@ -376,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
             or result.task_errors
             or result.diagnosis_errors
             or result.submission_errors
+            or result.agent_execution_errors
             or worker_service.last_remediation_errors
         )
         else 0
@@ -526,6 +535,16 @@ def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> Work
         submissions_checked=left.submissions_checked + right.submissions_checked,
         submissions_succeeded=left.submissions_succeeded + right.submissions_succeeded,
         submission_errors=[*left.submission_errors, *right.submission_errors],
+        agent_executions_checked=(
+            left.agent_executions_checked + right.agent_executions_checked
+        ),
+        agent_executions_succeeded=(
+            left.agent_executions_succeeded + right.agent_executions_succeeded
+        ),
+        agent_execution_errors=[
+            *left.agent_execution_errors,
+            *right.agent_execution_errors,
+        ],
     )
 
 
@@ -539,6 +558,9 @@ def _tick_summary(result: WorkerTickResult) -> str:
         f"errors={len(result.errors)} task_errors={len(result.task_errors)} "
         f"diagnosis_errors={len(result.diagnosis_errors)} "
         f"submission_errors={len(result.submission_errors)}"
+        f" agent_executions={result.agent_executions_succeeded}/"
+        f"{result.agent_executions_checked} "
+        f"agent_execution_errors={len(result.agent_execution_errors)}"
     )
 
 
