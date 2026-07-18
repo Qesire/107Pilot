@@ -17,6 +17,7 @@ RUN python3 -c 'import subprocess, sys, tomllib; dependencies = tomllib.load(ope
 COPY src ./src
 COPY data/known_errors ./data/known_errors
 COPY data/submission_templates ./data/submission_templates
+COPY config/platform_profiles ./config/platform_profiles
 
 USER 10700:10700
 

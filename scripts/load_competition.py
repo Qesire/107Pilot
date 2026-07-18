@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import ssl
 import statistics
 import time
@@ -13,6 +14,8 @@ from dataclasses import dataclass
 from typing import Any
 
 HEADERS = {"Content-Type": "application/json", "X-Pilot107-User": "alice"}
+PARTITION = os.environ.get("PILOT107_LOAD_PARTITION", "Students")
+QOS = os.environ.get("PILOT107_LOAD_QOS", "qos_stu_medium_2gpu")
 
 
 @dataclass(frozen=True)
@@ -316,8 +319,8 @@ def _contract_payload(index: int) -> dict[str, Any]:
             "expected_outputs": [f"pilot107-load-output/result-{index}.txt"],
         },
         "resources": {
-            "partition": "Students",
-            "qos": "qos_stu_medium_2gpu",
+            "partition": PARTITION,
+            "qos": QOS,
             "nodes": 1,
             "ntasks": 1,
             "cpus_per_task": 1,

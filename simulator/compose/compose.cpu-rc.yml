@@ -1,0 +1,55 @@
+services:
+  mariadb:
+    cpus: 0.50
+    mem_limit: 768m
+
+  slurmdbd:
+    cpus: 0.25
+    mem_limit: 384m
+    volumes:
+      - ./slurm-cpu-rc/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./secrets/slurmdbd-cpu-rc.conf:/etc/slurm/slurmdbd.conf
+
+  slurmctld:
+    cpus: 0.25
+    mem_limit: 384m
+    volumes:
+      - ./slurm-cpu-rc/slurm.conf:/etc/slurm/slurm.conf:ro
+
+  slurmrestd:
+    cpus: 0.25
+    mem_limit: 384m
+    volumes:
+      - ./slurm-cpu-rc/slurm.conf:/etc/slurm/slurm.conf:ro
+
+  worker-1:
+    cpus: 4.0
+    mem_limit: 7g
+    volumes:
+      - ./slurm-cpu-rc/slurm.conf:/etc/slurm/slurm.conf:ro
+
+  pilot107-command-gateway:
+    cpus: 0.25
+    mem_limit: 384m
+    volumes:
+      - ./slurm-cpu-rc/slurm.conf:/etc/slurm/slurm.conf:ro
+
+  pilot107-api:
+    cpus: 0.50
+    mem_limit: 768m
+    environment:
+      PILOT107_CONTRACT_PROFILE: cpu-only
+      PILOT107_CAPABILITY_PROFILE_PATH: /opt/pilot107/config/platform_profiles/cpu-only-8c16g.json
+      PILOT107_ALLOW_GPU_RECIPES: "false"
+
+  pilot107-worker:
+    cpus: 0.50
+    mem_limit: 768m
+
+  pilot107-web:
+    cpus: 0.25
+    mem_limit: 384m
+
+  pilot107-reverse-proxy:
+    cpus: 0.25
+    mem_limit: 384m

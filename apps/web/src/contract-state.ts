@@ -23,7 +23,7 @@ export function createDefaultContract(): JsonObject {
     },
     resources: {
       partition: "Students",
-      qos: "qos_stu_medium_2gpu",
+      qos: "qos_stu_cpu_long",
       nodes: 1,
       ntasks: 1,
       cpus_per_task: 1,

@@ -348,9 +348,7 @@ def capability_profile_from_real107_probe(
         local_roots=tuple(str(item) for item in cluster.get("local_roots", [])),
         default_partition=str(first_user.get("default_partition") or "Students"),
         default_qos=(
-            None
-            if first_user.get("default_qos") is None
-            else str(first_user.get("default_qos"))
+            None if first_user.get("default_qos") is None else str(first_user.get("default_qos"))
         ),
         partitions=partitions,
         qos=_docs_main_qos_capabilities(),
@@ -387,12 +385,73 @@ def load_capability_profile(path: Path) -> CapabilityProfile:
             probe_report=_read_json(path / "probe_report.json"),
         )
     payload = _read_json(path)
+    if payload.get("schema") == "pilot107.capability_profile.v1":
+        return _capability_profile_from_payload(payload)
     if "configuration_snapshot" in payload and "probe_report" in payload:
         return capability_profile_from_real107_probe(
             configuration_snapshot=_as_dict(payload["configuration_snapshot"]),
             probe_report=_as_dict(payload["probe_report"]),
         )
     raise ValueError(f"unsupported capability profile source: {path}")
+
+
+def _capability_profile_from_payload(payload: dict[str, Any]) -> CapabilityProfile:
+    rest = _as_dict(payload.get("rest"))
+    partitions = tuple(
+        PartitionCapability(
+            name=str(item["name"]),
+            nodes=None if item.get("nodes") is None else str(item["nodes"]),
+            total_nodes=(None if item.get("total_nodes") is None else int(item["total_nodes"])),
+            allow_qos=tuple(str(value) for value in item.get("allow_qos", [])),
+            state=tuple(str(value) for value in item.get("state", [])),
+            gpu_types=tuple(str(value) for value in item.get("gpu_types", [])),
+        )
+        for raw in payload.get("partitions", [])
+        for item in [_as_dict(raw)]
+    )
+    qos = tuple(
+        QosCapability(
+            name=str(item["name"]),
+            max_cpus=None if item.get("max_cpus") is None else int(item["max_cpus"]),
+            max_gpus=None if item.get("max_gpus") is None else int(item["max_gpus"]),
+            max_memory_gb=(
+                None if item.get("max_memory_gb") is None else int(item["max_memory_gb"])
+            ),
+            max_wall_hours=(
+                None if item.get("max_wall_hours") is None else int(item["max_wall_hours"])
+            ),
+            source_authority=str(item.get("source_authority") or "release-profile"),
+            notes=tuple(str(value) for value in item.get("notes", [])),
+        )
+        for raw in payload.get("qos", [])
+        for item in [_as_dict(raw)]
+    )
+    if not partitions or not qos:
+        raise ValueError("capability profile requires partitions and qos")
+    return CapabilityProfile(
+        profile_id=str(payload["profile_id"]),
+        source_authority=str(payload["source_authority"]),
+        captured_at=str(payload["captured_at"]),
+        freshness_seconds=int(payload["freshness_seconds"]),
+        shared_roots=tuple(str(value) for value in payload.get("shared_roots", [])),
+        local_roots=tuple(str(value) for value in payload.get("local_roots", [])),
+        default_partition=str(payload["default_partition"]),
+        default_qos=None if payload.get("default_qos") is None else str(payload["default_qos"]),
+        partitions=partitions,
+        qos=qos,
+        rest=RestCapability(
+            base_url=str(rest["base_url"]),
+            api_version=str(rest["api_version"]),
+            auth_strategy=str(rest["auth_strategy"]),
+            supports_query=bool(rest.get("supports_query", True)),
+            supports_submit=bool(rest.get("supports_submit", False)),
+            supports_cancel=bool(rest.get("supports_cancel", False)),
+            supports_accounting=bool(rest.get("supports_accounting", False)),
+            partial_payload_with_errors=bool(rest.get("partial_payload_with_errors", False)),
+        ),
+        dynamic_facts=tuple(str(value) for value in payload.get("dynamic_facts", [])),
+        limitations=tuple(str(value) for value in payload.get("limitations", [])),
+    )
 
 
 def _static_partitions(source: SourceAuthority) -> tuple[PartitionCapability, ...]:
@@ -570,8 +629,7 @@ def compute_openapi_digest(openapi_payload: dict[str, Any] | bytes | str) -> str
         material = openapi_payload.encode("utf-8")
     else:
         raise TypeError(
-            "openapi_payload must be dict, bytes, or str, got "
-            f"{type(openapi_payload).__name__}"
+            f"openapi_payload must be dict, bytes, or str, got {type(openapi_payload).__name__}"
         )
     return hashlib.sha256(material).hexdigest()
 
@@ -592,13 +650,9 @@ def refresh_openapi_digest(
     except SlurmTransportError:
         raise
     except Exception as exc:  # pragma: no cover - defensive, transport-specific
-        raise SlurmTransportError(
-            f"openapi refresh request failed: {type(exc).__name__}"
-        ) from exc
+        raise SlurmTransportError(f"openapi refresh request failed: {type(exc).__name__}") from exc
     if response.status >= 400:
-        raise SlurmTransportError(
-            f"openapi refresh failed: HTTP {response.status}"
-        )
+        raise SlurmTransportError(f"openapi refresh failed: HTTP {response.status}")
     if not isinstance(response.payload, dict) or not response.payload:
         raise SlurmTransportError("openapi refresh returned an empty or non-object body")
     return compute_openapi_digest(response.payload)
@@ -616,9 +670,7 @@ def refresh_configuration_snapshot_digest(
     freshness_seconds) are preserved unchanged. Raises ``SlurmTransportError``
     on failure; the token never appears in any error.
     """
-    digest = refresh_openapi_digest(
-        transport, snapshot.cluster.api_version, token=token
-    )
+    digest = refresh_openapi_digest(transport, snapshot.cluster.api_version, token=token)
     return replace(snapshot, openapi_digest=digest)
 
 

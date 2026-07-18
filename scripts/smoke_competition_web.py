@@ -66,6 +66,16 @@ def _assert_health() -> None:
     items = recipes.get("items")
     if not isinstance(items, list) or not items:
         raise RuntimeError(f"recipes endpoint returned no items: {recipes}")
+    if os.environ.get("PILOT107_EXPECT_CPU_ONLY") == "1":
+        if any("gpu" in str(item.get("recipe_id", "")).lower() for item in items):
+            raise RuntimeError(f"CPU-only profile exposed a GPU recipe: {items}")
+        capabilities = _get("/platform/capabilities")
+        partitions = capabilities.get("partitions", [])
+        qos = capabilities.get("qos", [])
+        if not partitions or any(item.get("gpu_types") for item in partitions):
+            raise RuntimeError(f"CPU-only capability contains GPU partitions: {capabilities}")
+        if any(item.get("max_gpus") not in {0, None} for item in qos):
+            raise RuntimeError(f"CPU-only capability contains GPU QoS: {capabilities}")
 
 
 def _run_case(*, name: str, command: str, expected_state: str) -> RunResult:
@@ -179,8 +189,8 @@ def _contract(command: str) -> dict:
             "expected_outputs": ["pilot107-competition-success/result.txt"],
         },
         "resources": {
-            "partition": "Students",
-            "qos": "qos_stu_medium_2gpu",
+            "partition": os.environ.get("PILOT107_SMOKE_PARTITION", "Students"),
+            "qos": os.environ.get("PILOT107_SMOKE_QOS", "qos_stu_medium_2gpu"),
             "nodes": 1,
             "ntasks": 1,
             "cpus_per_task": 1,

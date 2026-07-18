@@ -90,6 +90,7 @@ class ApiServiceConfig:
     rate_limit_window_seconds: int = 60
     contract_profile: str = "generic"
     capability_profile_path: Path | None = None
+    allow_gpu_recipes: bool = True
     llm_base_url: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
@@ -162,6 +163,7 @@ def config_from_env(
         rate_limit_window_seconds=_int(values, "PILOT107_RATE_LIMIT_WINDOW_SECONDS", 60),
         contract_profile=values.get("PILOT107_CONTRACT_PROFILE", "generic"),
         capability_profile_path=_optional_path(values, "PILOT107_CAPABILITY_PROFILE_PATH"),
+        allow_gpu_recipes=_bool(values, "PILOT107_ALLOW_GPU_RECIPES", True),
         llm_base_url=values.get("PILOT107_LLM_BASE_URL") or None,
         llm_api_key=values.get("PILOT107_LLM_API_KEY") or None,
         llm_model=values.get("PILOT107_LLM_MODEL") or None,
@@ -207,15 +209,20 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         worker_metrics_root=config.worker_metrics_root or config.db_path.parent / "worker-metrics",
     )
     contract_store = ContractStore(config.db_path)
-    catalog = RecipeCatalog(store=contract_store)
-    run_service = _build_run_service(config, store, control_repository)
     capability_profile = _build_capability_profile(config)
+    partition_qos = _contract_partition_qos(config.contract_profile, capability_profile)
+    catalog = RecipeCatalog(
+        store=contract_store,
+        allow_gpu=config.allow_gpu_recipes,
+        partition_qos=partition_qos,
+    )
+    run_service = _build_run_service(config, store, control_repository)
     platform_snapshot_store = PlatformSnapshotStore(config.db_path)
     user_entitlement_store = UserEntitlementStore(config.db_path)
     contract_service = ContractService(
         catalog=catalog,
         store=contract_store,
-        partition_qos=_contract_partition_qos(config.contract_profile, capability_profile),
+        partition_qos=partition_qos,
         qos_limits=capability_profile.qos_limits(),
         platform_snapshot_store=platform_snapshot_store,
         user_entitlement_store=user_entitlement_store,
@@ -493,7 +500,7 @@ def _contract_partition_qos(
 ) -> dict[str, tuple[str, ...]] | None:
     if profile == "generic":
         return None
-    if profile == "real107-sim":
+    if profile in {"real107-sim", "cpu-only"}:
         return capability_profile.partition_qos()
     raise ValueError(f"unknown contract profile: {profile}")
 

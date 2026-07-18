@@ -171,6 +171,15 @@ bash scripts/check-sim-core.sh
 - 全量门禁：590 passed、13 PostgreSQL integration skipped、2 subtests；Ruff、strict mypy（73 source files）通过；
 - R4-3 仍继续完整 PostgreSQL 业务 Store parity；不得把 control repository 接线表述为全领域业务数据库迁移完成。
 
+### 2026-07-18 R5 CPU-only 发布候选功能检查点
+
+- 新增 8C/16G 目标 CPU profile，仅暴露 `CPU-RC`/`qos_cpu_rc`，单作业 4 CPU/6 GiB/4 小时；GPU partition、QoS 和 recipe 均不进入运行候选；
+- Compose 固定一个 Slurm worker 和 7 CPU/约 11.6 GiB 容器上限，保留宿主余量；启动生成随机本地凭据并拒绝 placeholder；
+- 本机成功/失败/取消 Evidence/Capsule 两轮通过，跨整栈重启可恢复；20 路轻量并发和 4 路完整 workflow 无错误；
+- 浏览器 live 回归确认 CPU-only capability 与本地/真实 107 边界，console/errors 为空；
+- 全量门禁：594 passed、13 PostgreSQL integration skipped、2 subtests；Web 64 tests/build、Ruff、strict mypy 通过；
+- review：[cpu_rc_release_review.md](cpu_rc_release_review.md)；下一步固定 revision 并完成离线包独立目录导入/启动/停止/恢复验收。
+
 真人使用不进入这些工作包的通过条件。可选的 U2/U3 只用于视觉、文案、信任感和交互取舍；VM 上传、真实 107 操作和生产身份仍需另行授权。
 
 ## 3. A 轨：工程基线与扩展边界

@@ -29,7 +29,6 @@ services:
     depends_on:
       - slurmctld
       - worker-1
-      - worker-2
     healthcheck:
       test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2).read()\nPY"]
       interval: 10s

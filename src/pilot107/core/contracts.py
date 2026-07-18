@@ -119,16 +119,26 @@ class RecipeCatalog:
         *,
         store: ContractStore | None = None,
         template_dir: Path | None = None,
+        allow_gpu: bool = True,
+        partition_qos: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
         packaged = recipes
         if packaged is None:
             directory = template_dir or _default_template_dir()
             packaged = [_python_cpu_recipe(), *_load_packaged_recipes(directory)]
         packaged = [_with_content_digest(recipe) for recipe in packaged]
+        if partition_qos is not None:
+            packaged = [
+                _with_partition_qos(recipe, partition_qos)
+                for recipe in packaged
+                if allow_gpu or not _recipe_requires_gpu(recipe)
+            ]
         if store is not None:
             for recipe in packaged:
                 store.upsert_recipe_version(recipe)
             packaged = store.list_recipe_versions()
+        if not allow_gpu:
+            packaged = [recipe for recipe in packaged if not _recipe_requires_gpu(recipe)]
         self._recipes = {recipe.recipe_version_id: recipe for recipe in packaged}
 
     def list_summaries(self) -> list[RecipeSummary]:
@@ -449,9 +459,7 @@ class ContractStore:
             )
             values.extend([pattern, pattern, pattern])
         if cursor is not None:
-            conditions.append(
-                "(created_at < ? OR (created_at = ? AND contract_id < ?))"
-            )
+            conditions.append("(created_at < ? OR (created_at = ? AND contract_id < ?))")
             values.extend([cursor.primary, cursor.primary, cursor.secondary])
         with self.connect() as conn:
             rows = conn.execute(
@@ -718,9 +726,7 @@ class ContractService:
                 validate_platform_snapshot_resource_plan(resource_plan, platform_snapshot)
             )
         if self.user_entitlement_store is not None:
-            findings.extend(
-                validate_user_entitlement_resource_plan(resource_plan, entitlement)
-            )
+            findings.extend(validate_user_entitlement_resource_plan(resource_plan, entitlement))
         return ContractValidationResult(
             status=(
                 "BLOCK"
@@ -851,6 +857,35 @@ def _recipe_is_executable(recipe: RecipeVersion) -> bool:
     return recipe.materializer in SUPPORTED_MATERIALIZERS and (
         recipe.materializer != "sbatch_template_v1" or recipe.sbatch_template is not None
     )
+
+
+def _recipe_requires_gpu(recipe: RecipeVersion) -> bool:
+    platform = recipe.compatibility.get("platform", {})
+    return isinstance(platform, dict) and platform.get("requires_gpu") is True
+
+
+def _with_partition_qos(
+    recipe: RecipeVersion,
+    partition_qos: dict[str, tuple[str, ...]],
+) -> RecipeVersion:
+    compatibility = json.loads(json.dumps(recipe.compatibility))
+    partitions = list(partition_qos)
+    allowed_by_partition = {
+        partition: list(qos_values) for partition, qos_values in partition_qos.items()
+    }
+    first_qos = next(
+        (qos for values in partition_qos.values() for qos in values),
+        None,
+    )
+    compatibility["partitions"] = {
+        "default": partitions[0] if partitions else None,
+        "allowed": partitions,
+    }
+    compatibility["qos"] = {
+        "default": first_qos,
+        "allowed_by_partition": allowed_by_partition,
+    }
+    return _with_content_digest(replace(recipe, compatibility=compatibility))
 
 
 def _required_materialized_script(result: ContractValidationResult) -> str:
@@ -1044,9 +1079,7 @@ def _recipe_sql_values(recipe: RecipeVersion, now: str) -> tuple[Any, ...]:
     )
 
 
-_SEMVER = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$"
-)
+_SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$")
 
 
 def _semver_key(
@@ -1147,13 +1180,9 @@ def _row_to_recipe(row: sqlite3.Row) -> RecipeVersion:
         parameter_schema=json.loads(str(row["parameter_schema_json"])),
         compatibility=json.loads(str(row["compatibility_json"])),
         risk_declaration=json.loads(str(row["risk_declaration_json"])),
-        sbatch_template=None
-        if row["sbatch_template"] is None
-        else str(row["sbatch_template"]),
+        sbatch_template=None if row["sbatch_template"] is None else str(row["sbatch_template"]),
         preflight_checks=tuple(json.loads(str(row["preflight_checks_json"]))),
-        recovery=None
-        if row["recovery_json"] is None
-        else json.loads(str(row["recovery_json"])),
+        recovery=None if row["recovery_json"] is None else json.loads(str(row["recovery_json"])),
         success_protocol=None
         if row["success_protocol_json"] is None
         else json.loads(str(row["success_protocol_json"])),
@@ -1203,8 +1232,7 @@ def _v2_capability_findings(payload: dict[str, Any]) -> list[PreflightFinding]:
     retry = workflow.get("retry", {})
     policy = payload["policy"]
     if retry.get("max_attempts", 1) > 1 and (
-        policy.get("automation_level") != "bounded_auto"
-        or policy.get("require_approval", True)
+        policy.get("automation_level") != "bounded_auto" or policy.get("require_approval", True)
     ):
         findings.append(
             PreflightFinding(

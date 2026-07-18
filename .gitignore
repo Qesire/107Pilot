@@ -17,6 +17,7 @@ build/
 .env.*
 !.env.example
 !.env.competition.example
+!.env.cpu-rc.example
 
 artifacts/runs/
 artifacts/capsules/

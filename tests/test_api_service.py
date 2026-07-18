@@ -60,6 +60,7 @@ class ApiServiceTests(unittest.TestCase):
                 "PILOT107_PROXY_SIGNATURE_MAX_AGE_SECONDS": "45",
                 "PILOT107_CONTRACT_PROFILE": "real107-sim",
                 "PILOT107_CAPABILITY_PROFILE_PATH": str(self.root / "probe"),
+                "PILOT107_ALLOW_GPU_RECIPES": "false",
                 "PILOT107_LLM_BASE_URL": "https://api.llm.example.edu.cn/v1",
                 "PILOT107_LLM_API_KEY": "test-key",
                 "PILOT107_LLM_MODEL": "ustc-deepseek/deepseek-v4-pro",
@@ -94,6 +95,7 @@ class ApiServiceTests(unittest.TestCase):
         self.assertEqual(config.proxy_signature_max_age_seconds, 45)
         self.assertEqual(config.contract_profile, "real107-sim")
         self.assertEqual(config.capability_profile_path, self.root / "probe")
+        self.assertFalse(config.allow_gpu_recipes)
         self.assertEqual(config.llm_base_url, "https://api.llm.example.edu.cn/v1")
         self.assertEqual(config.llm_api_key, "test-key")
         self.assertEqual(config.llm_model, "ustc-deepseek/deepseek-v4-pro")
