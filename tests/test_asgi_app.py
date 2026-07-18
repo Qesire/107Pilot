@@ -161,6 +161,14 @@ class AsgiAppTests(unittest.TestCase):
                 aggregate_id="session_metrics",
                 payload={"session_id": "session_metrics"},
             )
+            api.metrics.observe_llm_call(
+                provider="local",
+                model="test-model",
+                outcome="success",
+                duration_seconds=0.25,
+                input_tokens=42,
+                output_tokens=8,
+            )
             WorkerTelemetryStore(
                 root=root / "worker-metrics",
                 worker_id="worker-metrics-test",
@@ -205,6 +213,14 @@ class AsgiAppTests(unittest.TestCase):
         )
         self.assertIn(
             'pilot107_worker_ticks_total{worker_id="worker-metrics-test"} 2',
+            metrics,
+        )
+        self.assertIn(
+            'pilot107_llm_calls_total{model="test-model",outcome="success",provider="local"} 1',
+            metrics,
+        )
+        self.assertIn(
+            'pilot107_llm_tokens_total{direction="input",model="test-model",provider="local"} 42',
             metrics,
         )
         self.assertIn("pilot107_metrics_scrape_error 0", metrics)
@@ -279,8 +295,7 @@ def _asgi_request(
         )
         start = next(message for message in messages if message["type"] == "http.response.start")
         response_headers = {
-            key.decode("latin-1"): value.decode("latin-1")
-            for key, value in start["headers"]
+            key.decode("latin-1"): value.decode("latin-1") for key, value in start["headers"]
         }
         response_body = b"".join(
             message.get("body", b"")

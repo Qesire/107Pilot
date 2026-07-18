@@ -141,6 +141,7 @@ class Pilot107HttpApi:
         health_service: ApiHealthService | None = None,
         control_repository: ControlRepository | None = None,
         worker_metrics_root: Path | None = None,
+        metrics: ControlPlaneMetrics | None = None,
         auth_required: bool = False,
         trusted_user_header: str = "X-Pilot107-User",
         proxy_hmac_secret: bytes | None = None,
@@ -152,6 +153,12 @@ class Pilot107HttpApi:
     ) -> None:
         self.store = store
         self.evidence_query = evidence_query
+        self.control_repository = control_repository or SQLiteControlRepository(store.db_path)
+        self.worker_metrics_root = worker_metrics_root or store.db_path.parent / "worker-metrics"
+        self.metrics = metrics or ControlPlaneMetrics(
+            control_repository=self.control_repository,
+            worker_metrics_root=self.worker_metrics_root,
+        )
         self.run_service = run_service
         self.contract_service = contract_service
         self.recipe_catalog = recipe_catalog or RecipeCatalog()
@@ -159,7 +166,7 @@ class Pilot107HttpApi:
         self.diagnosis_service = diagnosis_service or DiagnosisService(store=store)
         self.agent_explain_service = agent_explain_service or AgentExplainService(
             store=store,
-            llm_provider=_llm_provider_from_env(),
+            llm_provider=_llm_provider_from_env(observer=self.metrics),
             evidence_binder=EvidenceBinder(
                 store=store,
                 evidence_root=evidence_query.evidence_store.root,
@@ -192,12 +199,6 @@ class Pilot107HttpApi:
             llm_enabled=self.agent_explain_service.llm_provider is not None,
             user_entitlement_store=user_entitlement_store,
         )
-        self.control_repository = control_repository or SQLiteControlRepository(store.db_path)
-        self.worker_metrics_root = worker_metrics_root or store.db_path.parent / "worker-metrics"
-        self.metrics = ControlPlaneMetrics(
-            control_repository=self.control_repository,
-            worker_metrics_root=self.worker_metrics_root,
-        )
         self.auth_required = auth_required
         self.trusted_user_header = trusted_user_header
         self.proxy_authenticator = (
@@ -208,12 +209,15 @@ class Pilot107HttpApi:
             if proxy_hmac_secret is not None
             else None
         )
-        if min(
-            max_request_body_bytes,
-            max_response_body_bytes,
-            rate_limit_requests,
-            rate_limit_window_seconds,
-        ) <= 0:
+        if (
+            min(
+                max_request_body_bytes,
+                max_response_body_bytes,
+                rate_limit_requests,
+                rate_limit_window_seconds,
+            )
+            <= 0
+        ):
             raise ValueError("HTTP size and rate limits must be positive")
         self.max_request_body_bytes = max_request_body_bytes
         self.max_response_body_bytes = max_response_body_bytes
@@ -227,8 +231,10 @@ class Pilot107HttpApi:
         response = self._proxy_auth_error("GET", path, b"", headers)
         if response is None:
             response = self._handle_get(path, headers=headers)
-        return _finalize_response(
+        return self._finalize_and_trace(
             response,
+            method="GET",
+            path=path,
             request_id=request_id,
             request_headers=headers,
             enable_etag=True,
@@ -367,10 +373,7 @@ class Pilot107HttpApi:
             return ApiResponse(
                 status=200,
                 payload={
-                    "items": [
-                        _known_error_summary(rule)
-                        for rule in load_known_error_rules()
-                    ],
+                    "items": [_known_error_summary(rule) for rule in load_known_error_rules()],
                 },
             )
         if len(parts) == 3 and parts[:2] == ["diagnosis", "known-errors"]:
@@ -597,8 +600,10 @@ class Pilot107HttpApi:
         response = self._proxy_auth_error("POST", path, body, headers)
         if response is None:
             response = self._handle_post(path, body=body, headers=headers)
-        return _finalize_response(
+        return self._finalize_and_trace(
             response,
+            method="POST",
+            path=path,
             request_id=request_id,
             request_headers=headers,
             enable_etag=False,
@@ -630,12 +635,60 @@ class Pilot107HttpApi:
                 status=404,
                 payload={"error": {"code": "not_found", "path": parsed.path}},
             )
-        return _finalize_response(
+        return self._finalize_and_trace(
             response,
+            method="PATCH",
+            path=path,
             request_id=request_id,
             request_headers=headers,
             enable_etag=False,
         )
+
+    def _finalize_and_trace(
+        self,
+        response: ApiResponse,
+        *,
+        method: str,
+        path: str,
+        request_id: str,
+        request_headers: Mapping[str, str] | None,
+        enable_etag: bool,
+    ) -> ApiResponse:
+        finalized = _finalize_response(
+            response,
+            request_id=request_id,
+            request_headers=request_headers,
+            enable_etag=enable_etag,
+        )
+        parsed_path = urlparse(path).path
+        if not parsed_path.startswith("/api/v1/") or parsed_path.startswith("/api/v1/health/"):
+            return finalized
+        identifiers = _trace_identifiers(parsed_path, finalized.payload)
+        run_id = identifiers.get("run_id")
+        if run_id is not None and "job_id" not in identifiers:
+            try:
+                job_id = self.store.get_run(run_id).job_id
+            except KeyError:
+                job_id = None
+            if job_id is not None:
+                identifiers["job_id"] = str(job_id)
+        try:
+            self.control_repository.record_trace(
+                trace_id=f"trace_{uuid4().hex}",
+                request_id=request_id,
+                method=method,
+                route=normalize_http_route(parsed_path),
+                status=finalized.status,
+                actor=_header_value(request_headers, self.trusted_user_header),
+                run_id=identifiers.get("run_id"),
+                job_id=identifiers.get("job_id"),
+                session_id=identifiers.get("session_id"),
+            )
+        except Exception:
+            self.metrics.observe_trace_write(outcome="error")
+        else:
+            self.metrics.observe_trace_write(outcome="success")
+        return finalized
 
     def _handle_post(
         self,
@@ -1171,9 +1224,7 @@ class Pilot107HttpApi:
         if owner is not None and self.user_entitlement_store is not None:
             latest_entitlement = self.user_entitlement_store.latest(owner=owner)
             payload["latest_entitlement"] = (
-                None
-                if latest_entitlement is None
-                else latest_entitlement.summary_payload()
+                None if latest_entitlement is None else latest_entitlement.summary_payload()
             )
         else:
             payload["latest_entitlement"] = None
@@ -1468,9 +1519,7 @@ class Pilot107HttpApi:
             owner = _query_owner(params, identity)
             states = _enum_values(params, "state", {state.value for state in RunState})
             contract_id = _optional_query_text(params, "contract_id", max_length=128)
-            recipe_version_id = _optional_query_text(
-                params, "recipe_version_id", max_length=256
-            )
+            recipe_version_id = _optional_query_text(params, "recipe_version_id", max_length=256)
             created_after = _optional_query_time(params, "created_after")
             created_before = _optional_query_time(params, "created_before")
             query = _optional_query_text(params, "q", max_length=256)
@@ -1531,9 +1580,7 @@ class Pilot107HttpApi:
                 {"owner", "recipe_version_id", "digest", "derived", "q", "limit", "cursor"},
             )
             owner = _query_owner(params, identity)
-            recipe_version_id = _optional_query_text(
-                params, "recipe_version_id", max_length=256
-            )
+            recipe_version_id = _optional_query_text(params, "recipe_version_id", max_length=256)
             digest = _optional_query_text(params, "digest", max_length=64)
             derived = _optional_query_bool(params, "derived")
             query = _optional_query_text(params, "q", max_length=256)
@@ -1861,8 +1908,7 @@ class Pilot107HttpApi:
             )
             if environment not in {None, "docker", "real107_cpu", "real107_gpu"}:
                 raise ValueError(
-                    "verification_environment must be one of: "
-                    "docker, real107_cpu, real107_gpu"
+                    "verification_environment must be one of: docker, real107_cpu, real107_gpu"
                 )
             limit = _query_limit(params)
             filters = {
@@ -1952,9 +1998,7 @@ class Pilot107HttpApi:
             to_version = _optional_query_text(params, "to", max_length=64)
             if from_version is None or to_version is None:
                 raise ValueError("from and to release versions are required")
-            before = self.template_market_store.get_release_by_version(
-                template_id, from_version
-            )
+            before = self.template_market_store.get_release_by_version(template_id, from_version)
             after = self.template_market_store.get_release_by_version(template_id, to_version)
             actor = "" if identity is None else identity.username
             course_scopes = self.template_role_directory.visible_course_scopes(actor)
@@ -2292,9 +2336,7 @@ class Pilot107HttpApi:
                 if self.template_verification_service is None:
                     return ApiResponse(
                         status=503,
-                        payload={
-                            "error": {"code": "template_verification_unavailable"}
-                        },
+                        payload={"error": {"code": "template_verification_unavailable"}},
                     )
                 verification = self.template_verification_service.verify_from_run(
                     release_id=release.release_id,
@@ -2658,9 +2700,7 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
             ):
                 params["after_event_id"] = [self.headers["Last-Event-ID"]]
             request_headers = {
-                key: value
-                for key, value in self.headers.items()
-                if key.lower() != "if-none-match"
+                key: value for key, value in self.headers.items() if key.lower() != "if-none-match"
             }
             response = api._handle_verified_get(
                 _events_query_path(run_id, params),
@@ -2669,6 +2709,22 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
             if response.status != 200:
                 self._send_json(response)
                 return response.status
+            try:
+                stream_run = api.store.get_run(run_id)
+                api.control_repository.record_trace(
+                    trace_id=f"trace_{uuid4().hex}",
+                    request_id=str((response.headers or {})["X-Request-ID"]),
+                    method="GET",
+                    route="/api/v1/runs/{run_id}/events/stream",
+                    status=200,
+                    actor=_header_value(request_headers, api.trusted_user_header),
+                    run_id=run_id,
+                    job_id=None if stream_run.job_id is None else str(stream_run.job_id),
+                )
+            except Exception:
+                api.metrics.observe_trace_write(outcome="error")
+            else:
+                api.metrics.observe_trace_write(outcome="success")
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache, no-transform")
@@ -2678,10 +2734,15 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                 if key.lower() != "etag":
                     self.send_header(key, value)
             self.end_headers()
-            last_event_id = int(response.payload["page"]["last_event_id"])
+            stream_started = time.monotonic()
+            stream_outcome = "deadline"
+            stream_events = 0
+            api.metrics.sse_opened()
             try:
-                self._write_sse_events(response.payload.get("items", []))
+                last_event_id = int(response.payload["page"]["last_event_id"])
+                stream_events += self._write_sse_events(response.payload.get("items", []))
                 if once:
+                    stream_outcome = "complete"
                     self.close_connection = True
                     return 200
                 deadline = time.monotonic() + 25.0
@@ -2698,13 +2759,14 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                         headers=request_headers,
                     )
                     if polled.status != 200:
+                        stream_outcome = "poll_error"
                         self._write_sse(
                             event="stream_error",
                             data={"code": "EVENT_STREAM.POLL_FAILED"},
                         )
                         return 200
                     items = polled.payload.get("items", [])
-                    self._write_sse_events(items)
+                    stream_events += self._write_sse_events(items)
                     last_event_id = int(polled.payload["page"]["last_event_id"])
                     if time.monotonic() >= heartbeat_at:
                         self.wfile.write(b": keepalive\n\n")
@@ -2712,12 +2774,23 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                         heartbeat_at = time.monotonic() + 10.0
                     time.sleep(0.5)
             except (BrokenPipeError, ConnectionResetError):
+                stream_outcome = "disconnect"
                 return 200
+            except Exception:
+                stream_outcome = "error"
+                raise
+            finally:
+                api.metrics.observe_sse_closed(
+                    outcome=stream_outcome,
+                    duration_seconds=time.monotonic() - stream_started,
+                    events=stream_events,
+                )
             return 200
 
-        def _write_sse_events(self, items: object) -> None:
+        def _write_sse_events(self, items: object) -> int:
             if not isinstance(items, list):
-                return
+                return 0
+            written = 0
             for item_payload in items:
                 if not isinstance(item_payload, dict):
                     continue
@@ -2726,6 +2799,8 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                     event_id=int(item_payload["event_id"]),
                     data=_sse_event_summary(item_payload),
                 )
+                written += 1
+            return written
 
         def _write_sse(
             self,
@@ -2795,6 +2870,34 @@ def _header_value(headers: Mapping[str, str] | None, name: str) -> str | None:
         if key.lower() == expected:
             return value.strip()
     return None
+
+
+def _trace_identifiers(path: str, payload: Mapping[str, Any]) -> dict[str, str]:
+    identifiers: dict[str, str] = {}
+    parts = _route_parts(path)
+    if len(parts) >= 2 and parts[0] == "runs":
+        identifiers["run_id"] = parts[1]
+    if len(parts) >= 2 and parts[0] == "remediation-sessions":
+        identifiers["session_id"] = parts[1]
+
+    def visit(value: object, depth: int) -> None:
+        if depth > 5 or len(identifiers) == 3:
+            return
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                name = str(key)
+                if name in {"run_id", "job_id", "session_id"} and item is not None:
+                    candidate = str(item)
+                    if _REQUEST_ID.fullmatch(candidate):
+                        identifiers.setdefault(name, candidate)
+                elif name in {"item", "run", "session", "error"}:
+                    visit(item, depth + 1)
+        elif isinstance(value, list):
+            for item in value[:10]:
+                visit(item, depth + 1)
+
+    visit(payload, 0)
+    return identifiers
 
 
 def _reject_unknown_params(
@@ -3127,9 +3230,11 @@ def _known_error_detail(rule: KnownErrorRule) -> dict[str, Any]:
     }
 
 
-def _llm_provider_from_env() -> OpenAICompatibleLLMProvider | None:
+def _llm_provider_from_env(
+    *, observer: ControlPlaneMetrics | None = None
+) -> OpenAICompatibleLLMProvider | None:
     try:
-        return OpenAICompatibleLLMProvider.from_env()
+        return OpenAICompatibleLLMProvider.from_env(observer=observer)
     except ValueError:
         return None
 

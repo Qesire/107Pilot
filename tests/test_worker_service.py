@@ -33,6 +33,7 @@ class WorkerServiceTests(unittest.TestCase):
 
         self.assertEqual(config.db_path, self.root / "data" / "phase0" / "pilot107.db")
         self.assertEqual(config.evidence_root, self.root / "data" / "phase0" / "evidence")
+        self.assertIsNone(config.control_postgres_dsn)
         self.assertEqual(config.backend, "docker-compose-command")
         self.assertEqual(config.allowed_roots, ("/public/home/alice",))
         self.assertEqual(config.compose_file, self.root / "simulator" / "compose" / "compose.yml")
@@ -61,6 +62,7 @@ class WorkerServiceTests(unittest.TestCase):
                 "PILOT107_SLURM_USER_NAME": "alice",
                 "PILOT107_WORKER_HEALTH_PATH": "",
                 "PILOT107_WORKER_METRICS_ROOT": "",
+                "PILOT107_CONTROL_POSTGRES_DSN": "postgresql://control.example/pilot107",
             },
             project_root=self.root,
         )
@@ -81,6 +83,10 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(config.slurm_username, "alice")
         self.assertIsNone(config.health_path)
         self.assertIsNone(config.metrics_root)
+        self.assertEqual(
+            config.control_postgres_dsn,
+            "postgresql://control.example/pilot107",
+        )
         self.assertFalse(config.enable_docker_volume_evidence_transport)
 
     def test_config_from_env_accepts_explicit_volume_evidence_transport_flag(self) -> None:

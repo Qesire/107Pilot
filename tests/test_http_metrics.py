@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +35,8 @@ class StdlibHttpMetricsTests(unittest.TestCase):
                 base = f"http://127.0.0.1:{server.server_port}"
                 with urllib.request.urlopen(f"{base}/api/v1/health/live") as response:
                     self.assertEqual(response.status, 200)
+                with self.assertRaises(urllib.error.HTTPError):
+                    urllib.request.urlopen(f"{base}/api/v1/runs/run_missing")
                 with urllib.request.urlopen(f"{base}/metrics") as response:
                     metrics = response.read().decode("utf-8")
                     content_type = response.headers["Content-Type"]
@@ -49,6 +52,10 @@ class StdlibHttpMetricsTests(unittest.TestCase):
         )
         self.assertIn(
             'pilot107_worker_ticks_total{worker_id="stdlib-worker"} 3',
+            metrics,
+        )
+        self.assertIn(
+            'pilot107_control_trace_writes_total{outcome="success"} 1',
             metrics,
         )
         self.assertIn("pilot107_metrics_scrape_error 0", metrics)

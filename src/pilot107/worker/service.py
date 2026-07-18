@@ -10,7 +10,7 @@ import sys
 import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event
 
@@ -36,7 +36,7 @@ from pilot107.adapters.slurm import (
 from pilot107.core.advice import AgentAdviceService, AgentPolicyEngine
 from pilot107.core.agent import AgentExplainService
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
-from pilot107.core.control_repository import SQLiteControlRepository
+from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.preflight import LocalPathChecker, PathChecker
@@ -66,6 +66,7 @@ from pilot107.worker.telemetry import (
 class WorkerServiceConfig:
     db_path: Path
     evidence_root: Path
+    control_postgres_dsn: str | None = field(default=None, repr=False)
     backend: str = "docker-compose-command"
     allowed_roots: tuple[str, ...] = ("/public/home/alice",)
     worker_id: str = "runtime-worker"
@@ -236,9 +237,7 @@ class WorkerService:
             )
         except (OSError, WorkerTelemetryError, ValueError) as exc:
             self.cumulative_metrics = None
-            self.last_telemetry_error = redact_sensitive_text(
-                f"{type(exc).__name__}:{exc}"
-            )
+            self.last_telemetry_error = redact_sensitive_text(f"{type(exc).__name__}:{exc}")
         else:
             self.last_telemetry_error = None
 
@@ -275,10 +274,9 @@ def config_from_env(
     return WorkerServiceConfig(
         db_path=_path(values, "PILOT107_DB_PATH", runtime_dir / "pilot107.db"),
         evidence_root=_path(values, "PILOT107_EVIDENCE_ROOT", runtime_dir / "evidence"),
+        control_postgres_dsn=values.get("PILOT107_CONTROL_POSTGRES_DSN") or None,
         backend=values.get("PILOT107_WORKER_BACKEND", "docker-compose-command"),
-        allowed_roots=tuple(
-            _split_csv(values.get("PILOT107_ALLOWED_ROOTS", "/public/home/alice"))
-        ),
+        allowed_roots=tuple(_split_csv(values.get("PILOT107_ALLOWED_ROOTS", "/public/home/alice"))),
         worker_id=values.get("PILOT107_WORKER_ID", f"runtime-worker-{socket.gethostname()}"),
         batch_size=_int(values, "PILOT107_WORKER_BATCH_SIZE", 50),
         interval_seconds=_float(values, "PILOT107_WORKER_INTERVAL_SECONDS", 1.0),
@@ -306,9 +304,7 @@ def config_from_env(
         slurm_username=values.get("PILOT107_SLURM_USER_NAME"),
         rest_token_provider_enabled=_bool(values, "PILOT107_REST_TOKEN_PROVIDER", False),
         workdir_preflight_enabled=_bool(values, "PILOT107_WORKDIR_PREFLIGHT", True),
-        idempotency_reconcile_enabled=_bool(
-            values, "PILOT107_IDEMPOTENCY_RECONCILE", True
-        ),
+        idempotency_reconcile_enabled=_bool(values, "PILOT107_IDEMPOTENCY_RECONCILE", True),
         health_path=_optional_path(
             values,
             "PILOT107_WORKER_HEALTH_PATH",
@@ -329,7 +325,10 @@ def config_from_env(
 
 def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     store = RunStore(config.db_path)
-    control_repository = SQLiteControlRepository(config.db_path)
+    control_repository = build_control_repository(
+        sqlite_path=config.db_path,
+        postgres_dsn=config.control_postgres_dsn,
+    )
     evidence_store = EvidenceStore(config.evidence_root)
     backend, task_handler, reconcile_backend = _build_backend_and_task_handler(
         config, store, evidence_store
@@ -608,9 +607,7 @@ def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> Work
         submissions_checked=left.submissions_checked + right.submissions_checked,
         submissions_succeeded=left.submissions_succeeded + right.submissions_succeeded,
         submission_errors=[*left.submission_errors, *right.submission_errors],
-        agent_executions_checked=(
-            left.agent_executions_checked + right.agent_executions_checked
-        ),
+        agent_executions_checked=(left.agent_executions_checked + right.agent_executions_checked),
         agent_executions_succeeded=(
             left.agent_executions_succeeded + right.agent_executions_succeeded
         ),

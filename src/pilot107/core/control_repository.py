@@ -70,6 +70,20 @@ class OutboxMetricsSnapshot:
     expired_running: int
 
 
+@dataclass(frozen=True)
+class ControlTrace:
+    trace_id: str
+    request_id: str
+    method: str
+    route: str
+    status: int
+    actor: str | None
+    run_id: str | None
+    job_id: str | None
+    session_id: str | None
+    created_at: str
+
+
 class ControlRepository(Protocol):
     """Backend-neutral consistency contract used by control-plane workers."""
 
@@ -139,6 +153,30 @@ class ControlRepository(Protocol):
 
     def outbox_metrics(self) -> OutboxMetricsSnapshot: ...
 
+    def record_trace(
+        self,
+        *,
+        trace_id: str,
+        request_id: str,
+        method: str,
+        route: str,
+        status: int,
+        actor: str | None = None,
+        run_id: str | None = None,
+        job_id: str | None = None,
+        session_id: str | None = None,
+    ) -> ControlTrace: ...
+
+    def list_traces(
+        self,
+        *,
+        request_id: str | None = None,
+        run_id: str | None = None,
+        job_id: str | None = None,
+        session_id: str | None = None,
+        limit: int = 100,
+    ) -> list[ControlTrace]: ...
+
 
 CONTROL_MIGRATIONS = (
     SchemaMigration(
@@ -188,6 +226,30 @@ CONTROL_MIGRATIONS = (
             CREATE INDEX idx_control_outbox_topic_due
             ON control_outbox(topic, state, available_at, created_at)
             """,
+        ),
+    ),
+    SchemaMigration(
+        migration_id="003g.002.control_trace",
+        statements=(
+            """
+            CREATE TABLE control_traces (
+                trace_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                method TEXT NOT NULL,
+                route TEXT NOT NULL,
+                status INTEGER NOT NULL,
+                actor TEXT,
+                run_id TEXT,
+                job_id TEXT,
+                session_id TEXT,
+                created_at TEXT NOT NULL,
+                CHECK (status >= 100 AND status <= 599)
+            )
+            """,
+            "CREATE INDEX idx_control_traces_request ON control_traces(request_id, created_at)",
+            "CREATE INDEX idx_control_traces_run ON control_traces(run_id, created_at)",
+            "CREATE INDEX idx_control_traces_job ON control_traces(job_id, created_at)",
+            "CREATE INDEX idx_control_traces_session ON control_traces(session_id, created_at)",
         ),
     ),
 )
@@ -576,8 +638,7 @@ class SQLiteControlRepository:
                 """
             ).fetchall()
             due_pending = conn.execute(
-                "SELECT COUNT(*) FROM control_outbox "
-                "WHERE state = 'pending' AND available_at <= ?",
+                "SELECT COUNT(*) FROM control_outbox WHERE state = 'pending' AND available_at <= ?",
                 (now,),
             ).fetchone()
             expired_running = conn.execute(
@@ -599,6 +660,74 @@ class SQLiteControlRepository:
             due_pending=0 if due_pending is None else int(due_pending[0]),
             expired_running=0 if expired_running is None else int(expired_running[0]),
         )
+
+    def record_trace(
+        self,
+        *,
+        trace_id: str,
+        request_id: str,
+        method: str,
+        route: str,
+        status: int,
+        actor: str | None = None,
+        run_id: str | None = None,
+        job_id: str | None = None,
+        session_id: str | None = None,
+    ) -> ControlTrace:
+        _validate_key(trace_id, "trace_id", _IDENTIFIER)
+        _validate_key(request_id, "request_id", _IDENTIFIER)
+        _validate_trace_fields(method, route, status, actor, run_id, job_id, session_id)
+        created_at = self._now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO control_traces (
+                    trace_id, request_id, method, route, status, actor,
+                    run_id, job_id, session_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trace_id,
+                    request_id,
+                    method.upper(),
+                    route,
+                    status,
+                    actor,
+                    run_id,
+                    job_id,
+                    session_id,
+                    created_at,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM control_traces WHERE trace_id = ?", (trace_id,)
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("trace insert did not produce a row")
+        return _row_to_trace(row)
+
+    def list_traces(
+        self,
+        *,
+        request_id: str | None = None,
+        run_id: str | None = None,
+        job_id: str | None = None,
+        session_id: str | None = None,
+        limit: int = 100,
+    ) -> list[ControlTrace]:
+        filters = _trace_filters(request_id, run_id, job_id, session_id, limit)
+        clauses = [f"{column} = ?" for column, _value in filters]
+        parameters: list[Any] = [value for _column, value in filters]
+        parameters.append(limit)
+        where = " AND ".join(clauses) if clauses else "1 = 1"
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM control_traces WHERE "
+                + where
+                + " ORDER BY created_at DESC, trace_id DESC LIMIT ?",
+                parameters,
+            ).fetchall()
+        return [_row_to_trace(row) for row in rows]
 
     def _finish(
         self,
@@ -662,6 +791,69 @@ def _row_to_outbox(row: sqlite3.Row) -> OutboxMessage:
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
+
+
+def _row_to_trace(row: sqlite3.Row) -> ControlTrace:
+    return ControlTrace(
+        trace_id=str(row["trace_id"]),
+        request_id=str(row["request_id"]),
+        method=str(row["method"]),
+        route=str(row["route"]),
+        status=int(row["status"]),
+        actor=str(row["actor"]) if row["actor"] is not None else None,
+        run_id=str(row["run_id"]) if row["run_id"] is not None else None,
+        job_id=str(row["job_id"]) if row["job_id"] is not None else None,
+        session_id=str(row["session_id"]) if row["session_id"] is not None else None,
+        created_at=str(row["created_at"]),
+    )
+
+
+def _validate_trace_fields(
+    method: str,
+    route: str,
+    status: int,
+    actor: str | None,
+    run_id: str | None,
+    job_id: str | None,
+    session_id: str | None,
+) -> None:
+    if not re.fullmatch(r"[A-Z]{3,10}", method.upper()):
+        raise ValueError("method is invalid")
+    _validate_trace_text(route, "route", 512)
+    if not 100 <= status <= 599:
+        raise ValueError("status must be between 100 and 599")
+    if actor is not None:
+        _validate_trace_text(actor, "actor", 255)
+    for label, value in (("run_id", run_id), ("job_id", job_id), ("session_id", session_id)):
+        if value is not None:
+            _validate_key(value, label, _IDENTIFIER)
+
+
+def _validate_trace_text(value: str, label: str, maximum: int) -> None:
+    if not value or len(value) > maximum or any(character in value for character in "\r\n\0"):
+        raise ValueError(f"{label} is invalid")
+
+
+def _trace_filters(
+    request_id: str | None,
+    run_id: str | None,
+    job_id: str | None,
+    session_id: str | None,
+    limit: int,
+) -> list[tuple[str, str]]:
+    if limit <= 0 or limit > 1000:
+        raise ValueError("limit must be between 1 and 1000")
+    filters: list[tuple[str, str]] = []
+    for column, value in (
+        ("request_id", request_id),
+        ("run_id", run_id),
+        ("job_id", job_id),
+        ("session_id", session_id),
+    ):
+        if value is not None:
+            _validate_key(value, column, _IDENTIFIER)
+            filters.append((column, value))
+    return filters
 
 
 def _validate_key(value: str, label: str, pattern: re.Pattern[str]) -> None:

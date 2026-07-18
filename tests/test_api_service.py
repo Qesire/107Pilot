@@ -32,6 +32,7 @@ class ApiServiceTests(unittest.TestCase):
 
         self.assertEqual(config.db_path, self.root / "data" / "phase0" / "pilot107.db")
         self.assertEqual(config.evidence_root, self.root / "data" / "phase0" / "evidence")
+        self.assertIsNone(config.control_postgres_dsn)
         self.assertEqual(config.backend, "none")
         self.assertEqual(
             config.worker_metrics_root,
@@ -333,9 +334,7 @@ class ApiServiceTests(unittest.TestCase):
         self._store_entitlement(api, qos=("normal",))
         payload = _submit_payload()
         payload.pop("owner")
-        payload["resource_plan"].update(
-            {"partition": "Students", "qos": "qos_stu_default"}
-        )
+        payload["resource_plan"].update({"partition": "Students", "qos": "qos_stu_default"})
 
         response = api.handle_post(
             "/api/v1/runs/prepare",
@@ -360,9 +359,7 @@ class ApiServiceTests(unittest.TestCase):
         self._store_entitlement(api, qos=("qos_stu_default",))
         payload = _submit_payload()
         payload.pop("owner")
-        payload["resource_plan"].update(
-            {"partition": "Students", "qos": "qos_stu_default"}
-        )
+        payload["resource_plan"].update({"partition": "Students", "qos": "qos_stu_default"})
 
         response = api.handle_post(
             "/api/v1/runs/prepare",

@@ -163,6 +163,14 @@ bash scripts/check-sim-core.sh
   [control_plane_security.md](../operations/control_plane_security.md)；
 - 安全基线子切片完成；R4-3 继续持久 trace、LLM/SSE 专项与 PostgreSQL 业务 Store 接线。
 
+### 2026-07-18 R4-3 trace / LLM / SSE 与控制仓库运行时接线
+
+- 新增持久 control trace，关联 request/run/job/session；API 普通请求自动写入，SSE 外层连接只写一次；
+- 新增 LLM attempt 成败、时延、input/output token，以及 SSE active、完成原因、时延、事件数 metrics；
+- API/Worker 支持通过 `PILOT107_CONTROL_POSTGRES_DSN` 选择 PostgreSQL control repository，默认仍为 SQLite；
+- 全量门禁：590 passed、13 PostgreSQL integration skipped、2 subtests；Ruff、strict mypy（73 source files）通过；
+- R4-3 仍继续完整 PostgreSQL 业务 Store parity；不得把 control repository 接线表述为全领域业务数据库迁移完成。
+
 真人使用不进入这些工作包的通过条件。可选的 U2/U3 只用于视觉、文案、信任感和交互取舍；VM 上传、真实 107 操作和生产身份仍需另行授权。
 
 ## 3. A 轨：工程基线与扩展边界

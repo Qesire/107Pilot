@@ -12,10 +12,13 @@ from typing import Any
 
 from pilot107.core.control_repository import (
     ControlRepositoryConflict,
+    ControlTrace,
     LeaseClaim,
     OutboxMessage,
     OutboxMetricsSnapshot,
     OutboxQueueMetric,
+    _trace_filters,
+    _validate_trace_fields,
 )
 from pilot107.core.redaction import redact_sensitive_text
 
@@ -67,6 +70,33 @@ _POSTGRES_STATEMENTS = (
     """,
 )
 
+_POSTGRES_TRACE_STATEMENTS = (
+    """
+    CREATE TABLE control_traces (
+        trace_id TEXT PRIMARY KEY,
+        request_id TEXT NOT NULL,
+        method TEXT NOT NULL,
+        route TEXT NOT NULL,
+        status INTEGER NOT NULL,
+        actor TEXT,
+        run_id TEXT,
+        job_id TEXT,
+        session_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL,
+        CHECK (status >= 100 AND status <= 599)
+    )
+    """,
+    "CREATE INDEX idx_control_traces_request ON control_traces(request_id, created_at)",
+    "CREATE INDEX idx_control_traces_run ON control_traces(run_id, created_at)",
+    "CREATE INDEX idx_control_traces_job ON control_traces(job_id, created_at)",
+    "CREATE INDEX idx_control_traces_session ON control_traces(session_id, created_at)",
+)
+
+_POSTGRES_MIGRATIONS = (
+    (_MIGRATION_ID, _POSTGRES_STATEMENTS),
+    ("003g.002.control_trace", _POSTGRES_TRACE_STATEMENTS),
+)
+
 
 class PostgresDriverUnavailable(RuntimeError):
     """Raised when the optional PostgreSQL driver is not installed."""
@@ -97,7 +127,6 @@ class PostgresControlRepository:
         return self._psycopg.connect(self.dsn, row_factory=self._dict_row)
 
     def _initialize(self) -> None:
-        checksum = _migration_checksum(_POSTGRES_STATEMENTS)
         with self.connect() as conn, conn.transaction():
             encoding_row = conn.execute("SHOW server_encoding").fetchone()
             if encoding_row is None or _text(encoding_row["server_encoding"]).upper() != "UTF8":
@@ -112,23 +141,25 @@ class PostgresControlRepository:
                     )
                     """
             )
-            row = conn.execute(
-                "SELECT checksum FROM schema_migrations WHERE migration_id = %s",
-                (_MIGRATION_ID,),
-            ).fetchone()
-            if row is not None:
-                if _text(row["checksum"]) != checksum:
-                    raise RuntimeError(f"migration checksum changed: {_MIGRATION_ID}")
-                return
-            for statement in _POSTGRES_STATEMENTS:
-                conn.execute(statement)
-            conn.execute(
-                """
+            for migration_id, statements in _POSTGRES_MIGRATIONS:
+                checksum = _migration_checksum(statements)
+                row = conn.execute(
+                    "SELECT checksum FROM schema_migrations WHERE migration_id = %s",
+                    (migration_id,),
+                ).fetchone()
+                if row is not None:
+                    if _text(row["checksum"]) != checksum:
+                        raise RuntimeError(f"migration checksum changed: {migration_id}")
+                    continue
+                for statement in statements:
+                    conn.execute(statement)
+                conn.execute(
+                    """
                     INSERT INTO schema_migrations (migration_id, checksum, applied_at)
                     VALUES (%s, %s, %s)
                     """,
-                (_MIGRATION_ID, checksum, self._now()),
-            )
+                    (migration_id, checksum, self._now()),
+                )
 
     def acquire_lease(
         self,
@@ -481,10 +512,73 @@ class PostgresControlRepository:
                 for row in rows
             ),
             due_pending=0 if due_pending is None else int(due_pending["count"]),
-            expired_running=(
-                0 if expired_running is None else int(expired_running["count"])
-            ),
+            expired_running=(0 if expired_running is None else int(expired_running["count"])),
         )
+
+    def record_trace(
+        self,
+        *,
+        trace_id: str,
+        request_id: str,
+        method: str,
+        route: str,
+        status: int,
+        actor: str | None = None,
+        run_id: str | None = None,
+        job_id: str | None = None,
+        session_id: str | None = None,
+    ) -> ControlTrace:
+        _validate_key(trace_id, "trace_id", _IDENTIFIER)
+        _validate_key(request_id, "request_id", _IDENTIFIER)
+        _validate_trace_fields(method, route, status, actor, run_id, job_id, session_id)
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                INSERT INTO control_traces (
+                    trace_id, request_id, method, route, status, actor,
+                    run_id, job_id, session_id, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    trace_id,
+                    request_id,
+                    method.upper(),
+                    route,
+                    status,
+                    actor,
+                    run_id,
+                    job_id,
+                    session_id,
+                    self._now(),
+                ),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("trace insert did not produce a row")
+        return _row_to_trace(row)
+
+    def list_traces(
+        self,
+        *,
+        request_id: str | None = None,
+        run_id: str | None = None,
+        job_id: str | None = None,
+        session_id: str | None = None,
+        limit: int = 100,
+    ) -> list[ControlTrace]:
+        filters = _trace_filters(request_id, run_id, job_id, session_id, limit)
+        clauses = [f"{column} = %s" for column, _value in filters]
+        parameters: list[Any] = [value for _column, value in filters]
+        parameters.append(limit)
+        where = " AND ".join(clauses) if clauses else "TRUE"
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM control_traces WHERE "
+                + where
+                + " ORDER BY created_at DESC, trace_id DESC LIMIT %s",
+                parameters,
+            ).fetchall()
+        return [_row_to_trace(row) for row in rows]
 
     def _finish(
         self,
@@ -553,6 +647,21 @@ def _row_to_outbox(row: Mapping[str, Any]) -> OutboxMessage:
         last_error=str(row["last_error"]) if row["last_error"] is not None else None,
         created_at=_as_utc(row["created_at"]).isoformat(),
         updated_at=_as_utc(row["updated_at"]).isoformat(),
+    )
+
+
+def _row_to_trace(row: Mapping[str, Any]) -> ControlTrace:
+    return ControlTrace(
+        trace_id=str(row["trace_id"]),
+        request_id=str(row["request_id"]),
+        method=str(row["method"]),
+        route=str(row["route"]),
+        status=int(row["status"]),
+        actor=str(row["actor"]) if row["actor"] is not None else None,
+        run_id=str(row["run_id"]) if row["run_id"] is not None else None,
+        job_id=str(row["job_id"]) if row["job_id"] is not None else None,
+        session_id=str(row["session_id"]) if row["session_id"] is not None else None,
+        created_at=_as_utc(row["created_at"]).isoformat(),
     )
 
 

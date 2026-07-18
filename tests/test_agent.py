@@ -132,11 +132,13 @@ class AgentExplainTests(unittest.TestCase):
             facts=(fact,),
             diagnoses=(),
         )
+        observer = CapturingLLMObserver()
         provider = OpenAICompatibleLLMProvider(
             base_url="http://llm.internal/v1",
             api_key=None,
             model="local-model",
             structured_output_mode="json_schema",
+            observer=observer,
         )
         response_body = json.dumps(
             {
@@ -159,7 +161,8 @@ class AgentExplainTests(unittest.TestCase):
                             )
                         }
                     }
-                ]
+                ],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 35},
             }
         ).encode()
 
@@ -175,6 +178,10 @@ class AgentExplainTests(unittest.TestCase):
         self.assertEqual(request_payload["response_format"]["type"], "json_schema")
         self.assertTrue(request_payload["response_format"]["json_schema"]["strict"])
         self.assertEqual(result.citations[0].evidence_object_ids, ("ev_1",))
+        self.assertEqual(len(observer.calls), 1)
+        self.assertEqual(observer.calls[0]["outcome"], "success")
+        self.assertEqual(observer.calls[0]["input_tokens"], 120)
+        self.assertEqual(observer.calls[0]["output_tokens"], 35)
 
     def test_service_falls_back_when_llm_citation_is_invalid(self) -> None:
         run = self._failed_run()
@@ -465,6 +472,14 @@ class FakeHttpResponse:
 
     def read(self, limit: int = -1) -> bytes:
         return self.body if limit < 0 else self.body[:limit]
+
+
+class CapturingLLMObserver:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def observe_llm_call(self, **values: object) -> None:
+        self.calls.append(values)
 
 
 def _chat_response(content: str) -> bytes:

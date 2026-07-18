@@ -111,6 +111,16 @@ class ControlPlaneMetrics:
         self._requests: defaultdict[tuple[str, str, int], int] = defaultdict(int)
         self._duration_sum: defaultdict[tuple[str, str], float] = defaultdict(float)
         self._duration_count: defaultdict[tuple[str, str], int] = defaultdict(int)
+        self._trace_writes: defaultdict[str, int] = defaultdict(int)
+        self._llm_calls: defaultdict[tuple[str, str, str], int] = defaultdict(int)
+        self._llm_duration_sum: defaultdict[tuple[str, str], float] = defaultdict(float)
+        self._llm_duration_count: defaultdict[tuple[str, str], int] = defaultdict(int)
+        self._llm_tokens: defaultdict[tuple[str, str, str], int] = defaultdict(int)
+        self._sse_active = 0
+        self._sse_streams: defaultdict[str, int] = defaultdict(int)
+        self._sse_duration_sum = 0.0
+        self._sse_duration_count = 0
+        self._sse_events = 0
 
     def observe_request(
         self,
@@ -130,12 +140,69 @@ class ControlPlaneMetrics:
             self._duration_sum[(normalized_method, normalized_route)] += duration
             self._duration_count[(normalized_method, normalized_route)] += 1
 
+    def observe_trace_write(self, *, outcome: str) -> None:
+        normalized = outcome if outcome in {"success", "error"} else "error"
+        with self._lock:
+            self._trace_writes[normalized] += 1
+
+    def observe_llm_call(
+        self,
+        *,
+        provider: str,
+        model: str,
+        outcome: str,
+        duration_seconds: float,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        labels = (_metric_label(provider), _metric_label(model))
+        normalized_outcome = _llm_outcome(outcome)
+        duration = duration_seconds if math.isfinite(duration_seconds) else 0.0
+        with self._lock:
+            self._llm_calls[(*labels, normalized_outcome)] += 1
+            self._llm_duration_sum[labels] += max(0.0, duration)
+            self._llm_duration_count[labels] += 1
+            self._llm_tokens[(*labels, "input")] += max(0, input_tokens)
+            self._llm_tokens[(*labels, "output")] += max(0, output_tokens)
+
+    def sse_opened(self) -> None:
+        with self._lock:
+            self._sse_active += 1
+
+    def observe_sse_closed(
+        self,
+        *,
+        outcome: str,
+        duration_seconds: float,
+        events: int,
+    ) -> None:
+        normalized = (
+            outcome if outcome in {"complete", "deadline", "poll_error", "disconnect"} else "error"
+        )
+        duration = duration_seconds if math.isfinite(duration_seconds) else 0.0
+        with self._lock:
+            self._sse_active = max(0, self._sse_active - 1)
+            self._sse_streams[normalized] += 1
+            self._sse_duration_sum += max(0.0, duration)
+            self._sse_duration_count += 1
+            self._sse_events += max(0, events)
+
     def render(self, *, now: float | None = None) -> str:
         timestamp = time.time() if now is None else now
         with self._lock:
             requests = dict(self._requests)
             duration_sum = dict(self._duration_sum)
             duration_count = dict(self._duration_count)
+            trace_writes = dict(self._trace_writes)
+            llm_calls = dict(self._llm_calls)
+            llm_duration_sum = dict(self._llm_duration_sum)
+            llm_duration_count = dict(self._llm_duration_count)
+            llm_tokens = dict(self._llm_tokens)
+            sse_active = self._sse_active
+            sse_streams = dict(self._sse_streams)
+            sse_duration_sum = self._sse_duration_sum
+            sse_duration_count = self._sse_duration_count
+            sse_events = self._sse_events
         lines = [
             "# HELP pilot107_api_requests_total HTTP requests by normalized route and status.",
             "# TYPE pilot107_api_requests_total counter",
@@ -157,9 +224,59 @@ class ControlPlaneMetrics:
                 f"{{{labels}}} {_number(duration_sum[key])}"
             )
             lines.append(
-                "pilot107_api_request_duration_seconds_count"
-                f"{{{labels}}} {duration_count[key]}"
+                f"pilot107_api_request_duration_seconds_count{{{labels}}} {duration_count[key]}"
             )
+        lines.extend(
+            (
+                "# HELP pilot107_control_trace_writes_total Durable trace write outcomes.",
+                "# TYPE pilot107_control_trace_writes_total counter",
+            )
+        )
+        for outcome, value in sorted(trace_writes.items()):
+            lines.append(
+                f"pilot107_control_trace_writes_total{{{_labels(outcome=outcome)}}} {value}"
+            )
+        lines.extend(
+            (
+                "# HELP pilot107_llm_calls_total Local LLM call attempts.",
+                "# TYPE pilot107_llm_calls_total counter",
+                "# HELP pilot107_llm_call_duration_seconds Local LLM call duration.",
+                "# TYPE pilot107_llm_call_duration_seconds summary",
+                "# HELP pilot107_llm_tokens_total Reported local LLM tokens.",
+                "# TYPE pilot107_llm_tokens_total counter",
+            )
+        )
+        for (provider, model, outcome), value in sorted(llm_calls.items()):
+            labels = _labels(provider=provider, model=model, outcome=outcome)
+            lines.append(f"pilot107_llm_calls_total{{{labels}}} {value}")
+        for (provider, model), count in sorted(llm_duration_count.items()):
+            labels = _labels(provider=provider, model=model)
+            lines.append(
+                f"pilot107_llm_call_duration_seconds_sum{{{labels}}} "
+                f"{_number(llm_duration_sum[(provider, model)])}"
+            )
+            lines.append(f"pilot107_llm_call_duration_seconds_count{{{labels}}} {count}")
+        for (provider, model, direction), value in sorted(llm_tokens.items()):
+            labels = _labels(provider=provider, model=model, direction=direction)
+            lines.append(f"pilot107_llm_tokens_total{{{labels}}} {value}")
+        lines.extend(
+            (
+                "# HELP pilot107_sse_active Active server-sent event streams.",
+                "# TYPE pilot107_sse_active gauge",
+                f"pilot107_sse_active {sse_active}",
+                "# HELP pilot107_sse_streams_total Completed server-sent event streams.",
+                "# TYPE pilot107_sse_streams_total counter",
+                "# HELP pilot107_sse_stream_duration_seconds Server-sent event stream duration.",
+                "# TYPE pilot107_sse_stream_duration_seconds summary",
+                f"pilot107_sse_stream_duration_seconds_sum {_number(sse_duration_sum)}",
+                f"pilot107_sse_stream_duration_seconds_count {sse_duration_count}",
+                "# HELP pilot107_sse_events_total Server-sent events delivered.",
+                "# TYPE pilot107_sse_events_total counter",
+                f"pilot107_sse_events_total {sse_events}",
+            )
+        )
+        for outcome, value in sorted(sse_streams.items()):
+            lines.append(f"pilot107_sse_streams_total{{{_labels(outcome=outcome)}}} {value}")
 
         scrape_error = 0
         try:
@@ -274,11 +391,7 @@ def _route_label(scope: MutableMapping[str, Any]) -> str:
     if route_path == "/{path:path}":
         raw_path = scope.get("path")
         return normalize_http_route(raw_path) if isinstance(raw_path, str) else "unmatched"
-    return (
-        route_path
-        if isinstance(route_path, str) and route_path.startswith("/")
-        else "unmatched"
-    )
+    return route_path if isinstance(route_path, str) and route_path.startswith("/") else "unmatched"
 
 
 def normalize_http_route(path: str) -> str:
@@ -306,9 +419,34 @@ def normalize_http_route(path: str) -> str:
 
 
 def _labels(**values: str) -> str:
-    return ",".join(
-        f'{name}="{_escape_label(value)}"' for name, value in sorted(values.items())
-    )
+    return ",".join(f'{name}="{_escape_label(value)}"' for name, value in sorted(values.items()))
+
+
+def _metric_label(value: str) -> str:
+    normalized = value.strip()[:128]
+    return normalized if normalized and "\n" not in normalized else "unknown"
+
+
+def _llm_outcome(value: str) -> str:
+    if value == "success":
+        return value
+    if value.startswith("http_"):
+        try:
+            status = int(value.removeprefix("http_"))
+        except ValueError:
+            return "provider_error"
+        return "http_5xx" if status >= 500 else "http_4xx"
+    if value.startswith("invalid_schema"):
+        return "invalid_schema"
+    if value in {
+        "transport_error",
+        "invalid_response",
+        "invalid_json",
+        "invalid_citation",
+        "incomplete_citations",
+    }:
+        return value
+    return "provider_error"
 
 
 def _escape_label(value: str) -> str:

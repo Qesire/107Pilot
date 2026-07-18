@@ -29,9 +29,11 @@ from pilot107.adapters.slurm import (
 )
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.http_app import Pilot107HttpApi
+from pilot107.api.metrics import ControlPlaneMetrics
 from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
-from pilot107.core.control_repository import ControlRepository, SQLiteControlRepository
+from pilot107.core.control_repository import ControlRepository
+from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.identity import is_safe_username
 from pilot107.core.platform import (
@@ -60,6 +62,7 @@ class ApiServiceConfig:
     db_path: Path
     evidence_root: Path
     capsule_root: Path
+    control_postgres_dsn: str | None = field(default=None, repr=False)
     backend: str = "none"
     allowed_roots: tuple[str, ...] = ("/public/home/alice",)
     command_timeout_seconds: float = 20.0
@@ -117,6 +120,7 @@ def config_from_env(
         db_path=_path(values, "PILOT107_DB_PATH", runtime_dir / "pilot107.db"),
         evidence_root=_path(values, "PILOT107_EVIDENCE_ROOT", runtime_dir / "evidence"),
         capsule_root=_path(values, "PILOT107_CAPSULE_ROOT", runtime_dir / "capsules"),
+        control_postgres_dsn=values.get("PILOT107_CONTROL_POSTGRES_DSN") or None,
         backend=values.get("PILOT107_API_BACKEND", "none"),
         allowed_roots=tuple(_split_csv(values.get("PILOT107_ALLOWED_ROOTS", "/public/home/alice"))),
         command_timeout_seconds=_float(values, "PILOT107_COMMAND_TIMEOUT_SECONDS", 20.0),
@@ -142,9 +146,7 @@ def config_from_env(
         slurm_username=values.get("PILOT107_SLURM_USER_NAME"),
         rest_token_provider_enabled=_bool(values, "PILOT107_REST_TOKEN_PROVIDER", False),
         workdir_preflight_enabled=_bool(values, "PILOT107_WORKDIR_PREFLIGHT", True),
-        idempotency_reconcile_enabled=_bool(
-            values, "PILOT107_IDEMPOTENCY_RECONCILE", True
-        ),
+        idempotency_reconcile_enabled=_bool(values, "PILOT107_IDEMPOTENCY_RECONCILE", True),
         auth_required=_bool(values, "PILOT107_AUTH_REQUIRED", False),
         trusted_user_header=values.get("PILOT107_TRUSTED_USER_HEADER", "X-Pilot107-User"),
         proxy_hmac_secret=load_proxy_hmac_secret(
@@ -154,16 +156,10 @@ def config_from_env(
         proxy_signature_max_age_seconds=_int(
             values, "PILOT107_PROXY_SIGNATURE_MAX_AGE_SECONDS", 30
         ),
-        max_request_body_bytes=_int(
-            values, "PILOT107_MAX_REQUEST_BODY_BYTES", 2 * 1024 * 1024
-        ),
-        max_response_body_bytes=_int(
-            values, "PILOT107_MAX_RESPONSE_BODY_BYTES", 8 * 1024 * 1024
-        ),
+        max_request_body_bytes=_int(values, "PILOT107_MAX_REQUEST_BODY_BYTES", 2 * 1024 * 1024),
+        max_response_body_bytes=_int(values, "PILOT107_MAX_RESPONSE_BODY_BYTES", 8 * 1024 * 1024),
         rate_limit_requests=_int(values, "PILOT107_RATE_LIMIT_REQUESTS", 600),
-        rate_limit_window_seconds=_int(
-            values, "PILOT107_RATE_LIMIT_WINDOW_SECONDS", 60
-        ),
+        rate_limit_window_seconds=_int(values, "PILOT107_RATE_LIMIT_WINDOW_SECONDS", 60),
         contract_profile=values.get("PILOT107_CONTRACT_PROFILE", "generic"),
         capability_profile_path=_optional_path(values, "PILOT107_CAPABILITY_PROFILE_PATH"),
         llm_base_url=values.get("PILOT107_LLM_BASE_URL") or None,
@@ -171,9 +167,7 @@ def config_from_env(
         llm_model=values.get("PILOT107_LLM_MODEL") or None,
         llm_timeout_seconds=_float(values, "PILOT107_LLM_TIMEOUT_SECONDS", 20.0),
         llm_max_tokens=_int(values, "PILOT107_LLM_MAX_TOKENS", 700),
-        llm_structured_output_mode=values.get(
-            "PILOT107_LLM_STRUCTURED_OUTPUT_MODE", "prompt_json"
-        ),
+        llm_structured_output_mode=values.get("PILOT107_LLM_STRUCTURED_OUTPUT_MODE", "prompt_json"),
         llm_max_attempts=_int(values, "PILOT107_LLM_MAX_ATTEMPTS", 2),
         worker_metrics_root=_optional_path(
             values,
@@ -183,15 +177,11 @@ def config_from_env(
         template_reviewers=frozenset(
             _validated_usernames(values.get("PILOT107_TEMPLATE_REVIEWERS", ""))
         ),
-        template_admins=frozenset(
-            _validated_usernames(values.get("PILOT107_TEMPLATE_ADMINS", ""))
-        ),
+        template_admins=frozenset(_validated_usernames(values.get("PILOT107_TEMPLATE_ADMINS", ""))),
         template_course_instructors=_scoped_memberships(
             values.get("PILOT107_TEMPLATE_COURSE_INSTRUCTORS", "")
         ),
-        template_course_tas=_scoped_memberships(
-            values.get("PILOT107_TEMPLATE_COURSE_TAS", "")
-        ),
+        template_course_tas=_scoped_memberships(values.get("PILOT107_TEMPLATE_COURSE_TAS", "")),
         template_course_members=_scoped_memberships(
             values.get("PILOT107_TEMPLATE_COURSE_MEMBERS", "")
         ),
@@ -208,7 +198,14 @@ def config_from_env(
 
 def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     store = RunStore(config.db_path)
-    control_repository = SQLiteControlRepository(config.db_path)
+    control_repository = build_control_repository(
+        sqlite_path=config.db_path,
+        postgres_dsn=config.control_postgres_dsn,
+    )
+    metrics = ControlPlaneMetrics(
+        control_repository=control_repository,
+        worker_metrics_root=config.worker_metrics_root or config.db_path.parent / "worker-metrics",
+    )
     contract_store = ContractStore(config.db_path)
     catalog = RecipeCatalog(store=contract_store)
     run_service = _build_run_service(config, store, control_repository)
@@ -252,6 +249,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         store=store,
         control_repository=control_repository,
         worker_metrics_root=config.worker_metrics_root,
+        metrics=metrics,
         evidence_query=EvidenceQueryService(
             store=store,
             evidence_store=EvidenceStore(config.evidence_root),
@@ -273,7 +271,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         user_entitlement_store=user_entitlement_store,
         agent_explain_service=AgentExplainService(
             store=store,
-            llm_provider=_build_llm_provider(config),
+            llm_provider=_build_llm_provider(config, observer=metrics),
             evidence_binder=EvidenceBinder(
                 store=store,
                 evidence_root=config.evidence_root,
@@ -500,7 +498,11 @@ def _contract_partition_qos(
     raise ValueError(f"unknown contract profile: {profile}")
 
 
-def _build_llm_provider(config: ApiServiceConfig) -> OpenAICompatibleLLMProvider | None:
+def _build_llm_provider(
+    config: ApiServiceConfig,
+    *,
+    observer: ControlPlaneMetrics | None = None,
+) -> OpenAICompatibleLLMProvider | None:
     if not (config.llm_base_url and config.llm_model):
         return None
     return OpenAICompatibleLLMProvider(
@@ -511,6 +513,7 @@ def _build_llm_provider(config: ApiServiceConfig) -> OpenAICompatibleLLMProvider
         max_tokens=config.llm_max_tokens,
         structured_output_mode=config.llm_structured_output_mode,
         max_attempts=config.llm_max_attempts,
+        observer=observer,
     )
 
 

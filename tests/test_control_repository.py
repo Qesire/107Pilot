@@ -6,12 +6,14 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from pilot107.core.control_repository import (
     ControlRepository,
     ControlRepositoryConflict,
     SQLiteControlRepository,
 )
+from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.postgres_control_repository import PostgresControlRepository
 
 
@@ -24,6 +26,26 @@ class MutableClock:
 
     def advance(self, seconds: int) -> None:
         self.value += timedelta(seconds=seconds)
+
+
+class ControlRepositoryFactoryTests(unittest.TestCase):
+    def test_defaults_to_sqlite_and_selects_postgres_when_dsn_is_present(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sqlite = build_control_repository(
+                sqlite_path=Path(temporary) / "control.db",
+                postgres_dsn=None,
+            )
+        self.assertIsInstance(sqlite, SQLiteControlRepository)
+
+        with patch(
+            "pilot107.core.control_repository_factory.PostgresControlRepository"
+        ) as postgres:
+            selected = build_control_repository(
+                sqlite_path=Path("unused.db"),
+                postgres_dsn="postgresql://control.example/pilot107",
+            )
+        self.assertIs(selected, postgres.return_value)
+        postgres.assert_called_once_with("postgresql://control.example/pilot107")
 
 
 class SQLiteControlRepositoryTests(unittest.TestCase):
@@ -348,15 +370,54 @@ class SQLiteControlRepositoryTests(unittest.TestCase):
             ]
 
         with ThreadPoolExecutor(max_workers=4) as executor:
-            batches = list(
-                executor.map(claim, ("worker-a", "worker-b", "worker-c", "worker-d"))
-            )
+            batches = list(executor.map(claim, ("worker-a", "worker-b", "worker-c", "worker-d")))
         claimed_ids = [message_id for batch in batches for message_id in batch]
         self.assertEqual(len(claimed_ids), 40)
         self.assertEqual(len(set(claimed_ids)), 40)
         self.assertTrue(
             all(self.store.get_outbox(message_id).attempts == 1 for message_id in claimed_ids)
         )
+
+    def test_trace_persists_and_correlates_domain_identifiers(self) -> None:
+        first = self.store.record_trace(
+            trace_id="trace-1",
+            request_id="request-1",
+            method="post",
+            route="/api/v1/runs",
+            status=202,
+            actor="operator@example.test",
+            run_id="run_1",
+            job_id="12345",
+        )
+        self.clock.advance(1)
+        second = self.store.record_trace(
+            trace_id="trace-2",
+            request_id="request-2",
+            method="GET",
+            route="/api/v1/remediation-sessions/session_1",
+            status=200,
+            actor="operator@example.test",
+            run_id="run_1",
+            session_id="session_1",
+        )
+
+        self.assertEqual(first.method, "POST")
+        self.assertEqual(self.store.list_traces(request_id="request-1"), [first])
+        self.assertEqual(self.store.list_traces(job_id="12345"), [first])
+        self.assertEqual(self.store.list_traces(session_id="session_1"), [second])
+        self.assertEqual(self.store.list_traces(run_id="run_1"), [second, first])
+
+    def test_trace_validation_and_limit_are_bounded(self) -> None:
+        with self.assertRaises(ValueError):
+            self.store.record_trace(
+                trace_id="trace-1",
+                request_id="request-1",
+                method="GET",
+                route="/api/v1/runs\nforged",
+                status=200,
+            )
+        with self.assertRaises(ValueError):
+            self.store.list_traces(limit=0)
 
 
 @unittest.skipUnless(
@@ -372,7 +433,7 @@ class PostgresControlRepositoryContractTests(SQLiteControlRepositoryTests):
         self.dsn = os.environ["PILOT107_TEST_POSTGRES_DSN"]
         repository = PostgresControlRepository(self.dsn, clock=self.clock)
         with repository.connect() as conn:
-            conn.execute("TRUNCATE control_outbox, control_leases")
+            conn.execute("TRUNCATE control_traces, control_outbox, control_leases")
         self.store = repository
 
     def tearDown(self) -> None:

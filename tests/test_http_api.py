@@ -68,9 +68,7 @@ class HttpApiTests(unittest.TestCase):
         target = "/api/v1/recipes"
 
         self.assertEqual(
-            api.handle_get(target, headers={"X-Pilot107-User": "alice"}).payload["error"][
-                "code"
-            ],
+            api.handle_get(target, headers={"X-Pilot107-User": "alice"}).payload["error"]["code"],
             "AUTH.PROXY_SIGNATURE_INVALID",
         )
         headers = signed_proxy_headers(
@@ -194,6 +192,12 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(response.payload["run_id"], run.run_id)
         self.assertEqual(response.payload["tree"]["children"][0]["name"], "manifest")
 
+        traces = self.api.control_repository.list_traces(run_id=run.run_id)
+        self.assertEqual(len(traces), 1)
+        self.assertEqual(traces[0].request_id, response.headers["X-Request-ID"])
+        self.assertEqual(traces[0].job_id, "123")
+        self.assertEqual(traces[0].route, "/api/v1/runs/{run_id}/{action}")
+
     def test_get_evidence_object_preview_with_api_v1_prefix(self) -> None:
         run = self.run_store.create_run(
             run_id="run_http_preview",
@@ -227,9 +231,7 @@ class HttpApiTests(unittest.TestCase):
         response = self.api.handle_get(
             f"/api/v1/runs/{run.run_id}/evidence/objects/ev_http_preview"
         )
-        missing = self.api.handle_get(
-            f"/api/v1/runs/{run.run_id}/evidence/objects/ev_missing"
-        )
+        missing = self.api.handle_get(f"/api/v1/runs/{run.run_id}/evidence/objects/ev_missing")
 
         self.assertEqual(response.status, 200)
         self.assertEqual(response.payload["preview"]["content"], "preview from evidence\n")

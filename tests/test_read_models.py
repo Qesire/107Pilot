@@ -111,9 +111,7 @@ class ProductReadModelTests(unittest.TestCase):
             headers=self.alice_headers,
         )
         listed = [
-            item["run_id"]
-            for page in (first, second, third)
-            for item in page.payload["items"]
+            item["run_id"] for page in (first, second, third) for item in page.payload["items"]
         ]
 
         self.assertEqual(first.status, 200)
@@ -122,8 +120,7 @@ class ProductReadModelTests(unittest.TestCase):
         self.assertNotIn("run_bob_hidden", listed)
 
         filtered = self.api.handle_get(
-            "/api/v1/runs?state=FAILED&q=course-a&recipe_version_id="
-            "recipe_python_cpu%401.0.0",
+            "/api/v1/runs?state=FAILED&q=course-a&recipe_version_id=recipe_python_cpu%401.0.0",
             headers=self.alice_headers,
         )
         self.assertEqual(
@@ -132,8 +129,7 @@ class ProductReadModelTests(unittest.TestCase):
         )
 
         corrupt_recipe_link = self.api.handle_get(
-            "/api/v1/runs?recipe_version_id=recipe_python_cpu%401.0.0"
-            "&q=corrupt-link",
+            "/api/v1/runs?recipe_version_id=recipe_python_cpu%401.0.0&q=corrupt-link",
             headers=self.alice_headers,
         )
         self.assertEqual(corrupt_recipe_link.payload["items"], [])
@@ -226,11 +222,7 @@ class ProductReadModelTests(unittest.TestCase):
             headers=self.alice_headers,
         )
 
-        event_ids = [
-            item["event_id"]
-            for page in (first, second)
-            for item in page.payload["items"]
-        ]
+        event_ids = [item["event_id"] for page in (first, second) for item in page.payload["items"]]
         self.assertEqual(len(event_ids), 4)
         self.assertEqual(event_ids, sorted(event_ids))
         edges = {
@@ -363,8 +355,7 @@ class ProductReadModelTests(unittest.TestCase):
         )
         cursor = first.payload["page"]["next_cursor"]
         second = self.api.handle_get(
-            "/api/v1/platform/snapshots?freshness=unknown&limit=1&as_of="
-            f"{as_of}&cursor={cursor}",
+            f"/api/v1/platform/snapshots?freshness=unknown&limit=1&as_of={as_of}&cursor={cursor}",
             headers=self.alice_headers,
         )
         mismatched = self.api.handle_get(
@@ -491,8 +482,7 @@ class ProductReadModelTests(unittest.TestCase):
         secret = b"0123456789abcdef0123456789abcdef"
         self.api.proxy_authenticator = ProxyRequestAuthenticator(secret)
         target = (
-            f"/api/v1/runs/{run.run_id}/events/stream"
-            f"?once=true&after_event_id={event.event_id - 1}"
+            f"/api/v1/runs/{run.run_id}/events/stream?once=true&after_event_id={event.event_id - 1}"
         )
         server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.api))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -522,6 +512,12 @@ class ProductReadModelTests(unittest.TestCase):
         self.assertIn(f"id: {event.event_id}", body)
         self.assertIn('"state":"FAILED"', body)
         self.assertNotIn("must-not-stream", body)
+        metrics = self.api.metrics.render()
+        self.assertIn("pilot107_sse_active 0", metrics)
+        self.assertIn('pilot107_sse_streams_total{outcome="complete"} 1', metrics)
+        self.assertIn("pilot107_sse_events_total 1", metrics)
+        traces = self.api.control_repository.list_traces(run_id=run.run_id)
+        self.assertEqual(traces[0].route, "/api/v1/runs/{run_id}/events/stream")
 
 
 class ReadModelScaleTests(unittest.TestCase):

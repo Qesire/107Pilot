@@ -45,7 +45,7 @@ Python 测试中有 6 项需要绑定本机回环端口验证 SSE/HTTP wire beha
 | Phase 3D | 工程纵向链路已评审；用户反馈无人数门禁、非阻塞 |
 | Phase 3E | Remediation 事件/输入/takeover、专用 action、provider-neutral LLM 安全 benchmark 已完成 |
 | Phase 3F | Run timeline/lineage/compare、安全命令与 Agent Evidence/diff/执行/前后结果工作台已完成 |
-| Phase 3G | ControlRepository PostgreSQL parity、Run/collection/Agent outbox fencing、恢复与可观测性底座完成；业务 Store PG 接线、安全收口仍进行中 |
+| Phase 3G | ControlRepository PostgreSQL parity/运行时选择、Run/collection/Agent outbox fencing、恢复、持久 trace、LLM/SSE metrics 与安全基线完成；全领域业务 Store PG parity 仍进行中 |
 | Phase 3H | 本地比赛链路部分完成；真实 107 仅只读兼容探测 |
 
 ## 环境声明
