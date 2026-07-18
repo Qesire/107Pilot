@@ -296,13 +296,26 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
 
     # --- A-2: Template market seed (idempotent, fault-tolerant) ---
     try:
-        seed_preset_recipes(
+        seed_report = seed_preset_recipes(
             catalog=catalog,
             store=template_market_store,
             role_directory=template_role_directory,
         )
-    except Exception:  # noqa: BLE001 - startup must not crash on seed failure
-        pass  # seed errors are recorded in SeedReport; total failure is non-fatal
+        if seed_report.errors:
+            print(
+                f"[phase-a-seed] published={seed_report.published} "
+                f"skipped={seed_report.skipped} gate_blocked={seed_report.gate_blocked} "
+                f"errors={seed_report.errors}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[phase-a-seed] published={seed_report.published} "
+                f"skipped={seed_report.skipped} gate_blocked={seed_report.gate_blocked}",
+                flush=True,
+            )
+    except Exception as exc:  # noqa: BLE001 - startup must not crash on seed failure
+        print(f"[phase-a-seed] FATAL: {type(exc).__name__}: {exc}", flush=True)
 
     return Pilot107HttpApi(
         store=store,
