@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
+from pilot107.core.resources import REAL107_SIM_PARTITION_QOS
 from pilot107.core.template_market import TemplateMarketStore, TemplateVisibility
 from pilot107.core.template_market_seed import SeedReport, seed_preset_recipes
 from pilot107.core.template_policy import (
@@ -24,6 +25,7 @@ def template_store(tmp_path):
     contract_service = ContractService(
         catalog=RecipeCatalog(),
         store=ContractStore(db_path),
+        partition_qos=REAL107_SIM_PARTITION_QOS,
     )
     return TemplateMarketStore(
         db_path,
@@ -173,3 +175,24 @@ def test_seed_resumes_from_existing_editable_draft(
     assert all(
         "UNIQUE constraint" not in e for e in report.errors
     ), f"must not hit UNIQUE conflict; errors={report.errors}"
+
+
+def test_seed_payload_passes_publication_gate(
+    recipe_catalog, template_store, role_directory
+):
+    """Seed-generated payload must pass the publication gate (no BLOCK findings).
+
+    The fixture wires partition_qos=REAL107_SIM_PARTITION_QOS so the gate
+    enforces QoS/partition compatibility. A payload with qos='normal' on the
+    'Students' partition would be BLOCKED; the seed must derive qos/partition
+    from recipe.compatibility defaults.
+    """
+    report = seed_preset_recipes(
+        catalog=recipe_catalog,
+        store=template_store,
+        role_directory=role_directory,
+    )
+    assert report.gate_blocked == 0, f"gate blocked: {report.errors}"
+    assert report.published >= 1, f"seed should publish; errors={report.errors}"
+    items, _ = template_store.list_market_page(actor="pilot107-system-author")
+    assert len(items) >= 1

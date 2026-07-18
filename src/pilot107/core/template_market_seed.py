@@ -50,27 +50,45 @@ def _seed_environment() -> dict[str, str]:
 
 
 def _choose_partition(recipe: RecipeVersion) -> str:
+    """Pick the recipe's default partition, falling back to the first allowed."""
     compatibility = recipe.compatibility or {}
     partitions = compatibility.get("partitions") or {}
-    allowed = partitions.get("allowed") if isinstance(partitions, dict) else None
-    if isinstance(allowed, list) and allowed:
-        for candidate in allowed:
-            if isinstance(candidate, str) and candidate:
-                return candidate
+    if isinstance(partitions, dict):
+        default = partitions.get("default")
+        if isinstance(default, str) and default:
+            return default
+        allowed = partitions.get("allowed")
+        if isinstance(allowed, list) and allowed:
+            for candidate in allowed:
+                if isinstance(candidate, str) and candidate:
+                    return candidate
     return "debug"
 
 
+def _choose_qos(recipe: RecipeVersion) -> str:
+    """Pick the recipe's default QoS for the chosen partition."""
+    compatibility = recipe.compatibility or {}
+    qos = compatibility.get("qos") or {}
+    if isinstance(qos, dict):
+        default = qos.get("default")
+        if isinstance(default, str) and default:
+            return default
+    return "normal"
+
+
 def _draft_payload_from_recipe(recipe: RecipeVersion) -> dict[str, Any]:
-    """Build a contract payload that satisfies the recipe's required fields."""
+    """Build a contract payload that satisfies the recipe's required fields
+    and passes the publication gate (correct partition/qos, valid workdir)."""
     partition = _choose_partition(recipe)
+    qos = _choose_qos(recipe)
     return {
         "recipe_version_id": recipe.recipe_version_id,
-        "project": {"workdir": f"/public/home/{_SEED_AUTHOR}"},
+        "project": {"workdir": "/public/home/alice"},
         "entry": {"command": "echo ok"},
         "runtime": {"environment": _seed_environment()},
         "resources": {
             "partition": partition,
-            "qos": "normal",
+            "qos": qos,
             "nodes": 1,
             "ntasks": 1,
             "cpus_per_task": 1,
@@ -83,7 +101,10 @@ def _draft_payload_from_recipe(recipe: RecipeVersion) -> dict[str, Any]:
 def _draft_compatibility_from_recipe(recipe: RecipeVersion) -> dict[str, Any]:
     """Compatibility metadata: include the chosen partition and CPU-only flag."""
     partition = _choose_partition(recipe)
-    return {"partitions": [partition], "gpu": False}
+    compatibility = recipe.compatibility or {}
+    platform = compatibility.get("platform") or {}
+    requires_gpu = bool(platform.get("requires_gpu", False)) if isinstance(platform, dict) else False
+    return {"partitions": [partition], "gpu": requires_gpu}
 
 
 def _already_published(
