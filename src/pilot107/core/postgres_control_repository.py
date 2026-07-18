@@ -14,7 +14,10 @@ from pilot107.core.control_repository import (
     ControlRepositoryConflict,
     LeaseClaim,
     OutboxMessage,
+    OutboxMetricsSnapshot,
+    OutboxQueueMetric,
 )
+from pilot107.core.redaction import redact_sensitive_text
 
 _NAME = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$")
@@ -430,7 +433,7 @@ class PostgresControlRepository:
             fencing_token=fencing_token,
             state=target,
             available_at=self._now() + timedelta(seconds=delay_seconds),
-            error=error[:2000],
+            error=redact_sensitive_text(error[:2000]),
         )
         return self.get_outbox(message_id)
 
@@ -442,6 +445,46 @@ class PostgresControlRepository:
         if row is None:
             raise KeyError(message_id)
         return _row_to_outbox(row)
+
+    def outbox_metrics(self) -> OutboxMetricsSnapshot:
+        now = self._now()
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT topic, state, COUNT(*) AS messages,
+                       COALESCE(SUM(attempts), 0) AS attempts,
+                       COALESCE(SUM(GREATEST(attempts - 1, 0)), 0) AS reclaims
+                FROM control_outbox
+                GROUP BY topic, state
+                ORDER BY topic, state
+                """
+            ).fetchall()
+            due_pending = conn.execute(
+                "SELECT COUNT(*) AS count FROM control_outbox "
+                "WHERE state = 'pending' AND available_at <= %s",
+                (now,),
+            ).fetchone()
+            expired_running = conn.execute(
+                "SELECT COUNT(*) AS count FROM control_outbox "
+                "WHERE state = 'running' AND lease_expires_at <= %s",
+                (now,),
+            ).fetchone()
+        return OutboxMetricsSnapshot(
+            queues=tuple(
+                OutboxQueueMetric(
+                    topic=str(row["topic"]),
+                    state=str(row["state"]),
+                    messages=int(row["messages"]),
+                    attempts=int(row["attempts"]),
+                    reclaims=int(row["reclaims"]),
+                )
+                for row in rows
+            ),
+            due_pending=0 if due_pending is None else int(due_pending["count"]),
+            expired_running=(
+                0 if expired_running is None else int(expired_running["count"])
+            ),
+        )
 
     def _finish(
         self,

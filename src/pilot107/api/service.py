@@ -87,6 +87,7 @@ class ApiServiceConfig:
     llm_max_tokens: int = 700
     llm_structured_output_mode: str = "prompt_json"
     llm_max_attempts: int = 2
+    worker_metrics_root: Path | None = None
     template_reviewers: frozenset[str] = frozenset()
     template_admins: frozenset[str] = frozenset()
     template_course_instructors: Mapping[str, frozenset[str]] = field(default_factory=dict)
@@ -150,6 +151,11 @@ def config_from_env(
             "PILOT107_LLM_STRUCTURED_OUTPUT_MODE", "prompt_json"
         ),
         llm_max_attempts=_int(values, "PILOT107_LLM_MAX_ATTEMPTS", 2),
+        worker_metrics_root=_optional_path(
+            values,
+            "PILOT107_WORKER_METRICS_ROOT",
+            runtime_dir / "worker-metrics",
+        ),
         template_reviewers=frozenset(
             _validated_usernames(values.get("PILOT107_TEMPLATE_REVIEWERS", ""))
         ),
@@ -220,6 +226,8 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     )
     return Pilot107HttpApi(
         store=store,
+        control_repository=control_repository,
+        worker_metrics_root=config.worker_metrics_root,
         evidence_query=EvidenceQueryService(
             store=store,
             evidence_store=EvidenceStore(config.evidence_root),
@@ -481,8 +489,14 @@ def _path(values: Mapping[str, str], name: str, default: Path) -> Path:
     return Path(value).expanduser() if value else default
 
 
-def _optional_path(values: Mapping[str, str], name: str) -> Path | None:
+def _optional_path(
+    values: Mapping[str, str],
+    name: str,
+    default: Path | None = None,
+) -> Path | None:
     value = values.get(name)
+    if value is None:
+        return default
     return Path(value).expanduser() if value else None
 
 

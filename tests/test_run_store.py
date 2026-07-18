@@ -20,6 +20,29 @@ class RunStoreTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
+    def test_audit_event_payloads_are_redacted_before_persistence(self) -> None:
+        self.store.create_run(
+            run_id="run_audit_redaction",
+            owner="alice",
+            workdir="/public/home/alice",
+            script="echo safe",
+        )
+
+        event = self.store.append_event(
+            run_id="run_audit_redaction",
+            event_type="worker.run_error",
+            payload={
+                "token": "literal-secret",
+                "message": "Authorization=Bearer bearer-secret password=db-secret",
+            },
+        )
+
+        encoded = str(event.payload)
+        self.assertNotIn("literal-secret", encoded)
+        self.assertNotIn("bearer-secret", encoded)
+        self.assertNotIn("db-secret", encoded)
+        self.assertIn("<redacted>", encoded)
+
     def test_run_lineage_tracks_attempts_and_children(self) -> None:
         root = self.store.create_run(
             run_id="run_root",

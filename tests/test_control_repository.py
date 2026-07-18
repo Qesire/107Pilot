@@ -230,7 +230,7 @@ class SQLiteControlRepositoryTests(unittest.TestCase):
             message_id=first.message_id,
             owner="worker-a",
             fencing_token=first.fencing_token,
-            error="gateway unavailable",
+            error="gateway unavailable Authorization=Bearer first-secret",
             delay_seconds=5,
             max_attempts=2,
         )
@@ -243,12 +243,13 @@ class SQLiteControlRepositoryTests(unittest.TestCase):
             message_id=second.message_id,
             owner="worker-b",
             fencing_token=second.fencing_token,
-            error="gateway still unavailable",
+            error="gateway still unavailable password=second-secret",
             delay_seconds=10,
             max_attempts=2,
         )
         self.assertEqual(dead.state, "dead_letter")
-        self.assertEqual(dead.last_error, "gateway still unavailable")
+        self.assertNotIn("second-secret", str(dead.last_error))
+        self.assertIn("<redacted>", str(dead.last_error))
         self.clock.advance(10)
         self.assertEqual(self.store.claim_outbox(owner="worker-c", limit=1, lease_seconds=10), [])
 
@@ -275,6 +276,55 @@ class SQLiteControlRepositoryTests(unittest.TestCase):
 
         self.assertEqual([message.message_id for message in claimed], ["submit-1"])
         self.assertEqual(self.store.get_outbox("agent-1").state, "pending")
+
+    def test_outbox_metrics_report_topics_due_work_expiry_and_reclaims(self) -> None:
+        self.store.enqueue(
+            message_id="metrics-submit",
+            topic="run.submit",
+            aggregate_id="run_metrics",
+            payload={"run_id": "run_metrics"},
+        )
+        self.store.enqueue(
+            message_id="metrics-future",
+            topic="collection.execute",
+            aggregate_id="task_metrics",
+            payload={"task_id": 1},
+            available_at=(self.clock.value + timedelta(seconds=100)).isoformat(),
+        )
+        first = self.store.claim_outbox(
+            owner="worker-a",
+            limit=1,
+            lease_seconds=10,
+            topics=("run.submit",),
+        )[0]
+        self.clock.advance(11)
+        self.store.enqueue(
+            message_id="metrics-agent",
+            topic="agent.execute",
+            aggregate_id="session_metrics",
+            payload={"session_id": "session_metrics"},
+        )
+
+        expired = self.store.outbox_metrics()
+        queues = {(item.topic, item.state): item for item in expired.queues}
+
+        self.assertEqual(expired.due_pending, 1)
+        self.assertEqual(expired.expired_running, 1)
+        self.assertEqual(queues[("run.submit", "running")].attempts, 1)
+        self.assertEqual(queues[("run.submit", "running")].reclaims, 0)
+
+        reclaimed = self.store.claim_outbox(
+            owner="worker-b",
+            limit=1,
+            lease_seconds=10,
+            topics=("run.submit",),
+        )[0]
+        current = self.store.outbox_metrics()
+        current_queues = {(item.topic, item.state): item for item in current.queues}
+        self.assertEqual(reclaimed.fencing_token, first.fencing_token + 1)
+        self.assertEqual(current.expired_running, 0)
+        self.assertEqual(current_queues[("run.submit", "running")].attempts, 2)
+        self.assertEqual(current_queues[("run.submit", "running")].reclaims, 1)
 
     def test_concurrent_outbox_claim_delivers_each_message_once(self) -> None:
         for index in range(40):

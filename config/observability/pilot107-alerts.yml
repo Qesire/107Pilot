@@ -1,0 +1,42 @@
+groups:
+  - name: pilot107-control-plane
+    rules:
+      - alert: Pilot107MetricsSourceFailure
+        expr: pilot107_metrics_scrape_error > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: A durable 107Pilot metric source cannot be read
+      - alert: Pilot107WorkerStale
+        expr: >-
+          pilot107_worker_last_tick_age_seconds > 60
+          and on(worker_id) pilot107_worker_active == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: A 107Pilot worker has stopped publishing fresh telemetry
+      - alert: Pilot107ExpiredOutboxLease
+        expr: pilot107_outbox_expired_running > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable work has an expired lease awaiting reclaim
+      - alert: Pilot107DeadLetterPresent
+        expr: sum(pilot107_outbox_messages{state="dead_letter"}) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: At least one durable control-plane message is dead-lettered
+      - alert: Pilot107ApiServerErrorRate
+        expr: >-
+          sum(rate(pilot107_api_requests_total{status=~"5.."}[5m]))
+          / clamp_min(sum(rate(pilot107_api_requests_total[5m])), 0.000001) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: The 107Pilot API 5xx ratio is above five percent

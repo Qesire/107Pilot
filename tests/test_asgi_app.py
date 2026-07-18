@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pilot107.api.asgi_app import build_asgi_app, openapi_contract_snapshot
 from pilot107.api.http_app import build_api
+from pilot107.worker.telemetry import WorkerTelemetryStore
 
 
 class AsgiAppTests(unittest.TestCase):
@@ -101,6 +102,90 @@ class AsgiAppTests(unittest.TestCase):
             json.loads(response[2])["error"]["code"],
             "CONTRACT.RECIPE_REQUIRED",
         )
+
+    def test_prometheus_metrics_cover_normalized_api_outbox_and_worker_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            api = build_api(
+                db_path=root / "pilot107.db",
+                evidence_root=root / "evidence",
+            )
+            api.control_repository.enqueue(
+                message_id="metrics-agent",
+                topic="agent.execute",
+                aggregate_id="session_metrics",
+                payload={"session_id": "session_metrics"},
+            )
+            WorkerTelemetryStore(
+                root=root / "worker-metrics",
+                worker_id="worker-metrics-test",
+            ).update(
+                increments={"ticks_total": 2, "agent_execution_checked_total": 1},
+                tick_duration_seconds=0.125,
+                timestamp=100.0,
+            )
+            app = build_asgi_app(api)
+
+            _asgi_request(app, "/api/v1/health/live")
+            _asgi_request(app, "/api/v1/runs/run-sensitive-identifier")
+            _asgi_request(app, "/api/v1/random-one/value-one")
+            _asgi_request(app, "/api/v1/random-two/value-two")
+            _asgi_request(app, "/api/v1/runs/run-one/random-action-one")
+            _asgi_request(app, "/api/v1/runs/run-two/random-action-two")
+            response = _asgi_request(app, "/metrics")
+
+        self.assertEqual(response[0], 200)
+        self.assertIn("text/plain", response[1]["content-type"])
+        metrics = response[2].decode("utf-8")
+        self.assertIn(
+            'pilot107_api_requests_total{method="GET",route="/api/v1/health/live",status="200"} 1',
+            metrics,
+        )
+        self.assertIn('route="/api/v1/runs/{run_id}"', metrics)
+        self.assertNotIn("run-sensitive-identifier", metrics)
+        self.assertIn(
+            'pilot107_api_requests_total{method="GET",route="/api/v1/unmatched",status="404"} 2',
+            metrics,
+        )
+        self.assertIn(
+            'pilot107_api_requests_total{method="GET",'
+            'route="/api/v1/runs/{run_id}/{action}",status="404"} 2',
+            metrics,
+        )
+        self.assertNotIn("random-action-one", metrics)
+        self.assertNotIn("random-two", metrics)
+        self.assertIn(
+            'pilot107_outbox_messages{state="pending",topic="agent.execute"} 1',
+            metrics,
+        )
+        self.assertIn(
+            'pilot107_worker_ticks_total{worker_id="worker-metrics-test"} 2',
+            metrics,
+        )
+        self.assertIn("pilot107_metrics_scrape_error 0", metrics)
+
+    def test_metrics_report_corrupt_durable_source_without_leaking_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metrics_root = root / "worker-metrics"
+            metrics_root.mkdir()
+            (metrics_root / "worker-corrupt.json").write_text(
+                'password="should-never-appear"',
+                encoding="utf-8",
+            )
+            app = build_asgi_app(
+                build_api(
+                    db_path=root / "pilot107.db",
+                    evidence_root=root / "evidence",
+                )
+            )
+
+            response = _asgi_request(app, "/metrics")
+
+        metrics = response[2].decode("utf-8")
+        self.assertEqual(response[0], 200)
+        self.assertIn("pilot107_metrics_scrape_error 1", metrics)
+        self.assertNotIn("should-never-appear", metrics)
 
 
 def _asgi_request(

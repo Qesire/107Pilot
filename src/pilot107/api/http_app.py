@@ -17,6 +17,7 @@ from pilot107.adapters.slurm import SlurmBackendError
 from pilot107.api.evidence_query import EvidencePreviewUnavailable, EvidenceQueryService
 from pilot107.api.health import ApiHealthService
 from pilot107.api.http_types import ApiResponse as ApiResponse
+from pilot107.api.metrics import ControlPlaneMetrics, normalize_http_route
 from pilot107.api.remediation_routes import RemediationRoutes
 from pilot107.core.advice import (
     AgentAdviceError,
@@ -42,6 +43,7 @@ from pilot107.core.contracts import (
     recipe_version_payload,
     validation_payload,
 )
+from pilot107.core.control_repository import ControlRepository, SQLiteControlRepository
 from pilot107.core.diagnosis import DiagnosisService, KnownErrorRule, load_known_error_rules
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.identity import (
@@ -135,6 +137,8 @@ class Pilot107HttpApi:
         template_role_directory: TemplateRoleDirectory | None = None,
         template_verification_service: TemplateVerificationService | None = None,
         health_service: ApiHealthService | None = None,
+        control_repository: ControlRepository | None = None,
+        worker_metrics_root: Path | None = None,
         auth_required: bool = False,
         trusted_user_header: str = "X-Pilot107-User",
     ) -> None:
@@ -179,6 +183,12 @@ class Pilot107HttpApi:
             submission_enabled=run_service is not None,
             llm_enabled=self.agent_explain_service.llm_provider is not None,
             user_entitlement_store=user_entitlement_store,
+        )
+        self.control_repository = control_repository or SQLiteControlRepository(store.db_path)
+        self.worker_metrics_root = worker_metrics_root or store.db_path.parent / "worker-metrics"
+        self.metrics = ControlPlaneMetrics(
+            control_repository=self.control_repository,
+            worker_metrics_root=self.worker_metrics_root,
         )
         self.auth_required = auth_required
         self.trusted_user_header = trusted_user_header
@@ -2345,6 +2355,7 @@ def build_api(
     )
     return Pilot107HttpApi(
         store=store,
+        control_repository=SQLiteControlRepository(db_path),
         auth_required=auth_required,
         trusted_user_header=trusted_user_header,
         recipe_catalog=catalog,
@@ -2374,24 +2385,54 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
         server_version = "pilot107-api/0.1"
 
         def do_GET(self) -> None:  # noqa: N802
+            started = time.monotonic()
+            if urlparse(self.path).path == "/metrics":
+                self._send_metrics()
+                return
             stream_run_id = _sse_run_id(self.path)
             if stream_run_id is not None:
                 self._send_event_stream(stream_run_id)
+                api.metrics.observe_request(
+                    method="GET",
+                    route="/api/v1/runs/{run_id}/events/stream",
+                    status=200,
+                    duration_seconds=time.monotonic() - started,
+                )
                 return
             response = api.handle_get(self.path, headers=dict(self.headers.items()))
             self._send_json(response)
+            api.metrics.observe_request(
+                method="GET",
+                route=normalize_http_route(self.path),
+                status=response.status,
+                duration_seconds=time.monotonic() - started,
+            )
 
         def do_POST(self) -> None:  # noqa: N802
+            started = time.monotonic()
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(length) if length > 0 else b""
             response = api.handle_post(self.path, body=body, headers=dict(self.headers.items()))
             self._send_json(response)
+            api.metrics.observe_request(
+                method="POST",
+                route=normalize_http_route(self.path),
+                status=response.status,
+                duration_seconds=time.monotonic() - started,
+            )
 
         def do_PATCH(self) -> None:  # noqa: N802
+            started = time.monotonic()
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(length) if length > 0 else b""
             response = api.handle_patch(self.path, body=body, headers=dict(self.headers.items()))
             self._send_json(response)
+            api.metrics.observe_request(
+                method="PATCH",
+                route=normalize_http_route(self.path),
+                status=response.status,
+                duration_seconds=time.monotonic() - started,
+            )
 
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -2413,6 +2454,15 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             if body:
                 self.wfile.write(body)
+
+        def _send_metrics(self) -> None:
+            body = api.metrics.render().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
 
         def _send_event_stream(self, run_id: str) -> None:
             parsed = urlparse(self.path)

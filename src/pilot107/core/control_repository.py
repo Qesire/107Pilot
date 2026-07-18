@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
+from pilot107.core.redaction import redact_sensitive_text
 from pilot107.core.schema_migrations import SchemaMigration, apply_schema_migrations
 
 _NAME = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
@@ -51,6 +52,22 @@ class OutboxMessage:
     last_error: str | None
     created_at: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class OutboxQueueMetric:
+    topic: str
+    state: str
+    messages: int
+    attempts: int
+    reclaims: int
+
+
+@dataclass(frozen=True)
+class OutboxMetricsSnapshot:
+    queues: tuple[OutboxQueueMetric, ...]
+    due_pending: int
+    expired_running: int
 
 
 class ControlRepository(Protocol):
@@ -119,6 +136,8 @@ class ControlRepository(Protocol):
     ) -> OutboxMessage: ...
 
     def get_outbox(self, message_id: str) -> OutboxMessage: ...
+
+    def outbox_metrics(self) -> OutboxMetricsSnapshot: ...
 
 
 CONTROL_MIGRATIONS = (
@@ -529,7 +548,7 @@ class SQLiteControlRepository:
             fencing_token=fencing_token,
             state=target,
             available_at=available_at,
-            error=error[:2000],
+            error=redact_sensitive_text(error[:2000]),
         )
         return self.get_outbox(message_id)
 
@@ -541,6 +560,45 @@ class SQLiteControlRepository:
         if row is None:
             raise KeyError(message_id)
         return _row_to_outbox(row)
+
+    def outbox_metrics(self) -> OutboxMetricsSnapshot:
+        now = self._now()
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT topic, state, COUNT(*) AS messages,
+                       COALESCE(SUM(attempts), 0) AS attempts,
+                       COALESCE(SUM(CASE WHEN attempts > 1 THEN attempts - 1 ELSE 0 END), 0)
+                           AS reclaims
+                FROM control_outbox
+                GROUP BY topic, state
+                ORDER BY topic, state
+                """
+            ).fetchall()
+            due_pending = conn.execute(
+                "SELECT COUNT(*) FROM control_outbox "
+                "WHERE state = 'pending' AND available_at <= ?",
+                (now,),
+            ).fetchone()
+            expired_running = conn.execute(
+                "SELECT COUNT(*) FROM control_outbox "
+                "WHERE state = 'running' AND lease_expires_at <= ?",
+                (now,),
+            ).fetchone()
+        return OutboxMetricsSnapshot(
+            queues=tuple(
+                OutboxQueueMetric(
+                    topic=str(row["topic"]),
+                    state=str(row["state"]),
+                    messages=int(row["messages"]),
+                    attempts=int(row["attempts"]),
+                    reclaims=int(row["reclaims"]),
+                )
+                for row in rows
+            ),
+            due_pending=0 if due_pending is None else int(due_pending[0]),
+            expired_running=0 if expired_running is None else int(expired_running[0]),
+        )
 
     def _finish(
         self,

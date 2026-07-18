@@ -16,6 +16,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 from uuid import uuid4
 
+from pilot107.core.redaction import redact_sensitive_text
+
 BACKUP_SCHEMA = "pilot107.control_plane_backup.v1"
 
 
@@ -104,7 +106,7 @@ class PgToolsBackupAdapter:
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RecoveryError(f"{operation} could not run: {exc}") from exc
         if result.returncode != 0:
-            stderr = _redact(result.stderr.strip()[-2000:], dsn)
+            stderr = redact_sensitive_text(result.stderr.strip()[-2000:], secrets=(dsn,))
             raise RecoveryError(f"{operation} failed with exit {result.returncode}: {stderr}")
 
 
@@ -397,9 +399,3 @@ def _is_within(path: Path, root: Path) -> bool:
     except ValueError:
         return False
     return True
-
-
-def _redact(text: str, secret: str) -> str:
-    if not text:
-        return text
-    return text.replace(secret, "[REDACTED]")

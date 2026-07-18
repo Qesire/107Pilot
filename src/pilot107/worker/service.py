@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import signal
 import socket
 import sys
 import time
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -40,6 +40,7 @@ from pilot107.core.control_repository import SQLiteControlRepository
 from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.preflight import LocalPathChecker, PathChecker
+from pilot107.core.redaction import redact_sensitive_structure, redact_sensitive_text
 from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
@@ -54,6 +55,11 @@ from pilot107.worker.evidence import (
     EvidenceTransport,
 )
 from pilot107.worker.runtime_worker import RuntimeReconcileWorker, WorkerTickResult
+from pilot107.worker.telemetry import (
+    WorkerTelemetryError,
+    WorkerTelemetryStore,
+    write_json_atomic,
+)
 
 
 @dataclass(frozen=True)
@@ -82,6 +88,7 @@ class WorkerServiceConfig:
     workdir_preflight_enabled: bool = True
     idempotency_reconcile_enabled: bool = True
     health_path: Path | None = None
+    metrics_root: Path | None = None
     enable_docker_volume_evidence_transport: bool = False
 
 
@@ -100,10 +107,21 @@ class WorkerService:
         self.last_remediation_checked = 0
         self.last_remediation_advanced = 0
         self.last_remediation_errors: list[str] = []
+        self.last_tick_duration_seconds = 0.0
+        self.last_telemetry_error: str | None = None
+        self.cumulative_metrics: dict[str, object] | None = None
+        self.telemetry = (
+            None
+            if config.metrics_root is None
+            else WorkerTelemetryStore(root=config.metrics_root, worker_id=config.worker_id)
+        )
 
     def run_once(self) -> WorkerTickResult:
+        started = time.monotonic()
         result = self.stack.worker.tick()
         self._advance_remediations()
+        self.last_tick_duration_seconds = time.monotonic() - started
+        self._record_telemetry(result)
         self.write_health(result)
         return result
 
@@ -128,9 +146,14 @@ class WorkerService:
         return aggregate
 
     def run_forever(self, *, stop_event: Event) -> None:
-        while not stop_event.is_set():
-            self.run_once()
-            stop_event.wait(self.config.interval_seconds)
+        try:
+            while not stop_event.is_set():
+                self.run_once()
+                stop_event.wait(self.config.interval_seconds)
+        finally:
+            if self.telemetry is not None:
+                with suppress(OSError, WorkerTelemetryError, ValueError):
+                    self.telemetry.mark_stopped()
 
     def write_health(self, result: WorkerTickResult) -> None:
         if self.config.health_path is None:
@@ -143,10 +166,12 @@ class WorkerService:
                 or result.submission_errors
                 or result.agent_execution_errors
                 or self.last_remediation_errors
+                or self.last_telemetry_error
             ),
             "worker_id": self.config.worker_id,
             "backend": self.config.backend,
             "last_tick_unix": time.time(),
+            "last_tick_duration_seconds": round(self.last_tick_duration_seconds, 6),
             "checked": result.checked,
             "terminal": result.terminal,
             "tasks_checked": result.tasks_checked,
@@ -155,24 +180,67 @@ class WorkerService:
             "diagnoses_succeeded": result.diagnoses_succeeded,
             "submissions_checked": result.submissions_checked,
             "submissions_succeeded": result.submissions_succeeded,
-            "errors": [error.__dict__ for error in result.errors],
-            "task_errors": [error.__dict__ for error in result.task_errors],
-            "diagnosis_errors": [error.__dict__ for error in result.diagnosis_errors],
-            "submission_errors": [error.__dict__ for error in result.submission_errors],
+            "errors": redact_sensitive_structure([error.__dict__ for error in result.errors]),
+            "task_errors": redact_sensitive_structure(
+                [error.__dict__ for error in result.task_errors]
+            ),
+            "diagnosis_errors": redact_sensitive_structure(
+                [error.__dict__ for error in result.diagnosis_errors]
+            ),
+            "submission_errors": redact_sensitive_structure(
+                [error.__dict__ for error in result.submission_errors]
+            ),
             "agent_executions_checked": result.agent_executions_checked,
             "agent_executions_succeeded": result.agent_executions_succeeded,
-            "agent_execution_errors": [
-                error.__dict__ for error in result.agent_execution_errors
-            ],
+            "agent_execution_errors": redact_sensitive_structure(
+                [error.__dict__ for error in result.agent_execution_errors]
+            ),
             "remediation_checked": self.last_remediation_checked,
             "remediation_advanced": self.last_remediation_advanced,
-            "remediation_errors": self.last_remediation_errors,
+            "remediation_errors": redact_sensitive_structure(self.last_remediation_errors),
+            "telemetry_error": self.last_telemetry_error,
+            "cumulative_metrics": self.cumulative_metrics,
         }
-        self.config.health_path.parent.mkdir(parents=True, exist_ok=True)
-        self.config.health_path.write_text(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        write_json_atomic(self.config.health_path, payload)
+
+    def _record_telemetry(self, result: WorkerTickResult) -> None:
+        if self.telemetry is None:
+            self.last_telemetry_error = None
+            self.cumulative_metrics = None
+            return
+        increments = {
+            "ticks_total": 1,
+            "reconcile_checked_total": result.checked,
+            "reconcile_terminal_total": result.terminal,
+            "reconcile_errors_total": len(result.errors),
+            "collection_checked_total": result.tasks_checked,
+            "collection_succeeded_total": result.tasks_succeeded,
+            "collection_errors_total": len(result.task_errors),
+            "diagnosis_checked_total": result.diagnoses_checked,
+            "diagnosis_succeeded_total": result.diagnoses_succeeded,
+            "diagnosis_errors_total": len(result.diagnosis_errors),
+            "submission_checked_total": result.submissions_checked,
+            "submission_succeeded_total": result.submissions_succeeded,
+            "submission_errors_total": len(result.submission_errors),
+            "agent_execution_checked_total": result.agent_executions_checked,
+            "agent_execution_succeeded_total": result.agent_executions_succeeded,
+            "agent_execution_errors_total": len(result.agent_execution_errors),
+            "remediation_checked_total": self.last_remediation_checked,
+            "remediation_advanced_total": self.last_remediation_advanced,
+            "remediation_errors_total": len(self.last_remediation_errors),
+        }
+        try:
+            self.cumulative_metrics = self.telemetry.update(
+                increments=increments,
+                tick_duration_seconds=self.last_tick_duration_seconds,
+            )
+        except (OSError, WorkerTelemetryError, ValueError) as exc:
+            self.cumulative_metrics = None
+            self.last_telemetry_error = redact_sensitive_text(
+                f"{type(exc).__name__}:{exc}"
+            )
+        else:
+            self.last_telemetry_error = None
 
     def _advance_remediations(self) -> None:
         sessions = self.stack.remediation_service.remediation_store.list_actionable_sessions(
@@ -245,6 +313,11 @@ def config_from_env(
             values,
             "PILOT107_WORKER_HEALTH_PATH",
             runtime_dir / "worker-health.json",
+        ),
+        metrics_root=_optional_path(
+            values,
+            "PILOT107_WORKER_METRICS_ROOT",
+            runtime_dir / "worker-metrics",
         ),
         enable_docker_volume_evidence_transport=_bool(
             values,

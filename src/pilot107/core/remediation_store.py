@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from pilot107.core.redaction import redact_sensitive_structure
 from pilot107.core.remediation import (
     TERMINAL_REMEDIATION_STATES,
     ActionDecision,
@@ -693,7 +694,7 @@ class RemediationStore:
                 session_id, event_type, payload_json, created_at
             ) VALUES (?, ?, ?, ?)
             """,
-            (session_id, event_type, _json(payload), created_at),
+            (session_id, event_type, _json(redact_sensitive_structure(payload)), created_at),
         )
 
 

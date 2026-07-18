@@ -33,6 +33,10 @@ class ApiServiceTests(unittest.TestCase):
         self.assertEqual(config.db_path, self.root / "data" / "phase0" / "pilot107.db")
         self.assertEqual(config.evidence_root, self.root / "data" / "phase0" / "evidence")
         self.assertEqual(config.backend, "none")
+        self.assertEqual(
+            config.worker_metrics_root,
+            self.root / "data" / "phase0" / "worker-metrics",
+        )
         self.assertEqual(config.allowed_roots, ("/public/home/alice",))
         self.assertFalse(config.auth_required)
 

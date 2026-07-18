@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
 from pilot107.api.http_app import ApiResponse, Pilot107HttpApi
+from pilot107.api.metrics import ApiMetricsMiddleware
 from pilot107.api.service import build_api_service, config_from_env
 
 Forwarder = Callable[[Request], Awaitable[Response]]
@@ -158,6 +159,23 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
         title="107Pilot Control API",
         version="0.3.0",
         description="Owner-scoped control-plane API for 107Pilot.",
+    )
+    metrics = api.metrics
+    app.state.pilot107_metrics = metrics
+    app.add_middleware(ApiMetricsMiddleware, metrics=metrics)
+
+    async def metrics_endpoint() -> Response:
+        return Response(
+            content=metrics.render(),
+            media_type="text/plain; version=0.0.4",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    app.add_api_route(
+        "/metrics",
+        metrics_endpoint,
+        methods=["GET"],
+        include_in_schema=False,
     )
     forward_get = _get_forwarder(api)
     forward_post = _post_forwarder(api)

@@ -133,6 +133,17 @@ bash scripts/check-sim-core.sh
 - review：[phase3g_recovery_review.md](phase3g_recovery_review.md)；
 - 恢复子切片完成；R4-3 继续 PostgreSQL 业务接线、长期可观测性和其余本地安全基线。
 
+### 2026-07-18 R4 控制面可观测性底座检查点
+
+- API/stdlib 双 transport 共享 Prometheus scrape；route label 替换对象 ID，queue 暴露 topic/state、due、expiry、attempt/reclaim；
+- Worker 按稳定 ID 原子持久累计 reconcile、submit、Evidence、diagnosis、Agent 与 remediation，flock 防同 ID 丢计数；
+- graceful stop/硬崩溃通过 active tombstone 区分，Compose healthcheck 强制 freshness、telemetry、active 和 schema；
+- health、outbox last_error、Run/remediation audit event 统一 secret redaction，并保留 fencing/LLM 计数审计字段；
+- 五条告警覆盖 metric source、stale Worker、expired lease、dead letter 与 API 5xx；stdlib Docker live 和 Worker restart 连续性通过；
+- 全量门禁：578 passed、11 PostgreSQL integration skipped、2 subtests；Ruff、strict mypy、Compose config 通过；
+- review：[phase3g_observability_review.md](phase3g_observability_review.md)；
+- 可观测性底座完成；R4-3 继续 LLM/SSE 专项、持久 trace、安全基线与 PostgreSQL 业务接线。
+
 真人使用不进入这些工作包的通过条件。可选的 U2/U3 只用于视觉、文案、信任感和交互取舍；VM 上传、真实 107 操作和生产身份仍需另行授权。
 
 ## 3. A 轨：工程基线与扩展边界

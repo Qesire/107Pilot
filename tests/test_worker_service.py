@@ -16,6 +16,7 @@ from pilot107.core.resources import ResourcePlan
 from pilot107.core.run_service import RunService, RunSubmitRequest
 from pilot107.core.run_store import RunStore
 from pilot107.core.states import CollectionState, RunState
+from pilot107.worker.runtime_worker import WorkerRunError, WorkerTickResult
 from pilot107.worker.service import build_worker_service, config_from_env
 
 
@@ -36,6 +37,10 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(config.allowed_roots, ("/public/home/alice",))
         self.assertEqual(config.compose_file, self.root / "simulator" / "compose" / "compose.yml")
         self.assertEqual(config.health_path, self.root / "data" / "phase0" / "worker-health.json")
+        self.assertEqual(
+            config.metrics_root,
+            self.root / "data" / "phase0" / "worker-metrics",
+        )
 
     def test_config_from_env_accepts_service_overrides(self) -> None:
         config = config_from_env(
@@ -55,6 +60,7 @@ class WorkerServiceTests(unittest.TestCase):
                 "PILOT107_REST_AUTH_STYLE": "slurm_headers",
                 "PILOT107_SLURM_USER_NAME": "alice",
                 "PILOT107_WORKER_HEALTH_PATH": "",
+                "PILOT107_WORKER_METRICS_ROOT": "",
             },
             project_root=self.root,
         )
@@ -74,6 +80,7 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(config.rest_auth_style, "slurm_headers")
         self.assertEqual(config.slurm_username, "alice")
         self.assertIsNone(config.health_path)
+        self.assertIsNone(config.metrics_root)
         self.assertFalse(config.enable_docker_volume_evidence_transport)
 
     def test_config_from_env_accepts_explicit_volume_evidence_transport_flag(self) -> None:
@@ -140,6 +147,48 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(health["checked"], 0)
         self.assertEqual(health["remediation_checked"], 0)
         self.assertEqual(health["remediation_advanced"], 0)
+        self.assertEqual(health["cumulative_metrics"]["counters"]["ticks_total"], 1)
+        self.assertIsNone(health["telemetry_error"])
+
+        restarted = build_worker_service(config)
+        restarted.run_once()
+        restarted_health = json.loads(
+            (self.root / "data" / "phase0" / "worker-health.json").read_text()
+        )
+        self.assertEqual(
+            restarted_health["cumulative_metrics"]["counters"]["ticks_total"],
+            2,
+        )
+
+    def test_health_redacts_error_messages_and_secret_shaped_fields(self) -> None:
+        config = config_from_env(
+            {
+                "PILOT107_WORKER_BACKEND": "in-memory",
+                "PILOT107_WORKER_ID": "worker-redaction-test",
+            },
+            project_root=self.root,
+        )
+        service = build_worker_service(config)
+        result = WorkerTickResult(
+            checked=1,
+            terminal=0,
+            errors=[
+                WorkerRunError(
+                    run_id="run-secret",
+                    message=(
+                        "postgresql://alice:db-password@db/control "
+                        "Authorization=Bearer opaque-token"
+                    ),
+                )
+            ],
+        )
+
+        service.write_health(result)
+
+        health_text = config.health_path.read_text(encoding="utf-8")  # type: ignore[union-attr]
+        self.assertNotIn("db-password", health_text)
+        self.assertNotIn("opaque-token", health_text)
+        self.assertIn("<redacted>", health_text)
 
     def test_worker_advances_actionable_remediation_sessions(self) -> None:
         service = build_worker_service(

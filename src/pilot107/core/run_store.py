@@ -11,6 +11,7 @@ from typing import Any
 
 from pilot107.adapters.slurm import JobSnapshot, SubmitReceipt
 from pilot107.core.pagination import CursorPosition
+from pilot107.core.redaction import redact_sensitive_structure
 from pilot107.core.states import (
     ACTIVE_JOB_RUN_STATES,
     TERMINAL_RUN_STATES,
@@ -2269,7 +2270,12 @@ class RunStore:
             INSERT INTO run_events (run_id, event_type, payload_json, created_at)
             VALUES (?, ?, ?, ?)
             """,
-            (run_id, event_type, json.dumps(payload, sort_keys=True), utc_now_iso()),
+            (
+                run_id,
+                event_type,
+                json.dumps(redact_sensitive_structure(payload), sort_keys=True),
+                utc_now_iso(),
+            ),
         )
 
     def _ensure_task(self, conn: sqlite3.Connection, *, run_id: str, task_type: str) -> None:

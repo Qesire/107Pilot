@@ -43,9 +43,9 @@ Python 测试中有 6 项需要绑定本机回环端口验证 SSE/HTTP wire beha
 | Phase 3B | 平台事实、entitlement、preflight 已评审；工程治理基线已收敛 |
 | Phase 3C | Template/Market/Adoption 本地纵向链路已评审 |
 | Phase 3D | 工程纵向链路已评审；用户反馈无人数门禁、非阻塞 |
-| Phase 3E | persistent RemediationSession、预算、lease/CAS、规则闭环、审批执行与 evaluator 核心已实现；事件/输入 API、动作覆盖与 LLM benchmark 待补 |
-| Phase 3F | Run Evidence 已有；Agent queue/detail/预算/批准/拒绝/取消/执行第一版已通过本地浏览器回归，Run compare 与安全命令待补 |
-| Phase 3G | SQLite 单机能力已有；PostgreSQL/多实例/生产控制面未完成 |
+| Phase 3E | Remediation 事件/输入/takeover、专用 action、provider-neutral LLM 安全 benchmark 已完成 |
+| Phase 3F | Run timeline/lineage/compare、安全命令与 Agent Evidence/diff/执行/前后结果工作台已完成 |
+| Phase 3G | ControlRepository PostgreSQL parity、Run/collection/Agent outbox fencing、恢复与可观测性底座完成；业务 Store PG 接线、安全收口仍进行中 |
 | Phase 3H | 本地比赛链路部分完成；真实 107 仅只读兼容探测 |
 
 ## 环境声明
@@ -61,9 +61,8 @@ Docker、fake/replay LLM 和本地 command gateway 的结果不得表述为真�
 
 ## 当前工程风险
 
-1. Remediation list/detail 仍缺 keyset pagination、ETag、事件补读和安全的 `awaiting_input` 恢复协议；
-2. 受控 action 仍需扩大专用 probe/diff/rollback 覆盖，LLM proposal benchmark 尚未完成；
-3. Run/Agent 工作台尚缺前后 Run/Evidence/outputs 对比、安全 native command 和完整错误状态回归；
-4. 当前存储以 SQLite 为主，多 Worker 一致性、outbox、恢复和可观测性未完成；
-5. 当前 simulator 宣称模拟 GPU/64 CPU，不适合直接作为纯 CPU VM 发布配置；
-6. VM、真实身份和真实 107 均不在当前已验证能力内。
+1. Run、Remediation、Template 等业务 Store 仍以 SQLite 为主，尚未完成全领域 PostgreSQL parity/接线；
+2. LLM/SSE 专项指标、持久 request-to-domain trace、Prometheus retention 与 firing 演练仍未完成；
+3. proxy trust、rate/body/response limit、CSP/CSRF 和供应链扫描仍需 3G-4 安全收口；
+4. 当前 simulator 宣称模拟 GPU/64 CPU，不适合直接作为纯 CPU VM 发布配置；
+5. VM、真实身份和真实 107 均不在当前已验证能力内。
