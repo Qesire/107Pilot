@@ -63,7 +63,7 @@ do
 done
 
 rm -f "$work_dir/simulator/compose/.env.cpu-rc"
-find "$work_dir/simulator/compose" -maxdepth 1 -type f -name '.env*' ! -name '*.example' -delete
+find "$work_dir/simulator/compose" -maxdepth 1 -type f -name '.env*' ! -name '.env.cpu-rc.example' -delete
 rm -rf "$work_dir/simulator/compose/certs" "$work_dir/simulator/compose/secrets"
 mkdir -p "$work_dir/simulator/compose/certs" "$work_dir/simulator/compose/secrets"
 cp "$root/simulator/compose/certs/README.md" "$work_dir/simulator/compose/certs/"
