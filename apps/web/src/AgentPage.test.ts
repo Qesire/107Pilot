@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { proposalPatchRows, remediationStateLabel, remediationStateTone } from "./AgentPage";
+import {
+  defaultProvider,
+  proposalPatchRows,
+  providerLabel,
+  remediationStateLabel,
+  remediationStateTone,
+} from "./AgentPage";
 import type { RemediationState } from "./types";
 
 describe("Agent remediation state presentation", () => {
@@ -43,5 +49,20 @@ describe("Agent proposal diff", () => {
       rationale: "bounded",
     })).toEqual([{ field: "resources.qos", value: "qos_stu_default" }]);
     expect(proposalPatchRows({ parameters: { probe_kind: "cuda" } })).toEqual([]);
+  });
+});
+
+describe("LLM provider selection", () => {
+  it("defaults to local when LLM is configured", () => {
+    expect(defaultProvider({ llmConfigured: true })).toBe("local");
+  });
+
+  it("defaults to none when LLM is unconfigured", () => {
+    expect(defaultProvider({ llmConfigured: false })).toBe("none");
+  });
+
+  it("labels providers in Chinese", () => {
+    expect(providerLabel("local")).toBe("USTC LLM (glm-5.2-107)");
+    expect(providerLabel("none")).toBe("确定性规则（无 LLM）");
   });
 });

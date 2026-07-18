@@ -59,7 +59,7 @@ export function QueryBoundary({
   error: unknown;
   empty?: boolean;
   emptyTitle?: string;
-  emptyDetail?: string;
+  emptyDetail?: ReactNode;
   children: ReactNode;
 }) {
   if (pending) {

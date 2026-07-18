@@ -70,6 +70,17 @@ class TemplateRoleDirectory:
             course_scopes=instructor_scopes | ta_scopes,
         )
 
+    def system_reviewer_principal(self) -> TemplateReviewerPrincipal:
+        """Return a system principal for seed/bootstrap publishing.
+
+        The system reviewer is distinct from any draft owner to bypass the
+        self-review prohibition (system seed is not user behavior).
+        """
+        return TemplateReviewerPrincipal(
+            actor="pilot107-system-reviewer",
+            roles=frozenset({TemplateReviewerRole.REVIEWER, TemplateReviewerRole.ADMIN}),
+        )
+
     def visible_course_scopes(self, actor: str) -> frozenset[str]:
         scopes = (
             _scopes_for_actor(self.course_members, actor)

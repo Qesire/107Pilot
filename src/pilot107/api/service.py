@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,7 @@ from pilot107.adapters.slurm import (
     SlurmBackend,
     UrllibHttpTransport,
 )
+from pilot107.adapters.slurmrest_snapshot import SlurmrestSnapshotCollector
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.api.metrics import ControlPlaneMetrics
@@ -41,12 +44,14 @@ from pilot107.core.platform import (
     docker_sim_capability_profile,
     load_capability_profile,
 )
+from pilot107.core.platform_snapshot import ObservationSourceType
 from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.preflight import LocalPathChecker
 from pilot107.core.proxy_auth import load_proxy_hmac_secret
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
 from pilot107.core.template_market import TemplateMarketStore
+from pilot107.core.template_market_seed import seed_preset_recipes
 from pilot107.core.template_policy import (
     TemplatePublicationGate,
     TemplateRoleDirectory,
@@ -252,6 +257,67 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             capsule_root=config.capsule_root,
         )
     )
+    # --- A-1: Slurm REST snapshot auto-collect (startup + background refresh) ---
+    snapshot_transport = UrllibHttpTransport(
+        base_url=config.slurmrestd_url,
+        timeout_seconds=5.0,
+    )
+    snapshot_collector = SlurmrestSnapshotCollector(
+        transport=snapshot_transport,
+        api_version="v0.0.41",
+        token=config.slurm_token,
+    )
+
+    def _collect_and_store_snapshot() -> None:
+        try:
+            snapshot = snapshot_collector.collect()
+            platform_snapshot_store.create(
+                owner=config.slurm_username or "pilot107-system",
+                snapshot=snapshot,
+                source_type=ObservationSourceType.REST,
+                source_name="slurmrestd-auto",
+                expires_at=(datetime.now(UTC) + timedelta(seconds=300)).isoformat(),
+            )
+        except Exception:  # noqa: BLE001 - startup must not crash on snapshot failure
+            pass  # limitations captured in snapshot; total failure is non-fatal
+
+    # Initial collection at startup (non-blocking on failure)
+    _collect_and_store_snapshot()
+
+    # Background refresh thread (daemon, 5min interval)
+    def _refresh_loop() -> None:
+        while True:
+            threading.Event().wait(timeout=300.0)
+            _collect_and_store_snapshot()
+
+    refresh_thread = threading.Thread(
+        target=_refresh_loop, name="slurmrest-snapshot-refresh", daemon=True
+    )
+    refresh_thread.start()
+
+    # --- A-2: Template market seed (idempotent, fault-tolerant) ---
+    try:
+        seed_report = seed_preset_recipes(
+            catalog=catalog,
+            store=template_market_store,
+            role_directory=template_role_directory,
+        )
+        if seed_report.errors:
+            print(
+                f"[phase-a-seed] published={seed_report.published} "
+                f"skipped={seed_report.skipped} gate_blocked={seed_report.gate_blocked} "
+                f"errors={seed_report.errors}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[phase-a-seed] published={seed_report.published} "
+                f"skipped={seed_report.skipped} gate_blocked={seed_report.gate_blocked}",
+                flush=True,
+            )
+    except Exception as exc:  # noqa: BLE001 - startup must not crash on seed failure
+        print(f"[phase-a-seed] FATAL: {type(exc).__name__}: {exc}", flush=True)
+
     return Pilot107HttpApi(
         store=store,
         control_repository=control_repository,

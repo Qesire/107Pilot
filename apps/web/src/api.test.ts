@@ -190,6 +190,33 @@ describe("API transport", () => {
   });
 });
 
+describe("advanceRemediationSession provider passthrough", () => {
+  it("sends provider=local by default", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ session_id: "s1", state: "diagnosing" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.advanceRemediationSession("alice", "sess_123");
+
+    const call = fetchMock.mock.calls[0];
+    const body = JSON.parse((call![1] as RequestInit).body as string);
+    expect(body.provider).toBe("local");
+  });
+
+  it("sends provider=none when explicitly requested", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ session_id: "s1", state: "diagnosing" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.advanceRemediationSession("alice", "sess_123", undefined, { provider: "none" });
+
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.provider).toBe("none");
+  });
+});
+
 function jsonResponse(payload: unknown, status = 200, statusText = "OK"): Response {
   return {
     ok: status >= 200 && status < 300,
