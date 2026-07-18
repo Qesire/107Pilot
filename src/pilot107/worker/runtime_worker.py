@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
+from threading import Event, Thread
 
 from pilot107.adapters.slurm import SlurmAuthError, SlurmBackendError, SlurmTransportError
+from pilot107.core.control_repository import (
+    ControlRepository,
+    ControlRepositoryConflict,
+    OutboxMessage,
+)
 from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.run_service import RunService
+from pilot107.core.run_store import CollectionTaskFenceConflict, CollectionTaskRecord
 from pilot107.core.states import TERMINAL_RUN_STATES
 from pilot107.worker.evidence import CollectionTaskHandler
 
@@ -84,17 +92,21 @@ class RuntimeReconcileWorker:
         diagnosis_service: DiagnosisService | None = None,
         worker_id: str = "runtime-worker",
         task_lease_seconds: int = 300,
+        collection_max_attempts: int = 5,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
         if task_lease_seconds <= 0:
             raise ValueError("task_lease_seconds must be positive")
+        if collection_max_attempts <= 0:
+            raise ValueError("collection_max_attempts must be positive")
         self.service = service
         self.batch_size = batch_size
         self.task_handler = task_handler
         self.diagnosis_service = diagnosis_service
         self.worker_id = worker_id
         self.task_lease_seconds = task_lease_seconds
+        self.collection_max_attempts = collection_max_attempts
 
     def tick(self) -> WorkerTickResult:
         submission_batch = self.service.dispatch_due_submissions(limit=self.batch_size)
@@ -179,54 +191,7 @@ class RuntimeReconcileWorker:
         tasks_succeeded = 0
         task_errors: list[WorkerTaskError] = []
         if self.task_handler is not None:
-            tasks = self.service.store.acquire_due_collection_tasks(
-                lease_owner=self.worker_id,
-                limit=self.batch_size,
-                lease_seconds=self.task_lease_seconds,
-            )
-            tasks_checked = len(tasks)
-            for task in tasks:
-                run = self.service.store.get_run(task.run_id)
-                try:
-                    result = self.task_handler.collect(run=run, task_type=task.task_type)
-                except Exception as exc:
-                    classification = classify_worker_exception(
-                        exc,
-                        default_code=WorkerErrorCode.EVIDENCE_COLLECTION_ERROR,
-                        default_retryable=True,
-                    )
-                    self.service.store.mark_collection_task_failed(
-                        task.task_id,
-                        message=str(exc),
-                        retryable=classification.retryable,
-                        lease_owner=self.worker_id,
-                        error_code=classification.code.value,
-                        auth_required=classification.auth_required,
-                        retry_delay_seconds=_retry_delay_seconds(task.attempts)
-                        if classification.retryable
-                        else None,
-                    )
-                    task_errors.append(
-                        WorkerTaskError(
-                            task_id=task.task_id,
-                            run_id=task.run_id,
-                            task_type=task.task_type,
-                            message=str(exc),
-                            code=classification.code.value,
-                            retryable=classification.retryable,
-                            auth_required=classification.auth_required,
-                        )
-                    )
-                    continue
-                self.service.store.mark_collection_task_succeeded(
-                    task.task_id,
-                    lease_owner=self.worker_id,
-                    payload={
-                        "artifacts": [artifact.logical_path for artifact in result.artifacts],
-                        "warnings": result.warnings,
-                    },
-                )
-                tasks_succeeded += 1
+            tasks_checked, tasks_succeeded, task_errors = self._dispatch_collection_tasks()
 
         diagnoses_checked = 0
         diagnoses_succeeded = 0
@@ -269,6 +234,232 @@ class RuntimeReconcileWorker:
             submission_errors=submission_errors,
         )
 
+    def _dispatch_collection_tasks(
+        self,
+    ) -> tuple[int, int, list[WorkerTaskError]]:
+        if self.task_handler is None:
+            return 0, 0, []
+        repository = self.service.control_repository
+        if repository is None:
+            return self._dispatch_legacy_collection_tasks()
+
+        for task in self.service.store.list_collection_tasks_for_dispatch(
+            limit=self.batch_size
+        ):
+            repository.enqueue(
+                message_id=_collection_message_id(task),
+                topic="collection.execute",
+                aggregate_id=task.run_id,
+                payload={
+                    "task_id": task.task_id,
+                    "run_id": task.run_id,
+                    "task_type": task.task_type,
+                    "generation": task.generation,
+                },
+            )
+        checked = 0
+        succeeded = 0
+        errors: list[WorkerTaskError] = []
+        for _ in range(self.batch_size):
+            claimed = repository.claim_outbox(
+                owner=self.worker_id,
+                limit=1,
+                lease_seconds=self.task_lease_seconds,
+                topics=("collection.execute",),
+            )
+            if not claimed:
+                break
+            message = claimed[0]
+            checked += 1
+            try:
+                completed, error = self._execute_collection_message(message)
+            except Exception as exc:
+                task_id, run_id, task_type, _ = _collection_message_identity(
+                    message,
+                    strict=False,
+                )
+                with suppress(ControlRepositoryConflict, RuntimeError):
+                    repository.retry(
+                        message_id=message.message_id,
+                        owner=message.lease_owner or self.worker_id,
+                        fencing_token=message.fencing_token,
+                        error=str(exc),
+                        delay_seconds=1,
+                        max_attempts=self.collection_max_attempts,
+                    )
+                errors.append(
+                    WorkerTaskError(
+                        task_id=task_id,
+                        run_id=run_id,
+                        task_type=task_type,
+                        message=str(exc),
+                    )
+                )
+                continue
+            succeeded += int(completed)
+            if error is not None:
+                errors.append(error)
+        return checked, succeeded, errors
+
+    def _execute_collection_message(
+        self,
+        message: OutboxMessage,
+    ) -> tuple[bool, WorkerTaskError | None]:
+        repository = self.service.control_repository
+        if repository is None or self.task_handler is None:
+            raise RuntimeError("collection outbox dependencies are unavailable")
+        task_id, run_id, task_type, generation = _collection_message_identity(message)
+        task = self.service.store.get_collection_task(task_id)
+        if (
+            task.run_id != run_id
+            or task.task_type != task_type
+            or task.generation != generation
+        ):
+            self._acknowledge_collection(message)
+            return False, None
+        if task.state == "succeeded":
+            self._acknowledge_collection(message)
+            return True, None
+        if task.state == "failed_permanent":
+            self._acknowledge_collection(message)
+            return False, None
+        if message.lease_owner is None or message.lease_expires_at is None:
+            raise RuntimeError("collection outbox message has no active lease")
+        claimed = self.service.store.claim_collection_task(
+            task_id,
+            lease_owner=message.lease_owner,
+            fencing_token=message.fencing_token,
+            generation=generation,
+            lease_expires_at=message.lease_expires_at,
+        )
+        if claimed is None:
+            raise CollectionTaskFenceConflict(f"collection task is fenced: {task_id}")
+
+        run = self.service.store.get_run(run_id)
+        try:
+            with _OutboxHeartbeat(
+                repository=repository,
+                message=message,
+                lease_seconds=self.task_lease_seconds,
+            ):
+                result = self.task_handler.collect(run=run, task_type=task_type)
+        except Exception as exc:
+            classification = classify_worker_exception(
+                exc,
+                default_code=WorkerErrorCode.EVIDENCE_COLLECTION_ERROR,
+                default_retryable=True,
+            )
+            can_retry = (
+                classification.retryable
+                and message.attempts < self.collection_max_attempts
+            )
+            retry_delay = _retry_delay_seconds(message.attempts) if can_retry else None
+            self.service.store.mark_collection_task_failed(
+                task_id,
+                message=str(exc),
+                retryable=can_retry,
+                lease_owner=message.lease_owner,
+                fencing_token=message.fencing_token,
+                error_code=classification.code.value,
+                auth_required=classification.auth_required,
+                retry_delay_seconds=retry_delay,
+            )
+            repository.retry(
+                message_id=message.message_id,
+                owner=message.lease_owner,
+                fencing_token=message.fencing_token,
+                error=str(exc),
+                delay_seconds=retry_delay or 0,
+                max_attempts=(self.collection_max_attempts if classification.retryable else 1),
+            )
+            return False, WorkerTaskError(
+                task_id=task_id,
+                run_id=run_id,
+                task_type=task_type,
+                message=str(exc),
+                code=classification.code.value,
+                retryable=can_retry,
+                auth_required=classification.auth_required,
+            )
+
+        self.service.store.mark_collection_task_succeeded(
+            task_id,
+            lease_owner=message.lease_owner,
+            fencing_token=message.fencing_token,
+            payload={
+                "artifacts": [artifact.logical_path for artifact in result.artifacts],
+                "warnings": result.warnings,
+            },
+        )
+        self._acknowledge_collection(message)
+        return True, None
+
+    def _acknowledge_collection(self, message: OutboxMessage) -> None:
+        repository = self.service.control_repository
+        if repository is None or message.lease_owner is None:
+            return
+        with suppress(ControlRepositoryConflict):
+            repository.acknowledge(
+                message_id=message.message_id,
+                owner=message.lease_owner,
+                fencing_token=message.fencing_token,
+            )
+
+    def _dispatch_legacy_collection_tasks(
+        self,
+    ) -> tuple[int, int, list[WorkerTaskError]]:
+        assert self.task_handler is not None
+        tasks = self.service.store.acquire_due_collection_tasks(
+            lease_owner=self.worker_id,
+            limit=self.batch_size,
+            lease_seconds=self.task_lease_seconds,
+        )
+        succeeded = 0
+        errors: list[WorkerTaskError] = []
+        for task in tasks:
+            run = self.service.store.get_run(task.run_id)
+            try:
+                result = self.task_handler.collect(run=run, task_type=task.task_type)
+            except Exception as exc:
+                classification = classify_worker_exception(
+                    exc,
+                    default_code=WorkerErrorCode.EVIDENCE_COLLECTION_ERROR,
+                    default_retryable=True,
+                )
+                self.service.store.mark_collection_task_failed(
+                    task.task_id,
+                    message=str(exc),
+                    retryable=classification.retryable,
+                    lease_owner=self.worker_id,
+                    error_code=classification.code.value,
+                    auth_required=classification.auth_required,
+                    retry_delay_seconds=_retry_delay_seconds(task.attempts)
+                    if classification.retryable
+                    else None,
+                )
+                errors.append(
+                    WorkerTaskError(
+                        task_id=task.task_id,
+                        run_id=task.run_id,
+                        task_type=task.task_type,
+                        message=str(exc),
+                        code=classification.code.value,
+                        retryable=classification.retryable,
+                        auth_required=classification.auth_required,
+                    )
+                )
+                continue
+            self.service.store.mark_collection_task_succeeded(
+                task.task_id,
+                lease_owner=self.worker_id,
+                payload={
+                    "artifacts": [artifact.logical_path for artifact in result.artifacts],
+                    "warnings": result.warnings,
+                },
+            )
+            succeeded += 1
+        return len(tasks), succeeded, errors
+
     def run_until_idle(
         self,
         *,
@@ -308,6 +499,89 @@ class RuntimeReconcileWorker:
                 break
             time.sleep(interval_seconds)
         return aggregate
+
+
+def _collection_message_id(task: CollectionTaskRecord) -> str:
+    return f"collection:{task.task_id}:{task.generation}"
+
+
+def _collection_message_identity(
+    message: OutboxMessage,
+    *,
+    strict: bool = True,
+) -> tuple[int, str, str, int]:
+    task_id = message.payload.get("task_id")
+    run_id = message.payload.get("run_id")
+    task_type = message.payload.get("task_type")
+    generation = message.payload.get("generation")
+    valid = (
+        message.topic == "collection.execute"
+        and isinstance(task_id, int)
+        and not isinstance(task_id, bool)
+        and task_id > 0
+        and isinstance(run_id, str)
+        and bool(run_id)
+        and message.aggregate_id == run_id
+        and isinstance(task_type, str)
+        and bool(task_type)
+        and isinstance(generation, int)
+        and not isinstance(generation, bool)
+        and generation > 0
+    )
+    if not valid and strict:
+        raise ValueError("collection outbox identity is invalid")
+    return (
+        task_id if isinstance(task_id, int) and not isinstance(task_id, bool) else 0,
+        run_id if isinstance(run_id, str) and run_id else message.aggregate_id,
+        task_type if isinstance(task_type, str) and task_type else "unknown",
+        generation
+        if isinstance(generation, int) and not isinstance(generation, bool)
+        else 0,
+    )
+
+
+class _OutboxHeartbeat:
+    def __init__(
+        self,
+        *,
+        repository: ControlRepository,
+        message: OutboxMessage,
+        lease_seconds: int,
+    ) -> None:
+        if message.lease_owner is None:
+            raise ValueError("heartbeat requires an owned outbox message")
+        self.repository = repository
+        self.message = message
+        self.lease_seconds = lease_seconds
+        self.interval_seconds = max(0.1, lease_seconds / 3)
+        self.stop_event = Event()
+        self.error: Exception | None = None
+        self.thread = Thread(target=self._run, daemon=True)
+
+    def __enter__(self) -> _OutboxHeartbeat:
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=max(1.0, self.interval_seconds + 1))
+        if exc_type is None and self.error is not None:
+            raise CollectionTaskFenceConflict(str(self.error)) from self.error
+
+    def _run(self) -> None:
+        assert self.message.lease_owner is not None
+        while not self.stop_event.wait(self.interval_seconds):
+            try:
+                self.repository.renew_outbox(
+                    message_id=self.message.message_id,
+                    owner=self.message.lease_owner,
+                    fencing_token=self.message.fencing_token,
+                    lease_seconds=self.lease_seconds,
+                )
+            except Exception as exc:
+                self.error = exc
+                self.stop_event.set()
+                return
 
 
 def classify_worker_exception(

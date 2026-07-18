@@ -100,7 +100,17 @@ bash scripts/check-sim-core.sh
 - 两线程、两个 spawn 进程、enqueue-only crash、外部 submit 后 crash、DB write 后 ack 前 crash 契约通过；
 - Docker demo 跨容器接管通过：`run_live_outbox_recovery_fixed_20260718` 由独立 Worker 提交并完成 Evidence collection；
 - review：[phase3g_submission_outbox_review.md](phase3g_submission_outbox_review.md)；
-- 下一步迁移 collection 与 Agent execution 到统一 lease/fencing/outbox，并补 PostgreSQL 业务接线和 crash matrix。
+- Run submit 子切片提交：`b2e1789 feat: add fenced submission outbox`。
+
+### 2026-07-18 R4 Collection Outbox 检查点
+
+- production Worker 的 Evidence collection 已改由确定性 `collection.execute` outbox 驱动；旧任务表保留为业务状态源；
+- collection task 持久化单调 fencing token，租约 owner 名被复用时，旧 token 仍不能写回；
+- task generation 随 runtime task 再激活递增，避免已成功 message ID 阻断下一轮采集；
+- 两线程、两个 spawn 进程竞争均证明每个任务只执行一次；任务成功写库后 ack 前崩溃只补 ack；
+- Docker 跨容器金路径 `run_4c0ac2cde0c340cb872b7f60024467cf` 完成 7/7 fenced collection outbox 和 20 个 Evidence objects；
+- review：[phase3g_collection_outbox_review.md](phase3g_collection_outbox_review.md)；
+- 下一步迁移 Agent execution，再补 PostgreSQL 业务接线、可观测性和 crash matrix。
 
 真人使用不进入这些工作包的通过条件。可选的 U2/U3 只用于视觉、文案、信任感和交互取舍；VM 上传、真实 107 操作和生产身份仍需另行授权。
 

@@ -4,7 +4,11 @@ import unittest
 from pathlib import Path
 
 from pilot107.adapters.slurm import JobSnapshot, SubmissionStrategy, SubmitReceipt
-from pilot107.core.run_store import RunStore, RunStoreFenceConflict
+from pilot107.core.run_store import (
+    CollectionTaskFenceConflict,
+    RunStore,
+    RunStoreFenceConflict,
+)
 from pilot107.core.states import CollectionState, RunState
 
 
@@ -410,6 +414,40 @@ class RunStoreTests(unittest.TestCase):
             lease_owner="worker-1",
         )
         self.assertEqual(self.store.get_collection_task(task.task_id).state, "succeeded")
+
+    def test_collection_task_rejects_stale_token_even_when_owner_name_is_reused(self) -> None:
+        self._terminal_run_with_tasks()
+        task = self.store.list_due_collection_tasks(limit=1)[0]
+        first = self.store.claim_collection_task(
+            task.task_id,
+            lease_owner="worker-reused",
+            fencing_token=1,
+            generation=task.generation,
+            lease_expires_at="2026-07-18T01:00:00+00:00",
+        )
+        self.assertIsNotNone(first)
+        second = self.store.claim_collection_task(
+            task.task_id,
+            lease_owner="worker-reused",
+            fencing_token=2,
+            generation=task.generation,
+            lease_expires_at="2026-07-18T02:00:00+00:00",
+        )
+        self.assertIsNotNone(second)
+
+        with self.assertRaises(CollectionTaskFenceConflict):
+            self.store.mark_collection_task_succeeded(
+                task.task_id,
+                lease_owner="worker-reused",
+                fencing_token=1,
+            )
+
+        succeeded = self.store.mark_collection_task_succeeded(
+            task.task_id,
+            lease_owner="worker-reused",
+            fencing_token=2,
+        )
+        self.assertEqual(succeeded.state, "succeeded")
 
     def test_retryable_collection_task_failure_marks_run_degraded(self) -> None:
         run = self._terminal_run_with_tasks()

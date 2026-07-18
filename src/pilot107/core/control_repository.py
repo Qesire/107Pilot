@@ -96,6 +96,15 @@ class ControlRepository(Protocol):
         lease_seconds: int,
     ) -> OutboxMessage | None: ...
 
+    def renew_outbox(
+        self,
+        *,
+        message_id: str,
+        owner: str,
+        fencing_token: int,
+        lease_seconds: int,
+    ) -> OutboxMessage: ...
+
     def acknowledge(self, *, message_id: str, owner: str, fencing_token: int) -> None: ...
 
     def retry(
@@ -468,6 +477,35 @@ class SQLiteControlRepository:
             available_at=None,
             error=None,
         )
+
+    def renew_outbox(
+        self,
+        *,
+        message_id: str,
+        owner: str,
+        fencing_token: int,
+        lease_seconds: int,
+    ) -> OutboxMessage:
+        _validate_key(message_id, "message_id", _IDENTIFIER)
+        _validate_key(owner, "owner", _IDENTIFIER)
+        _require_positive(fencing_token, "fencing_token")
+        _require_positive(lease_seconds, "lease_seconds")
+        now = self._now()
+        expires_at = self._after(lease_seconds)
+        with self.connect() as conn:
+            result = conn.execute(
+                """
+                UPDATE control_outbox
+                SET lease_expires_at = ?, updated_at = ?
+                WHERE message_id = ? AND state = 'running'
+                  AND lease_owner = ? AND fencing_token = ?
+                  AND lease_expires_at > ?
+                """,
+                (expires_at, now, message_id, owner, fencing_token, now),
+            )
+        if result.rowcount != 1:
+            raise ControlRepositoryConflict("outbox lease is expired or fenced")
+        return self.get_outbox(message_id)
 
     def retry(
         self,

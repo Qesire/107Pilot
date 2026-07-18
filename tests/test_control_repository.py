@@ -176,6 +176,48 @@ class SQLiteControlRepositoryTests(unittest.TestCase):
             )
         )
 
+    def test_outbox_renewal_extends_only_the_current_unexpired_fence(self) -> None:
+        self.store.enqueue(
+            message_id="message-renew",
+            topic="collection.execute",
+            aggregate_id="run_renew",
+            payload={"run_id": "run_renew"},
+        )
+        first = self.store.claim_outbox(
+            owner="worker-a",
+            limit=1,
+            lease_seconds=10,
+        )[0]
+        self.clock.advance(5)
+
+        renewed = self.store.renew_outbox(
+            message_id=first.message_id,
+            owner="worker-a",
+            fencing_token=first.fencing_token,
+            lease_seconds=10,
+        )
+
+        self.assertGreater(str(renewed.lease_expires_at), str(first.lease_expires_at))
+        self.clock.advance(6)
+        self.assertEqual(
+            self.store.claim_outbox(owner="worker-b", limit=1, lease_seconds=10),
+            [],
+        )
+        self.clock.advance(5)
+        reclaimed = self.store.claim_outbox(
+            owner="worker-b",
+            limit=1,
+            lease_seconds=10,
+        )[0]
+        with self.assertRaises(ControlRepositoryConflict):
+            self.store.renew_outbox(
+                message_id=first.message_id,
+                owner="worker-a",
+                fencing_token=first.fencing_token,
+                lease_seconds=10,
+            )
+        self.assertEqual(reclaimed.fencing_token, first.fencing_token + 1)
+
     def test_retry_delays_delivery_and_dead_letters_at_attempt_budget(self) -> None:
         self.store.enqueue(
             message_id="message-1",

@@ -26,6 +26,10 @@ class RunStoreFenceConflict(RuntimeError):
     """Raised when a stale submission worker attempts to persist a result."""
 
 
+class CollectionTaskFenceConflict(RuntimeError):
+    """Raised when a stale collection worker attempts to persist a result."""
+
+
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -76,6 +80,8 @@ class CollectionTaskRecord:
     next_attempt_at: str | None
     lease_owner: str | None
     lease_expires_at: str | None
+    fencing_token: int
+    generation: int
     attempts: int
     created_at: str
     updated_at: str
@@ -233,6 +239,8 @@ class RunStore:
                     next_attempt_at TEXT,
                     lease_owner TEXT,
                     lease_expires_at TEXT,
+                    fencing_token INTEGER NOT NULL DEFAULT 0,
+                    generation INTEGER NOT NULL DEFAULT 1,
                     attempts INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -376,6 +384,18 @@ class RunStore:
                 table="runs",
                 column="submission_fencing_token",
                 definition="INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                conn,
+                table="collection_tasks",
+                column="fencing_token",
+                definition="INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                conn,
+                table="collection_tasks",
+                column="generation",
+                definition="INTEGER NOT NULL DEFAULT 1",
             )
             self._ensure_column(
                 conn,
@@ -1675,6 +1695,95 @@ class RunStore:
             ).fetchall()
         return [_row_to_collection_task(row) for row in rows]
 
+    def list_collection_tasks_for_dispatch(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[CollectionTaskRecord]:
+        """Return due work plus expired legacy leases for durable outbox seeding."""
+
+        if limit <= 0:
+            return []
+        now = utc_now_iso()
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM collection_tasks
+                WHERE (
+                    state IN ('pending', 'failed_retryable')
+                    AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                ) OR (
+                    state = 'running'
+                    AND lease_expires_at IS NOT NULL
+                    AND lease_expires_at <= ?
+                )
+                ORDER BY updated_at, created_at, task_id
+                LIMIT ?
+                """,
+                (now, now, limit),
+            ).fetchall()
+        return [_row_to_collection_task(row) for row in rows]
+
+    def claim_collection_task(
+        self,
+        task_id: int,
+        *,
+        lease_owner: str,
+        fencing_token: int,
+        generation: int,
+        lease_expires_at: str,
+    ) -> CollectionTaskRecord | None:
+        if fencing_token <= 0:
+            raise ValueError("fencing_token must be positive")
+        if generation <= 0:
+            raise ValueError("generation must be positive")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            result = conn.execute(
+                """
+                UPDATE collection_tasks
+                SET state = 'running', lease_owner = ?, lease_expires_at = ?,
+                    fencing_token = ?, attempts = attempts + 1, updated_at = ?
+                WHERE task_id = ? AND generation = ?
+                  AND (
+                    (
+                      state IN ('pending', 'failed_retryable')
+                      AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+                    ) OR (
+                      state = 'running' AND fencing_token < ?
+                    )
+                  )
+                """,
+                (
+                    lease_owner,
+                    lease_expires_at,
+                    fencing_token,
+                    now,
+                    task_id,
+                    generation,
+                    now,
+                    fencing_token,
+                ),
+            )
+            if result.rowcount != 1:
+                return None
+            task = self._get_task_in_conn(conn, task_id)
+            self._append_event(
+                conn,
+                run_id=task.run_id,
+                event_type="collection.task_acquired",
+                payload={
+                    "task_id": task.task_id,
+                    "task_type": task.task_type,
+                    "lease_owner": lease_owner,
+                    "lease_expires_at": lease_expires_at,
+                    "fencing_token": fencing_token,
+                    "generation": generation,
+                },
+            )
+            self._refresh_collection_state(conn, task.run_id)
+        return self.get_collection_task(task_id)
+
     def acquire_due_collection_tasks(
         self,
         *,
@@ -1716,6 +1825,7 @@ class RunStore:
                     SET state = 'running',
                         lease_owner = ?,
                         lease_expires_at = ?,
+                        fencing_token = fencing_token + 1,
                         attempts = attempts + 1,
                         updated_at = ?
                     WHERE task_id = ?
@@ -1744,6 +1854,8 @@ class RunStore:
                         "task_type": task.task_type,
                         "lease_owner": lease_owner,
                         "lease_expires_at": lease_expires_at,
+                        "fencing_token": task.fencing_token,
+                        "generation": task.generation,
                     },
                 )
                 self._refresh_collection_state(conn, task.run_id)
@@ -1765,6 +1877,7 @@ class RunStore:
                 SET state = 'running',
                     lease_owner = ?,
                     lease_expires_at = ?,
+                    fencing_token = fencing_token + 1,
                     attempts = attempts + 1,
                     updated_at = ?
                 WHERE task_id = ?
@@ -1787,7 +1900,10 @@ class RunStore:
         *,
         payload: dict[str, Any] | None = None,
         lease_owner: str | None = None,
+        fencing_token: int | None = None,
     ) -> CollectionTaskRecord:
+        if fencing_token is not None and lease_owner is None:
+            raise ValueError("fencing_token requires lease_owner")
         now = utc_now_iso()
         with self.connect() as conn:
             if lease_owner is None:
@@ -1802,7 +1918,7 @@ class RunStore:
                     """,
                     (now, task_id),
                 )
-            else:
+            elif fencing_token is None:
                 result = conn.execute(
                     """
                     UPDATE collection_tasks
@@ -1816,14 +1932,37 @@ class RunStore:
                     """,
                     (now, task_id, lease_owner),
                 )
+            else:
+                result = conn.execute(
+                    """
+                    UPDATE collection_tasks
+                    SET state = 'succeeded',
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = ?
+                    WHERE task_id = ?
+                      AND state = 'running'
+                      AND lease_owner = ?
+                      AND fencing_token = ?
+                    """,
+                    (now, task_id, lease_owner, fencing_token),
+                )
             if result.rowcount != 1:
-                raise RuntimeError(f"collection task lease conflict: {task_id}")
+                raise CollectionTaskFenceConflict(
+                    f"collection task lease is fenced: {task_id}"
+                )
             task = self._get_task_in_conn(conn, task_id)
             self._append_event(
                 conn,
                 run_id=task.run_id,
                 event_type="collection.task_succeeded",
-                payload={"task_id": task.task_id, "task_type": task.task_type, **(payload or {})},
+                payload={
+                    "task_id": task.task_id,
+                    "task_type": task.task_type,
+                    "fencing_token": fencing_token,
+                    "generation": task.generation,
+                    **(payload or {}),
+                },
             )
             self._refresh_collection_state(conn, task.run_id)
         return self.get_collection_task(task_id)
@@ -1838,7 +1977,10 @@ class RunStore:
         error_code: str | None = None,
         auth_required: bool = False,
         retry_delay_seconds: int | None = None,
+        fencing_token: int | None = None,
     ) -> CollectionTaskRecord:
+        if fencing_token is not None and lease_owner is None:
+            raise ValueError("fencing_token requires lease_owner")
         now = utc_now_iso()
         state = "failed_retryable" if retryable else "failed_permanent"
         next_attempt_at = None
@@ -1860,7 +2002,7 @@ class RunStore:
                     """,
                     (state, next_attempt_at, now, task_id),
                 )
-            else:
+            elif fencing_token is None:
                 result = conn.execute(
                     """
                     UPDATE collection_tasks
@@ -1875,8 +2017,33 @@ class RunStore:
                     """,
                     (state, next_attempt_at, now, task_id, lease_owner),
                 )
+            else:
+                result = conn.execute(
+                    """
+                    UPDATE collection_tasks
+                    SET state = ?,
+                        next_attempt_at = ?,
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = ?
+                    WHERE task_id = ?
+                      AND state = 'running'
+                      AND lease_owner = ?
+                      AND fencing_token = ?
+                    """,
+                    (
+                        state,
+                        next_attempt_at,
+                        now,
+                        task_id,
+                        lease_owner,
+                        fencing_token,
+                    ),
+                )
             if result.rowcount != 1:
-                raise RuntimeError(f"collection task lease conflict: {task_id}")
+                raise CollectionTaskFenceConflict(
+                    f"collection task lease is fenced: {task_id}"
+                )
             task = self._get_task_in_conn(conn, task_id)
             self._append_event(
                 conn,
@@ -1890,6 +2057,8 @@ class RunStore:
                     "error_code": error_code,
                     "auth_required": auth_required,
                     "retry_delay_seconds": retry_delay_seconds,
+                    "fencing_token": fencing_token,
+                    "generation": task.generation,
                 },
             )
             self._refresh_collection_state(conn, task.run_id)
@@ -1984,7 +2153,8 @@ class RunStore:
         conn.execute(
             """
             UPDATE collection_tasks
-            SET state = 'pending', next_attempt_at = ?, updated_at = ?
+            SET state = 'pending', next_attempt_at = ?, generation = generation + 1,
+                updated_at = ?
             WHERE run_id = ? AND task_type = ? AND state = 'succeeded'
             """,
             (now, now, run_id, task_type),
@@ -2116,6 +2286,8 @@ def _row_to_collection_task(row: sqlite3.Row) -> CollectionTaskRecord:
         next_attempt_at=None if row["next_attempt_at"] is None else str(row["next_attempt_at"]),
         lease_owner=None if row["lease_owner"] is None else str(row["lease_owner"]),
         lease_expires_at=None if row["lease_expires_at"] is None else str(row["lease_expires_at"]),
+        fencing_token=int(row["fencing_token"]),
+        generation=int(row["generation"]),
         attempts=int(row["attempts"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),

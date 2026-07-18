@@ -379,6 +379,36 @@ class PostgresControlRepository:
             error=None,
         )
 
+    def renew_outbox(
+        self,
+        *,
+        message_id: str,
+        owner: str,
+        fencing_token: int,
+        lease_seconds: int,
+    ) -> OutboxMessage:
+        _validate_key(message_id, "message_id", _IDENTIFIER)
+        _validate_key(owner, "owner", _IDENTIFIER)
+        _require_positive(fencing_token, "fencing_token")
+        _require_positive(lease_seconds, "lease_seconds")
+        now = self._now()
+        expires_at = now + timedelta(seconds=lease_seconds)
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                UPDATE control_outbox
+                SET lease_expires_at = %s, updated_at = %s
+                WHERE message_id = %s AND state = 'running'
+                  AND lease_owner = %s AND fencing_token = %s
+                  AND lease_expires_at > %s
+                RETURNING *
+                """,
+                (expires_at, now, message_id, owner, fencing_token, now),
+            ).fetchone()
+        if row is None:
+            raise ControlRepositoryConflict("outbox lease is expired or fenced")
+        return _row_to_outbox(row)
+
     def retry(
         self,
         *,
