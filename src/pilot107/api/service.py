@@ -51,6 +51,7 @@ from pilot107.core.proxy_auth import load_proxy_hmac_secret
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
 from pilot107.core.template_market import TemplateMarketStore
+from pilot107.core.template_market_seed import seed_preset_recipes
 from pilot107.core.template_policy import (
     TemplatePublicationGate,
     TemplateRoleDirectory,
@@ -292,6 +293,16 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         target=_refresh_loop, name="slurmrest-snapshot-refresh", daemon=True
     )
     refresh_thread.start()
+
+    # --- A-2: Template market seed (idempotent, fault-tolerant) ---
+    try:
+        seed_preset_recipes(
+            catalog=catalog,
+            store=template_market_store,
+            role_directory=template_role_directory,
+        )
+    except Exception:  # noqa: BLE001 - startup must not crash on seed failure
+        pass  # seed errors are recorded in SeedReport; total failure is non-fatal
 
     return Pilot107HttpApi(
         store=store,
