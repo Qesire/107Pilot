@@ -28,6 +28,7 @@ import {
 } from "./components";
 import { useCapabilities, useLatestEntitlement, useLatestPlatform, useRun, useRunPages, useRuns } from "./query";
 import { RunTable } from "./RunTable";
+import { RunPicker } from "./RunPicker";
 import { nativeRunCommands, RunEvidencePanel } from "./RunEvidencePanel";
 import { clearRunFilters, loadRunFilters, saveRunFilters } from "./run-filters";
 import { runStateLabel, runTone } from "./run-status";
@@ -281,6 +282,7 @@ export function RunsPage({ user, location, navigate }: PageProps) {
 export function TerminalCollaborationPage({ user, location, navigate, terminalDeepLink }: PageProps & { terminalDeepLink: string | null }) {
   const runId = location.search.get("run");
   const run = useRun(user, runId);
+  const runs = useRuns(user);
   const [copied, setCopied] = useState<string | null>(null);
   const commands = run.data?.job_id
     ? nativeRunCommands(run.data.job_id, run.data.workdir ?? null)
@@ -295,7 +297,23 @@ export function TerminalCollaborationPage({ user, location, navigate, terminalDe
       <div className="terminal-collaboration-grid">
         <section className="panel">
           <div className="panel-heading"><div><p className="panel-kicker">Selected Run</p><h2>对象绑定</h2></div></div>
-          <QueryBoundary pending={Boolean(runId) && run.isPending} error={run.error} empty={!runId} emptyTitle="尚未选择 Run" emptyDetail="从 Run 摘要中的“终端协同”进入，命令才会绑定明确 Job ID。">
+          <QueryBoundary
+            pending={Boolean(runId) && run.isPending}
+            error={run.error}
+            empty={!runId}
+            emptyTitle="选择一个 Run 进入终端协同"
+            emptyDetail={
+              <>
+                <RunPicker
+                  runs={runs.data?.items ?? []}
+                  onSelect={(selectedId) => navigate(withSearch("/terminal", location.search, { run: selectedId }))}
+                />
+                <p className="terminal-safety-note">
+                  选择 Run 后，命令将绑定该 Run 的 Job ID 和工作目录；浏览器不会执行 shell。
+                </p>
+              </>
+            }
+          >
             {run.data ? <>
               <dl className="fact-list">
                 <div><dt>Run</dt><dd className="mono wrap-anywhere">{run.data.run_id}</dd></div>
