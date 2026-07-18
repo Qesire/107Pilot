@@ -106,3 +106,42 @@ S1 已部署, G3 功能链通过 (smoke/外部可达/并发 20/并发 50/4 路�
 - 单一 fixed_user=alice 身份
 
 本记录在 S1 状态问题上取代 `docs/phase-3/cpu_rc_release_review.md:5` 中 "尚未上传或部署 VM" 的结论。`current_status_index.md` 的 S1 行应从 "当前未部署" 更新为 "已部署，G3 功能链通过"。
+
+## Phase A 重部补录 (2026-07-18T21:46Z)
+
+Phase A 四缺口修复后重部到 VM (revision `a91b9765def1`)，让设计中的 12 步演示闭环在 VM 上真正跑通。
+
+### 修复内容
+
+| 缺口 | 实现 | VM 验证结果 |
+|---|---|---|
+| A-1 Slurm 实时事实 | 新增 `slurmrest_snapshot.py` 采集器 + `service.py` 启动时采集 + 5min 后台刷新；owner 用 `config.slurm_username` (alice) | `/api/v1/platform/capabilities` 的 `latest_snapshot` 非 null ✓；partitions/nodes 数据为空 (slurmrestd 需 JWT, api 容器无 docker socket 不能 `scontrol token`) — 静态 profile 仍显示 CPU-RC 分区/QoS, 可演示; JWT 接入列为 follow-up |
+| A-2 模板市场 seed | 新增 `template_market_seed.py` 完整发布流 (create_draft→submit_review→decide_review→publish), 幂等 (skip 已发布 + resume editable stale draft + refresh stale payload), 容错 (gate-blocked 记录不中断); 系统 bootstrap reviewer 注入 | 启动日志 `published=5 gate_blocked=0` ✓; `GET /api/v1/templates` 返回 5 个模板 (学生 CPU/结构化 Preflight/健壮 Slurm/Python CPU/Fail-closed 合并) ✓ |
+| A-3 LLM 接入 | `.env.cpu-rc.example` 加 USTC glm-5.2-107 模板; VM `.env.cpu-rc` 注入真实 apiKey (sk-4J_...); `api.ts` `advanceRemediationSession` 默认发 `provider=local`; `AgentPage.tsx` 加 provider 选择器 | env 配置 ✓; LLM endpoint 可达 (status 200, 返回模型列表) ✓; UI provider 选择器已部署 (web 测试 74 pass) |
+| A-4 workspace 绑 job | 新增 `RunPicker.tsx` 纯组件; `AgentPage.tsx` 空状态改内联 RunPicker (filter FAILED); `pages.tsx` `TerminalCollaborationPage` 空状态改内联 RunPicker; `QueryBoundary.emptyDetail` 放宽为 ReactNode | 代码完成 (web 测试 74 pass); 浏览器视觉验证待人工 |
+
+### 测试基线
+
+- Python: 628 passed, 13 skipped, 5 subtests passed
+- Web (vitest): 74 passed, 0 failed
+- TypeScript: `tsc --noEmit` 无错误
+
+### 部署过程关键修复 (4 轮重建)
+
+1. 首次重建: Docker 层缓存导致 Phase A 文件未入镜像 → 改用 `--no-cache` 重建
+2. `.env.cpu-rc` image refs 指向旧 revision → sed 更新到新 revision
+3. seed 因 `config.template_reviewers` 默认不含系统 reviewer → seed 内部构造 seed-scoped role_directory
+4. 持久 DB 卷残留 stale editable drafts (qos='normal') → resume 时 `update_draft` 刷新 payload
+
+### Phase A 不做 (边界)
+
+- 真实 107 (Slurm 仍为模拟器)
+- 校园多用户生产 (单租户 fixed_user=alice)
+- 扩展闭环新功能 (代码上传 / LLM 生成作业 / 自动 capsule / agent 热修 / 下载上传重试 / 分享) — Phase B
+- `RemediationPlanV1` 结构化提案接入 live `_plan_turn` — Phase B
+
+### Follow-up (不阻塞演示)
+
+- A-1 slurmrestd JWT auth: api 容器需 docker socket mount 或与 worker/slurm 容器共享 token 机制, 才能让 REST 采集读到真实 partitions/nodes
+- A-4 浏览器视觉验证: 用户手动打开 `https://114.214.241.31:8443/agent` 和 `/terminal` 确认 RunPicker 空状态
+- VM root 密码更换: 密码在此文档前已暴露, 建议换 SSH key 或新密码
