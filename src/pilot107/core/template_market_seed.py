@@ -11,7 +11,12 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from pilot107.core.contracts import RecipeCatalog, RecipeVersion
-from pilot107.core.template_market import TemplateMarketItemRecord, TemplateMarketStore, TemplateVisibility
+from pilot107.core.template_market import (
+    TemplateDraftRecord,
+    TemplateMarketItemRecord,
+    TemplateMarketStore,
+    TemplateVisibility,
+)
 from pilot107.core.template_policy import TemplateRoleDirectory
 
 _SEED_AUTHOR = "pilot107-system-author"
@@ -99,6 +104,26 @@ def _already_published(
     return False
 
 
+def _find_draft_by_template_id(
+    store: TemplateMarketStore, template_id: str, *, owner: str
+) -> TemplateDraftRecord | None:
+    """Find an existing draft by template_id.
+
+    Used for idempotency across failed seed runs: a previous run may have
+    created an editable draft but failed before publish, leaving it in the
+    persistent DB volume. Re-running seed must resume from that draft
+    instead of hitting the UNIQUE constraint on template_drafts.template_id.
+    """
+    try:
+        drafts, _ = store.list_drafts_page(owner=owner, limit=100)
+    except Exception:
+        return None
+    for draft in drafts:
+        if getattr(draft, "template_id", None) == template_id:
+            return draft
+    return None
+
+
 def seed_preset_recipes(
     *,
     catalog: RecipeCatalog,
@@ -127,18 +152,31 @@ def seed_preset_recipes(
             report.skipped += 1
             continue
         try:
-            draft = store.create_draft(
-                owner=_SEED_AUTHOR,
-                title=recipe.title,
-                description=(
-                    f"Seed preset recipe {recipe.recipe_version_id}"
-                ),
-                visibility=TemplateVisibility.PUBLIC,
-                payload=_draft_payload_from_recipe(recipe),
-                compatibility=_draft_compatibility_from_recipe(recipe),
-                publication=dict(_SEED_PUBLICATION),
-                template_id=f"seed-{recipe.recipe_id}",
+            template_id = f"seed-{recipe.recipe_id}"
+            existing_draft = _find_draft_by_template_id(
+                store, template_id, owner=_SEED_AUTHOR
             )
+            if existing_draft is not None:
+                draft = existing_draft
+                if str(draft.state) != "editable":
+                    # submitted/approved/published/rejected/archived: cannot
+                    # safely resume without a review lookup; record and skip.
+                    raise RuntimeError(
+                        f"existing draft in state {draft.state}, cannot resume"
+                    )
+            else:
+                draft = store.create_draft(
+                    owner=_SEED_AUTHOR,
+                    title=recipe.title,
+                    description=(
+                        f"Seed preset recipe {recipe.recipe_version_id}"
+                    ),
+                    visibility=TemplateVisibility.PUBLIC,
+                    payload=_draft_payload_from_recipe(recipe),
+                    compatibility=_draft_compatibility_from_recipe(recipe),
+                    publication=dict(_SEED_PUBLICATION),
+                    template_id=template_id,
+                )
             review = store.submit_review(
                 draft.draft_id, owner=_SEED_AUTHOR, expected_version=draft.version
             )

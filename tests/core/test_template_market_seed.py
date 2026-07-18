@@ -127,3 +127,49 @@ def test_seed_injects_system_reviewer_into_role_directory(
     for item in items:
         review = template_store.get_review(item.release.review_id)
         assert review.reviewer == "pilot107-system-reviewer"
+
+
+def test_seed_resumes_from_existing_editable_draft(
+    recipe_catalog, template_store, role_directory
+):
+    """If a previous failed seed left an editable draft, seed resumes from it
+    instead of hitting a UNIQUE constraint on template_drafts.template_id."""
+    recipe = recipe_catalog.list_versions()[0]
+    template_store.create_draft(
+        owner="pilot107-system-author",
+        title=recipe.title,
+        description="stale draft from failed run",
+        visibility=TemplateVisibility.PUBLIC,
+        payload={
+            "recipe_version_id": recipe.recipe_version_id,
+            "project": {"workdir": "/public/home/pilot107-system-author"},
+            "entry": {"command": "echo ok"},
+            "runtime": {"environment": {}},
+            "resources": {
+                "partition": "debug",
+                "qos": "normal",
+                "nodes": 1,
+                "ntasks": 1,
+                "cpus_per_task": 1,
+                "memory": "1G",
+                "time_limit": "00:05:00",
+            },
+        },
+        compatibility={"partitions": ["debug"], "gpu": False},
+        publication={
+            "license": "MIT",
+            "attribution": "stale seed",
+            "dataset_access": "none",
+            "risk_statement": "stale",
+        },
+        template_id=f"seed-{recipe.recipe_id}",
+    )
+    report = seed_preset_recipes(
+        catalog=recipe_catalog,
+        store=template_store,
+        role_directory=role_directory,
+    )
+    assert report.published >= 1, f"seed should publish; errors={report.errors}"
+    assert all(
+        "UNIQUE constraint" not in e for e in report.errors
+    ), f"must not hit UNIQUE conflict; errors={report.errors}"
