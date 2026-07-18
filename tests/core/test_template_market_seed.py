@@ -6,7 +6,13 @@ import pytest
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
 from pilot107.core.resources import REAL107_SIM_PARTITION_QOS
 from pilot107.core.template_market import TemplateMarketStore, TemplateVisibility
-from pilot107.core.template_market_seed import SeedReport, seed_preset_recipes
+from pilot107.core.template_market_seed import (
+    SeedReport,
+    seed_preset_recipes,
+    _draft_compatibility_from_recipe,
+    _draft_payload_from_recipe,
+    _SEED_PUBLICATION,
+)
 from pilot107.core.template_policy import (
     TemplatePublicationGate,
     TemplateReviewerRole,
@@ -193,6 +199,37 @@ def test_seed_payload_passes_publication_gate(
         role_directory=role_directory,
     )
     assert report.gate_blocked == 0, f"gate blocked: {report.errors}"
+    assert report.published >= 1, f"seed should publish; errors={report.errors}"
+    items, _ = template_store.list_market_page(actor="pilot107-system-author")
+    assert len(items) >= 1
+
+
+def test_seed_refreshes_stale_draft_payload_on_resume(
+    recipe_catalog, template_store, role_directory
+):
+    """Existing editable draft with a stale payload (e.g. qos='normal' from a
+    pre-fix seed run) must be refreshed before publish so the gate passes."""
+    recipe = recipe_catalog.list_versions()[0]
+    stale_payload = _draft_payload_from_recipe(recipe)
+    stale_payload["resources"]["qos"] = "normal"  # stale, gate would block
+    template_store.create_draft(
+        owner="pilot107-system-author",
+        title=recipe.title,
+        description="stale draft from failed run",
+        visibility=TemplateVisibility.PUBLIC,
+        payload=stale_payload,
+        compatibility=_draft_compatibility_from_recipe(recipe),
+        publication=dict(_SEED_PUBLICATION),
+        template_id=f"seed-{recipe.recipe_id}",
+    )
+    report = seed_preset_recipes(
+        catalog=recipe_catalog,
+        store=template_store,
+        role_directory=role_directory,
+    )
+    assert report.gate_blocked == 0, (
+        f"stale draft should be refreshed before publish: {report.errors}"
+    )
     assert report.published >= 1, f"seed should publish; errors={report.errors}"
     items, _ = template_store.list_market_page(actor="pilot107-system-author")
     assert len(items) >= 1

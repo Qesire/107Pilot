@@ -185,6 +185,21 @@ def seed_preset_recipes(
                     raise RuntimeError(
                         f"existing draft in state {draft.state}, cannot resume"
                     )
+                # Refresh the stale draft's content with current recipe-derived
+                # values. Pre-fix seed runs may have left drafts with payloads
+                # that no longer pass the publication gate (e.g. qos='normal'
+                # before _choose_qos was introduced).
+                draft = store.update_draft(
+                    draft.draft_id,
+                    owner=_SEED_AUTHOR,
+                    expected_version=draft.version,
+                    title=recipe.title,
+                    description=f"Seed preset recipe {recipe.recipe_version_id}",
+                    visibility=TemplateVisibility.PUBLIC,
+                    payload=_draft_payload_from_recipe(recipe),
+                    compatibility=_draft_compatibility_from_recipe(recipe),
+                    publication=dict(_SEED_PUBLICATION),
+                )
             else:
                 draft = store.create_draft(
                     owner=_SEED_AUTHOR,
