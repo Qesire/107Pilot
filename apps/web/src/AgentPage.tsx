@@ -3,7 +3,8 @@ import { useState } from "react";
 import { ArrowRight, Ban, Bot, CheckCircle2, Play, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 import { api } from "./api";
 import { QueryBoundary, SectionHeading, StatusBadge, formatTimestamp } from "./components";
-import { useRemediationSession, useRemediationSessions } from "./query";
+import { RunPicker } from "./RunPicker";
+import { useRemediationSession, useRemediationSessions, useRuns } from "./query";
 import type { RemediationProposal, RemediationSession, RemediationState } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
@@ -32,13 +33,21 @@ const terminalStates = new Set<RemediationState>([
 ]);
 
 export function AgentPage({ user, location, navigate }: AgentPageProps) {
+  const queryClient = useQueryClient();
   const state = location.search.get("state") ?? "";
   const requestedSession = location.search.get("session");
   const sessions = useRemediationSessions(user, state || undefined);
+  const runs = useRuns(user, "FAILED");
   const selectedId = requestedSession ?? sessions.data?.items[0]?.session_id ?? null;
   const detail = useRemediationSession(user, selectedId);
   const selectSession = (sessionId: string) =>
     navigate(withSearch("/agent", location.search, { session: sessionId }));
+  const createRemediationSession = useMutation({
+    mutationFn: (runId: string) => api.createRemediationSession(user, runId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["remediation-sessions", user] });
+    },
+  });
 
   return (
     <>
@@ -77,8 +86,26 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
             pending={sessions.isPending}
             error={sessions.error}
             empty={(sessions.data?.items.length ?? 0) === 0}
-            emptyTitle="还没有修复会话"
-            emptyDetail="从失败 Run 的诊断页启动；Agent 不会扫描或修改其他用户的作业。"
+            emptyTitle="选择一个失败的 Run 开始修复"
+            emptyDetail={
+              <>
+                <RunPicker
+                  runs={runs.data?.items ?? []}
+                  filter={{ state: "FAILED" }}
+                  onSelect={(runId) => createRemediationSession.mutate(runId)}
+                />
+                {createRemediationSession.error ? (
+                  <p className="agent-safety-note" role="alert">
+                    {createRemediationSession.error instanceof Error
+                      ? createRemediationSession.error.message
+                      : "创建会话失败"}
+                  </p>
+                ) : null}
+                <p className="agent-safety-note">
+                  选择 Run 后，Agent 只处理该 Run 的 Evidence，不会扫描或修改其他作业。
+                </p>
+              </>
+            }
           >
             <div className="agent-session-list">
               {(sessions.data?.items ?? []).map((session) => (
