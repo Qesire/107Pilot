@@ -14,6 +14,7 @@ from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.core.agent import AgentCitation, AgentExplainService, LLMExplanation
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
 from pilot107.core.evidence_binding import EvidenceBinder
+from pilot107.core.proxy_auth import signed_proxy_headers
 from pilot107.core.resources import ResourcePlan
 from pilot107.core.run_service import RunService, RunSubmitRequest
 from pilot107.core.run_store import RunStore
@@ -49,6 +50,38 @@ class HttpApiTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
+
+    def test_proxy_signature_guards_forwarded_identity_and_replay(self) -> None:
+        secret = b"0123456789abcdef0123456789abcdef"
+        api = Pilot107HttpApi(
+            store=self.run_store,
+            evidence_query=EvidenceQueryService(
+                store=self.run_store,
+                evidence_store=self.evidence_store,
+            ),
+            run_service=self.run_service,
+            recipe_catalog=self.recipe_catalog,
+            contract_service=self.contract_service,
+            auth_required=True,
+            proxy_hmac_secret=secret,
+        )
+        target = "/api/v1/recipes"
+
+        self.assertEqual(
+            api.handle_get(target, headers={"X-Pilot107-User": "alice"}).payload["error"][
+                "code"
+            ],
+            "AUTH.PROXY_SIGNATURE_INVALID",
+        )
+        headers = signed_proxy_headers(
+            secret=secret,
+            method="GET",
+            target=target,
+            user="alice",
+        )
+        self.assertEqual(api.handle_get(target, headers=headers).status, 200)
+        self.assertEqual(api.handle_get(target, headers=headers).status, 403)
+        self.assertEqual(api.handle_get("/api/v1/health/live").status, 200)
 
     def _failed_run_with_stderr(self):
         run = self.run_store.create_run(

@@ -42,3 +42,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sh simulator/compose/scripts/check-compose-config.sh
+
+  security:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.3"
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: uv sync --locked --extra dev
+      - run: npm ci
+      - run: uv run python scripts/scan-tracked-secrets.py
+      - run: uv run pip-audit . --locked --progress-spinner off
+      - run: npm audit --omit=dev --audit-level=high
+      - run: docker build -f apps/Dockerfile -t pilot107/app-ci:${{ github.sha }} .
+      - name: Scan source, dependency locks, secrets, and configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Scan application image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: pilot107/app-ci:${{ github.sha }}
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

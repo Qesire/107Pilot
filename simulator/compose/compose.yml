@@ -110,6 +110,8 @@ services:
     image: ${PILOT107_API_IMAGE:-pilot107/api:local}
     profiles: ["apps"]
     user: "10700:10700"
+    group_add:
+      - "${PILOT107_SECRET_GID:-1000}"
     read_only: true
     cap_drop: ["ALL"]
     security_opt:
@@ -140,6 +142,7 @@ services:
       PILOT107_WORKER_METRICS_ROOT: /var/lib/pilot107/worker-metrics
       PILOT107_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/alice,/public/home/bob}
       PILOT107_AUTH_REQUIRED: "true"
+      PILOT107_PROXY_HMAC_SECRET_FILE: /run/secrets/pilot107-proxy-hmac
       PILOT107_CONTRACT_PROFILE: ${PILOT107_CONTRACT_PROFILE:-real107-sim}
       PILOT107_SLURMRESTD_URL: http://slurmrestd:6820
       PILOT107_REST_AUTH_STYLE: ${PILOT107_REST_AUTH_STYLE:-bearer}
@@ -156,6 +159,8 @@ services:
     volumes:
       - public:/public:ro
       - pilot107-data:/var/lib/pilot107
+    secrets:
+      - pilot107-proxy-hmac
     depends_on:
       - slurmrestd
     healthcheck:
@@ -209,6 +214,8 @@ services:
     image: ${PILOT107_WEB_IMAGE:-pilot107/web:local}
     profiles: ["apps"]
     user: "10700:10700"
+    group_add:
+      - "${PILOT107_SECRET_GID:-1000}"
     read_only: true
     cap_drop: ["ALL"]
     security_opt:
@@ -233,6 +240,10 @@ services:
       PILOT107_WEB_IDENTITY_MODE: ${PILOT107_WEB_IDENTITY_MODE:-demo}
       PILOT107_WEB_FIXED_USER: ${PILOT107_WEB_FIXED_USER:-}
       PILOT107_WEB_TERMINAL_DEEP_LINK: ${PILOT107_WEB_TERMINAL_DEEP_LINK:-}
+      PILOT107_WEB_PUBLIC_ORIGIN: ${PILOT107_WEB_PUBLIC_ORIGIN:-}
+      PILOT107_PROXY_HMAC_SECRET_FILE: /run/secrets/pilot107-proxy-hmac
+    secrets:
+      - pilot107-proxy-hmac
     depends_on:
       - pilot107-api
     healthcheck:
@@ -250,3 +261,7 @@ volumes:
   public:
   slurm-log:
   pilot107-data:
+
+secrets:
+  pilot107-proxy-hmac:
+    file: ${PILOT107_PROXY_HMAC_SECRET_FILE:-./secrets/proxy-hmac.local}

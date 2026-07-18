@@ -19,6 +19,7 @@ from pilot107.api.health import ApiHealthService
 from pilot107.api.http_types import ApiResponse as ApiResponse
 from pilot107.api.metrics import ControlPlaneMetrics, normalize_http_route
 from pilot107.api.remediation_routes import RemediationRoutes
+from pilot107.api.security import FixedWindowRateLimiter
 from pilot107.core.advice import (
     AgentAdviceError,
     AgentAdviceService,
@@ -68,6 +69,7 @@ from pilot107.core.platform_snapshot_store import (
     PlatformSnapshotStore,
     SnapshotFreshness,
 )
+from pilot107.core.proxy_auth import ProxyRequestAuthenticator
 from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.resources import (
     ArraySpec,
@@ -141,6 +143,12 @@ class Pilot107HttpApi:
         worker_metrics_root: Path | None = None,
         auth_required: bool = False,
         trusted_user_header: str = "X-Pilot107-User",
+        proxy_hmac_secret: bytes | None = None,
+        proxy_signature_max_age_seconds: int = 30,
+        max_request_body_bytes: int = 2 * 1024 * 1024,
+        max_response_body_bytes: int = 8 * 1024 * 1024,
+        rate_limit_requests: int = 600,
+        rate_limit_window_seconds: int = 60,
     ) -> None:
         self.store = store
         self.evidence_query = evidence_query
@@ -192,12 +200,50 @@ class Pilot107HttpApi:
         )
         self.auth_required = auth_required
         self.trusted_user_header = trusted_user_header
+        self.proxy_authenticator = (
+            ProxyRequestAuthenticator(
+                proxy_hmac_secret,
+                max_age_seconds=proxy_signature_max_age_seconds,
+            )
+            if proxy_hmac_secret is not None
+            else None
+        )
+        if min(
+            max_request_body_bytes,
+            max_response_body_bytes,
+            rate_limit_requests,
+            rate_limit_window_seconds,
+        ) <= 0:
+            raise ValueError("HTTP size and rate limits must be positive")
+        self.max_request_body_bytes = max_request_body_bytes
+        self.max_response_body_bytes = max_response_body_bytes
+        self.rate_limiter = FixedWindowRateLimiter(
+            limit=rate_limit_requests,
+            window_seconds=rate_limit_window_seconds,
+        )
 
     def handle_get(self, path: str, headers: Mapping[str, str] | None = None) -> ApiResponse:
         request_id = _request_id(headers)
-        response = self._handle_get(path, headers=headers)
+        response = self._proxy_auth_error("GET", path, b"", headers)
+        if response is None:
+            response = self._handle_get(path, headers=headers)
         return _finalize_response(
             response,
+            request_id=request_id,
+            request_headers=headers,
+            enable_etag=True,
+        )
+
+    def _handle_verified_get(
+        self,
+        path: str,
+        headers: Mapping[str, str] | None = None,
+    ) -> ApiResponse:
+        """Handle an internal poll after its transport request was authenticated once."""
+
+        request_id = _request_id(headers)
+        return _finalize_response(
+            self._handle_get(path, headers=headers),
             request_id=request_id,
             request_headers=headers,
             enable_etag=True,
@@ -548,7 +594,9 @@ class Pilot107HttpApi:
         headers: Mapping[str, str] | None = None,
     ) -> ApiResponse:
         request_id = _request_id(headers)
-        response = self._handle_post(path, body=body, headers=headers)
+        response = self._proxy_auth_error("POST", path, body, headers)
+        if response is None:
+            response = self._handle_post(path, body=body, headers=headers)
         return _finalize_response(
             response,
             request_id=request_id,
@@ -565,8 +613,11 @@ class Pilot107HttpApi:
         request_id = _request_id(headers)
         parsed = urlparse(path)
         parts = _route_parts(parsed.path)
+        proxy_error = self._proxy_auth_error("PATCH", path, body, headers)
         identity, auth_error = self._resolve_identity(headers)
-        if auth_error is not None:
+        if proxy_error is not None:
+            response = proxy_error
+        elif auth_error is not None:
             response = auth_error
         elif len(parts) == 2 and parts[0] == "template-drafts":
             response = self._update_template_draft(
@@ -2290,6 +2341,28 @@ class Pilot107HttpApi:
             return None, ApiResponse(status=403, payload={"error": {"code": "AUTH.FORBIDDEN"}})
         return resolution.identity, None
 
+    def _proxy_auth_error(
+        self,
+        method: str,
+        path: str,
+        body: bytes,
+        headers: Mapping[str, str] | None,
+    ) -> ApiResponse | None:
+        if self.proxy_authenticator is None or _is_public_health_path(path):
+            return None
+        if self.proxy_authenticator.verify(
+            method=method,
+            target=path,
+            body=body,
+            headers=headers or {},
+            trusted_user_header=self.trusted_user_header,
+        ):
+            return None
+        return ApiResponse(
+            status=403,
+            payload={"error": {"code": "AUTH.PROXY_SIGNATURE_INVALID"}},
+        )
+
     def _submit_request_from_contract(
         self,
         payload: dict[str, Any],
@@ -2380,6 +2453,17 @@ def build_api(
     )
 
 
+def _is_public_health_path(path: str) -> bool:
+    route = urlparse(path).path.rstrip("/") or "/"
+    return route in {
+        "/healthz",
+        "/health/live",
+        "/health/ready",
+        "/api/v1/health/live",
+        "/api/v1/health/ready",
+    }
+
+
 def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = "pilot107-api/0.1"
@@ -2389,13 +2473,21 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
             if urlparse(self.path).path == "/metrics":
                 self._send_metrics()
                 return
+            if not _is_public_health_path(self.path) and not self._allow_request():
+                api.metrics.observe_request(
+                    method="GET",
+                    route=normalize_http_route(self.path),
+                    status=429,
+                    duration_seconds=time.monotonic() - started,
+                )
+                return
             stream_run_id = _sse_run_id(self.path)
             if stream_run_id is not None:
-                self._send_event_stream(stream_run_id)
+                stream_status = self._send_event_stream(stream_run_id)
                 api.metrics.observe_request(
                     method="GET",
                     route="/api/v1/runs/{run_id}/events/stream",
-                    status=200,
+                    status=stream_status,
                     duration_seconds=time.monotonic() - started,
                 )
                 return
@@ -2410,8 +2502,15 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             started = time.monotonic()
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            body = self.rfile.read(length) if length > 0 else b""
+            if not self._allow_request():
+                self._observe_rejected("POST", 429, started)
+                return
+            body, error = self._read_request_body()
+            if error is not None:
+                self._send_json(error)
+                self._observe_rejected("POST", error.status, started)
+                return
+            assert body is not None
             response = api.handle_post(self.path, body=body, headers=dict(self.headers.items()))
             self._send_json(response)
             api.metrics.observe_request(
@@ -2423,8 +2522,15 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
 
         def do_PATCH(self) -> None:  # noqa: N802
             started = time.monotonic()
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            body = self.rfile.read(length) if length > 0 else b""
+            if not self._allow_request():
+                self._observe_rejected("PATCH", 429, started)
+                return
+            body, error = self._read_request_body()
+            if error is not None:
+                self._send_json(error)
+                self._observe_rejected("PATCH", error.status, started)
+                return
+            assert body is not None
             response = api.handle_patch(self.path, body=body, headers=dict(self.headers.items()))
             self._send_json(response)
             api.metrics.observe_request(
@@ -2445,15 +2551,69 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                     "utf-8"
                 )
             )
+            if len(body) > api.max_response_body_bytes:
+                response = ApiResponse(
+                    status=500,
+                    payload={"error": {"code": "HTTP.RESPONSE_TOO_LARGE"}},
+                )
+                body = b'{"error":{"code":"HTTP.RESPONSE_TOO_LARGE"}}'
             self.send_response(response.status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             for key, value in (response.headers or {}).items():
                 self.send_header(key, value)
             self.end_headers()
             if body:
                 self.wfile.write(body)
+
+        def _allow_request(self) -> bool:
+            allowed, retry_after = api.rate_limiter.check(self.client_address[0])
+            if allowed:
+                return True
+            self._send_json(
+                ApiResponse(
+                    status=429,
+                    payload={"error": {"code": "HTTP.RATE_LIMITED"}},
+                    headers={"Retry-After": str(retry_after)},
+                )
+            )
+            return False
+
+        def _read_request_body(self) -> tuple[bytes | None, ApiResponse | None]:
+            if self.headers.get("Transfer-Encoding"):
+                return None, ApiResponse(
+                    status=400,
+                    payload={"error": {"code": "HTTP.TRANSFER_ENCODING_UNSUPPORTED"}},
+                )
+            value = self.headers.get("Content-Length", "0") or "0"
+            try:
+                length = int(value)
+            except ValueError:
+                return None, ApiResponse(
+                    status=400,
+                    payload={"error": {"code": "HTTP.CONTENT_LENGTH_INVALID"}},
+                )
+            if length < 0:
+                return None, ApiResponse(
+                    status=400,
+                    payload={"error": {"code": "HTTP.CONTENT_LENGTH_INVALID"}},
+                )
+            if length > api.max_request_body_bytes:
+                return None, ApiResponse(
+                    status=413,
+                    payload={"error": {"code": "HTTP.REQUEST_TOO_LARGE"}},
+                )
+            return self.rfile.read(length) if length else b"", None
+
+        def _observe_rejected(self, method: str, status: int, started: float) -> None:
+            api.metrics.observe_request(
+                method=method,
+                route=normalize_http_route(self.path),
+                status=status,
+                duration_seconds=time.monotonic() - started,
+            )
 
         def _send_metrics(self) -> None:
             body = api.metrics.render().encode("utf-8")
@@ -2464,7 +2624,19 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
-        def _send_event_stream(self, run_id: str) -> None:
+        def _send_event_stream(self, run_id: str) -> int:
+            original_headers = dict(self.headers.items())
+            proxy_error = api._proxy_auth_error("GET", self.path, b"", original_headers)
+            if proxy_error is not None:
+                self._send_json(
+                    _finalize_response(
+                        proxy_error,
+                        request_id=_request_id(original_headers),
+                        request_headers=original_headers,
+                        enable_etag=False,
+                    )
+                )
+                return proxy_error.status
             parsed = urlparse(self.path)
             params = parse_qs(parsed.query, keep_blank_values=True)
             once_values = params.pop("once", [])
@@ -2477,7 +2649,7 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                         enable_etag=False,
                     )
                 )
-                return
+                return 400
             once = once_values == ["true"]
             if (
                 "cursor" not in params
@@ -2490,13 +2662,13 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                 for key, value in self.headers.items()
                 if key.lower() != "if-none-match"
             }
-            response = api.handle_get(
+            response = api._handle_verified_get(
                 _events_query_path(run_id, params),
                 headers=request_headers,
             )
             if response.status != 200:
                 self._send_json(response)
-                return
+                return response.status
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache, no-transform")
@@ -2511,7 +2683,7 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                 self._write_sse_events(response.payload.get("items", []))
                 if once:
                     self.close_connection = True
-                    return
+                    return 200
                 deadline = time.monotonic() + 25.0
                 heartbeat_at = time.monotonic() + 10.0
                 polling_params = {
@@ -2521,7 +2693,7 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                 }
                 while time.monotonic() < deadline:
                     polling_params["after_event_id"] = [str(last_event_id)]
-                    polled = api.handle_get(
+                    polled = api._handle_verified_get(
                         _events_query_path(run_id, polling_params),
                         headers=request_headers,
                     )
@@ -2530,7 +2702,7 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                             event="stream_error",
                             data={"code": "EVENT_STREAM.POLL_FAILED"},
                         )
-                        return
+                        return 200
                     items = polled.payload.get("items", [])
                     self._write_sse_events(items)
                     last_event_id = int(polled.payload["page"]["last_event_id"])
@@ -2540,7 +2712,8 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                         heartbeat_at = time.monotonic() + 10.0
                     time.sleep(0.5)
             except (BrokenPipeError, ConnectionResetError):
-                return
+                return 200
+            return 200
 
         def _write_sse_events(self, items: object) -> None:
             if not isinstance(items, list):

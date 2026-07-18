@@ -616,8 +616,17 @@ def openapi_contract_snapshot(app: FastAPI) -> dict[str, Any]:
 
 def _get_forwarder(api: Pilot107HttpApi) -> Forwarder:
     async def forward(request: Request) -> Response:
+        public_health = request.url.path in {
+            "/healthz",
+            "/api/v1/health/live",
+            "/api/v1/health/ready",
+        }
+        rate_error = None if public_health else _rate_limit_error(api, request)
+        if rate_error is not None:
+            return _to_fastapi_response(rate_error, api.max_response_body_bytes)
         return _to_fastapi_response(
-            api.handle_get(_request_target(request), headers=dict(request.headers.items()))
+            api.handle_get(_request_target(request), headers=dict(request.headers.items())),
+            api.max_response_body_bytes,
         )
 
     return forward
@@ -625,12 +634,19 @@ def _get_forwarder(api: Pilot107HttpApi) -> Forwarder:
 
 def _post_forwarder(api: Pilot107HttpApi) -> Forwarder:
     async def forward(request: Request) -> Response:
+        rate_error = _rate_limit_error(api, request)
+        if rate_error is not None:
+            return _to_fastapi_response(rate_error, api.max_response_body_bytes)
+        body, body_error = await _limited_request_body(api, request)
+        if body_error is not None:
+            return _to_fastapi_response(body_error, api.max_response_body_bytes)
         return _to_fastapi_response(
             api.handle_post(
                 _request_target(request),
-                body=await request.body(),
+                body=body,
                 headers=dict(request.headers.items()),
-            )
+            ),
+            api.max_response_body_bytes,
         )
 
     return forward
@@ -638,12 +654,19 @@ def _post_forwarder(api: Pilot107HttpApi) -> Forwarder:
 
 def _patch_forwarder(api: Pilot107HttpApi) -> Forwarder:
     async def forward(request: Request) -> Response:
+        rate_error = _rate_limit_error(api, request)
+        if rate_error is not None:
+            return _to_fastapi_response(rate_error, api.max_response_body_bytes)
+        body, body_error = await _limited_request_body(api, request)
+        if body_error is not None:
+            return _to_fastapi_response(body_error, api.max_response_body_bytes)
         return _to_fastapi_response(
             api.handle_patch(
                 _request_target(request),
-                body=await request.body(),
+                body=body,
                 headers=dict(request.headers.items()),
-            )
+            ),
+            api.max_response_body_bytes,
         )
 
     return forward
@@ -654,12 +677,81 @@ def _request_target(request: Request) -> str:
     return request.url.path if not query else f"{request.url.path}?{query}"
 
 
-def _to_fastapi_response(response: ApiResponse) -> Response:
+def _to_fastapi_response(response: ApiResponse, max_body_bytes: int) -> Response:
     headers = response.headers or {}
     if response.status == 304:
-        return Response(status_code=304, headers=headers)
-    return JSONResponse(
+        return Response(
+            status_code=304,
+            headers={
+                **headers,
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+    selected = JSONResponse(
         content=response.payload,
         status_code=response.status,
         headers=headers,
     )
+    if len(selected.body) > max_body_bytes:
+        selected = JSONResponse(
+            content={"error": {"code": "HTTP.RESPONSE_TOO_LARGE"}},
+            status_code=500,
+        )
+    selected.headers["Cache-Control"] = "no-store"
+    selected.headers["X-Content-Type-Options"] = "nosniff"
+    return selected
+
+
+def _rate_limit_error(api: Pilot107HttpApi, request: Request) -> ApiResponse | None:
+    client = request.client
+    key = client.host if client is not None else "unknown"
+    allowed, retry_after = api.rate_limiter.check(key)
+    if allowed:
+        return None
+    return ApiResponse(
+        status=429,
+        payload={"error": {"code": "HTTP.RATE_LIMITED"}},
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+async def _limited_request_body(
+    api: Pilot107HttpApi,
+    request: Request,
+) -> tuple[bytes, ApiResponse | None]:
+    if request.headers.get("transfer-encoding"):
+        return b"", ApiResponse(
+            status=400,
+            payload={"error": {"code": "HTTP.TRANSFER_ENCODING_UNSUPPORTED"}},
+        )
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            return b"", ApiResponse(
+                status=400,
+                payload={"error": {"code": "HTTP.CONTENT_LENGTH_INVALID"}},
+            )
+        if declared_length < 0:
+            return b"", ApiResponse(
+                status=400,
+                payload={"error": {"code": "HTTP.CONTENT_LENGTH_INVALID"}},
+            )
+        if declared_length > api.max_request_body_bytes:
+            return b"", ApiResponse(
+                status=413,
+                payload={"error": {"code": "HTTP.REQUEST_TOO_LARGE"}},
+            )
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > api.max_request_body_bytes:
+            return b"", ApiResponse(
+                status=413,
+                payload={"error": {"code": "HTTP.REQUEST_TOO_LARGE"}},
+            )
+        chunks.append(chunk)
+    return b"".join(chunks), None

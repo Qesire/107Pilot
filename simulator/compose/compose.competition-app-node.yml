@@ -5,6 +5,8 @@ services:
     image: ${PILOT107_API_IMAGE:-pilot107/api:local}
     restart: unless-stopped
     user: "10700:10700"
+    group_add:
+      - "${PILOT107_SECRET_GID:-1000}"
     read_only: true
     cap_drop: ["ALL"]
     security_opt:
@@ -36,6 +38,7 @@ services:
       PILOT107_EVIDENCE_ROOT: /var/lib/pilot107/evidence
       PILOT107_CAPSULE_ROOT: /var/lib/pilot107/capsules
       PILOT107_AUTH_REQUIRED: "true"
+      PILOT107_PROXY_HMAC_SECRET_FILE: /run/secrets/pilot107-proxy-hmac
       PILOT107_CONTRACT_PROFILE: ${PILOT107_CONTRACT_PROFILE:-real107-sim}
       PILOT107_LLM_BASE_URL: ${PILOT107_LLM_BASE_URL:-}
       PILOT107_LLM_API_KEY: ${PILOT107_LLM_API_KEY:-}
@@ -47,6 +50,8 @@ services:
     volumes:
       - public:/public:ro
       - pilot107-data:/var/lib/pilot107
+    secrets:
+      - pilot107-proxy-hmac
     healthcheck:
       test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()\nPY"]
       interval: 10s
@@ -88,6 +93,8 @@ services:
     image: ${PILOT107_WEB_IMAGE:-pilot107/web:local}
     restart: unless-stopped
     user: "10700:10700"
+    group_add:
+      - "${PILOT107_SECRET_GID:-1000}"
     read_only: true
     cap_drop: ["ALL"]
     security_opt:
@@ -111,6 +118,11 @@ services:
       PILOT107_WEB_DEMO_USER: ${PILOT107_WEB_DEMO_USER:-alice}
       PILOT107_WEB_IDENTITY_MODE: fixed_user
       PILOT107_WEB_FIXED_USER: ${PILOT107_WEB_FIXED_USER:-alice}
+      PILOT107_WEB_PUBLIC_ORIGIN: ${PILOT107_WEB_PUBLIC_ORIGIN:-https://127.0.0.1:8443}
+      PILOT107_WEB_ENABLE_HSTS: "true"
+      PILOT107_PROXY_HMAC_SECRET_FILE: /run/secrets/pilot107-proxy-hmac
+    secrets:
+      - pilot107-proxy-hmac
     depends_on:
       - pilot107-api
     healthcheck:
@@ -165,3 +177,7 @@ networks:
 volumes:
   public:
   pilot107-data:
+
+secrets:
+  pilot107-proxy-hmac:
+    file: ${PILOT107_PROXY_HMAC_SECRET_FILE:-./secrets/proxy-hmac.local}

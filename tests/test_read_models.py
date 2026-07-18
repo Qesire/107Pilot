@@ -17,6 +17,7 @@ from pilot107.core.platform_snapshot import (
     PlatformSnapshotScope,
 )
 from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
+from pilot107.core.proxy_auth import ProxyRequestAuthenticator, signed_proxy_headers
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
 from pilot107.core.states import RunState
@@ -487,15 +488,27 @@ class ProductReadModelTests(unittest.TestCase):
             event_type="run.stream_test",
             payload={"state": "FAILED", "raw_response": {"token": "must-not-stream"}},
         )
+        secret = b"0123456789abcdef0123456789abcdef"
+        self.api.proxy_authenticator = ProxyRequestAuthenticator(secret)
+        target = (
+            f"/api/v1/runs/{run.run_id}/events/stream"
+            f"?once=true&after_event_id={event.event_id - 1}"
+        )
         server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.api))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             request = urllib.request.Request(
-                "http://127.0.0.1:"
-                f"{server.server_address[1]}/api/v1/runs/{run.run_id}/events/stream"
-                f"?once=true&after_event_id={event.event_id - 1}",
-                headers={**self.alice_headers, "If-None-Match": '"stale-client-etag"'},
+                f"http://127.0.0.1:{server.server_address[1]}{target}",
+                headers={
+                    **signed_proxy_headers(
+                        secret=secret,
+                        method="GET",
+                        target=target,
+                        user="alice",
+                    ),
+                    "If-None-Match": '"stale-client-etag"',
+                },
             )
             with urllib.request.urlopen(request, timeout=5) as response:
                 body = response.read().decode()

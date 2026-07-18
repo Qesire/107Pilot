@@ -3,6 +3,8 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+bash ../../scripts/init-local-secrets.sh
+
 docker compose --env-file .env.example -f compose.yml config >/dev/null
 docker compose \
   --env-file .env.competition.example \

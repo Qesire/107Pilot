@@ -9,11 +9,14 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
+
+from pilot107.api.security import FixedWindowRateLimiter
+from pilot107.core.proxy_auth import load_proxy_hmac_secret, signed_proxy_headers
 
 _SAFE_USER = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _STATIC_ROOT = Path(__file__).resolve().parent / "static"
@@ -39,6 +42,13 @@ class WebConfig:
     trusted_user_header: str = "X-Pilot107-User"
     identity_mode: WebIdentityMode = WebIdentityMode.DEMO
     terminal_deep_link: str | None = None
+    proxy_hmac_secret: bytes | None = field(default=None, repr=False)
+    public_origin: str | None = None
+    enable_hsts: bool = False
+    max_request_body_bytes: int = 2 * 1024 * 1024
+    max_response_body_bytes: int = 8 * 1024 * 1024
+    rate_limit_requests: int = 300
+    rate_limit_window_seconds: int = 60
 
     def __post_init__(self) -> None:
         if not is_safe_demo_user(self.demo_user):
@@ -53,6 +63,15 @@ class WebConfig:
             self.terminal_deep_link
         ):
             raise ValueError("PILOT107_WEB_TERMINAL_DEEP_LINK must be an absolute HTTP(S) URL")
+        if self.public_origin is not None and normalize_origin(self.public_origin) is None:
+            raise ValueError("PILOT107_WEB_PUBLIC_ORIGIN must be an HTTP(S) origin")
+        if min(
+            self.max_request_body_bytes,
+            self.max_response_body_bytes,
+            self.rate_limit_requests,
+            self.rate_limit_window_seconds,
+        ) <= 0:
+            raise ValueError("Web size and rate limits must be positive")
 
 
 def config_from_env(env: Mapping[str, str] | None = None) -> WebConfig:
@@ -66,10 +85,31 @@ def config_from_env(env: Mapping[str, str] | None = None) -> WebConfig:
             values.get("PILOT107_WEB_IDENTITY_MODE", WebIdentityMode.DEMO.value)
         ),
         terminal_deep_link=values.get("PILOT107_WEB_TERMINAL_DEEP_LINK") or None,
+        proxy_hmac_secret=load_proxy_hmac_secret(
+            secret=values.get("PILOT107_PROXY_HMAC_SECRET"),
+            secret_file=values.get("PILOT107_PROXY_HMAC_SECRET_FILE"),
+        ),
+        public_origin=values.get("PILOT107_WEB_PUBLIC_ORIGIN") or None,
+        enable_hsts=_env_bool(values.get("PILOT107_WEB_ENABLE_HSTS"), False),
+        max_request_body_bytes=int(
+            values.get("PILOT107_WEB_MAX_REQUEST_BODY_BYTES", str(2 * 1024 * 1024))
+        ),
+        max_response_body_bytes=int(
+            values.get("PILOT107_WEB_MAX_RESPONSE_BODY_BYTES", str(8 * 1024 * 1024))
+        ),
+        rate_limit_requests=int(values.get("PILOT107_WEB_RATE_LIMIT_REQUESTS", "300")),
+        rate_limit_window_seconds=int(
+            values.get("PILOT107_WEB_RATE_LIMIT_WINDOW_SECONDS", "60")
+        ),
     )
 
 
 def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
+    rate_limiter = FixedWindowRateLimiter(
+        limit=config.rate_limit_requests,
+        window_seconds=config.rate_limit_window_seconds,
+    )
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "pilot107-web/0.1"
 
@@ -78,9 +118,13 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
                 self._send_bytes(200, b'{"status":"ok"}\n', "application/json; charset=utf-8")
                 return
             if urlparse(self.path).path == "/api/v1/web/session":
+                if not self._allow_api_request():
+                    return
                 self._serve_web_session()
                 return
             if self.path.startswith("/api/"):
+                if not self._allow_api_request():
+                    return
                 self._proxy()
                 return
             self._serve_static()
@@ -101,15 +145,22 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             if self.path.startswith("/api/"):
+                if not self._allow_api_request() or not self._allow_mutating_request():
+                    return
                 self._proxy()
                 return
             self._send_bytes(404, b"not found\n", "text/plain; charset=utf-8")
 
         def do_PATCH(self) -> None:  # noqa: N802
             if self.path.startswith("/api/"):
+                if not self._allow_api_request() or not self._allow_mutating_request():
+                    return
                 self._proxy()
                 return
             self._send_bytes(404, b"not found\n", "text/plain; charset=utf-8")
+
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            self._send_error(405, "HTTP.METHOD_NOT_ALLOWED")
 
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -158,8 +209,10 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
             )
 
         def _proxy(self) -> None:
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            body = self.rfile.read(length) if length > 0 else None
+            body, error = self._read_request_body()
+            if error is not None:
+                self._send_error(error[0], error[1])
+                return
             user = resolve_proxy_user(config, dict(self.headers.items()))
             if user is None:
                 self._send_bytes(
@@ -175,6 +228,17 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
             content_type = self.headers.get("Content-Type")
             if content_type:
                 headers["Content-Type"] = content_type
+            if config.proxy_hmac_secret is not None:
+                headers.update(
+                    signed_proxy_headers(
+                        secret=config.proxy_hmac_secret,
+                        method=self.command,
+                        target=self.path,
+                        user=user,
+                        body=body or b"",
+                        trusted_user_header=config.trusted_user_header,
+                    )
+                )
             request = urllib.request.Request(
                 url=f"{config.api_base_url}{self.path}",
                 data=body,
@@ -183,16 +247,23 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
             )
             try:
                 with urllib.request.urlopen(request, timeout=30) as response:
-                    response_body = response.read()
+                    response_body = response.read(config.max_response_body_bytes + 1)
+                    if len(response_body) > config.max_response_body_bytes:
+                        self._send_error(502, "WEB.UPSTREAM_RESPONSE_TOO_LARGE")
+                        return
                     self._send_bytes(
                         response.status,
                         response_body,
                         response.headers.get("Content-Type", "application/json; charset=utf-8"),
                     )
             except urllib.error.HTTPError as exc:
+                response_body = exc.read(config.max_response_body_bytes + 1)
+                if len(response_body) > config.max_response_body_bytes:
+                    self._send_error(502, "WEB.UPSTREAM_RESPONSE_TOO_LARGE")
+                    return
                 self._send_bytes(
                     exc.code,
-                    exc.read(),
+                    response_body,
                     exc.headers.get("Content-Type", "application/json; charset=utf-8"),
                 )
             except OSError as exc:
@@ -215,14 +286,69 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
             *,
             cache_control: str = "no-store",
             send_body: bool = True,
+            extra_headers: Mapping[str, str] | None = None,
         ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", cache_control)
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
+                "base-uri 'self'; frame-ancestors 'none'",
+            )
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+            self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+            if config.enable_hsts:
+                self.send_header("Strict-Transport-Security", "max-age=31536000")
+            for key, value in (extra_headers or {}).items():
+                self.send_header(key, value)
             self.end_headers()
             if send_body:
                 self.wfile.write(body)
+
+        def _allow_api_request(self) -> bool:
+            allowed, retry_after = rate_limiter.check(self.client_address[0])
+            if allowed:
+                return True
+            self._send_bytes(
+                429,
+                b'{"error":{"code":"HTTP.RATE_LIMITED"}}\n',
+                "application/json; charset=utf-8",
+                extra_headers={"Retry-After": str(retry_after)},
+            )
+            return False
+
+        def _allow_mutating_request(self) -> bool:
+            error = mutating_request_error(config, dict(self.headers.items()))
+            if error is None:
+                return True
+            self._send_error(403, error)
+            return False
+
+        def _read_request_body(self) -> tuple[bytes | None, tuple[int, str] | None]:
+            if self.headers.get("Transfer-Encoding"):
+                return None, (400, "HTTP.TRANSFER_ENCODING_UNSUPPORTED")
+            value = self.headers.get("Content-Length", "0") or "0"
+            try:
+                length = int(value)
+            except ValueError:
+                return None, (400, "HTTP.CONTENT_LENGTH_INVALID")
+            if length < 0:
+                return None, (400, "HTTP.CONTENT_LENGTH_INVALID")
+            if length > config.max_request_body_bytes:
+                return None, (413, "HTTP.REQUEST_TOO_LARGE")
+            return self.rfile.read(length) if length else None, None
+
+        def _send_error(self, status: int, code: str) -> None:
+            payload = json.dumps({"error": {"code": code}}, separators=(",", ":")).encode(
+                "utf-8"
+            ) + b"\n"
+            self._send_bytes(status, payload, "application/json; charset=utf-8")
 
     return Handler
 
@@ -237,6 +363,60 @@ def is_safe_terminal_deep_link(value: str) -> bool:
         and parsed.username is None
         and parsed.password is None
     )
+
+
+def normalize_origin(value: str) -> str | None:
+    if any(ord(character) < 32 for character in value):
+        return None
+    parsed = urlparse(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    default_port = 80 if parsed.scheme == "http" else 443
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    hostname = parsed.hostname
+    assert hostname is not None
+    rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+    authority = rendered_host if port in {None, default_port} else f"{rendered_host}:{port}"
+    return f"{parsed.scheme}://{authority}"
+
+
+def mutating_request_error(config: WebConfig, headers: Mapping[str, str]) -> str | None:
+    normalized = {key.lower(): value for key, value in headers.items()}
+    if normalized.get("cookie"):
+        return "CSRF.COOKIE_AUTH_UNSUPPORTED"
+    fetch_site = normalized.get("sec-fetch-site", "").lower()
+    if fetch_site in {"cross-site", "same-site"}:
+        return "CSRF.CROSS_SITE_DENIED"
+    content_type = normalized.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/json":
+        return "CSRF.JSON_REQUIRED"
+    origin = normalized.get("origin")
+    if origin:
+        expected = normalize_origin(config.public_origin) if config.public_origin else None
+        if expected is None:
+            host = normalized.get("host", "")
+            expected = normalize_origin(f"http://{host}") if host else None
+        if normalize_origin(origin) != expected:
+            return "CSRF.ORIGIN_DENIED"
+    return None
+
+
+def _env_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def run_web_server(*, config: WebConfig, host: str, port: int) -> None:
@@ -313,6 +493,14 @@ def main() -> int:
             fixed_user=env_config.fixed_user,
             trusted_user_header=env_config.trusted_user_header,
             identity_mode=env_config.identity_mode,
+            terminal_deep_link=env_config.terminal_deep_link,
+            proxy_hmac_secret=env_config.proxy_hmac_secret,
+            public_origin=env_config.public_origin,
+            enable_hsts=env_config.enable_hsts,
+            max_request_body_bytes=env_config.max_request_body_bytes,
+            max_response_body_bytes=env_config.max_response_body_bytes,
+            rate_limit_requests=env_config.rate_limit_requests,
+            rate_limit_window_seconds=env_config.rate_limit_window_seconds,
         ),
         host=args.host,
         port=args.port,

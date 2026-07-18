@@ -9,6 +9,8 @@ from pilot107.web.server import (
     config_from_env,
     is_safe_demo_user,
     is_safe_terminal_deep_link,
+    mutating_request_error,
+    normalize_origin,
     resolve_proxy_user,
     resolve_static_request,
 )
@@ -16,9 +18,15 @@ from pilot107.web.server import (
 
 class WebServerTests(unittest.TestCase):
     def test_config_from_env_reads_api_base_url(self) -> None:
-        config = config_from_env({"PILOT107_WEB_API_BASE_URL": "http://api:8080/"})
+        config = config_from_env(
+            {
+                "PILOT107_WEB_API_BASE_URL": "http://api:8080/",
+                "PILOT107_PROXY_HMAC_SECRET": "x" * 32,
+            }
+        )
 
         self.assertEqual(config.api_base_url, "http://api:8080")
+        self.assertEqual(config.proxy_hmac_secret, b"x" * 32)
 
     def test_web_config_defaults_to_alice(self) -> None:
         self.assertEqual(WebConfig(api_base_url="http://api:8080").demo_user, "alice")
@@ -85,9 +93,49 @@ class WebServerTests(unittest.TestCase):
         )
         self.assertTrue(is_safe_terminal_deep_link("http://127.0.0.1:7681/"))
         self.assertFalse(is_safe_terminal_deep_link("javascript:alert(1)"))
-        self.assertFalse(is_safe_terminal_deep_link("https://user:pass@example.edu"))
+        credential_url = "https://user:pass@example.edu"  # secret-scan: allow
+        self.assertFalse(is_safe_terminal_deep_link(credential_url))
         with self.assertRaisesRegex(ValueError, "absolute HTTP"):
             config_from_env({"PILOT107_WEB_TERMINAL_DEEP_LINK": "javascript:alert(1)"})
+
+    def test_mutating_requests_require_json_and_same_origin_without_cookies(self) -> None:
+        config = WebConfig(
+            api_base_url="http://api:8080",
+            public_origin="https://pilot.example.edu",
+        )
+        valid = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Origin": "https://pilot.example.edu",
+            "Sec-Fetch-Site": "same-origin",
+        }
+
+        self.assertIsNone(mutating_request_error(config, valid))
+        self.assertEqual(
+            mutating_request_error(config, {**valid, "Cookie": "session=unsafe"}),
+            "CSRF.COOKIE_AUTH_UNSUPPORTED",
+        )
+        self.assertEqual(
+            mutating_request_error(config, {**valid, "Origin": "https://evil.example"}),
+            "CSRF.ORIGIN_DENIED",
+        )
+        self.assertEqual(
+            mutating_request_error(config, {"Content-Type": "text/plain"}),
+            "CSRF.JSON_REQUIRED",
+        )
+
+    def test_public_origin_is_canonical_and_hsts_is_explicit(self) -> None:
+        config = config_from_env(
+            {
+                "PILOT107_WEB_PUBLIC_ORIGIN": "https://pilot.example.edu/",
+                "PILOT107_WEB_ENABLE_HSTS": "true",
+            }
+        )
+
+        self.assertEqual(normalize_origin(config.public_origin or ""), "https://pilot.example.edu")
+        self.assertTrue(config.enable_hsts)
+        self.assertIsNone(normalize_origin("https://pilot.example.edu/path"))
+        self.assertIsNone(normalize_origin("https://pilot.example.edu:invalid"))
+        self.assertEqual(normalize_origin("http://[::1]:3000"), "http://[::1]:3000")
 
     def test_static_assets_exist(self) -> None:
         static_root = Path(__file__).resolve().parents[1] / "src" / "pilot107" / "web" / "static"

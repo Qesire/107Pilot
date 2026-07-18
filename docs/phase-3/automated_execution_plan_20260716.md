@@ -144,6 +144,25 @@ bash scripts/check-sim-core.sh
 - review：[phase3g_observability_review.md](phase3g_observability_review.md)；
 - 可观测性底座完成；R4-3 继续 LLM/SSE 专项、持久 trace、安全基线与 PostgreSQL 业务接线。
 
+### 2026-07-18 R4 控制面安全与供应链基线检查点
+
+- Web→API 身份头改为 HMAC-authenticated forwarding，绑定 method/target/user/body/timestamp/request ID，
+  过期、篡改和 freshness 窗口内重放 fail closed；
+- stdlib/FastAPI/Web/HTTPS proxy 全部增加请求/响应上限，API/Web 增加 429 + Retry-After 的进程内限流；
+- fixed identity 的跨站 simple POST 已关闭：write 只接受 JSON、same-origin、无 Cookie，并统一 CSP、
+  frame、nosniff、referrer、permissions、opener headers；
+- Compose secret 不进 environment/Git，以 host-group-only 文件供非 root API/Web 读取；首次 live 权限失败
+  已通过 supplemental GID 修复并重新验证；
+- CI 新增 Python/Node audit、candidate secret scan、Trivy source/config/image HIGH/CRITICAL gate；考虑
+  2026-03 上游事件，Trivy v0.36.0 固定完整 commit SHA；
+- 全量门禁：587 passed、11 PostgreSQL integration skipped、2 subtests；Web 64 tests/build、Ruff、strict
+  mypy 72 source files、四种 Compose config 和候选 secret scan 通过；
+- Docker live：直连伪造 identity 403、BFF 签名 200、CSRF 负面通过，纵向模拟 Run SUCCEEDED 并收集
+  20 个 Evidence objects；在线漏洞和 image CVE 等待真实 CI run，不误报本机 offline 0 findings；
+- review：[phase3g_security_review.md](phase3g_security_review.md)，运维契约：
+  [control_plane_security.md](../operations/control_plane_security.md)；
+- 安全基线子切片完成；R4-3 继续持久 trace、LLM/SSE 专项与 PostgreSQL 业务 Store 接线。
+
 真人使用不进入这些工作包的通过条件。可选的 U2/U3 只用于视觉、文案、信任感和交互取舍；VM 上传、真实 107 操作和生产身份仍需另行授权。
 
 ## 3. A 轨：工程基线与扩展边界

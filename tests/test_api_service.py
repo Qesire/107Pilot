@@ -55,6 +55,8 @@ class ApiServiceTests(unittest.TestCase):
                 "PILOT107_SLURM_USER_NAME": "alice",
                 "PILOT107_AUTH_REQUIRED": "true",
                 "PILOT107_TRUSTED_USER_HEADER": "X-Remote-User",
+                "PILOT107_PROXY_HMAC_SECRET": "x" * 32,
+                "PILOT107_PROXY_SIGNATURE_MAX_AGE_SECONDS": "45",
                 "PILOT107_CONTRACT_PROFILE": "real107-sim",
                 "PILOT107_CAPABILITY_PROFILE_PATH": str(self.root / "probe"),
                 "PILOT107_LLM_BASE_URL": "https://api.llm.example.edu.cn/v1",
@@ -87,6 +89,8 @@ class ApiServiceTests(unittest.TestCase):
         self.assertEqual(config.slurm_username, "alice")
         self.assertTrue(config.auth_required)
         self.assertEqual(config.trusted_user_header, "X-Remote-User")
+        self.assertEqual(config.proxy_hmac_secret, b"x" * 32)
+        self.assertEqual(config.proxy_signature_max_age_seconds, 45)
         self.assertEqual(config.contract_profile, "real107-sim")
         self.assertEqual(config.capability_profile_path, self.root / "probe")
         self.assertEqual(config.llm_base_url, "https://api.llm.example.edu.cn/v1")

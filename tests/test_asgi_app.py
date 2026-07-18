@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pilot107.api.asgi_app import build_asgi_app, openapi_contract_snapshot
 from pilot107.api.http_app import build_api
+from pilot107.api.security import FixedWindowRateLimiter
 from pilot107.worker.telemetry import WorkerTelemetryStore
 
 
@@ -102,6 +103,50 @@ class AsgiAppTests(unittest.TestCase):
             json.loads(response[2])["error"]["code"],
             "CONTRACT.RECIPE_REQUIRED",
         )
+
+    def test_transport_enforces_body_response_and_rate_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            api = build_api(
+                db_path=root / "pilot107.db",
+                evidence_root=root / "evidence",
+            )
+            api.max_request_body_bytes = 3
+            api.rate_limiter = FixedWindowRateLimiter(limit=1, window_seconds=60)
+            app = build_asgi_app(api)
+
+            oversized = _asgi_request(
+                app,
+                "/api/v1/contracts/validate",
+                method="POST",
+                body=b"1234",
+            )
+            first = _asgi_request(app, "/api/v1/recipes")
+            limited = _asgi_request(app, "/api/v1/recipes")
+            health = _asgi_request(app, "/api/v1/health/live")
+
+        self.assertEqual(oversized[0], 413)
+        self.assertEqual(json.loads(oversized[2])["error"]["code"], "HTTP.REQUEST_TOO_LARGE")
+        # The rejected POST consumed the first request in this process-local window.
+        self.assertEqual(first[0], 429)
+        self.assertEqual(limited[0], 429)
+        self.assertIn("retry-after", limited[1])
+        self.assertEqual(health[0], 200)
+        self.assertEqual(health[1]["x-content-type-options"], "nosniff")
+
+    def test_transport_fails_closed_when_response_exceeds_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            api = build_api(
+                db_path=root / "pilot107.db",
+                evidence_root=root / "evidence",
+            )
+            api.max_response_body_bytes = 16
+            app = build_asgi_app(api)
+            response = _asgi_request(app, "/api/v1/health/live")
+
+        self.assertEqual(response[0], 500)
+        self.assertEqual(json.loads(response[2])["error"]["code"], "HTTP.RESPONSE_TOO_LARGE")
 
     def test_prometheus_metrics_cover_normalized_api_outbox_and_worker_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

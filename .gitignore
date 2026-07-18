@@ -34,4 +34,6 @@ simulator/reports/
 simulator/compose/.env
 simulator/compose/certs/*
 !simulator/compose/certs/README.md
+simulator/compose/secrets/*
+!simulator/compose/secrets/README.md
 simulator/compose/slurm/jwt_hs256.key

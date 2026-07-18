@@ -13,9 +13,18 @@ from pathlib import Path
 
 
 class ProxyConfig:
-    def __init__(self, *, target: str, https_port: int) -> None:
+    def __init__(
+        self,
+        *,
+        target: str,
+        https_port: int,
+        max_request_body_bytes: int = 2 * 1024 * 1024,
+        max_response_body_bytes: int = 8 * 1024 * 1024,
+    ) -> None:
         self.target = target.rstrip("/")
         self.https_port = https_port
+        self.max_request_body_bytes = max_request_body_bytes
+        self.max_response_body_bytes = max_response_body_bytes
 
 
 def make_redirect_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
@@ -54,7 +63,20 @@ def make_proxy_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
             return
 
         def _proxy(self) -> None:
-            length = int(self.headers.get("Content-Length", "0") or "0")
+            if self.headers.get("Transfer-Encoding"):
+                self.send_error(400, "transfer encoding unsupported")
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+            except ValueError:
+                self.send_error(400, "invalid content length")
+                return
+            if length < 0:
+                self.send_error(400, "invalid content length")
+                return
+            if length > config.max_request_body_bytes:
+                self.send_error(413, "request too large")
+                return
             body = self.rfile.read(length) if length > 0 else None
             headers = {
                 key: value
@@ -71,7 +93,10 @@ def make_proxy_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
             )
             try:
                 with urllib.request.urlopen(request, timeout=30) as response:
-                    response_body = response.read()
+                    response_body = response.read(config.max_response_body_bytes + 1)
+                    if len(response_body) > config.max_response_body_bytes:
+                        self.send_error(502, "upstream response too large")
+                        return
                     self.send_response(response.status)
                     for key, value in response.headers.items():
                         if key.lower() in {"connection", "transfer-encoding", "content-length"}:
@@ -81,7 +106,10 @@ def make_proxy_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                     self.end_headers()
                     self.wfile.write(response_body)
             except urllib.error.HTTPError as exc:
-                response_body = exc.read()
+                response_body = exc.read(config.max_response_body_bytes + 1)
+                if len(response_body) > config.max_response_body_bytes:
+                    self.send_error(502, "upstream response too large")
+                    return
                 self.send_response(exc.code)
                 self.send_header("Content-Length", str(len(response_body)))
                 self.end_headers()
@@ -106,9 +134,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", default="http://pilot107-web:3000")
     parser.add_argument("--cert", type=Path, required=True)
     parser.add_argument("--key", type=Path, required=True)
+    parser.add_argument("--max-request-body-bytes", type=int, default=2 * 1024 * 1024)
+    parser.add_argument("--max-response-body-bytes", type=int, default=8 * 1024 * 1024)
     args = parser.parse_args(argv)
 
-    config = ProxyConfig(target=args.target, https_port=args.https_port)
+    config = ProxyConfig(
+        target=args.target,
+        https_port=args.https_port,
+        max_request_body_bytes=args.max_request_body_bytes,
+        max_response_body_bytes=args.max_response_body_bytes,
+    )
     https_server = ThreadingHTTPServer((args.host, args.https_port), make_proxy_handler(config))
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
