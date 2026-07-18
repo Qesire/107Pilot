@@ -103,3 +103,27 @@ def test_role_directory_system_reviewer_principal():
     assert principal.actor == "pilot107-system-reviewer"
     assert TemplateReviewerRole.REVIEWER in principal.roles
     assert TemplateReviewerRole.ADMIN in principal.roles
+
+
+def test_seed_injects_system_reviewer_into_role_directory(
+    recipe_catalog, template_store
+):
+    """Seed must publish even when the caller's role_directory does NOT contain
+    the system reviewer (default config has only {'reviewer'})."""
+    bare_directory = TemplateRoleDirectory(
+        reviewers=frozenset({"reviewer"}),
+        admins=frozenset({"reviewer"}),
+    )
+    report = seed_preset_recipes(
+        catalog=recipe_catalog,
+        store=template_store,
+        role_directory=bare_directory,
+    )
+    assert report.published >= 1, (
+        "seed must inject the system reviewer so the publish flow completes"
+    )
+    items, _ = template_store.list_market_page(actor="pilot107-system-author")
+    assert len(items) >= 1
+    for item in items:
+        review = template_store.get_review(item.release.review_id)
+        assert review.reviewer == "pilot107-system-reviewer"

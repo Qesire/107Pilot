@@ -7,7 +7,7 @@ gate-blocked recipes are recorded and do not abort the seed.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from pilot107.core.contracts import RecipeCatalog, RecipeVersion
@@ -15,6 +15,7 @@ from pilot107.core.template_market import TemplateMarketItemRecord, TemplateMark
 from pilot107.core.template_policy import TemplateRoleDirectory
 
 _SEED_AUTHOR = "pilot107-system-author"
+_SEED_REVIEWER = "pilot107-system-reviewer"
 _SEED_PUBLICATION: dict[str, str] = {
     "license": "MIT",
     "attribution": "107Pilot preset recipe catalog",
@@ -110,7 +111,16 @@ def seed_preset_recipes(
     Fault-tolerant: gate-blocked recipes are recorded, not raised.
     """
     report = SeedReport()
-    reviewer_principal = role_directory.system_reviewer_principal()
+    # The caller's role_directory may not include the system reviewer (the
+    # default config only lists human reviewers). Construct a seed-scoped
+    # directory that guarantees the system reviewer is authorized to decide
+    # the bootstrap reviews, regardless of the caller's configuration.
+    seed_role_directory = replace(
+        role_directory,
+        reviewers=role_directory.reviewers | frozenset({_SEED_REVIEWER}),
+        admins=role_directory.admins | frozenset({_SEED_REVIEWER}),
+    )
+    reviewer_principal = seed_role_directory.system_reviewer_principal()
 
     for recipe in catalog.list_versions():
         if _already_published(store, recipe):

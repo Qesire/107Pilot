@@ -271,7 +271,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         try:
             snapshot = snapshot_collector.collect()
             platform_snapshot_store.create(
-                owner="pilot107-system",
+                owner=config.slurm_username or "pilot107-system",
                 snapshot=snapshot,
                 source_type=ObservationSourceType.REST,
                 source_name="slurmrestd-auto",
