@@ -123,6 +123,16 @@ bash scripts/check-sim-core.sh
 - review：[phase3g_agent_execution_outbox_review.md](phase3g_agent_execution_outbox_review.md)；
 - R4-2 完成；下一步进入 R4-3 PostgreSQL 业务接线、可观测性、恢复演练与本地安全基线。
 
+### 2026-07-18 R4 控制面恢复检查点
+
+- 新增 integrity-bound 冷备/验证/空目录恢复入口，覆盖 SQLite、Evidence、Capsule 与可选 PostgreSQL custom dump；
+- create/restore 强制显式 quiesce，组件缺失、symlink、特殊文件、递归路径、篡改和非空覆盖均 fail closed；
+- PostgreSQL restore 的 reset 确认下沉到核心 API，DSN 不进入 manifest 或子进程 argv，失败文本脱敏；
+- 本机停止 API/Worker 后完成 552 文件冷备与隔离恢复；28 张业务表/1,209 行、394 个 Evidence 和 155 个 Capsule 文件一致，服务恢复 healthy；
+- 全量门禁：565 passed、10 PostgreSQL integration skipped、2 subtests；Ruff 与 strict mypy 通过；
+- review：[phase3g_recovery_review.md](phase3g_recovery_review.md)；
+- 恢复子切片完成；R4-3 继续 PostgreSQL 业务接线、长期可观测性和其余本地安全基线。
+
 真人使用不进入这些工作包的通过条件。可选的 U2/U3 只用于视觉、文案、信任感和交互取舍；VM 上传、真实 107 操作和生产身份仍需另行授权。
 
 ## 3. A 轨：工程基线与扩展边界
