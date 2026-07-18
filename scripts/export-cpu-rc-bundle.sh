@@ -82,7 +82,7 @@ sed -i \
 printf '%s\n' "${images[@]}" >"$work_dir/images/images.txt"
 docker save "${images[@]}" | gzip -1 >"$work_dir/images/pilot107-cpu-rc-images.tar.gz"
 docker run --rm "${images[1]}" python3 -m pip list --format=json >"$work_dir/sbom/python-packages.json"
-cp "$root/apps/web/package-lock.json" "$work_dir/sbom/web-package-lock.json"
+cp "$root/package-lock.json" "$work_dir/sbom/web-package-lock.json"
 
 python3 - "$work_dir" "$revision" "${images[@]}" <<'PY'
 import datetime
