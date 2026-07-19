@@ -120,6 +120,13 @@ class WorkerTelemetryStore:
                 f"worker metrics are unreadable: {type(exc).__name__}"
             ) from exc
         _validate_payload(payload, worker_id=self.worker_id)
+        # Backfill counters added after the file was written (additive schema
+        # migration). The validator allows missing counters (subset check);
+        # here we initialize them to 0 so the file is upgraded on first read.
+        counters = cast(dict[str, Any], payload["counters"])
+        for name in COUNTERS:
+            if name not in counters:
+                counters[name] = 0
         return cast(dict[str, Any], payload)
 
 
@@ -164,7 +171,7 @@ def _validate_payload(payload: object, *, worker_id: str) -> None:
     if payload.get("worker_id") != worker_id:
         raise WorkerTelemetryError("worker metrics identity does not match")
     counters = payload.get("counters")
-    if not isinstance(counters, dict) or set(counters) != set(COUNTERS):
+    if not isinstance(counters, dict) or not set(counters).issubset(set(COUNTERS)):
         raise WorkerTelemetryError("worker metrics counters are invalid")
     if any(
         not isinstance(value, int) or isinstance(value, bool) or value < 0

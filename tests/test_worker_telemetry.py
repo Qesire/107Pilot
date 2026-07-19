@@ -134,5 +134,45 @@ class WorkerTelemetryTests(unittest.TestCase):
         )
 
 
+    def test_stale_metrics_missing_new_counters_are_backfilled(self) -> None:
+        """A metrics file from an older revision that lacks counters added
+        later (e.g. capsule_*_total) must be upgraded on read, not rejected.
+        This is the volume-persistence upgrade-compatibility path.
+        """
+        from pilot107.worker.telemetry import COUNTERS, WORKER_METRICS_SCHEMA
+
+        store = WorkerTelemetryStore(root=self.root, worker_id="worker-stale")
+        stale_counters = {name: 0 for name in COUNTERS if not name.startswith("capsule_")}
+        store.path.write_text(
+            json.dumps(
+                {
+                    "schema": WORKER_METRICS_SCHEMA,
+                    "worker_id": "worker-stale",
+                    "first_tick_unix": 1.0,
+                    "last_tick_unix": 2.0,
+                    "last_tick_duration_seconds": 0.01,
+                    "active": False,
+                    "stopped_at_unix": 2.0,
+                    "counters": {**stale_counters, "ticks_total": 42},
+                }
+            )
+        )
+
+        updated = store.update(
+            increments={"ticks_total": 1},
+            tick_duration_seconds=0.1,
+            timestamp=3.0,
+        )
+
+        self.assertEqual(updated["counters"]["ticks_total"], 43)
+        for capsule_counter in (
+            "capsule_builds_attempted_total",
+            "capsule_builds_succeeded_total",
+            "capsule_errors_total",
+        ):
+            self.assertIn(capsule_counter, updated["counters"])
+            self.assertEqual(updated["counters"][capsule_counter], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

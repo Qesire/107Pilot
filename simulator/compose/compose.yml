@@ -191,6 +191,7 @@ services:
       PILOT107_WORKER_ID: runtime-worker-primary
       PILOT107_WORKER_HEALTH_PATH: /var/lib/pilot107/worker-health.json
       PILOT107_WORKER_METRICS_ROOT: /var/lib/pilot107/worker-metrics
+      PILOT107_CAPSULE_ROOT: /var/lib/pilot107/capsules
       PILOT107_SLURMRESTD_URL: http://slurmrestd:6820
       PILOT107_REST_AUTH_STYLE: ${PILOT107_REST_AUTH_STYLE:-bearer}
       PILOT107_SLURM_USER_NAME: ${PILOT107_SLURM_USER_NAME:-alice}
