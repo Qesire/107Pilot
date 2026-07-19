@@ -47,21 +47,34 @@ cp "$root/pyproject.toml" "$root/README.md" "$work_dir/"
 [[ ! -f "$root/uv.lock" ]] || cp "$root/uv.lock" "$work_dir/"
 
 for script in \
+  accept-cpu-rc-release.sh \
   apply-cpu-rc-profile.sh \
   build-app-images.sh \
   build-cpu-rc-images.sh \
   check-cpu-rc.sh \
   control-plane-recovery.py \
+  export-cpu-rc-bundle.sh \
   import-cpu-rc-images.sh \
   init-local-secrets.sh \
+  install-systemd-units.sh \
   load_competition.py \
   scan-array-artifacts.py \
+  smoke-auto-capsule.sh \
+  smoke-auto-capsule.py \
+  smoke-cpu-rc-remediation.sh \
+  smoke-cpu-rc-remediation.py \
+  smoke-restart-volume-recovery.sh \
+  smoke-restart-volume-recovery.py \
   smoke_competition_web.py \
   start-cpu-rc.sh \
   stop-cpu-rc.sh
 do
   cp "$root/scripts/$script" "$work_dir/scripts/"
 done
+
+# systemd unit templates + install doc
+mkdir -p "$work_dir/scripts/systemd"
+cp -a "$root/scripts/systemd/" "$work_dir/scripts/systemd/"
 
 rm -f "$work_dir/simulator/compose/.env.cpu-rc"
 find "$work_dir/simulator/compose" -maxdepth 1 -type f -name '.env*' ! -name '.env.cpu-rc.example' -delete
