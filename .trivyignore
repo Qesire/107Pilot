@@ -1,0 +1,9 @@
+# DS-0002 (HIGH): Specify at least 1 USER command in Dockerfile with non-root user.
+# Suppressed for simulator/images/slurm/Dockerfile: the entrypoint
+# (docker-entrypoint.sh) must run as root to bootstrap munge, mariadb, and
+# per-service chown/perm setup, then drops privileges via `gosu` to the
+# service user (slurm/munge/mysql/pilot107) before exec'ing the daemon.
+# Adding a Dockerfile-level non-root USER would break root bootstrap. This
+# is a local Slurm simulator image, not a production-facing service, and the
+# compose services already constrain runtime via gosu.
+DS-0002
