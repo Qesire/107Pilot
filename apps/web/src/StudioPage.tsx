@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import Ajv2020 from "ajv/dist/2020";
 import type { ErrorObject, ValidateFunction } from "ajv";
@@ -7,14 +7,15 @@ import {
   Braces,
   CheckCircle2,
   ClipboardCheck,
-  Code2,
   FileCode2,
   Save,
   ShieldAlert,
-  TerminalSquare,
+  Wrench,
 } from "lucide-react";
 import { api } from "./api";
+import { AgentCoeditPanel } from "./AgentCoeditPanel";
 import {
+  applyPatchToContract,
   createDefaultContract,
   diffText,
   linesToStrings,
@@ -38,26 +39,22 @@ interface StudioPageProps {
   navigate: (path: string, options?: { replace?: boolean }) => void;
 }
 
-type StudioTab = "basic" | "advanced" | "source" | "script" | "terminal";
-
-const studioTabs: Array<{ id: StudioTab; label: string; icon: typeof Braces }> = [
-  { id: "basic", label: "基础", icon: Braces },
-  { id: "advanced", label: "高级", icon: ShieldAlert },
-  { id: "source", label: "源码", icon: Code2 },
-  { id: "script", label: "脚本", icon: FileCode2 },
-  { id: "terminal", label: "终端协同", icon: TerminalSquare },
-];
-
 const ContractSourceEditor = lazy(() => import("./ContractSourceEditor"));
+
+const placeholderCommandValues = new Set(["echo ok", "python3 main.py"]);
+
+export function isPlaceholderValue(value: unknown): boolean {
+  if (value === "" || value === null || value === undefined) return true;
+  if (typeof value === "string" && placeholderCommandValues.has(value.trim())) {
+    return true;
+  }
+  return false;
+}
 
 export function StudioPage({ user, location, navigate }: StudioPageProps) {
   const contractId = location.pathname === "/studio/new"
     ? null
     : decodeURIComponent(location.pathname.slice("/studio/".length));
-  const requestedTab = location.search.get("tab");
-  const tab = studioTabs.some((item) => item.id === requestedTab)
-    ? requestedTab as StudioTab
-    : "basic";
   const format: SourceFormat = location.search.get("format") === "json" ? "json" : "yaml";
   const schemaQuery = useContractSchema(user);
   const recipes = useRecipes(user);
@@ -68,30 +65,44 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
   const [sourceConflict, setSourceConflict] = useState(false);
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [canonicalDirty, setCanonicalDirty] = useState(false);
-  const hydratedId = useRef<string | null>(null);
+  const [showValidationPanel, setShowValidationPanel] = useState(true);
+  const [showScriptPanel, setShowScriptPanel] = useState(false);
+  const [hydratedContractId, setHydratedContractId] = useState<string | null>(null);
 
   const validation = useMutation({
     mutationFn: () => api.validateContract(user, canonical),
     onSuccess: (result) => {
       setCanonical(result.effective_request.contract);
-      if (!sourceDirty && tab === "source") setSource(serializeContract(result.effective_request.contract, format));
+      if (!sourceDirty) setSource(serializeContract(result.effective_request.contract, format));
     },
   });
   const creation = useMutation({
     mutationFn: () => api.createContract(user, canonical),
     onSuccess: (result) => {
-      navigate(`/studio/${result.contract_id}?user=${encodeURIComponent(user)}&tab=script`, { replace: true });
+      navigate(`/studio/${result.contract_id}?user=${encodeURIComponent(user)}&panel=script`, { replace: true });
     },
   });
 
+  // After creating a Contract, the navigate above sets panel=script; auto-open
+  // the script collapsible so the user lands on the materialized preview, which
+  // mirrors the old tab=script behaviour now that tabs are gone.
+  const panelParam = location.search.get("panel");
+  useEffect(() => {
+    if (panelParam === "script") setShowScriptPanel(true);
+  }, [panelParam]);
+
+  // Hydration: load canonical + source from the persisted Contract as soon as
+  // the query returns it. We track the hydrated contract id in STATE (not a
+  // ref) so that the render cycle can gate the studio-shell on hydration
+  // completion — this is what prevents the one-frame flash of default-contract
+  // content after adoption, which was the root cause of "adopt 后看不到内容".
   useEffect(() => {
     if (!contractId) {
-      hydratedId.current = null;
+      if (hydratedContractId !== null) setHydratedContractId(null);
       return;
     }
-    if (existing.data && hydratedId.current !== contractId) {
+    if (existing.data && hydratedContractId !== contractId) {
       const loaded = structuredClone(existing.data.contract);
-      hydratedId.current = contractId;
       setCanonical(loaded);
       setSource(serializeContract(loaded, format));
       setSourceDirty(false);
@@ -102,8 +113,9 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
         validation.reset();
       }
       creation.reset();
+      setHydratedContractId(contractId);
     }
-  }, [contractId, creation, existing.data, format, validation]);
+  }, [contractId, existing.data, format, validation, creation, hydratedContractId]);
 
   useEffect(() => {
     if (!sourceDirty) setSource(serializeContract(canonical, format));
@@ -129,22 +141,20 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
     creation.reset();
     if (sourceDirty) {
       setSourceConflict(true);
-    } else if (tab === "source") {
+    } else {
       setSource(serializeContract(next, format));
     }
   };
   const update = (path: readonly string[], value: unknown) =>
     commitCanonical(updateContractPath(canonical, path, value));
-  const switchTab = (next: StudioTab) => {
-    if (next === "source" && !sourceDirty) setSource(serializeContract(canonical, format));
-    navigate(withSearch(location.pathname, location.search, { tab: next }));
-  };
+  const applyAgentPatch = (patch: Record<string, unknown>) =>
+    commitCanonical(applyPatchToContract(canonical, patch));
   const switchFormat = (next: SourceFormat) => {
     if (sourceDirty) {
       setSourceError("源码有未应用修改；请先应用或放弃，再切换格式。");
       return;
     }
-    navigate(withSearch(location.pathname, location.search, { format: next, tab: "source" }));
+    navigate(withSearch(location.pathname, location.search, { format: next }));
   };
   const applySource = () => {
     try {
@@ -169,28 +179,48 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
   };
   const busy = validation.isPending || creation.isPending;
   const blocked = sourceDirty || clientErrors.length > 0 || busy;
+  const recipeVersionId = readContractValue(canonical, ["recipe_version_id"], "");
+
+  // `isHydrated` gates the studio-shell: for /studio/new it is always true
+  // (default contract is the starting point); for /studio/<id> it only flips
+  // after the hydration effect has populated canonical from existing.data.
+  // This is the fix for "adopt 后 Studio 看不到内容" — the shell no longer
+  // renders with default-contract content while the real Contract is loading.
+  const isHydrated = !contractId || hydratedContractId === contractId;
+  // QueryBoundary gates on schema + recipes only; contract hydration is
+  // handled by the explicit studio-hydrating banner below so the message can
+  // be specific ("正在加载 Contract…") instead of the generic data-loading UI.
+  const studioLoading = schemaQuery.isPending || recipes.isPending;
 
   return (
     <>
       <SectionHeading
         eyebrow="Contract Studio / canonical state"
         title={contractId ? "检查与派生 Contract" : "新建 Contract"}
-        detail="五个投影共享同一 canonical object；客户端提示只用于即时反馈，服务端 validation 始终是最终权威。"
+        detail="表单、源码与 Agent 共享同一 canonical object；左侧编辑表单，中间实时同步源码，右侧让 Agent 建议改动。服务端 validation 始终是最终权威。"
       />
 
-      <QueryBoundary pending={schemaQuery.isPending || recipes.isPending || (Boolean(contractId) && existing.isPending)} error={schemaQuery.error ?? recipes.error ?? existing.error}>
+      <QueryBoundary
+        pending={studioLoading}
+        error={schemaQuery.error ?? recipes.error ?? existing.error}
+      >
+        {!isHydrated ? (
+          <div className="studio-hydrating" role="status">
+            <Braces aria-hidden="true" />
+            <div>
+              <strong>正在加载 Contract…</strong>
+              <p>从 107Pilot API 拉取持久化的 canonical Contract 并填充三栏投影。</p>
+            </div>
+          </div>
+        ) : null}
+        {isHydrated ? (
         <div className="studio-shell">
           <header className="studio-toolbar">
-            <nav aria-label="Contract Studio 投影" className="studio-tabs">
-              {studioTabs.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <button key={item.id} type="button" className={tab === item.id ? "active" : undefined} aria-current={tab === item.id ? "page" : undefined} onClick={() => switchTab(item.id)}>
-                    <Icon aria-hidden="true" size={15} /> {item.label}
-                  </button>
-                );
-              })}
-            </nav>
+            <div className="studio-toolbar-meta">
+              <span className="meta-chip"><strong>Recipe</strong><code>{recipeVersionId || "—"}</code></span>
+              <span className="meta-chip"><strong>Contract</strong><code>{contractId ?? "尚未持久化"}</code></span>
+              <span className="meta-chip"><strong>Digest</strong><code>{validation.data?.effective_request.contract_digest ?? existing.data?.digest ?? "校验后生成"}</code></span>
+            </div>
             <div className="studio-actions">
               <StatusBadge
                 label={sourceDirty ? "源码未应用" : clientErrors.length ? `${clientErrors.length} 个客户端问题` : "客户端结构通过"}
@@ -205,11 +235,6 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
             </div>
           </header>
 
-          <div className="studio-context" aria-label="Contract 固定上下文">
-            <span><strong>Recipe</strong>{readContractValue(canonical, ["recipe_version_id"], "—")}</span>
-            <span><strong>Contract</strong>{contractId ?? "尚未持久化"}</span>
-            <span><strong>Digest</strong>{validation.data?.effective_request.contract_digest ?? existing.data?.digest ?? "校验后生成"}</span>
-          </div>
           {existing.data?.derivation_reason ? <div className="studio-lineage"><strong>Lineage</strong><span>{existing.data.derivation_reason}</span>{existing.data.parent_contract_id ? <span className="mono">parent {existing.data.parent_contract_id}</span> : null}{location.search.get("adoption") ? <span className="mono">adoption {location.search.get("adoption")}</span> : null}</div> : null}
 
           {sourceConflict ? (
@@ -223,50 +248,97 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
             <div className="studio-notice error" role="alert"><AlertTriangle aria-hidden="true" /><div><strong>服务器拒绝请求</strong><p>{(validation.error ?? creation.error)?.message}</p></div></div>
           ) : null}
 
-          <div className="studio-body">
-            <section className="studio-main" aria-label={`${tab} 投影`}>
-              {tab === "basic" ? <BasicProjection contract={canonical} recipes={recipes.data?.items ?? []} update={update} /> : null}
-              {tab === "advanced" ? <AdvancedProjection contract={canonical} update={update} /> : null}
-              {tab === "source" ? (
-                <SourceProjection
-                  format={format}
-                  source={source}
-                  schema={schemaQuery.data ?? {}}
-                  dirty={sourceDirty}
-                  conflict={sourceConflict}
-                  onFormat={switchFormat}
-                  onChange={(next) => { setSource(next); setSourceDirty(true); setSourceError(null); }}
-                  onApply={applySource}
-                  onDiscard={discardSource}
-                />
-              ) : null}
-              {tab === "script" ? <ScriptProjection validation={validation.data} contract={canonical} /> : null}
-              {tab === "terminal" ? <TerminalProjection user={user} contractId={contractId} /> : null}
+          <div className="studio-body-3col">
+            <section className="studio-col studio-col-form" aria-label="表单投影">
+              <header className="projection-heading">
+                <h2>表单</h2>
+                <p>基础与高级字段共享同一 canonical；滚动查看全部字段。</p>
+              </header>
+              <div className="studio-form-scroll">
+                <BasicProjection contract={canonical} recipes={recipes.data?.items ?? []} update={update} />
+                <AdvancedProjection contract={canonical} update={update} />
+              </div>
             </section>
-            <aside className="studio-side" aria-label="校验结果">
-              <h2>校验与风险</h2>
-              <p className="side-detail">Ajv 即时检查 schema；提交动作仍调用服务器 materializer 和 preflight。</p>
-              {clientErrors.length ? (
-                <ul className="finding-list client">
-                  {clientErrors.slice(0, 8).map((error, index) => (
-                    <li key={`${error.instancePath}-${error.keyword}-${index}`}><strong>{error.instancePath || "/"}</strong><span>{error.message ?? error.keyword}</span></li>
-                  ))}
-                </ul>
-              ) : <div className="validation-ok"><CheckCircle2 aria-hidden="true" /><span><strong>客户端结构通过</strong><small>等待或已完成服务端校验。</small></span></div>}
-              {validation.data ? (
-                <>
-                  <div className="server-validation-heading"><StatusBadge label={`服务器 ${validation.data.status}`} tone={validation.data.status === "BLOCK" ? "danger" : "success"} /></div>
-                  {validation.data.findings.length ? (
-                    <ul className="finding-list server">
-                      {validation.data.findings.map((finding, index) => <li key={`${finding.code}-${index}`}><strong>{finding.code}</strong><span>{finding.message}</span></li>)}
-                    </ul>
-                  ) : <p className="no-findings">无服务端 findings。</p>}
-                </>
-              ) : null}
+
+            <section className="studio-col studio-col-source" aria-label="源码投影">
+              <SourceProjection
+                format={format}
+                source={source}
+                schema={schemaQuery.data ?? {}}
+                dirty={sourceDirty}
+                conflict={sourceConflict}
+                onFormat={switchFormat}
+                onChange={(next) => { setSource(next); setSourceDirty(true); setSourceError(null); }}
+                onApply={applySource}
+                onDiscard={discardSource}
+              />
+            </section>
+
+            <aside className="studio-col studio-col-agent" aria-label="Agent 协同面板">
+              <AgentCoeditPanel
+                user={user}
+                contract={canonical}
+                recipeVersionId={recipeVersionId}
+                onApplyPatch={applyAgentPatch}
+              />
             </aside>
           </div>
+
+          <div className="studio-collapsibles">
+            <details
+              className="studio-collapsible"
+              open={showValidationPanel}
+              onToggle={(event) => setShowValidationPanel(event.currentTarget.open)}
+            >
+              <summary>
+                <ShieldAlert aria-hidden="true" size={16} />
+                <span>校验与风险</span>
+                <StatusBadge
+                  label={clientErrors.length ? `${clientErrors.length} 客户端` : validation.data ? `服务器 ${validation.data.status}` : "未校验"}
+                  tone={clientErrors.length ? "warning" : validation.data?.status === "BLOCK" ? "danger" : validation.data?.status === "OK" ? "success" : "neutral"}
+                />
+              </summary>
+              <div className="studio-collapsible-body validation-side">
+                <p className="side-detail">Ajv 即时检查 schema；提交动作仍调用服务器 materializer 和 preflight。</p>
+                {clientErrors.length ? (
+                  <ul className="finding-list client">
+                    {clientErrors.slice(0, 8).map((error, index) => (
+                      <li key={`${error.instancePath}-${error.keyword}-${index}`}><strong>{error.instancePath || "/"}</strong><span>{error.message ?? error.keyword}</span></li>
+                    ))}
+                  </ul>
+                ) : <div className="validation-ok"><CheckCircle2 aria-hidden="true" /><span><strong>客户端结构通过</strong><small>等待或已完成服务端校验。</small></span></div>}
+                {validation.data ? (
+                  <>
+                    <div className="server-validation-heading"><StatusBadge label={`服务器 ${validation.data.status}`} tone={validation.data.status === "BLOCK" ? "danger" : "success"} /></div>
+                    {validation.data.findings.length ? (
+                      <ul className="finding-list server">
+                        {validation.data.findings.map((finding, index) => <li key={`${finding.code}-${index}`}><strong>{finding.code}</strong><span>{finding.message}</span></li>)}
+                      </ul>
+                    ) : <p className="no-findings">无服务端 findings。</p>}
+                  </>
+                ) : null}
+              </div>
+            </details>
+
+            <details
+              className="studio-collapsible"
+              open={showScriptPanel}
+              onToggle={(event) => setShowScriptPanel(event.currentTarget.open)}
+            >
+              <summary>
+                <FileCode2 aria-hidden="true" size={16} />
+                <span>脚本预览</span>
+                <StatusBadge label={validation.data?.effective_request.script ? "已 materialize" : "待校验"} tone={validation.data?.effective_request.script ? "success" : "neutral"} />
+              </summary>
+              <div className="studio-collapsible-body">
+                <ScriptProjection validation={validation.data} contract={canonical} />
+              </div>
+            </details>
+          </div>
+
           {contractId ? <RunLaunchPanel user={user} contractId={contractId} localDirty={canonicalDirty} navigate={navigate} /> : null}
         </div>
+        ) : null}
       </QueryBoundary>
     </>
   );
@@ -310,14 +382,16 @@ function BasicProjection({ contract, recipes, update }: ProjectionProps & { reci
   const expected = readContractValue<unknown[]>(contract, ["outputs", "expected"], []);
   const stringOutputs = expected.filter((item): item is string => typeof item === "string");
   const typedOutputs = expected.filter((item) => typeof item !== "string");
+  const commandValue = readContractValue(contract, ["entry", "command"], "");
+  const workdirValue = readContractValue(contract, ["project", "workdir"], "");
   return (
     <div className="projection-stack">
       <ProjectionHeading title="基础模式" detail="任务、路径、资源和常用输出；高级字段保留在 canonical object 中。" />
       <fieldset className="field-group"><legend>任务</legend><div className="form-grid two">
         <SelectField label="Recipe version" value={currentRecipe} onChange={(value) => update(["recipe_version_id"], value)} options={recipeOptions} />
         <TextField label="项目名（可选）" value={readContractValue(contract, ["project", "name"], "")} onChange={(value) => update(["project", "name"], value)} />
-        <TextField className="span-2" label="Workdir" value={readContractValue(contract, ["project", "workdir"], "")} onChange={(value) => update(["project", "workdir"], value)} />
-        <TextField className="span-2" label="Command" multiline value={readContractValue(contract, ["entry", "command"], "")} onChange={(value) => update(["entry", "command"], value)} />
+        <TextField className="span-2" label="Workdir" value={workdirValue} onChange={(value) => update(["project", "workdir"], value)} customizable={isPlaceholderValue(workdirValue)} />
+        <TextField className="span-2" label="Command" multiline value={commandValue} onChange={(value) => update(["entry", "command"], value)} customizable={isPlaceholderValue(commandValue)} />
       </div></fieldset>
       <fieldset className="field-group"><legend>资源</legend><div className="form-grid three">
         <TextField label="Partition" value={readContractValue(contract, ["resources", "partition"], "")} onChange={(value) => update(["resources", "partition"], value)} />
@@ -374,7 +448,10 @@ function SourceProjection({ format, source, schema, dirty, conflict, onFormat, o
       <ProjectionHeading title="源码模式" detail="直接编辑 canonical Contract；只有“应用源码”才会替换共享状态。" />
       <div className="source-toolbar">
         <div className="segmented" aria-label="源码格式"><button type="button" className={format === "yaml" ? "active" : undefined} onClick={() => onFormat("yaml")}>YAML</button><button type="button" className={format === "json" ? "active" : undefined} onClick={() => onFormat("json")}>JSON</button></div>
-        <div><button className="button secondary" type="button" disabled={!dirty} onClick={onDiscard}>放弃源码修改</button><button className="button primary" type="button" disabled={!dirty} onClick={onApply}>{conflict ? "应用源码并覆盖表单" : "应用源码"}</button></div>
+        <div className="source-toolbar-actions">
+          <button className="button secondary" type="button" disabled={!dirty} onClick={onDiscard}>放弃源码修改</button>
+          <button className="button primary" type="button" disabled={!dirty} onClick={onApply}>{conflict ? "应用源码并覆盖表单" : "应用源码"}</button>
+        </div>
       </div>
       <div className="source-editor" data-testid="contract-source-editor">
         <Suspense fallback={<div className="query-state" role="status">正在加载源码编辑器…</div>}>
@@ -398,18 +475,7 @@ function ScriptProjection({ validation, contract }: { validation: ReturnType<typ
         <pre className="script-diff"><code>{diff.map((item, index) => <span className={`diff-${item.kind}`} key={`${item.kind}-${index}`}>{item.kind === "added" ? "+ " : item.kind === "removed" ? "- " : "  "}{item.line}{"\n"}</span>)}</code></pre>
         <div className="script-section-heading"><h3>Resolved script</h3></div>
         <pre className="script-preview"><code>{script}</code></pre>
-      </> : <ProjectionEmpty title="脚本被阻断" detail="查看右侧服务端 findings；当前 Contract 无法 materialize。" />}
-    </div>
-  );
-}
-
-function TerminalProjection({ user, contractId }: { user: string; contractId: string | null }) {
-  const validateCommand = `curl --fail-with-body \\\n  -H 'Content-Type: application/json' \\\n  -H 'X-Pilot107-User: ${user}' \\\n  --data-binary @contract.json \\\n  http://127.0.0.1:3000/api/v1/contracts/validate`;
-  return (
-    <div className="projection-stack">
-      <ProjectionHeading title="终端协同" detail="下载/保存当前 JSON 为 contract.json 后，可用同一服务端契约继续；trusted header 命令仅限本地开发。" />
-      <pre className="script-preview"><code>{validateCommand}</code></pre>
-      <dl className="terminal-facts"><div><dt>当前 Contract</dt><dd className="mono wrap-anywhere">{contractId ?? "尚未持久化"}</dd></div><div><dt>关键对象</dt><dd>Contract ID 与 digest，而不是浏览器表单 session</dd></div></dl>
+      </> : <ProjectionEmpty title="脚本被阻断" detail="查看校验面板中的服务端 findings；当前 Contract 无法 materialize。" />}
     </div>
   );
 }
@@ -422,16 +488,29 @@ function ProjectionEmpty({ title, detail }: { title: string; detail: string }) {
   return <div className="projection-empty"><FileCode2 aria-hidden="true" /><div><strong>{title}</strong><p>{detail}</p></div></div>;
 }
 
-function TextField({ label, value, onChange, multiline, detail, className }: { label: string; value: string; onChange: (value: string) => void; multiline?: boolean; detail?: string | undefined; className?: string | undefined }) {
-  return <label className={`form-field ${className ?? ""}`}><span>{label}</span>{multiline ? <textarea value={value} rows={4} onChange={(event) => onChange(event.target.value)} /> : <input value={value} onChange={(event) => onChange(event.target.value)} />}{detail ? <small>{detail}</small> : null}</label>;
+function TextField({ label, value, onChange, multiline, detail, className, customizable }: { label: string; value: string; onChange: (value: string) => void; multiline?: boolean; detail?: string | undefined; className?: string | undefined; customizable?: boolean | undefined }) {
+  return (
+    <label className={`form-field ${className ?? ""}`}>
+      <span className="form-field-label">
+        {label}
+        {customizable ? (
+          <small className="customizable-hint" title="此值为模板占位，建议改成你的真实参数">
+            <Wrench aria-hidden="true" size={11} /> 可自定义
+          </small>
+        ) : null}
+      </span>
+      {multiline ? <textarea value={value} rows={4} onChange={(event) => onChange(event.target.value)} /> : <input value={value} onChange={(event) => onChange(event.target.value)} />}
+      {detail ? <small>{detail}</small> : null}
+    </label>
+  );
 }
 
 function NumberField({ label, value, onChange, min, max, disabled }: { label: string; value: number; onChange: (value: number) => void; min: number; max?: number | undefined; disabled?: boolean | undefined }) {
-  return <label className="form-field"><span>{label}</span><input type="number" value={value} min={min} max={max} disabled={disabled} onChange={(event) => onChange(Number(event.target.value))} /></label>;
+  return <label className="form-field"><span className="form-field-label">{label}</span><input type="number" value={value} min={min} max={max} disabled={disabled} onChange={(event) => onChange(Number(event.target.value))} /></label>;
 }
 
 function SelectField({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) {
-  return <label className="form-field"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>;
+  return <label className="form-field"><span className="form-field-label">{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>;
 }
 
 function JsonObjectField({ label, value, onCommit }: { label: string; value: JsonObject; onCommit: (value: JsonObject) => void }) {
@@ -448,5 +527,5 @@ function JsonObjectField({ label, value, onCommit }: { label: string; value: Jso
       setError(caught instanceof Error ? caught.message : "invalid JSON");
     }
   };
-  return <label className="form-field json-object-field"><span>{label}</span><textarea rows={7} value={draft} onChange={(event) => { setDraft(event.target.value); setDirty(true); }} /><span className="json-field-actions"><small className={error ? "field-error" : undefined}>{error ?? (dirty ? "有未应用修改" : "已同步 canonical state")}</small><button type="button" className="text-link" disabled={!dirty} onClick={apply}>应用 JSON</button></span></label>;
+  return <label className="form-field json-object-field"><span className="form-field-label">{label}</span><textarea rows={7} value={draft} onChange={(event) => { setDraft(event.target.value); setDirty(true); }} /><span className="json-field-actions"><small className={error ? "field-error" : undefined}>{error ?? (dirty ? "有未应用修改" : "已同步 canonical state")}</small><button type="button" className="text-link" disabled={!dirty} onClick={apply}>应用 JSON</button></span></label>;
 }

@@ -1,6 +1,7 @@
 import type {
   CapabilityProfile,
   ContractRecordPayload,
+  ContractSuggestion,
   ContractValidation,
   EntitlementSnapshot,
   HealthReady,
@@ -215,6 +216,24 @@ export const api = {
     sendJson<ContractValidation>("/api/v1/contracts/validate", user, contract, signal),
   createContract: (user: string, contract: JsonObject, signal?: AbortSignal) =>
     sendJson<ContractRecordPayload>("/api/v1/contracts", user, contract, signal),
+  suggestContractPatch: (
+    user: string,
+    contract: JsonObject,
+    recipeVersionId: string,
+    userIntent: string,
+    provider: "local" | "none" = "local",
+    signal?: AbortSignal,
+  ) => sendJson<ContractSuggestion>(
+    "/api/v1/contracts/agent/suggest",
+    user,
+    {
+      current_contract: contract,
+      recipe_version_id: recipeVersionId,
+      user_intent: userIntent,
+      provider,
+    },
+    signal,
+  ),
   templates: (
     user: string,
     filters: {

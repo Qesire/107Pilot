@@ -71,6 +71,33 @@ export function updateContractPath(
   return root;
 }
 
+/**
+ * Apply a dotted-path patch (e.g. {"entry.command": "python3 main.py"}) to a
+ * contract, returning a new canonical object. Array indices may be addressed
+ * with numeric path segments. Unknown intermediate paths are created as objects.
+ */
+export function applyPatchToContract(
+  contract: JsonObject,
+  patch: Record<string, unknown>,
+): JsonObject {
+  const root = structuredClone(contract);
+  for (const [dottedPath, value] of Object.entries(patch)) {
+    const keys = dottedPath.split(".").filter(Boolean);
+    if (keys.length === 0) continue;
+    let cursor: JsonObject = root;
+    for (let index = 0; index < keys.length - 1; index += 1) {
+      const key = keys[index]!;
+      const current = cursor[key];
+      const next = isJsonObject(current) ? current : {};
+      cursor[key] = next;
+      cursor = next;
+    }
+    const finalKey = keys.at(-1);
+    if (finalKey) cursor[finalKey] = value;
+  }
+  return root;
+}
+
 export function readContractValue<T>(
   contract: JsonObject,
   path: readonly string[],
