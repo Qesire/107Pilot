@@ -139,9 +139,11 @@ class SimulatorProfileConfigTests(unittest.TestCase):
         )
 
     def test_env_defaults_use_25_11_target(self) -> None:
+        # .env.competition is a generated, gitignored file (created from
+        # .env.competition.example by start-competition.sh). Audit the two
+        # committed templates that carry the defaults.
         for relative in (
             "simulator/compose/.env.example",
-            "simulator/compose/.env.competition",
             "simulator/compose/.env.competition.example",
         ):
             env_text = (ROOT / relative).read_text(encoding="utf-8")
