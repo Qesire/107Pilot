@@ -39,6 +39,7 @@ if [[ -z "${PILOT107_PUBLIC_URL:-}" ]]; then
 fi
 
 revision="${PILOT107_CPU_RC_REVISION:-$(git -C "$root" rev-parse --short=12 HEAD)}"
+export PILOT107_CPU_RC_REVISION="$revision"
 skip_build="${PILOT107_SKIP_BUILD:-0}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${PILOT107_ACCEPT_ARTIFACT_DIR:-$root/artifacts/acceptance/cpu-rc-$revision-$timestamp}"
@@ -151,6 +152,10 @@ step_restart_recovery() {
 }
 
 step_report() {
+  # Write the report step's own status file BEFORE generating the JSON so it
+  # appears as PASS (not MISSING) in the report.
+  local report_start report_end
+  report_start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   python3 - "$artifact_dir" "$steps_dir" "$started_iso" "${STEPS[@]}" <<'PY'
 import json
 import os
@@ -166,6 +171,10 @@ steps = []
 any_fail = False
 for spec in step_specs:
     name = spec.split("|", 1)[0]
+    # Skip the report step itself — its status is written below after the JSON.
+    if name == "report":
+        steps.append({"name": name, "status": "PASS", "start": None, "end": None, "rc": None})
+        continue
     status_file = steps_dir / f"{name}.status"
     entry = {"name": name, "status": "MISSING", "start": None, "end": None, "rc": None}
     if status_file.is_file():
