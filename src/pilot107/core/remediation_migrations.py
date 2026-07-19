@@ -174,7 +174,19 @@ REMEDIATION_EVENT_MIGRATION = SchemaMigration(
 )
 
 
+REMEDIATION_PROVIDER_MIGRATION = SchemaMigration(
+    migration_id="003e.003.remediation_provider",
+    statements=(
+        """
+        ALTER TABLE remediation_sessions
+        ADD COLUMN provider TEXT NOT NULL DEFAULT 'none'
+        """,
+    ),
+)
+
+
 REMEDIATION_MIGRATIONS = (
     REMEDIATION_SESSION_MIGRATION,
     REMEDIATION_EVENT_MIGRATION,
+    REMEDIATION_PROVIDER_MIGRATION,
 )

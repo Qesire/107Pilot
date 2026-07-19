@@ -165,6 +165,7 @@ class RemediationRoutes:
                     request_key=_required_string(payload, "request_key"),
                     automation_policy=str(payload.get("automation_policy", "manual_approval")),
                     budget=RemediationBudget.from_payload(budget_payload),
+                    provider=str(payload.get("provider", "none")),
                 )
                 return ApiResponse(
                     status=201 if created else 200,
@@ -189,10 +190,11 @@ class RemediationRoutes:
             session = self.service.remediation_store.get_session(session_id)
             actor = identity.username if identity is not None else session.owner
             if action == "advance":
+                raw_provider = payload.get("provider")
                 updated = self.service.advance(
                     session_id,
                     worker_id=f"api:{actor}",
-                    provider=str(payload.get("provider", "none")),
+                    provider=str(raw_provider) if raw_provider is not None else None,
                 )
                 return ApiResponse(status=200, payload=remediation_session_payload(updated))
             if action == "approve":

@@ -11,9 +11,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from pilot107.adapters.rest_token import TokenValidityProbe
 from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.run_store import RunStore
 from pilot107.core.user_entitlement_store import UserEntitlementStore
+from pilot107.services.platform_snapshot_freshness import (
+    SnapshotCollectionMonitor,
+)
 
 
 class HealthCheckStatus(StrEnum):
@@ -21,6 +25,7 @@ class HealthCheckStatus(StrEnum):
     CONFIGURED = "configured"
     UNAVAILABLE = "unavailable"
     DISABLED = "disabled"
+    DEGRADED = "degraded"
 
 
 @dataclass(frozen=True)
@@ -55,6 +60,8 @@ class ApiHealthService:
         llm_enabled: bool,
         user_entitlement_store: UserEntitlementStore | None = None,
         worker_health_path: str | None = None,
+        snapshot_freshness_monitor: SnapshotCollectionMonitor | None = None,
+        token_validity_probe: TokenValidityProbe | None = None,
     ) -> None:
         self.store = store
         self.evidence_root = evidence_root
@@ -63,6 +70,8 @@ class ApiHealthService:
         self.llm_enabled = llm_enabled
         self.user_entitlement_store = user_entitlement_store
         self.worker_health_path = worker_health_path
+        self.snapshot_freshness_monitor = snapshot_freshness_monitor
+        self.token_validity_probe = token_validity_probe
 
     def live_payload(self) -> dict[str, str]:
         return {"status": "alive", "service": "pilot107-api"}
@@ -94,6 +103,8 @@ class ApiHealthService:
             )
         )
         checks.append(self._worker_heartbeat_check())
+        checks.append(self._platform_snapshot_freshness_check())
+        checks.append(self._slurm_token_validity_check())
         ready = all(
             check.status == HealthCheckStatus.OK
             for check in checks
@@ -260,6 +271,129 @@ class ApiHealthService:
             latency_ms=_elapsed_ms(started),
         )
 
+    def _platform_snapshot_freshness_check(self) -> HealthCheck:
+        """Report whether this process is successfully collecting snapshots.
+
+        Non-required by design: a slurmrestd collection failure must not block
+        deploy (the original "startup must not crash" intent), but it must be
+        visible to operators as a DEGRADED indicator with last-success age,
+        consecutive failure count, and a truncated last error.
+        """
+        monitor = self.snapshot_freshness_monitor
+        if monitor is None:
+            return HealthCheck(
+                name="platform_snapshot_freshness",
+                status=HealthCheckStatus.DISABLED,
+                required=False,
+            )
+        state = monitor.state()
+        now = time.time()
+        if state.last_success_at is None and state.consecutive_failures == 0:
+            return HealthCheck(
+                name="platform_snapshot_freshness",
+                status=HealthCheckStatus.DISABLED,
+                required=False,
+                reason="snapshot collection has not run yet",
+            )
+        if state.consecutive_failures > 0:
+            age = now - state.last_success_at if state.last_success_at else None
+            reason = (
+                f"collection failing: consecutive_failures={state.consecutive_failures}"
+                f" last_success_age={_fmt_seconds(age)}"
+            )
+            if state.last_error_message:
+                reason += f" last_error={state.last_error_message}"
+            return HealthCheck(
+                name="platform_snapshot_freshness",
+                status=HealthCheckStatus.DEGRADED,
+                required=False,
+                reason=reason,
+            )
+        # Last collection succeeded: flag stale if it has been more than two
+        # refresh intervals (2 * 5 min) since the last success.
+        age = now - state.last_success_at if state.last_success_at else None
+        if age is not None and age > 600:
+            return HealthCheck(
+                name="platform_snapshot_freshness",
+                status=HealthCheckStatus.DEGRADED,
+                required=False,
+                reason=f"snapshot stale: last_success_age={age:.0f}s",
+            )
+        return HealthCheck(
+            name="platform_snapshot_freshness",
+            status=HealthCheckStatus.OK,
+            required=False,
+            reason=f"last_success_age={_fmt_seconds(age)}",
+        )
+
+    def _slurm_token_validity_check(self) -> HealthCheck:
+        """Report Slurm REST JWT validity for the rest-native path.
+
+        Non-required: an expired/missing JWT must not block deploy, but it must
+        be visible. For simulator-minted tokens this reflects re-mint health;
+        for externally-managed tokens (``PILOT107_SLURM_TOKEN``) it reports
+        remaining lifespan if parseable, else "externally managed". The
+        command-gateway path does not use a JWT and reports DISABLED.
+        """
+        probe = self.token_validity_probe
+        if probe is None:
+            return HealthCheck(
+                name="slurm_token_validity",
+                status=HealthCheckStatus.DISABLED,
+                required=False,
+            )
+        validity = probe.validity()
+        margin = validity.refresh_margin_seconds
+        if validity.last_re_mint_error is not None:
+            return HealthCheck(
+                name="slurm_token_validity",
+                status=HealthCheckStatus.DEGRADED,
+                required=False,
+                reason=(
+                    f"re-mint failed: {validity.last_re_mint_error} "
+                    f"remaining={_fmt_seconds(validity.remaining_seconds)}"
+                ),
+            )
+        if validity.remaining_seconds is None:
+            # Externally managed with unparseable expiry, or no token minted
+            # yet. We cannot assert degradation without expiry info, so report
+            # CONFIGURED (non-OK, non-required) so it is visible but not
+            # alarming.
+            if validity.externally_managed:
+                return HealthCheck(
+                    name="slurm_token_validity",
+                    status=HealthCheckStatus.CONFIGURED,
+                    required=False,
+                    reason="externally managed (expiry unknown)",
+                )
+            return HealthCheck(
+                name="slurm_token_validity",
+                status=HealthCheckStatus.CONFIGURED,
+                required=False,
+                reason="no token minted yet",
+            )
+        remaining = validity.remaining_seconds
+        if remaining <= 0:
+            return HealthCheck(
+                name="slurm_token_validity",
+                status=HealthCheckStatus.DEGRADED,
+                required=False,
+                reason=f"token expired: remaining={remaining:.0f}s",
+            )
+        if remaining <= margin:
+            return HealthCheck(
+                name="slurm_token_validity",
+                status=HealthCheckStatus.DEGRADED,
+                required=False,
+                reason=f"token near expiry: remaining={remaining:.0f}s margin={margin}s",
+            )
+        return HealthCheck(
+            name="slurm_token_validity",
+            status=HealthCheckStatus.OK,
+            required=False,
+            reason=f"remaining={remaining:.0f}s mode={validity.mode}",
+        )
+
 
 def _configured_check(name: str, enabled: bool) -> HealthCheck:
     return HealthCheck(
@@ -271,3 +405,9 @@ def _configured_check(name: str, enabled: bool) -> HealthCheck:
 
 def _elapsed_ms(started: float) -> float:
     return (time.monotonic() - started) * 1000
+
+
+def _fmt_seconds(seconds: float | None) -> str:
+    if seconds is None:
+        return "unknown"
+    return f"{seconds:.0f}s"

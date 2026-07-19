@@ -12,6 +12,27 @@ import { api } from "./api";
 import { providerLabel, type LlmProvider } from "./AgentPage";
 import type { ContractSuggestion, JsonObject } from "./types";
 
+/**
+ * The agent suggest endpoint returns either an "ok" payload (the existing
+ * ContractSuggestion shape plus ``status: "ok"``) or a "degraded" payload
+ * (``status: "degraded"`` with a ``reason`` and an empty patch). The degraded
+ * shape signals an LLM failure the frontend must surface instead of silently
+ * applying an empty patch.
+ */
+interface AgentSuggestResponse extends ContractSuggestion {
+  status?: "ok" | "degraded";
+  reason?: string;
+}
+
+const DEGRADED_REASON_LABELS: Record<string, string> = {
+  provider_unconfigured: "未配置 LLM",
+  provider_invalid_key: "认证失败",
+  provider_timeout: "请求超时",
+  provider_transport_error: "网关连接失败",
+  provider_schema_error: "返回结构异常",
+  provider_parse_error: "返回解析失败",
+};
+
 export interface AgentCoeditPanelProps {
   user: string;
   contract: JsonObject;
@@ -33,11 +54,13 @@ export function AgentCoeditPanel({
 }: AgentCoeditPanelProps) {
   const [intent, setIntent] = useState("");
   const [provider, setProvider] = useState<LlmProvider>("local");
-  const [suggestion, setSuggestion] = useState<ContractSuggestion | null>(null);
+  const [suggestion, setSuggestion] = useState<AgentSuggestResponse | null>(null);
 
   const suggest = useMutation({
     mutationFn: () =>
-      api.suggestContractPatch(user, contract, recipeVersionId, intent, provider),
+      api.suggestContractPatch(user, contract, recipeVersionId, intent, provider) as Promise<
+        AgentSuggestResponse
+      >,
     onSuccess: setSuggestion,
   });
 
@@ -47,8 +70,10 @@ export function AgentCoeditPanel({
     suggest.mutate();
   };
 
+  const isDegraded = suggestion?.status === "degraded";
+
   const apply = () => {
-    if (!suggestion) return;
+    if (!suggestion || isDegraded) return;
     onApplyPatch(suggestion.suggested_patch);
     setSuggestion(null);
     setIntent("");
@@ -58,7 +83,7 @@ export function AgentCoeditPanel({
     setSuggestion(null);
   };
 
-  const patchRows = suggestion
+  const patchRows = suggestion && !isDegraded
     ? Object.entries(suggestion.suggested_patch)
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([path, value]) => ({
@@ -71,6 +96,11 @@ export function AgentCoeditPanel({
                 : JSON.stringify(value),
         }))
     : [];
+
+  const degradedLabel =
+    suggestion?.reason && DEGRADED_REASON_LABELS[suggestion.reason]
+      ? DEGRADED_REASON_LABELS[suggestion.reason]
+      : "LLM 调用失败";
 
   return (
     <div className="agent-coedit">
@@ -137,7 +167,20 @@ export function AgentCoeditPanel({
         </div>
       ) : null}
 
-      {suggestion ? (
+      {suggestion && isDegraded ? (
+        <div className="studio-notice error" role="alert">
+          <AlertTriangle aria-hidden="true" />
+          <div>
+            <strong>Agent 降级：{degradedLabel}</strong>
+            <p>{suggestion.explanation_zh}</p>
+            {suggestion.reason ? (
+              <p className="agent-coedit-note">reason: {suggestion.reason}</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {suggestion && !isDegraded ? (
         <div className="agent-coedit-result">
           <div className="agent-coedit-explanation">
             <strong>Agent 建议</strong>

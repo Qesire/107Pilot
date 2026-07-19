@@ -34,7 +34,7 @@ from pilot107.adapters.slurm import (
     UrllibHttpTransport,
 )
 from pilot107.core.advice import AgentAdviceService, AgentPolicyEngine
-from pilot107.core.agent import AgentExplainService
+from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
 from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.diagnosis import DiagnosisService
@@ -261,9 +261,13 @@ class WorkerService:
         errors: list[str] = []
         for session in sessions:
             try:
+                # Honor the per-session provider the user selected (persisted on
+                # the session). The Worker never overrides it: passing
+                # ``provider=None`` tells ``advance`` to use the stored value.
                 updated = self.stack.remediation_service.advance(
                     session.session_id,
                     worker_id=self.config.worker_id,
+                    provider=None,
                 )
                 if updated.version != session.version or updated.state != session.state:
                     advanced += 1
@@ -374,7 +378,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     )
     explain_service = AgentExplainService(
         store=store,
-        llm_provider=None,
+        llm_provider=_worker_llm_provider_from_env(),
         evidence_binder=EvidenceBinder(
             store=store,
             evidence_root=config.evidence_root,
@@ -619,6 +623,21 @@ def _build_evidence_transport(config: WorkerServiceConfig) -> EvidenceTransport 
     if config.backend in {"docker-compose-command", "command-gateway"}:
         return DockerVolumeEvidenceTransport(allowed_roots=allowed_roots)
     return AuthorizedFilesystemEvidenceTransport(allowed_roots=allowed_roots)
+
+
+def _worker_llm_provider_from_env() -> OpenAICompatibleLLMProvider | None:
+    """Best-effort LLM provider for the worker's remediation auto-advance.
+
+    Returns ``None`` when the LLM gateway is not configured, in which case
+    ``AgentExplainService`` falls back to deterministic explanations and the
+    rule-based policy engine still generates ``suggested_patch``. When the
+    user selects an LLM provider on a remediation session, the persisted
+    choice is honored here instead of being silently downgraded to ``none``.
+    """
+    try:
+        return OpenAICompatibleLLMProvider.from_env()
+    except ValueError:
+        return None
 
 
 def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> WorkerTickResult:

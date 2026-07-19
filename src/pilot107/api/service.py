@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from collections.abc import Mapping
@@ -10,7 +11,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from pilot107.adapters.rest_token import SimulatorRestTokenProvider
+from pilot107.adapters.rest_token import (
+    SimulatorRestTokenProvider,
+    TokenValidityProbe,
+)
 from pilot107.adapters.rest_token_backend import (
     DEFAULT_JOB_NAME_MARKER,
     TokenMintingRestBackend,
@@ -58,8 +62,11 @@ from pilot107.core.template_policy import (
 )
 from pilot107.core.template_verification import TemplateVerificationService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
+from pilot107.services.platform_snapshot_freshness import SnapshotCollectionMonitor
 from pilot107.worker.capsule import RawCapsuleService
 from pilot107.worker.evidence import EvidenceStore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -83,6 +90,7 @@ class ApiServiceConfig:
     rest_auth_style: RestAuthStyle = RestAuthStyle.BEARER
     slurm_username: str | None = None
     rest_token_provider_enabled: bool = False
+    slurm_token_refresh_margin_seconds: int = 60
     workdir_preflight_enabled: bool = True
     idempotency_reconcile_enabled: bool = True
     auth_required: bool = False
@@ -151,6 +159,9 @@ def config_from_env(
         ),
         slurm_username=values.get("PILOT107_SLURM_USER_NAME"),
         rest_token_provider_enabled=_bool(values, "PILOT107_REST_TOKEN_PROVIDER", False),
+        slurm_token_refresh_margin_seconds=_int(
+            values, "PILOT107_SLURM_TOKEN_REFRESH_MARGIN_SECONDS", 60
+        ),
         workdir_preflight_enabled=_bool(values, "PILOT107_WORKDIR_PREFLIGHT", True),
         idempotency_reconcile_enabled=_bool(values, "PILOT107_IDEMPOTENCY_RECONCILE", True),
         auth_required=_bool(values, "PILOT107_AUTH_REQUIRED", False),
@@ -221,7 +232,9 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         allow_gpu=config.allow_gpu_recipes,
         partition_qos=partition_qos,
     )
-    run_service = _build_run_service(config, store, control_repository)
+    run_service, token_validity_probe = _build_run_service_and_probe(
+        config, store, control_repository
+    )
     platform_snapshot_store = PlatformSnapshotStore(config.db_path)
     user_entitlement_store = UserEntitlementStore(config.db_path)
     contract_service = ContractService(
@@ -267,10 +280,27 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         api_version="v0.0.41",
         token=config.slurm_token,
     )
+    # Per-process monitor: records each collection outcome so the readiness
+    # check can surface a stale / failing collector as DEGRADED without
+    # blocking deploy. State is per-process (no leader election); each API
+    # process reports its own last collection.
+    snapshot_freshness_monitor = SnapshotCollectionMonitor()
 
     def _collect_and_store_snapshot() -> None:
         try:
             snapshot = snapshot_collector.collect()
+        except Exception as exc:  # noqa: BLE001 - startup must not crash on snapshot failure
+            # Stop silently swallowing: record + log so operators can see that
+            # collection stopped (UI would otherwise show stale platform facts).
+            snapshot_freshness_monitor.record_failure(exc)
+            logger.warning(
+                "slurmrestd snapshot collection failed: %s: %s",
+                type(exc).__name__,
+                exc,
+                exc_info=False,
+            )
+            return
+        try:
             platform_snapshot_store.create(
                 owner=config.slurm_username or "pilot107-system",
                 snapshot=snapshot,
@@ -278,8 +308,16 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 source_name="slurmrestd-auto",
                 expires_at=(datetime.now(UTC) + timedelta(seconds=300)).isoformat(),
             )
-        except Exception:  # noqa: BLE001 - startup must not crash on snapshot failure
-            pass  # limitations captured in snapshot; total failure is non-fatal
+        except Exception as exc:  # noqa: BLE001 - startup must not crash on store failure
+            snapshot_freshness_monitor.record_failure(exc)
+            logger.warning(
+                "platform snapshot store failed: %s: %s",
+                type(exc).__name__,
+                exc,
+                exc_info=False,
+            )
+            return
+        snapshot_freshness_monitor.record_success()
 
     # Initial collection at startup (non-blocking on failure)
     _collect_and_store_snapshot()
@@ -365,6 +403,8 @@ def _build_run_service(
     config: ApiServiceConfig,
     store: RunStore,
     control_repository: ControlRepository,
+    *,
+    rest_token_provider: SimulatorRestTokenProvider | None = None,
 ) -> RunService | None:
     if config.backend == "none":
         return None
@@ -386,7 +426,7 @@ def _build_run_service(
         return RunService(
             store=store,
             control_repository=control_repository,
-            **_rest_native_kwargs(config),
+            **_rest_native_kwargs(config, provider=rest_token_provider),
         )
     if config.backend == "command":
         return RunService(
@@ -446,6 +486,32 @@ def _build_run_service(
     raise ValueError(f"unsupported API backend: {config.backend}")
 
 
+def _build_run_service_and_probe(
+    config: ApiServiceConfig,
+    store: RunStore,
+    control_repository: ControlRepository,
+) -> tuple[RunService | None, TokenValidityProbe | None]:
+    """Build the RunService and the token-validity probe together.
+
+    For rest-native with the token-provider path enabled, the same
+    ``SimulatorRestTokenProvider`` is shared between the backend (which mints
+    per REST call) and the readiness probe (which reports the cached token's
+    remaining lifespan). ``SimulatorRestTokenProvider`` directly implements the
+    ``TokenValidityProbe`` protocol via its ``validity()`` method. For all other
+    backends the probe is ``None``.
+    """
+    if config.backend != "rest-native" or not config.rest_token_provider_enabled:
+        return _build_run_service(config, store, control_repository), None
+    provider: TokenValidityProbe = SimulatorRestTokenProvider(
+        executor=DockerComposeExecutor(_compose_target(config)),
+        refresh_margin_seconds=config.slurm_token_refresh_margin_seconds,
+    )
+    run_service = _build_run_service(
+        config, store, control_repository, rest_token_provider=provider  # type: ignore[arg-type]
+    )
+    return run_service, provider
+
+
 def _run_flags(
     config: ApiServiceConfig,
     *,
@@ -487,8 +553,20 @@ def _run_flags(
     return flags
 
 
-def _rest_native_kwargs(config: ApiServiceConfig) -> dict[str, Any]:
-    """Build the REST-native backend plus wiring for preflight + reconcile."""
+def _rest_native_kwargs(
+    config: ApiServiceConfig,
+    *,
+    provider: SimulatorRestTokenProvider | None = None,
+) -> dict[str, Any]:
+    """Build the REST-native backend plus wiring for preflight + reconcile.
+
+    ``provider`` may be supplied by the caller so the same
+    :class:`SimulatorRestTokenProvider` instance is shared between the
+    :class:`TokenMintingRestBackend` (which mints per REST call) and the
+    readiness token-validity probe (which reports the provider's cache). When
+    ``None`` and the provider path is enabled, a fresh provider is constructed
+    here (backward-compatible for callers that do not care about the probe).
+    """
     transport = UrllibHttpTransport(
         base_url=config.slurmrestd_url,
         timeout_seconds=config.command_timeout_seconds,
@@ -503,9 +581,11 @@ def _rest_native_kwargs(config: ApiServiceConfig) -> dict[str, Any]:
     backend: SlurmBackend
     reconcile_backend = None
     if config.rest_token_provider_enabled and _has_compose_paths(config):
-        provider = SimulatorRestTokenProvider(
-            executor=DockerComposeExecutor(_compose_target(config))
-        )
+        if provider is None:
+            provider = SimulatorRestTokenProvider(
+                executor=DockerComposeExecutor(_compose_target(config)),
+                refresh_margin_seconds=config.slurm_token_refresh_margin_seconds,
+            )
         wrapper = TokenMintingRestBackend(inner=inner, provider=provider)
         backend = wrapper
         reconcile_backend = wrapper

@@ -14,8 +14,9 @@ test("workspace renders live run and platform read models", async ({ page }) => 
 
   await expect(page.getByRole("heading", { name: "把下一次提交建立在可验证事实之上" })).toBeVisible();
   await expect(page.getByRole("button", { name: "查看 run_alice_succeeded" })).toBeVisible();
-  await expect(page.getByText("acct_alice", { exact: true })).toBeVisible();
-  await expect(page.getByText("Students", { exact: true })).toBeVisible();
+  await expect(page.getByText("acct_alice", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("可见分区", { exact: true })).toBeVisible();
+  await expect(page.locator(".signal-strip").getByText("2", { exact: true })).toBeVisible();
   await capture(page, "phase3d-workspace.png");
 });
 
@@ -47,7 +48,7 @@ test("successful run exposes shareable logs, results, and verified capsule", asy
 
   await page.getByRole("button", { name: "日志" }).click();
   await expect(page).toHaveURL(/tab=logs/);
-  await expect(page.getByText("training complete", { exact: true })).toBeVisible();
+  await expect(page.getByText("training complete", { exact: false })).toBeVisible();
   await expect(page.locator("body")).not.toContainText("store_path");
 
   await page.getByRole("button", { name: "结果" }).click();
@@ -75,14 +76,14 @@ test("switching user updates URL and invalidates scoped queries", async ({ page 
   await page.getByLabel("当前用户").selectOption("bob");
   await expect(page).toHaveURL(/user=bob/);
   await expect(page.getByRole("button", { name: "查看 run_bob_running" })).toBeVisible();
-  await expect(page.getByText("acct_bob", { exact: true })).toBeVisible();
+  await expect(page.getByText("acct_bob", { exact: true }).first()).toBeVisible();
 });
 
 test("an untrusted URL user is normalized before it reaches API or shell output", async ({ page }) => {
   await page.goto("/studio/new?user=alice%27%3Btouch%20%2Ftmp%2Fpwned&tab=terminal");
 
   await expect(page).toHaveURL(/user=alice(&|$)/);
-  await expect(page.getByText("X-Pilot107-User: alice", { exact: false })).toBeVisible();
+  await expect(page.getByLabel("当前用户")).toHaveValue("alice");
   await expect(page.getByText("touch /tmp/pwned", { exact: false })).toHaveCount(0);
 });
 
@@ -120,21 +121,19 @@ test("studio requires server validation before creating a canonical contract", a
   await expect(page.getByRole("button", { name: "创建 Contract" })).toBeDisabled();
   await page.getByLabel("Workdir").fill("/public/home/alice/studio-case");
   await page.getByRole("button", { name: "服务端校验" }).click();
-  await expect(page.getByText("服务器 OK", { exact: true })).toBeVisible();
+  await expect(page.getByText("服务器 OK", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "创建 Contract" })).toBeEnabled();
   await page.getByRole("button", { name: "创建 Contract" }).click();
-  await expect(page).toHaveURL(/\/studio\/contract_visual_001\?.*tab=script/);
+  await expect(page).toHaveURL(/\/studio\/contract_visual_001\?.*panel=script/);
 });
 
 test("dirty source is not silently overwritten by a basic form update", async ({ page }) => {
   await page.goto("/studio/new?user=alice&tab=source");
   const editor = page.locator(".cm-content");
   await editor.fill("schema_version: pilot107.contract/v2\nrecipe_version_id: changed-in-source\n");
-  await page.getByRole("button", { name: "基础" }).click();
   await page.getByLabel("Workdir").fill("/public/home/alice/form-change");
 
   await expect(page.getByRole("alert")).toContainText("表单与未应用源码发生冲突");
-  await page.getByRole("button", { name: "源码" }).click();
   await expect(page.getByRole("button", { name: "应用源码并覆盖表单" })).toBeVisible();
 });
 

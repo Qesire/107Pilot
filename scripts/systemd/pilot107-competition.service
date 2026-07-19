@@ -1,0 +1,40 @@
+[Unit]
+Description=107Pilot competition stack (docker compose)
+Documentation=file:///__PILOT107_REPO_ROOT__/scripts/systemd/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+# Pull stack config from /etc/pilot107/competition.env. start-competition.sh
+# does not strictly require PILOT107_PUBLIC_URL (unlike cpu-rc), but the env
+# file is the single source for any operator-supplied overrides.
+ConditionPathExists=/etc/pilot107/competition.env
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=root
+WorkingDirectory=__PILOT107_REPO_ROOT__
+EnvironmentFile=/etc/pilot107/competition.env
+
+# start-competition.sh builds images, runs `docker compose --profile
+# competition up -d` (compose.yml + compose.competition.yml; no cpu-rc
+# overlay), and waits for healthchecks. oneshot + RemainAfterExit=yes is the
+# canonical pattern for a `docker compose up -d` wrapper.
+ExecStart=__PILOT107_REPO_ROOT__/scripts/start-competition.sh
+
+# stop-competition.sh runs `docker compose down` against the same files +
+# profile, so the unit tears down exactly the containers it brought up.
+ExecStop=__PILOT107_REPO_ROOT__/scripts/stop-competition.sh
+
+# If start fails (e.g. transient docker daemon hiccup), retry. Once the stack
+# is up, per-container restart policies in compose handle container crashes;
+# the unit itself stays "active".
+Restart=on-failure
+RestartSec=10
+
+# Cold first-run image builds can take several minutes; give the script room.
+TimeoutStartSec=20min
+TimeoutStopSec=5min
+
+[Install]
+WantedBy=multi-user.target

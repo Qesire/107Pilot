@@ -141,6 +141,7 @@ class RemediationSession:
     lease_expires_at: str | None
     created_at: str
     updated_at: str
+    provider: str = "none"
 
 
 @dataclass(frozen=True)

@@ -105,6 +105,7 @@ class RemediationService:
         request_key: str,
         automation_policy: str = "manual_approval",
         budget: RemediationBudget | None = None,
+        provider: str = "none",
     ) -> tuple[RemediationSession, bool]:
         normalized_key = request_key.strip()
         if not _REQUEST_KEY.fullmatch(normalized_key):
@@ -144,6 +145,7 @@ class RemediationService:
             source_evidence_digest=evidence_digest,
             automation_policy=automation_policy,
             budget=budget or RemediationBudget(),
+            provider=provider,
         )
 
     def advance(
@@ -151,7 +153,7 @@ class RemediationService:
         session_id: str,
         *,
         worker_id: str,
-        provider: str = "none",
+        provider: str | None = None,
     ) -> RemediationSession:
         session, claimed = self.remediation_store.claim_lease(
             session_id,
@@ -159,6 +161,15 @@ class RemediationService:
         )
         if not claimed:
             return session
+        # Persist the caller's provider choice before advancing. When the
+        # Worker auto-advances it passes ``provider=None`` so the previously
+        # persisted user choice (default "none") is honored. When the UI
+        # advances with an explicit provider, that choice is recorded here.
+        if provider is not None:
+            session = self.remediation_store.update_provider(
+                session_id,
+                provider=provider,
+            )
         try:
             for _ in range(8):
                 session = self.remediation_store.get_session(session_id)
@@ -182,7 +193,7 @@ class RemediationService:
                     )
                     continue
                 if session.state == RemediationState.PLANNING:
-                    return self._plan_turn(session, provider=provider)
+                    return self._plan_turn(session, provider=session.provider)
                 if session.state == RemediationState.EXECUTING:
                     return self._evaluate_execution(session)
                 if session.state == RemediationState.EVALUATING:
@@ -691,6 +702,7 @@ def remediation_session_payload(
         "source_diagnosis_digest": session.source_diagnosis_digest,
         "source_evidence_digest": session.source_evidence_digest,
         "automation_policy": session.automation_policy,
+        "provider": session.provider,
         "budget": session.budget.to_payload(),
         "usage": session.usage.to_payload(),
         "stop_reason": session.stop_reason,

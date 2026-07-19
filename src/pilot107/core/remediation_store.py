@@ -20,6 +20,7 @@ from pilot107.core.remediation import (
     RemediationBudget,
     RemediationConflict,
     RemediationEvent,
+    RemediationInvariantError,
     RemediationSession,
     RemediationState,
     RemediationUsage,
@@ -60,9 +61,11 @@ class RemediationStore:
         source_evidence_digest: str,
         automation_policy: str,
         budget: RemediationBudget,
+        provider: str = "none",
     ) -> tuple[RemediationSession, bool]:
         now = _now()
         usage = RemediationUsage()
+        normalized_provider = self._normalize_provider(provider)
         with self.connect() as conn:
             cursor = conn.execute(
                 """
@@ -70,8 +73,8 @@ class RemediationStore:
                     session_id, owner, request_key, state, version, source_run_id,
                     source_contract_id, source_diagnosis_digest, source_evidence_digest,
                     automation_policy, budget_json, usage_json, stop_reason, takeover_reason,
-                    lease_owner, lease_expires_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)
+                    lease_owner, lease_expires_at, created_at, updated_at, provider
+                ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -87,6 +90,7 @@ class RemediationStore:
                     _json(usage.to_payload()),
                     now,
                     now,
+                    normalized_provider,
                 ),
             )
             if cursor.rowcount == 1:
@@ -94,7 +98,11 @@ class RemediationStore:
                     conn,
                     session_id=session_id,
                     event_type="session.created",
-                    payload={"state": state.value, "version": 1},
+                    payload={
+                        "state": state.value,
+                        "version": 1,
+                        "provider": normalized_provider,
+                    },
                     created_at=now,
                 )
             row = conn.execute(
@@ -107,6 +115,50 @@ class RemediationStore:
         if record.session_id != session_id or record.source_run_id != source_run_id:
             raise RemediationConflict("remediation request key conflicts with another session")
         return record, cursor.rowcount == 1
+
+    def update_provider(
+        self,
+        session_id: str,
+        *,
+        provider: str,
+    ) -> RemediationSession:
+        """Persist the user's LLM provider choice on the session.
+
+        Does not bump ``version`` or change ``state``: provider is a
+        per-session configuration, not a state transition, so it must not
+        interfere with the lease/state compare-and-swap used by ``advance``.
+        """
+        normalized_provider = self._normalize_provider(provider)
+        now = _now()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE remediation_sessions
+                SET provider = ?, updated_at = ?
+                WHERE session_id = ?
+                """,
+                (normalized_provider, now, session_id),
+            )
+            if cursor.rowcount == 1:
+                self._append_event(
+                    conn,
+                    session_id=session_id,
+                    event_type="session.provider_updated",
+                    payload={"provider": normalized_provider},
+                    created_at=now,
+                )
+        if cursor.rowcount != 1:
+            raise KeyError(session_id)
+        return self.get_session(session_id)
+
+    @staticmethod
+    def _normalize_provider(provider: str) -> str:
+        normalized = (provider or "none").strip().lower()
+        if normalized not in {"none", "local", "campus"}:
+            raise RemediationInvariantError(
+                f"unsupported remediation provider: {provider}"
+            )
+        return normalized
 
     def get_session(self, session_id: str) -> RemediationSession:
         with self.connect() as conn:
@@ -728,6 +780,7 @@ def _row_to_session(row: sqlite3.Row) -> RemediationSession:
         ),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        provider=str(row["provider"]) if "provider" in row else "none",
     )
 
 

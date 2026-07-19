@@ -385,6 +385,7 @@ function Overview({ user, run, objects, tasks, remediation }: { user: string; ru
       <dl className="fact-list evidence-facts">
         <div><dt>Job ID</dt><dd className="mono">{run.job_id ?? "—"}</dd></div>
         <div><dt>Contract</dt><dd className="mono wrap-anywhere">{run.contract_id ?? "—"}</dd></div>
+        <div><dt>Workdir</dt><dd className="mono wrap-anywhere">{run.workdir ?? "服务器 read model 未公开"}</dd></div>
         <div><dt>Terminal</dt><dd>{run.terminal_state ?? run.state}</dd></div>
         <div><dt>Exit</dt><dd className="mono">{run.exit_code ?? "—"}</dd></div>
         <div><dt>Result</dt><dd>{run.result_status}</dd></div>

@@ -260,6 +260,7 @@ class ContractAgentSuggestRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         payload = response.payload
+        self.assertEqual(payload["status"], "ok")
         self.assertEqual(
             payload["suggested_patch"],
             {
@@ -271,7 +272,7 @@ class ContractAgentSuggestRouteTests(unittest.TestCase):
         self.assertTrue(payload["needs_user_confirmation"])
         self.assertIn("调整", payload["explanation_zh"])
 
-    def test_route_provider_none_returns_empty_patch(self) -> None:
+    def test_route_provider_none_returns_ok_empty_patch(self) -> None:
         api = self._api_with_llm()
         response = self._post(
             api,
@@ -283,10 +284,11 @@ class ContractAgentSuggestRouteTests(unittest.TestCase):
             },
         )
         self.assertEqual(response.status, 200)
+        self.assertEqual(response.payload["status"], "ok")
         self.assertEqual(response.payload["suggested_patch"], {})
         self.assertFalse(response.payload["needs_user_confirmation"])
 
-    def test_route_llm_not_configured_falls_back(self) -> None:
+    def test_route_llm_not_configured_returns_degraded(self) -> None:
         api = self._api_without_llm()
         response = self._post(
             api,
@@ -298,9 +300,97 @@ class ContractAgentSuggestRouteTests(unittest.TestCase):
             },
         )
         self.assertEqual(response.status, 200)
+        self.assertEqual(response.payload["status"], "degraded")
+        self.assertEqual(response.payload["reason"], "provider_unconfigured")
         self.assertEqual(response.payload["suggested_patch"], {})
         self.assertFalse(response.payload["needs_user_confirmation"])
-        self.assertIn("LLM", response.payload["explanation_zh"])
+
+    def test_route_transport_error_returns_degraded(self) -> None:
+        api = self._api_with_llm()
+        with patch(
+            "pilot107.core.agent.urllib.request.urlopen",
+            side_effect=TimeoutError("read timed out"),
+        ):
+            response = self._post(
+                api,
+                {
+                    "current_contract": _VALID_CONTRACT,
+                    "recipe_version_id": "recipe_python_cpu@1.0.0",
+                    "user_intent": "改一下",
+                    "provider": "local",
+                },
+            )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.payload["status"], "degraded")
+        self.assertEqual(response.payload["reason"], "provider_timeout")
+        self.assertEqual(response.payload["suggested_patch"], {})
+
+    def test_route_invalid_json_returns_degraded(self) -> None:
+        api = self._api_with_llm()
+        # max_attempts=1 so a single invalid-JSON response surfaces as degraded
+        # instead of retrying into a success.
+        from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
+
+        provider = OpenAICompatibleLLMProvider(
+            base_url="http://llm.internal/v1",
+            api_key="test-key",
+            model="local-model",
+            max_attempts=1,
+        )
+        api.agent_explain_service = AgentExplainService(
+            store=self.store,
+            llm_provider=provider,
+            evidence_binder=EvidenceBinder(
+                store=self.store,
+                evidence_root=self.evidence_store.root,
+            ),
+        )
+        invalid = _chat_response("not-json")
+        with patch(
+            "pilot107.core.agent.urllib.request.urlopen",
+            return_value=_FakeHttpResponse(invalid),
+        ):
+            response = self._post(
+                api,
+                {
+                    "current_contract": _VALID_CONTRACT,
+                    "recipe_version_id": "recipe_python_cpu@1.0.0",
+                    "user_intent": "改一下",
+                    "provider": "local",
+                },
+            )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.payload["status"], "degraded")
+        self.assertEqual(response.payload["reason"], "provider_parse_error")
+        self.assertEqual(response.payload["suggested_patch"], {})
+
+    def test_route_invalid_key_returns_degraded(self) -> None:
+        import urllib.error
+        from email.message import Message
+
+        api = self._api_with_llm()
+        with patch(
+            "pilot107.core.agent.urllib.request.urlopen",
+            side_effect=urllib.error.HTTPError(
+                url="http://llm.internal/v1/chat/completions",
+                code=401,
+                msg="Unauthorized",
+                hdrs=Message(),
+                fp=None,
+            ),
+        ):
+            response = self._post(
+                api,
+                {
+                    "current_contract": _VALID_CONTRACT,
+                    "recipe_version_id": "recipe_python_cpu@1.0.0",
+                    "user_intent": "改一下",
+                    "provider": "local",
+                },
+            )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.payload["status"], "degraded")
+        self.assertEqual(response.payload["reason"], "provider_invalid_key")
 
     def test_route_missing_body_returns_400(self) -> None:
         api = self._api_with_llm()

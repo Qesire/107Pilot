@@ -1665,7 +1665,12 @@ class Pilot107HttpApi:
                 },
             )
         if provider == "none":
-            return ApiResponse(status=200, payload=suggest_contract_patch_without_llm())
+            # Intentional: the user chose deterministic mode. This is not a
+            # failure, so it stays HTTP 200 with status "ok" and an empty patch.
+            return ApiResponse(
+                status=200,
+                payload={**suggest_contract_patch_without_llm(), "status": "ok"},
+            )
         # Prefer the injected LLM provider from agent_explain_service; fall back to env.
         llm_provider = getattr(self.agent_explain_service, "llm_provider", None)
         if llm_provider is None:
@@ -1674,7 +1679,10 @@ class Pilot107HttpApi:
             except ValueError:
                 return ApiResponse(
                     status=200,
-                    payload=suggest_contract_patch_without_llm(),
+                    payload=_agent_suggest_degraded(
+                        "provider_unconfigured",
+                        "未配置 LLM 网关，无法生成建议。请选择确定性模式或配置 LLM。",
+                    ),
                 )
         try:
             result = llm_provider.suggest_contract_patch(
@@ -1682,11 +1690,15 @@ class Pilot107HttpApi:
                 recipe_version_id=recipe_version_id,
                 user_intent=user_intent,
             )
-            return ApiResponse(status=200, payload=result)
-        except AgentProviderError:
+            return ApiResponse(status=200, payload={**result, "status": "ok"})
+        except AgentProviderError as exc:
+            reason = _agent_suggest_reason_for_error(exc)
             return ApiResponse(
                 status=200,
-                payload=suggest_contract_patch_without_llm(),
+                payload=_agent_suggest_degraded(
+                    reason,
+                    _agent_suggest_degraded_explanation_zh(reason),
+                ),
             )
 
     def _list_agent_advice(
@@ -3311,6 +3323,60 @@ def _llm_provider_from_env(
         return OpenAICompatibleLLMProvider.from_env(observer=observer)
     except ValueError:
         return None
+
+
+def _agent_suggest_degraded(reason: str, explanation_zh: str) -> dict[str, Any]:
+    """Build a 200-level degraded payload so the frontend can distinguish
+    LLM failures from the intentional ``provider=none`` empty-patch case.
+    """
+    return {
+        "status": "degraded",
+        "reason": reason,
+        "suggested_patch": {},
+        "explanation_zh": explanation_zh,
+        "needs_user_confirmation": False,
+    }
+
+
+def _agent_suggest_degraded_explanation_zh(reason: str) -> str:
+    messages = {
+        "provider_unconfigured": "未配置 LLM 网关，无法生成建议。",
+        "provider_invalid_key": "LLM 网关认证失败，请检查 API Key 配置。",
+        "provider_timeout": "LLM 网关请求超时，请稍后重试。",
+        "provider_transport_error": "LLM 网关连接失败，请检查网络或网关状态。",
+        "provider_schema_error": "LLM 返回内容不符合预期结构，未能生成建议。",
+        "provider_parse_error": "LLM 返回内容解析失败，未能生成建议。",
+    }
+    return messages.get(reason, "LLM 调用失败，未能生成建议。")
+
+
+def _agent_suggest_reason_for_error(exc: AgentProviderError) -> str:
+    """Map an ``AgentProviderError.code`` to a stable degraded reason string."""
+    code = exc.code
+    if code.startswith("invalid_schema"):
+        return "provider_schema_error"
+    if code in {"invalid_json", "invalid_response"}:
+        return "provider_parse_error"
+    if code in {"invalid_citation", "incomplete_citations"}:
+        return "provider_schema_error"
+    if code.startswith("http_"):
+        try:
+            status = int(code.removeprefix("http_"))
+        except ValueError:
+            return "provider_transport_error"
+        if status in {401, 403}:
+            return "provider_invalid_key"
+        if status == 408:
+            return "provider_timeout"
+        return "provider_transport_error"
+    if code == "transport_error":
+        # ``TimeoutError`` and ``URLError`` both surface as ``transport_error``;
+        # distinguish by the wrapped cause so timeouts are reported distinctly.
+        cause = exc.__cause__
+        if isinstance(cause, TimeoutError):
+            return "provider_timeout"
+        return "provider_transport_error"
+    return "provider_transport_error"
 
 
 def _route_parts(path: str) -> list[str]:

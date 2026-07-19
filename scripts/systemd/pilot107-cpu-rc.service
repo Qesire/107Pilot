@@ -1,0 +1,42 @@
+[Unit]
+Description=107Pilot CPU-RC release-candidate stack (docker compose)
+Documentation=file:///__PILOT107_REPO_ROOT__/scripts/systemd/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+# Pull stack secrets / public URL from /etc/pilot107/cpu-rc.env.
+# start-cpu-rc.sh refuses to run without PILOT107_PUBLIC_URL.
+ConditionPathExists=/etc/pilot107/cpu-rc.env
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=root
+WorkingDirectory=__PILOT107_REPO_ROOT__
+EnvironmentFile=/etc/pilot107/cpu-rc.env
+
+# start-cpu-rc.sh builds images, brings the stack up detached, and waits for
+# healthchecks. oneshot + RemainAfterExit=yes is the canonical pattern for a
+# `docker compose up -d` wrapper: the unit is "active" while the stack is up,
+# and ExecStop is invoked on `systemctl stop` / shutdown.
+ExecStart=__PILOT107_REPO_ROOT__/scripts/start-cpu-rc.sh
+
+# stop-cpu-rc.sh runs `docker compose -p pilot107-cpu-rc -f ... down` with the
+# same project name and overlays used by start-cpu-rc.sh, so the unit tears
+# down exactly the containers it brought up.
+ExecStop=__PILOT107_REPO_ROOT__/scripts/stop-cpu-rc.sh
+
+# If start fails (e.g. transient docker daemon hiccup), retry. Once the stack
+# is up, the per-container restart policies in compose handle container
+# crashes; the unit itself stays "active".
+Restart=on-failure
+RestartSec=10
+
+# Give the script room for the build + healthcheck loop (can take several
+# minutes on a cold VM). systemd's default TimeoutStartSec is 90s which is too
+# short for a first-time image build.
+TimeoutStartSec=20min
+TimeoutStopSec=5min
+
+[Install]
+WantedBy=multi-user.target
