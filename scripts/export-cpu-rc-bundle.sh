@@ -55,6 +55,41 @@ mkdir -p "$work_dir/simulator/compose/certs" "$work_dir/simulator/compose/secret
 cp "$root/simulator/compose/certs/README.md" "$work_dir/simulator/compose/certs/" 2>/dev/null || true
 cp "$root/simulator/compose/secrets/README.md" "$work_dir/simulator/compose/secrets/" 2>/dev/null || true
 rm -f "$work_dir/simulator/compose/slurm/jwt_hs256.key" 2>/dev/null || true
+cp -a "$root/docs/operations" "$work_dir/docs-operations"
+cp -a "$root/docs/phase-3" "$work_dir/docs-phase-3"
+cp "$root/pyproject.toml" "$root/README.md" "$work_dir/"
+[[ ! -f "$root/uv.lock" ]] || cp "$root/uv.lock" "$work_dir/"
+
+for script in \
+  accept-cpu-rc-release.sh \
+  apply-cpu-rc-profile.sh \
+  build-app-images.sh \
+  build-cpu-rc-images.sh \
+  check-cpu-rc.sh \
+  control-plane-recovery.py \
+  export-cpu-rc-bundle.sh \
+  import-cpu-rc-images.sh \
+  init-local-secrets.sh \
+  install-systemd-units.sh \
+  load_competition.py \
+  scan-array-artifacts.py \
+  smoke-auto-capsule.sh \
+  smoke-auto-capsule.py \
+  smoke-cpu-rc-remediation.sh \
+  smoke-cpu-rc-remediation.py \
+  smoke-restart-volume-recovery.sh \
+  smoke-restart-volume-recovery.py \
+  smoke_competition_web.py \
+  start-cpu-rc.sh \
+  stop-cpu-rc.sh
+do
+  cp "$root/scripts/$script" "$work_dir/scripts/"
+done
+
+# systemd unit templates + install doc
+mkdir -p "$work_dir/scripts/systemd"
+cp -a "$root/scripts/systemd/" "$work_dir/scripts/systemd/"
+
 find "$work_dir" -type d \( -name node_modules -o -name '*.egg-info' \) -prune -exec rm -rf {} +
 find "$work_dir" -type d -name __pycache__ -prune -exec rm -rf {} +
 find "$work_dir" -type f -name '*.pyc' -delete
