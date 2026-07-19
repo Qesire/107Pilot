@@ -1377,7 +1377,7 @@ cd /root/107pilot-cpu-rc-<oldsha>-<oldts> && bash scripts/stop-cpu-rc.sh
 cd /root && tar xzf 107pilot-cpu-rc-<newsha>-<timestamp>.tar.gz
 cd /root/107pilot-cpu-rc-<newsha>-<timestamp> && bash scripts/import-cpu-rc-images.sh
 # 注入 LLM apiKey 到 .env.cpu-rc（从本地 opencode 配置 ustc-107 条目读取）
-# 编辑 .env.cpu-rc: PILOT107_LLM_API_KEY=sk-4J_S1WUu0eghmkpm50LtLg
+# 编辑 .env.cpu-rc: PILOT107_LLM_API_KEY=<rotate-previous-key-and-set-via-secrets>
 PILOT107_SKIP_BUILD=1 bash scripts/start-cpu-rc.sh
 ```
 预期：10/10 容器健康，`/healthz` 200。
