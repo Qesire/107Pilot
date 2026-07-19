@@ -447,6 +447,12 @@ export interface ContractValidation {
   observed_at: string;
 }
 
+export interface ContractSuggestion {
+  suggested_patch: Record<string, unknown>;
+  explanation_zh: string;
+  needs_user_confirmation: boolean;
+}
+
 export interface RecipeSummaryPayload {
   recipe_id: string;
   latest_version: string;

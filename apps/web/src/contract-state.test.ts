@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyPatchToContract,
   createDefaultContract,
   diffText,
   linesToStrings,
@@ -87,5 +88,51 @@ describe("canonical Contract state", () => {
     expect(result).toHaveLength(1000);
     expect(result[0]?.kind).toBe("removed");
     expect(result.at(-1)?.kind).toBe("added");
+  });
+
+  it("applies a dotted-path patch from the agent without dropping unrelated fields", () => {
+    const original = advancedContract();
+    const patch = {
+      "entry.command": "python3 train.py --epochs 50",
+      "resources.cpus_per_task": 8,
+      "resources.memory": "32G",
+    };
+
+    const patched = applyPatchToContract(original, patch);
+
+    expect(readContractValue(patched, ["entry", "command"], "")).toBe(
+      "python3 train.py --epochs 50",
+    );
+    expect(readContractValue(patched, ["resources", "cpus_per_task"], 0)).toBe(8);
+    expect(readContractValue(patched, ["resources", "memory"], "")).toBe("32G");
+    // Untouched nested vendor fields stay intact.
+    expect(readContractValue(patched, ["runtime", "vendor_runtime_flag"], "")).toBe(
+      "preserve-me",
+    );
+    expect(
+      readContractValue(patched, ["resources", "array", "vendor_array_flag"], false),
+    ).toBe(true);
+    // Original is not mutated.
+    expect(readContractValue(original, ["entry", "command"], "")).toBe("python3 main.py");
+  });
+
+  it("creates intermediate objects when the agent patch reaches a missing path", () => {
+    const original = createDefaultContract();
+    const patched = applyPatchToContract(original, {
+      "policy.max_remediation_attempts": 5,
+      "workflow.retry.backoff_seconds": 60,
+    });
+
+    expect(readContractValue(patched, ["policy", "max_remediation_attempts"], 0)).toBe(5);
+    expect(readContractValue(patched, ["workflow", "retry", "backoff_seconds"], 0)).toBe(
+      60,
+    );
+  });
+
+  it("ignores empty patch keys gracefully", () => {
+    const original = createDefaultContract();
+    const patched = applyPatchToContract(original, { "": "ignored", "entry.command": "echo ok" });
+
+    expect(readContractValue(patched, ["entry", "command"], "")).toBe("echo ok");
   });
 });

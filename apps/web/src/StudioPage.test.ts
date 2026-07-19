@@ -4,6 +4,7 @@ import {
   compileEditorValidator,
   sourceDiagnostics,
 } from "./ContractSourceEditor";
+import { isPlaceholderValue } from "./StudioPage";
 
 const schema = {
   type: "object",
@@ -41,5 +42,25 @@ describe("Contract source editor", () => {
     expect(parseErrors).toHaveLength(1);
     expect(parseErrors[0]?.from).toBeGreaterThanOrEqual(0);
     expect(schemaErrors.some((item) => item.message.includes("workdir"))).toBe(true);
+  });
+});
+
+describe("isPlaceholderValue", () => {
+  it("flags empty, null and undefined as placeholders", () => {
+    expect(isPlaceholderValue("")).toBe(true);
+    expect(isPlaceholderValue(null)).toBe(true);
+    expect(isPlaceholderValue(undefined)).toBe(true);
+  });
+
+  it("flags known template command placeholders", () => {
+    expect(isPlaceholderValue("echo ok")).toBe(true);
+    expect(isPlaceholderValue("python3 main.py")).toBe(true);
+    expect(isPlaceholderValue("  python3 main.py  ")).toBe(true);
+  });
+
+  it("leaves real user-provided values alone", () => {
+    expect(isPlaceholderValue("python3 train.py --epochs 50")).toBe(false);
+    expect(isPlaceholderValue("/public/home/alice/work")).toBe(false);
+    expect(isPlaceholderValue(4)).toBe(false);
   });
 });

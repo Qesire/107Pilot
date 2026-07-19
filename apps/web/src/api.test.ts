@@ -190,6 +190,65 @@ describe("API transport", () => {
   });
 });
 
+describe("suggestContractPatch contract agent suggest", () => {
+  it("posts current contract + intent + provider to the agent endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        suggested_patch: { "entry.command": "python3 train.py" },
+        explanation_zh: "已将 command 改为训练入口。",
+        needs_user_confirmation: true,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.suggestContractPatch(
+      "alice",
+      { schema_version: "pilot107.contract/v2" },
+      "recipe_python_cpu@1.0.0",
+      "我要跑一个 python 训练脚本",
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/contracts/agent/suggest",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          current_contract: { schema_version: "pilot107.contract/v2" },
+          recipe_version_id: "recipe_python_cpu@1.0.0",
+          user_intent: "我要跑一个 python 训练脚本",
+          provider: "local",
+        }),
+        headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+      }),
+    );
+    expect(result.suggested_patch).toEqual({ "entry.command": "python3 train.py" });
+    expect(result.explanation_zh).toBe("已将 command 改为训练入口。");
+    expect(result.needs_user_confirmation).toBe(true);
+  });
+
+  it("forwards provider=none when explicitly requested", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        suggested_patch: {},
+        explanation_zh: "无需改动。",
+        needs_user_confirmation: false,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.suggestContractPatch(
+      "alice",
+      {},
+      "recipe_python_cpu@1.0.0",
+      "describe",
+      "none",
+    );
+
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.provider).toBe("none");
+  });
+});
+
 describe("advanceRemediationSession provider passthrough", () => {
   it("sends provider=local by default", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
