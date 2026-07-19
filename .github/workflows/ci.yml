@@ -36,6 +36,25 @@ jobs:
       - run: npm run typecheck
       - run: npm test -- --run
       - run: npm run build
+      - name: Detect web static build drift
+        run: |
+          if ! git diff --exit-code -- src/pilot107/web/static; then
+            echo "::error::src/pilot107/web/static is stale. Run 'npm run build' locally and commit the updated bundle."
+            git diff --stat -- src/pilot107/web/static
+            exit 1
+          fi
+
+  web-ui:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:ui
 
   compose:
     runs-on: ubuntu-24.04

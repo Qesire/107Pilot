@@ -18,7 +18,8 @@ from pilot107.core.control_repository import (
 from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import CollectionTaskFenceConflict, CollectionTaskRecord
-from pilot107.core.states import TERMINAL_RUN_STATES
+from pilot107.core.states import TERMINAL_RUN_STATES, CapsuleState, CollectionState
+from pilot107.worker.capsule import CapsuleError, RawCapsuleService
 from pilot107.worker.evidence import CollectionTaskHandler
 
 
@@ -28,6 +29,7 @@ class WorkerErrorCode(StrEnum):
     AUTH_FORBIDDEN = "AUTH.FORBIDDEN"
     SLURM_BACKEND_ERROR = "SLURM.BACKEND_ERROR"
     EVIDENCE_COLLECTION_ERROR = "EVIDENCE.COLLECTION_ERROR"
+    CAPSULE_AUTO_BUILD_ERROR = "CAPSULE.AUTO_BUILD_ERROR"
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,16 @@ class WorkerTickResult:
     agent_executions_checked: int = 0
     agent_executions_succeeded: int = 0
     agent_execution_errors: list[WorkerRunError] = field(default_factory=list)
+    capsule_builds_attempted: int = 0
+    capsule_builds_succeeded: int = 0
+    capsule_errors: list[WorkerRunError] = field(default_factory=list)
+
+
+@dataclass
+class _CapsuleBuildStats:
+    attempted: int = 0
+    succeeded: int = 0
+    errors: list[WorkerRunError] = field(default_factory=list)
 
 
 class RuntimeReconcileWorker:
@@ -98,6 +110,7 @@ class RuntimeReconcileWorker:
         task_lease_seconds: int = 300,
         collection_max_attempts: int = 5,
         agent_advice_service: AgentAdviceService | None = None,
+        capsule_service: RawCapsuleService | None = None,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -113,6 +126,7 @@ class RuntimeReconcileWorker:
         self.task_lease_seconds = task_lease_seconds
         self.collection_max_attempts = collection_max_attempts
         self.agent_advice_service = agent_advice_service
+        self.capsule_service = capsule_service
 
     def tick(self) -> WorkerTickResult:
         submission_batch = self.service.dispatch_due_submissions(limit=self.batch_size)
@@ -210,8 +224,11 @@ class RuntimeReconcileWorker:
         tasks_checked = 0
         tasks_succeeded = 0
         task_errors: list[WorkerTaskError] = []
+        capsule_stats = _CapsuleBuildStats()
         if self.task_handler is not None:
-            tasks_checked, tasks_succeeded, task_errors = self._dispatch_collection_tasks()
+            tasks_checked, tasks_succeeded, task_errors = self._dispatch_collection_tasks(
+                capsule_stats
+            )
 
         diagnoses_checked = 0
         diagnoses_succeeded = 0
@@ -257,16 +274,20 @@ class RuntimeReconcileWorker:
                 len(agent_batch.succeeded) if agent_batch is not None else 0
             ),
             agent_execution_errors=agent_execution_errors,
+            capsule_builds_attempted=capsule_stats.attempted,
+            capsule_builds_succeeded=capsule_stats.succeeded,
+            capsule_errors=capsule_stats.errors,
         )
 
     def _dispatch_collection_tasks(
         self,
+        capsule_stats: _CapsuleBuildStats,
     ) -> tuple[int, int, list[WorkerTaskError]]:
         if self.task_handler is None:
             return 0, 0, []
         repository = self.service.control_repository
         if repository is None:
-            return self._dispatch_legacy_collection_tasks()
+            return self._dispatch_legacy_collection_tasks(capsule_stats)
 
         for task in self.service.store.list_collection_tasks_for_dispatch(
             limit=self.batch_size
@@ -297,7 +318,7 @@ class RuntimeReconcileWorker:
             message = claimed[0]
             checked += 1
             try:
-                completed, error = self._execute_collection_message(message)
+                completed, error, run_id = self._execute_collection_message(message)
             except Exception as exc:
                 task_id, run_id, task_type, _ = _collection_message_identity(
                     message,
@@ -324,12 +345,14 @@ class RuntimeReconcileWorker:
             succeeded += int(completed)
             if error is not None:
                 errors.append(error)
+            if completed and run_id is not None:
+                self._record_auto_capsule(run_id, capsule_stats)
         return checked, succeeded, errors
 
     def _execute_collection_message(
         self,
         message: OutboxMessage,
-    ) -> tuple[bool, WorkerTaskError | None]:
+    ) -> tuple[bool, WorkerTaskError | None, str | None]:
         repository = self.service.control_repository
         if repository is None or self.task_handler is None:
             raise RuntimeError("collection outbox dependencies are unavailable")
@@ -341,13 +364,13 @@ class RuntimeReconcileWorker:
             or task.generation != generation
         ):
             self._acknowledge_collection(message)
-            return False, None
+            return False, None, None
         if task.state == "succeeded":
             self._acknowledge_collection(message)
-            return True, None
+            return True, None, run_id
         if task.state == "failed_permanent":
             self._acknowledge_collection(message)
-            return False, None
+            return False, None, None
         if message.lease_owner is None or message.lease_expires_at is None:
             raise RuntimeError("collection outbox message has no active lease")
         claimed = self.service.store.claim_collection_task(
@@ -405,7 +428,7 @@ class RuntimeReconcileWorker:
                 code=classification.code.value,
                 retryable=can_retry,
                 auth_required=classification.auth_required,
-            )
+            ), run_id
 
         self.service.store.mark_collection_task_succeeded(
             task_id,
@@ -417,7 +440,7 @@ class RuntimeReconcileWorker:
             },
         )
         self._acknowledge_collection(message)
-        return True, None
+        return True, None, run_id
 
     def _acknowledge_collection(self, message: OutboxMessage) -> None:
         repository = self.service.control_repository
@@ -432,6 +455,7 @@ class RuntimeReconcileWorker:
 
     def _dispatch_legacy_collection_tasks(
         self,
+        capsule_stats: _CapsuleBuildStats,
     ) -> tuple[int, int, list[WorkerTaskError]]:
         assert self.task_handler is not None
         tasks = self.service.store.acquire_due_collection_tasks(
@@ -483,7 +507,62 @@ class RuntimeReconcileWorker:
                 },
             )
             succeeded += 1
+            self._record_auto_capsule(task.run_id, capsule_stats)
         return len(tasks), succeeded, errors
+
+    def _record_auto_capsule(
+        self,
+        run_id: str,
+        capsule_stats: _CapsuleBuildStats,
+    ) -> None:
+        """Best-effort, idempotent auto-capsule build after collection succeeds.
+
+        Non-fatal: CapsuleError is swallowed and only recorded as an event so
+        the tick continues. Other exceptions are recorded both as an event and
+        a WorkerRunError so health reflects the failure without crashing. The
+        explicit ``POST /runs/{id}/capsule`` endpoint remains authoritative.
+        """
+        if self.capsule_service is None:
+            return
+        try:
+            run = self.service.store.get_run(run_id)
+        except Exception:
+            return
+        if run.collection_state != CollectionState.SUCCEEDED:
+            return
+        if run.capsule_state == CapsuleState.READY:
+            return
+        capsule_stats.attempted += 1
+        try:
+            self.capsule_service.build_raw_capsule(run_id)
+        except CapsuleError as exc:
+            self.service.store.append_event(
+                run_id=run_id,
+                event_type="capsule.auto_build_skipped",
+                payload={"message": str(exc), "non_fatal": True},
+            )
+            return
+        except Exception as exc:
+            self.service.store.append_event(
+                run_id=run_id,
+                event_type="capsule.auto_build_failed",
+                payload={"message": str(exc), "retryable": True},
+            )
+            capsule_stats.errors.append(
+                WorkerRunError(
+                    run_id=run_id,
+                    message=str(exc),
+                    code=WorkerErrorCode.CAPSULE_AUTO_BUILD_ERROR.value,
+                    retryable=True,
+                )
+            )
+            return
+        capsule_stats.succeeded += 1
+        self.service.store.append_event(
+            run_id=run_id,
+            event_type="capsule.auto_build_completed",
+            payload={"worker_id": self.worker_id},
+        )
 
     def run_until_idle(
         self,
@@ -525,6 +604,13 @@ class RuntimeReconcileWorker:
                     *aggregate.agent_execution_errors,
                     *result.agent_execution_errors,
                 ],
+                capsule_builds_attempted=(
+                    aggregate.capsule_builds_attempted + result.capsule_builds_attempted
+                ),
+                capsule_builds_succeeded=(
+                    aggregate.capsule_builds_succeeded + result.capsule_builds_succeeded
+                ),
+                capsule_errors=[*aggregate.capsule_errors, *result.capsule_errors],
             )
             if (
                 result.checked == 0

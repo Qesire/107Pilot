@@ -71,8 +71,12 @@ def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
         server_version = "pilot107-command-gateway/0.1"
 
         def do_GET(self) -> None:  # noqa: N802
-            if self.path.rstrip("/") == "/healthz":
+            path = self.path.rstrip("/")
+            if path == "/healthz":
                 self._send_json(200, {"status": "ok"})
+                return
+            if path == "/health/ready":
+                self._send_json(*_slurm_readiness())
                 return
             self._send_json(404, {"error": "not_found"})
 
@@ -154,6 +158,63 @@ def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
             self.wfile.write(body)
 
     return Handler
+
+
+def _slurm_readiness() -> tuple[int, dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+
+    ping = _run_readonly_probe(["scontrol", "ping"])
+    checks.append(_probe_check("scontrol_ping", ping))
+
+    sinfo = _run_readonly_probe(["sinfo", "-h", "-o", "%P"])
+    sinfo_check = _probe_check("sinfo_partitions", sinfo)
+    if sinfo_check["status"] == "ok" and not sinfo["stdout"].strip():
+        sinfo_check = {
+            "name": "sinfo_partitions",
+            "status": "fail",
+            "detail": "no partitions reported",
+        }
+    checks.append(sinfo_check)
+
+    ready = all(check.get("status") == "ok" for check in checks)
+    payload = {
+        "status": "ready" if ready else "not_ready",
+        "checks": checks,
+    }
+    return (200 if ready else 503, payload)
+
+
+def _probe_check(name: str, result: dict[str, Any]) -> dict[str, Any]:
+    if result["status"] == "ok":
+        return {"name": name, "status": "ok"}
+    detail = result.get("detail") or ""
+    return {"name": name, "status": "fail", "detail": detail[:200]}
+
+
+def _run_readonly_probe(argv: list[str]) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            argv,
+            timeout=3,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        return {"status": "fail", "detail": f"binary missing: {exc}", "stdout": ""}
+    except subprocess.TimeoutExpired as exc:
+        return {"status": "fail", "detail": f"timeout after {exc.timeout}s", "stdout": ""}
+    except OSError as exc:
+        return {"status": "fail", "detail": f"os error: {exc}", "stdout": ""}
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        detail = stderr or f"exit code {completed.returncode}"
+        return {
+            "status": "fail",
+            "detail": detail,
+            "stdout": completed.stdout or "",
+        }
+    return {"status": "ok", "stdout": completed.stdout or ""}
 
 
 def _request_id(header: str | None) -> str:

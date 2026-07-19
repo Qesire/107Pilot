@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -53,6 +54,7 @@ class ApiHealthService:
         submission_enabled: bool,
         llm_enabled: bool,
         user_entitlement_store: UserEntitlementStore | None = None,
+        worker_health_path: str | None = None,
     ) -> None:
         self.store = store
         self.evidence_root = evidence_root
@@ -60,6 +62,7 @@ class ApiHealthService:
         self.submission_enabled = submission_enabled
         self.llm_enabled = llm_enabled
         self.user_entitlement_store = user_entitlement_store
+        self.worker_health_path = worker_health_path
 
     def live_payload(self) -> dict[str, str]:
         return {"status": "alive", "service": "pilot107-api"}
@@ -90,6 +93,7 @@ class ApiHealthService:
                 _configured_check("local_llm", self.llm_enabled),
             )
         )
+        checks.append(self._worker_heartbeat_check())
         ready = all(
             check.status == HealthCheckStatus.OK
             for check in checks
@@ -187,6 +191,70 @@ class ApiHealthService:
             )
         return HealthCheck(
             name="user_entitlement_store",
+            status=HealthCheckStatus.OK,
+            required=True,
+            latency_ms=_elapsed_ms(started),
+        )
+
+    def _worker_heartbeat_check(self) -> HealthCheck:
+        if self.worker_health_path is None:
+            return HealthCheck(
+                name="worker_heartbeat",
+                status=HealthCheckStatus.DISABLED,
+                required=False,
+            )
+        started = time.monotonic()
+        path = Path(self.worker_health_path)
+        try:
+            raw = path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as exc:
+            return HealthCheck(
+                name="worker_heartbeat",
+                status=HealthCheckStatus.UNAVAILABLE,
+                required=True,
+                latency_ms=_elapsed_ms(started),
+                reason=f"worker_heartbeat_unreadable: {exc}",
+            )
+        if not isinstance(data, dict):
+            return HealthCheck(
+                name="worker_heartbeat",
+                status=HealthCheckStatus.UNAVAILABLE,
+                required=True,
+                latency_ms=_elapsed_ms(started),
+                reason="worker_heartbeat_payload_invalid",
+            )
+        ok = data.get("ok")
+        last_tick: Any = data.get("last_tick_unix")
+        if ok is not True:
+            return HealthCheck(
+                name="worker_heartbeat",
+                status=HealthCheckStatus.UNAVAILABLE,
+                required=True,
+                latency_ms=_elapsed_ms(started),
+                reason=f"worker_heartbeat_ok_false: ok={ok!r}",
+            )
+        try:
+            last_tick_seconds = float(last_tick)
+        except (TypeError, ValueError):
+            return HealthCheck(
+                name="worker_heartbeat",
+                status=HealthCheckStatus.UNAVAILABLE,
+                required=True,
+                latency_ms=_elapsed_ms(started),
+                reason=f"worker_heartbeat_tick_invalid: {last_tick!r}",
+            )
+        stale_seconds = time.time() - last_tick_seconds
+        if stale_seconds > 120:
+            return HealthCheck(
+                name="worker_heartbeat",
+                status=HealthCheckStatus.UNAVAILABLE,
+                required=True,
+                latency_ms=_elapsed_ms(started),
+                reason=f"worker_heartbeat_stale: {stale_seconds:.1f}s",
+            )
+        return HealthCheck(
+            name="worker_heartbeat",
             status=HealthCheckStatus.OK,
             required=True,
             latency_ms=_elapsed_ms(started),

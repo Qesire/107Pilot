@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   applyPatchToContract,
   createDefaultContract,
@@ -134,5 +134,44 @@ describe("canonical Contract state", () => {
     const patched = applyPatchToContract(original, { "": "ignored", "entry.command": "echo ok" });
 
     expect(readContractValue(patched, ["entry", "command"], "")).toBe("echo ok");
+  });
+
+  describe("prototype-pollution defense", () => {
+    afterEach(() => {
+      // Clean up any pollution that could leak from a misbehaving implementation
+      // so test runs stay isolated.
+      delete (Object.prototype as any).polluted;
+      delete (Object.prototype as any).x;
+    });
+
+    it("ignores a __proto__.polluted patch and does not touch Object.prototype", () => {
+      const original = createDefaultContract();
+      const patched = applyPatchToContract(original, { "__proto__.polluted": true });
+
+      expect(({} as any).polluted).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(patched, "polluted")).toBe(false);
+      expect(readContractValue(patched, ["entry", "command"], "")).toBe("python3 main.py");
+    });
+
+    it("ignores a constructor.prototype.x patch", () => {
+      const original = createDefaultContract();
+      const patched = applyPatchToContract(original, { "constructor.prototype.x": 1 });
+
+      expect(({} as any).x).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(patched, "x")).toBe(false);
+    });
+
+    it("still applies a legitimate patch alongside rejected pollution keys", () => {
+      const original = createDefaultContract();
+      const patched = applyPatchToContract(original, {
+        "__proto__.polluted": true,
+        "project.workdir": "/public/home/alice/work",
+      });
+
+      expect(({} as any).polluted).toBeUndefined();
+      expect(readContractValue(patched, ["project", "workdir"], "")).toBe(
+        "/public/home/alice/work",
+      );
+    });
   });
 });

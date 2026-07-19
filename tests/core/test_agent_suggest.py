@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.api.http_types import ApiResponse
+from pilot107.core.advice import _PATCHABLE_FIELDS
 from pilot107.core.agent import (
+    _CONTRACT_PATCH_ALLOWED_FIELDS,
+    _THINKING_CLOSE,
+    _THINKING_OPEN,
     AgentProviderError,
     OpenAICompatibleLLMProvider,
+    _parse_contract_patch_json,
     suggest_contract_patch_without_llm,
 )
 from pilot107.core.evidence_binding import EvidenceBinder
@@ -27,7 +30,7 @@ class _FakeHttpResponse:
     def __init__(self, body: bytes) -> None:
         self._body = body
 
-    def __enter__(self) -> "_FakeHttpResponse":
+    def __enter__(self) -> _FakeHttpResponse:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -307,6 +310,96 @@ class ContractAgentSuggestRouteTests(unittest.TestCase):
             headers={"X-Pilot107-User": "alice"},
         )
         self.assertEqual(response.status, 400)
+
+
+class ParseContractPatchJsonTests(unittest.TestCase):
+    """Direct unit tests for the _parse_contract_patch_json helper.
+
+    Mirrors the reasoning-block format exercised by tests/test_agent.py
+    for _parse_llm_json, but targets the contract-patch parser. The
+    thinking prefix/terminator are imported from agent.py (built via
+    chr()) so source tooling cannot mangle the literal tags.
+    """
+
+    def _patch_payload(self, patch: dict, explanation: str = "已调整。") -> str:
+        return json.dumps(
+            {"suggested_patch": patch, "explanation_zh": explanation},
+            ensure_ascii=False,
+        )
+
+    def test_accepts_closed_thinking_prefix_before_json(self) -> None:
+        content = f"{_THINKING_OPEN}internal reasoning{_THINKING_CLOSE}\n" + self._patch_payload(
+            {"entry.command": "python3 train.py"}
+        )
+        result = _parse_contract_patch_json(content)
+        self.assertEqual(
+            result["suggested_patch"], {"entry.command": "python3 train.py"}
+        )
+        self.assertEqual(result["explanation_zh"], "已调整。")
+
+    def test_rejects_unclosed_thinking_prefix(self) -> None:
+        content = f"{_THINKING_OPEN}internal reasoning\n" + self._patch_payload(
+            {"entry.command": "python3 train.py"}
+        )
+        with self.assertRaises(AgentProviderError) as raised:
+            _parse_contract_patch_json(content)
+        self.assertEqual(raised.exception.code, "invalid_json")
+
+    def test_accepts_markdown_fence_around_json(self) -> None:
+        content = "```json\n" + self._patch_payload({"project.workdir": "/tmp/x"}) + "\n```"
+        result = _parse_contract_patch_json(content)
+        self.assertEqual(result["suggested_patch"], {"project.workdir": "/tmp/x"})
+
+    def test_pure_json_happy_path(self) -> None:
+        result = _parse_contract_patch_json(
+            self._patch_payload({"resources.cpus_per_task": 4})
+        )
+        self.assertEqual(result["suggested_patch"], {"resources.cpus_per_task": 4})
+
+    def test_rejects_non_json(self) -> None:
+        with self.assertRaises(AgentProviderError) as raised:
+            _parse_contract_patch_json("not-json")
+        self.assertEqual(raised.exception.code, "invalid_json")
+
+    def test_rejects_proto_pollution_field(self) -> None:
+        with self.assertRaises(AgentProviderError) as raised:
+            _parse_contract_patch_json(
+                self._patch_payload({"__proto__.polluted": True})
+            )
+        self.assertEqual(raised.exception.code, "invalid_schema_patch_field")
+
+    def test_rejects_constructor_field(self) -> None:
+        with self.assertRaises(AgentProviderError) as raised:
+            _parse_contract_patch_json(self._patch_payload({"constructor.x": 1}))
+        self.assertEqual(raised.exception.code, "invalid_schema_patch_field")
+
+    def test_rejects_prototype_field(self) -> None:
+        with self.assertRaises(AgentProviderError) as raised:
+            _parse_contract_patch_json(self._patch_payload({"prototype.y": 1}))
+        self.assertEqual(raised.exception.code, "invalid_schema_patch_field")
+
+    def test_rejects_non_whitelisted_identity_field(self) -> None:
+        with self.assertRaises(AgentProviderError) as raised:
+            _parse_contract_patch_json(self._patch_payload({"owner_identity": "bob"}))
+        self.assertEqual(raised.exception.code, "invalid_schema_patch_field")
+
+    def test_rejects_non_whitelisted_misc_field(self) -> None:
+        with self.assertRaises(AgentProviderError) as raised:
+            _parse_contract_patch_json(self._patch_payload({"cid": "abc"}))
+        self.assertEqual(raised.exception.code, "invalid_schema_patch_field")
+
+    def test_accepts_whitelisted_field(self) -> None:
+        result = _parse_contract_patch_json(
+            self._patch_payload({"project.workdir": "/public/home/alice/work"})
+        )
+        self.assertEqual(
+            result["suggested_patch"], {"project.workdir": "/public/home/alice/work"}
+        )
+
+    def test_allowed_fields_match_advice_patchable_fields(self) -> None:
+        # Drift detector: the agent whitelist must mirror advice._PATCHABLE_FIELDS
+        # so the LLM can only suggest fields the remediation layer can apply.
+        self.assertEqual(_CONTRACT_PATCH_ALLOWED_FIELDS, _PATCHABLE_FIELDS)
 
 
 def _build_explain_service(store: RunStore, evidence_store: EvidenceStore):

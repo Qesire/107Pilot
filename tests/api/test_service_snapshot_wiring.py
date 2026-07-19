@@ -1,6 +1,7 @@
 """build_api_service wires SlurmrestSnapshotCollector at startup."""
 from __future__ import annotations
 
+import contextlib
 import importlib
 import threading
 import time
@@ -44,10 +45,8 @@ def test_build_api_service_invokes_initial_snapshot(cpu_rc_env):
 
     with pytest.MonkeyPatch().context() as mp:
         mp.setattr(service_module, "SlurmrestSnapshotCollector", StubCollector)
-        try:
+        with contextlib.suppress(Exception):
             service_module.build_api_service(service_module.config_from_env())
-        except Exception:
-            pass  # we only care that the collector was invoked
     assert len(collected) >= 1, "initial snapshot collection must run at startup"
 
 
@@ -58,10 +57,8 @@ def test_build_api_service_starts_background_refresh_thread(cpu_rc_env):
         t for t in threading.enumerate()
         if "snapshot" in t.name.lower() or "slurmrest" in t.name.lower()
     ]
-    try:
+    with contextlib.suppress(Exception):
         service_module.build_api_service(service_module.config_from_env())
-    except Exception:
-        pass
     time.sleep(0.1)
     threads_after = [
         t for t in threading.enumerate()
@@ -84,10 +81,8 @@ def test_build_api_service_passes_slurm_token_to_collector(cpu_rc_env, monkeypat
         real_init(self, *args, **kwargs)
 
     monkeypatch.setattr(service_module.SlurmrestSnapshotCollector, "__init__", spy_init)
-    try:
+    with contextlib.suppress(Exception):
         service_module.build_api_service(service_module.config_from_env())
-    except Exception:
-        pass
     assert captured.get("token") == "test-jwt-token"
 
 
@@ -141,10 +136,8 @@ def test_build_api_service_uses_slurm_username_as_snapshot_owner(
     monkeypatch.setattr(service_module, "SlurmrestSnapshotCollector", StubCollector)
     monkeypatch.setattr(service_module, "PlatformSnapshotStore", StubStore)
     monkeypatch.setenv("PILOT107_SLURM_USER_NAME", "alice")
-    try:
+    with contextlib.suppress(Exception):
         service_module.build_api_service(service_module.config_from_env())
-    except Exception:
-        pass
     assert len(captured_owners) >= 1, "snapshot must be stored at startup"
     assert captured_owners[0] == "alice", (
         "snapshot owner must be config.slurm_username so /capabilities matches"

@@ -45,6 +45,7 @@ from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
 from pilot107.services.remediation_service import RemediationService
+from pilot107.worker.capsule import RawCapsuleService
 from pilot107.worker.evidence import (
     AuthorizedFilesystemEvidenceTransport,
     CollectionTaskHandler,
@@ -91,6 +92,8 @@ class WorkerServiceConfig:
     health_path: Path | None = None
     metrics_root: Path | None = None
     enable_docker_volume_evidence_transport: bool = False
+    auto_capsule_enabled: bool = True
+    capsule_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -166,6 +169,7 @@ class WorkerService:
                 or result.diagnosis_errors
                 or result.submission_errors
                 or result.agent_execution_errors
+                or result.capsule_errors
                 or self.last_remediation_errors
                 or self.last_telemetry_error
             ),
@@ -195,6 +199,11 @@ class WorkerService:
             "agent_executions_succeeded": result.agent_executions_succeeded,
             "agent_execution_errors": redact_sensitive_structure(
                 [error.__dict__ for error in result.agent_execution_errors]
+            ),
+            "capsule_builds_attempted": result.capsule_builds_attempted,
+            "capsule_builds_succeeded": result.capsule_builds_succeeded,
+            "capsule_errors": redact_sensitive_structure(
+                [error.__dict__ for error in result.capsule_errors]
             ),
             "remediation_checked": self.last_remediation_checked,
             "remediation_advanced": self.last_remediation_advanced,
@@ -226,6 +235,9 @@ class WorkerService:
             "agent_execution_checked_total": result.agent_executions_checked,
             "agent_execution_succeeded_total": result.agent_executions_succeeded,
             "agent_execution_errors_total": len(result.agent_execution_errors),
+            "capsule_builds_attempted_total": result.capsule_builds_attempted,
+            "capsule_builds_succeeded_total": result.capsule_builds_succeeded,
+            "capsule_errors_total": len(result.capsule_errors),
             "remediation_checked_total": self.last_remediation_checked,
             "remediation_advanced_total": self.last_remediation_advanced,
             "remediation_errors_total": len(self.last_remediation_errors),
@@ -320,6 +332,12 @@ def config_from_env(
             "PILOT107_ENABLE_DOCKER_VOLUME_EVIDENCE_TRANSPORT",
             False,
         ),
+        auto_capsule_enabled=_bool(values, "PILOT107_AUTO_CAPSULE", True),
+        capsule_root=_path(
+            values,
+            "PILOT107_CAPSULE_ROOT",
+            runtime_dir / "capsules",
+        ),
     )
 
 
@@ -374,6 +392,14 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         remediation_store=RemediationStore(config.db_path),
         advice_service=advice_service,
     )
+    capsule_service: RawCapsuleService | None = None
+    if config.auto_capsule_enabled and config.capsule_root is not None:
+        capsule_service = RawCapsuleService(
+            store=store,
+            evidence_store=evidence_store,
+            capsule_root=config.capsule_root,
+            creator="pilot107-worker",
+        )
     worker = RuntimeReconcileWorker(
         service=run_service,
         batch_size=config.batch_size,
@@ -382,6 +408,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         worker_id=config.worker_id,
         task_lease_seconds=config.task_lease_seconds,
         agent_advice_service=advice_service,
+        capsule_service=capsule_service,
     )
     return WorkerService(
         config=config,
@@ -457,6 +484,7 @@ def main(argv: list[str] | None = None) -> int:
             or result.diagnosis_errors
             or result.submission_errors
             or result.agent_execution_errors
+            or result.capsule_errors
             or worker_service.last_remediation_errors
         )
         else 0
@@ -615,6 +643,13 @@ def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> Work
             *left.agent_execution_errors,
             *right.agent_execution_errors,
         ],
+        capsule_builds_attempted=(
+            left.capsule_builds_attempted + right.capsule_builds_attempted
+        ),
+        capsule_builds_succeeded=(
+            left.capsule_builds_succeeded + right.capsule_builds_succeeded
+        ),
+        capsule_errors=[*left.capsule_errors, *right.capsule_errors],
     )
 
 
@@ -630,7 +665,9 @@ def _tick_summary(result: WorkerTickResult) -> str:
         f"submission_errors={len(result.submission_errors)}"
         f" agent_executions={result.agent_executions_succeeded}/"
         f"{result.agent_executions_checked} "
-        f"agent_execution_errors={len(result.agent_execution_errors)}"
+        f"agent_execution_errors={len(result.agent_execution_errors)} "
+        f"capsules={result.capsule_builds_succeeded}/{result.capsule_builds_attempted} "
+        f"capsule_errors={len(result.capsule_errors)}"
     )
 
 

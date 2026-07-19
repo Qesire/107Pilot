@@ -7,11 +7,11 @@ from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalo
 from pilot107.core.resources import REAL107_SIM_PARTITION_QOS
 from pilot107.core.template_market import TemplateMarketStore, TemplateVisibility
 from pilot107.core.template_market_seed import (
+    _SEED_PUBLICATION,
     SeedReport,
-    seed_preset_recipes,
     _draft_compatibility_from_recipe,
     _draft_payload_from_recipe,
-    _SEED_PUBLICATION,
+    seed_preset_recipes,
 )
 from pilot107.core.template_policy import (
     TemplatePublicationGate,

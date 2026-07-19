@@ -35,6 +35,9 @@ COUNTERS = (
     "remediation_checked_total",
     "remediation_advanced_total",
     "remediation_errors_total",
+    "capsule_builds_attempted_total",
+    "capsule_builds_succeeded_total",
+    "capsule_errors_total",
 )
 
 

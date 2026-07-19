@@ -80,15 +80,21 @@ export function applyPatchToContract(
   contract: JsonObject,
   patch: Record<string, unknown>,
 ): JsonObject {
+  // Defense in depth against prototype-pollution patches (e.g.
+  // "__proto__.polluted"): never walk or write through prototype-related
+  // segments, and use null-prototype intermediates so a malicious key cannot
+  // reach Object.prototype.
+  const FORBIDDEN_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
   const root = structuredClone(contract);
   for (const [dottedPath, value] of Object.entries(patch)) {
     const keys = dottedPath.split(".").filter(Boolean);
     if (keys.length === 0) continue;
+    if (keys.some((key) => FORBIDDEN_SEGMENTS.has(key))) continue;
     let cursor: JsonObject = root;
     for (let index = 0; index < keys.length - 1; index += 1) {
       const key = keys[index]!;
       const current = cursor[key];
-      const next = isJsonObject(current) ? current : {};
+      const next = isJsonObject(current) ? current : (Object.create(null) as JsonObject);
       cursor[key] = next;
       cursor = next;
     }

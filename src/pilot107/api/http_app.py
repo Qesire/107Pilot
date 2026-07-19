@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import re
 import time
 from collections.abc import Mapping
@@ -198,6 +199,7 @@ class Pilot107HttpApi:
             submission_enabled=run_service is not None,
             llm_enabled=self.agent_explain_service.llm_provider is not None,
             user_entitlement_store=user_entitlement_store,
+            worker_health_path=os.environ.get("PILOT107_WORKER_HEALTH_PATH"),
         )
         self.auth_required = auth_required
         self.trusted_user_header = trusted_user_header
@@ -1627,9 +1629,9 @@ class Pilot107HttpApi:
         identity: UserIdentity | None,
     ) -> ApiResponse:
         from pilot107.core.agent import (
+            AgentProviderError,
             OpenAICompatibleLLMProvider,
             suggest_contract_patch_without_llm,
-            AgentProviderError,
         )
         payload, error = _json_body(body)
         if error is not None:
@@ -1641,17 +1643,26 @@ class Pilot107HttpApi:
         if not isinstance(current_contract, dict):
             return ApiResponse(
                 status=400,
-                payload={"error": {"code": "INVALID_REQUEST", "message": "current_contract must be an object"}},
+                payload={
+                    "error": {
+                        "code": "INVALID_REQUEST",
+                        "message": "current_contract must be an object",
+                    }
+                },
             )
         if not isinstance(recipe_version_id, str) or not recipe_version_id:
             return ApiResponse(
                 status=400,
-                payload={"error": {"code": "INVALID_REQUEST", "message": "recipe_version_id is required"}},
+                payload={
+                    "error": {"code": "INVALID_REQUEST", "message": "recipe_version_id is required"}
+                },
             )
         if not isinstance(user_intent, str) or not user_intent.strip():
             return ApiResponse(
                 status=400,
-                payload={"error": {"code": "INVALID_REQUEST", "message": "user_intent is required"}},
+                payload={
+                    "error": {"code": "INVALID_REQUEST", "message": "user_intent is required"}
+                },
             )
         if provider == "none":
             return ApiResponse(status=200, payload=suggest_contract_patch_without_llm())

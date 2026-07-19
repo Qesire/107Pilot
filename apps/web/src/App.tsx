@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { StatusBadge } from "./components";
 import { AgentPage } from "./AgentPage";
+import { EnvBoundaryBanner } from "./EnvBoundaryBanner";
 import { useHealth, useWebSession } from "./query";
 import { ClusterPage, NotFoundPage, RunsPage, TerminalCollaborationPage, WorkspacePage } from "./pages";
 import { MarketPage, TemplateDetailPage } from "./MarketPages";
@@ -55,6 +56,7 @@ export default function App() {
 
   return (
     <div className="product-shell">
+      <EnvBoundaryBanner />
       <a className="skip-link" href="#main-content">跳到主要内容</a>
       <aside className="app-sidebar">
         <button className="brand" type="button" onClick={() => go("/projects")} aria-label="107Pilot 工作台">

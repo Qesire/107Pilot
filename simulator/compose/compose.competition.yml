@@ -30,13 +30,14 @@ services:
       - slurmctld
       - worker-1
     healthcheck:
-      test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2).read()\nPY"]
+      test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=2).read()\nPY"]
       interval: 10s
       timeout: 5s
       retries: 10
 
   pilot107-api:
     profiles: ["competition"]
+    restart: unless-stopped
     environment:
       PILOT107_API_BACKEND: command-gateway
       PILOT107_COMMAND_GATEWAY_URL: http://pilot107-command-gateway:8090
@@ -48,6 +49,7 @@ services:
 
   pilot107-worker:
     profiles: ["competition"]
+    restart: unless-stopped
     environment:
       PILOT107_WORKER_BACKEND: command-gateway
       PILOT107_COMMAND_GATEWAY_URL: http://pilot107-command-gateway:8090
@@ -58,6 +60,7 @@ services:
 
   pilot107-web:
     profiles: ["competition"]
+    restart: unless-stopped
     environment:
       PILOT107_WEB_IDENTITY_MODE: fixed_user
       PILOT107_WEB_FIXED_USER: ${PILOT107_WEB_FIXED_USER:-alice}
@@ -67,6 +70,8 @@ services:
     profiles: ["competition"]
     restart: unless-stopped
     user: "10700:10700"
+    group_add:
+      - "${PILOT107_SECRET_GID:-1000}"
     read_only: true
     cap_drop: ["ALL"]
     security_opt:

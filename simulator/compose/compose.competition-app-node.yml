@@ -53,7 +53,7 @@ services:
     secrets:
       - pilot107-proxy-hmac
     healthcheck:
-      test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()\nPY"]
+      test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=2).read()\nPY"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -84,7 +84,13 @@ services:
     depends_on:
       - pilot107-api
     healthcheck:
-      test: ["CMD-SHELL", "test -s /var/lib/pilot107/worker-health.json"]
+      test:
+        - CMD-SHELL
+        - >-
+          python3 -c "import json,time;
+          p=json.load(open('/var/lib/pilot107/worker-health.json'));
+          assert p['ok'] is True;
+          assert time.time()-p['last_tick_unix'] < 60"
       interval: 10s
       timeout: 5s
       retries: 6

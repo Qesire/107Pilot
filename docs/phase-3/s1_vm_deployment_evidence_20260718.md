@@ -10,6 +10,8 @@
   - `docs/phase-3/cpu_rc_release_review.md` (本记录在 S1 状态问题上取代其中 "尚未上传或部署 VM" 的结论)
   - `docs/phase-0/vm_test_readiness.md` (VM 进入条件)
 
+> **环境边界声明**: 本验收在 Docker Slurm simulator + 单台 CPU VM + fixed_user=alice 边界内完成。不构成真实 107 平台验收,亦非校园多用户生产环境验证。所有并发测试使用单一身份 alice。
+
 ## 部署环境
 
 - VM: 8 vCPU Intel Xeon (Icelake), 15 GiB RAM + 4 GiB swap, 146 GB disk (131 GB free), Ubuntu 24.04.4 LTS, kernel 6.8.0-106-generic x86_64
@@ -35,7 +37,7 @@
 
 ### 全链路冒烟 (`scripts/check-cpu-rc.sh`, rc=0)
 
-success/fail/cancel + Evidence/Capsule 闭环全部通过:
+success/fail/cancel + Evidence/Capsule 闭环全部通过 (capsule 由显式 `POST /runs/{id}/capsule` 触发生成,非作业结束后自动生成;见下文 Phase A 边界):
 
 - success: run_09c4a41645de4093a108a07474306e17:1
 - failure: run_f984a63a06964de1875f27cabca4f4bc:2
@@ -69,7 +71,7 @@ success/fail/cancel + Evidence/Capsule 闭环全部通过:
 - errors=0
 - elapsed 9.4s
 - p50 latency 6.1s
-- 证明多用户并发实际作业提交 + capsule 完成
+- 证明单一用户 (alice) 的并发请求处理与 capsule 完成（非多用户身份隔离或越权测试）
 
 ### 重启 + 卷恢复
 

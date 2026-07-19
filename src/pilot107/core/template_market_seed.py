@@ -103,7 +103,9 @@ def _draft_compatibility_from_recipe(recipe: RecipeVersion) -> dict[str, Any]:
     partition = _choose_partition(recipe)
     compatibility = recipe.compatibility or {}
     platform = compatibility.get("platform") or {}
-    requires_gpu = bool(platform.get("requires_gpu", False)) if isinstance(platform, dict) else False
+    requires_gpu = (
+        bool(platform.get("requires_gpu", False)) if isinstance(platform, dict) else False
+    )
     return {"partitions": [partition], "gpu": requires_gpu}
 
 

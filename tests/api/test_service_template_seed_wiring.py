@@ -1,6 +1,7 @@
 """build_api_service invokes template market seed at startup."""
 from __future__ import annotations
 
+import contextlib
 import importlib
 
 
@@ -17,10 +18,8 @@ def test_build_api_service_invokes_seed_at_startup(cpu_rc_env, monkeypatch):
         return SeedReport(published=0, skipped=0, gate_blocked=0)
 
     monkeypatch.setattr(service_module, "seed_preset_recipes", stub_seed)
-    try:
+    with contextlib.suppress(Exception):
         service_module.build_api_service(service_module.config_from_env())
-    except Exception:
-        pass
     assert len(seed_calls) == 1, "seed must run exactly once at startup"
     # Verify the right stores were passed
     assert seed_calls[0]["store"] is not None
@@ -41,6 +40,6 @@ def test_build_api_service_seed_failure_is_non_fatal(cpu_rc_env, monkeypatch):
     try:
         service_module.build_api_service(service_module.config_from_env())
     except RuntimeError:
-        assert False, "seed failure must not propagate"
+        raise AssertionError("seed failure must not propagate") from None
     except Exception:
         pass  # other errors (e.g. snapshot) are fine

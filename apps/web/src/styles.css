@@ -838,3 +838,18 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+.env-boundary-banner {
+  grid-column: 1 / -1;
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  width: 100%;
+  padding: 6px 16px;
+  background: var(--amber-soft);
+  color: var(--ink);
+  border-bottom: 1px solid var(--amber);
+  font-size: 0.85rem;
+  text-align: center;
+  line-height: 1.4;
+}

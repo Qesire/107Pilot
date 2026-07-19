@@ -52,11 +52,36 @@ _LLM_CONTRACT_PATCH_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_CONTRACT_PATCH_FORBIDDEN_PATH_PREFIXES: tuple[str, ...] = (
-    "owner_identity",
-    "contract_id",
-    "job_id",
-    "run_id",
+# Thinking-block prefix emitted by some local LLMs before the JSON payload.
+# Built with chr() so HTML-tag-stripping source tooling cannot mangle the
+# literal closing tag (which previously caused the parser to always raise).
+_THINKING_OPEN = chr(60) + "think" + chr(62)
+_THINKING_CLOSE = chr(60) + "/think" + chr(62)
+
+# Strict whitelist of Contract dot-paths the agent may suggest patching.
+# Mirrors pilot107.core.advice._PATCHABLE_FIELDS exactly (a test in
+# tests/core/test_agent_suggest.py asserts the two sets stay equal so that
+# the agent can only suggest fields the remediation layer can apply).
+# Imported directly would create a circular import (advice imports agent),
+# so the set is mirrored here and kept in sync by that test.
+_CONTRACT_PATCH_ALLOWED_FIELDS: frozenset[str] = frozenset(
+    {
+        "project.workdir",
+        "entry.command",
+        "resources.partition",
+        "resources.qos",
+        "resources.nodes",
+        "resources.ntasks",
+        "resources.cpus_per_task",
+        "resources.time_limit",
+        "resources.memory",
+        "resources.gpus_per_node",
+        "resources.array",
+    }
+)
+
+_CONTRACT_PATCH_FORBIDDEN_SEGMENTS: frozenset[str] = frozenset(
+    {"__proto__", "prototype", "constructor"}
 )
 
 _CONTRACT_PATCH_FALLBACK_EXPLANATION_ZH = "LLM 未配置，请手动编辑 Contract 字段。"
@@ -78,7 +103,8 @@ _CONTRACT_PATCH_SYSTEM_PROMPT = (
     "resources.memory），value 是新的字段值。"
     "只能建议修改 Contract 的业务字段，不要建议修改 owner_identity、contract_id、"
     "job_id、run_id 等身份或调度标识字段。"
-    "如果用户意图不清晰或无法安全生成 patch，请返回空的 suggested_patch 并在 explanation_zh 中说明。"
+    "如果用户意图不清晰或无法安全生成 patch，"
+    "请返回空的 suggested_patch 并在 explanation_zh 中说明。"
     "只返回包含 suggested_patch 和 explanation_zh 两个字段的 JSON 对象，不要返回其他内容。"
 )
 
@@ -891,8 +917,8 @@ def _contract_patch_prompt_payload(
 
 def _parse_contract_patch_json(content: str) -> dict[str, Any]:
     text = content.strip()
-    if text.startswith("ancias"):
-        _, separator, text = text.partition("")
+    if text.startswith("<think>"):
+        _, separator, text = text.partition(_THINKING_CLOSE)
         if not separator:
             raise AgentProviderError(
                 "local llm returned an unterminated thinking prefix",
@@ -943,12 +969,13 @@ def _parse_contract_patch_json(content: str) -> dict[str, Any]:
                 code="invalid_schema_patch_key",
             )
         dot_path = key.strip()
-        if any(
-            dot_path == prefix or dot_path.startswith(f"{prefix}.")
-            for prefix in _CONTRACT_PATCH_FORBIDDEN_PATH_PREFIXES
+        segments = dot_path.split(".")
+        if (
+            dot_path not in _CONTRACT_PATCH_ALLOWED_FIELDS
+            or any(segment in _CONTRACT_PATCH_FORBIDDEN_SEGMENTS for segment in segments)
         ):
             raise AgentProviderError(
-                f"local llm patch targets forbidden field: {dot_path}",
+                f"local llm patch targets a non-whitelisted field: {dot_path}",
                 code="invalid_schema_patch_field",
             )
         normalized_patch[dot_path] = value

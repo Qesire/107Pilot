@@ -22,11 +22,12 @@ if [[ ! -f "$cert_dir/tls.crt" || ! -f "$cert_dir/tls.key" ]]; then
     -subj "/CN=localhost" \
     -keyout "$cert_dir/tls.key" \
     -out "$cert_dir/tls.crt" >/dev/null 2>&1
-  chmod 0644 "$cert_dir/tls.key"
+  chmod 0640 "$cert_dir/tls.key"
   chmod 0644 "$cert_dir/tls.crt"
   echo "generated self-signed TLS certificate under $cert_dir"
 fi
-chmod 0644 "$cert_dir/tls.key" "$cert_dir/tls.crt"
+chmod 0640 "$cert_dir/tls.key"
+chmod 0644 "$cert_dir/tls.crt"
 
 if [[ "${PILOT107_SKIP_BUILD:-0}" != "1" ]]; then
   bash "$root/scripts/build-slurm-sim-image.sh"
