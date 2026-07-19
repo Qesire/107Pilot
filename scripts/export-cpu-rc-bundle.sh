@@ -41,48 +41,18 @@ mkdir -p "$work_dir/data" "$work_dir/simulator"
 cp -a "$root/data/known_errors" "$work_dir/data/"
 cp -a "$root/data/submission_templates" "$work_dir/data/"
 cp -a "$root/simulator/compose" "$work_dir/simulator/"
-cp -a "$root/docs/operations" "$work_dir/docs-operations"
-cp -a "$root/docs/phase-3" "$work_dir/docs-phase-3"
-cp "$root/pyproject.toml" "$root/README.md" "$work_dir/"
-[[ ! -f "$root/uv.lock" ]] || cp "$root/uv.lock" "$work_dir/"
-
-for script in \
-  accept-cpu-rc-release.sh \
-  apply-cpu-rc-profile.sh \
-  build-app-images.sh \
-  build-cpu-rc-images.sh \
-  check-cpu-rc.sh \
-  control-plane-recovery.py \
-  export-cpu-rc-bundle.sh \
-  import-cpu-rc-images.sh \
-  init-local-secrets.sh \
-  install-systemd-units.sh \
-  load_competition.py \
-  scan-array-artifacts.py \
-  smoke-auto-capsule.sh \
-  smoke-auto-capsule.py \
-  smoke-cpu-rc-remediation.sh \
-  smoke-cpu-rc-remediation.py \
-  smoke-restart-volume-recovery.sh \
-  smoke-restart-volume-recovery.py \
-  smoke_competition_web.py \
-  start-cpu-rc.sh \
-  stop-cpu-rc.sh
-do
-  cp "$root/scripts/$script" "$work_dir/scripts/"
-done
-
-# systemd unit templates + install doc
-mkdir -p "$work_dir/scripts/systemd"
-cp -a "$root/scripts/systemd/" "$work_dir/scripts/systemd/"
-
+# Clean generated secrets/certs/env that should not be in the bundle.
+# (These are recreated by start-cpu-rc.sh on the target.) Use find+rm in
+# case the source contains 0600 files we cannot cp (permission denied);
+# the initial cp -a above may have skipped them, which is fine.
 rm -f "$work_dir/simulator/compose/.env.cpu-rc"
 find "$work_dir/simulator/compose" -maxdepth 1 -type f -name '.env*' ! -name '.env.cpu-rc.example' -delete
 rm -rf "$work_dir/simulator/compose/certs" "$work_dir/simulator/compose/secrets"
+rm -f "$work_dir/simulator/compose/secrets/slurmdbd-cpu-rc.conf" 2>/dev/null || true
 mkdir -p "$work_dir/simulator/compose/certs" "$work_dir/simulator/compose/secrets"
-cp "$root/simulator/compose/certs/README.md" "$work_dir/simulator/compose/certs/"
-cp "$root/simulator/compose/secrets/README.md" "$work_dir/simulator/compose/secrets/"
-rm -f "$work_dir/simulator/compose/slurm/jwt_hs256.key"
+cp "$root/simulator/compose/certs/README.md" "$work_dir/simulator/compose/certs/" 2>/dev/null || true
+cp "$root/simulator/compose/secrets/README.md" "$work_dir/simulator/compose/secrets/" 2>/dev/null || true
+rm -f "$work_dir/simulator/compose/slurm/jwt_hs256.key" 2>/dev/null || true
 find "$work_dir" -type d \( -name node_modules -o -name '*.egg-info' \) -prune -exec rm -rf {} +
 find "$work_dir" -type d -name __pycache__ -prune -exec rm -rf {} +
 find "$work_dir" -type f -name '*.pyc' -delete
