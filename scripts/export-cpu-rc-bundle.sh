@@ -40,7 +40,9 @@ cp -a "$root/config" "$work_dir/config"
 mkdir -p "$work_dir/data" "$work_dir/simulator"
 cp -a "$root/data/known_errors" "$work_dir/data/"
 cp -a "$root/data/submission_templates" "$work_dir/data/"
-cp -a "$root/simulator/compose" "$work_dir/simulator/"
+# Copy the compose dir but tolerate unreadable 0600 secrets (owned by the
+# slurm container uid); those are cleaned below and must NOT be in the bundle.
+cp -a "$root/simulator/compose" "$work_dir/simulator/" 2>/dev/null || true
 # Clean generated secrets/certs/env that should not be in the bundle.
 # (These are recreated by start-cpu-rc.sh on the target.) Use find+rm in
 # case the source contains 0600 files we cannot cp (permission denied);
