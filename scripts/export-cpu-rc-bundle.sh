@@ -73,12 +73,12 @@ for script in \
   install-systemd-units.sh \
   load_competition.py \
   scan-array-artifacts.py \
+  smoke_auto_capsule.py \
   smoke-auto-capsule.sh \
-  smoke-auto-capsule.py \
-  smoke-cpu-rc-remediation.sh \
-  smoke-cpu-rc-remediation.py \
-  smoke-restart-volume-recovery.sh \
-  smoke-restart-volume-recovery.py \
+  smoke_cpu_rc_remediation.sh \
+  smoke_cpu_rc_remediation.py \
+  smoke_restart_volume_recovery.sh \
+  smoke_restart_volume_recovery.py \
   smoke_competition_web.py \
   start-cpu-rc.sh \
   stop-cpu-rc.sh
