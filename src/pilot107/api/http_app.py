@@ -757,6 +757,11 @@ class Pilot107HttpApi:
             except (ContractError, KeyError, TypeError, ValueError) as exc:
                 return _contract_error_response(exc)
 
+        if len(parts) == 3 and parts == ["contracts", "agent", "suggest"]:
+            return self._contract_agent_suggest(
+                body=body, identity=identity,
+            )
+
         if len(parts) == 1 and parts[0] == "contracts":
             if self.contract_service is None:
                 return ApiResponse(
@@ -1614,6 +1619,64 @@ class Pilot107HttpApi:
             kind="contracts",
             scope=scope,
         )
+
+    def _contract_agent_suggest(
+        self,
+        *,
+        body: bytes,
+        identity: UserIdentity | None,
+    ) -> ApiResponse:
+        from pilot107.core.agent import (
+            OpenAICompatibleLLMProvider,
+            suggest_contract_patch_without_llm,
+            AgentProviderError,
+        )
+        payload, error = _json_body(body)
+        if error is not None:
+            return error
+        current_contract = payload.get("current_contract")
+        recipe_version_id = payload.get("recipe_version_id")
+        user_intent = payload.get("user_intent")
+        provider = str(payload.get("provider", "none"))
+        if not isinstance(current_contract, dict):
+            return ApiResponse(
+                status=400,
+                payload={"error": {"code": "INVALID_REQUEST", "message": "current_contract must be an object"}},
+            )
+        if not isinstance(recipe_version_id, str) or not recipe_version_id:
+            return ApiResponse(
+                status=400,
+                payload={"error": {"code": "INVALID_REQUEST", "message": "recipe_version_id is required"}},
+            )
+        if not isinstance(user_intent, str) or not user_intent.strip():
+            return ApiResponse(
+                status=400,
+                payload={"error": {"code": "INVALID_REQUEST", "message": "user_intent is required"}},
+            )
+        if provider == "none":
+            return ApiResponse(status=200, payload=suggest_contract_patch_without_llm())
+        # Prefer the injected LLM provider from agent_explain_service; fall back to env.
+        llm_provider = getattr(self.agent_explain_service, "llm_provider", None)
+        if llm_provider is None:
+            try:
+                llm_provider = OpenAICompatibleLLMProvider.from_env()
+            except ValueError:
+                return ApiResponse(
+                    status=200,
+                    payload=suggest_contract_patch_without_llm(),
+                )
+        try:
+            result = llm_provider.suggest_contract_patch(
+                current_contract=current_contract,
+                recipe_version_id=recipe_version_id,
+                user_intent=user_intent,
+            )
+            return ApiResponse(status=200, payload=result)
+        except AgentProviderError:
+            return ApiResponse(
+                status=200,
+                payload=suggest_contract_patch_without_llm(),
+            )
 
     def _list_agent_advice(
         self,
