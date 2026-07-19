@@ -87,8 +87,7 @@ do
 done
 
 # systemd unit templates + install doc
-mkdir -p "$work_dir/scripts/systemd"
-cp -a "$root/scripts/systemd/" "$work_dir/scripts/systemd/"
+cp -a "$root/scripts/systemd" "$work_dir/scripts/systemd"
 
 find "$work_dir" -type d \( -name node_modules -o -name '*.egg-info' \) -prune -exec rm -rf {} +
 find "$work_dir" -type d -name __pycache__ -prune -exec rm -rf {} +
