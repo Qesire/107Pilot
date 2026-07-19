@@ -75,9 +75,9 @@ for script in \
   scan-array-artifacts.py \
   smoke_auto_capsule.py \
   smoke-auto-capsule.sh \
-  smoke_cpu_rc_remediation.sh \
+  smoke-cpu-rc-remediation.sh \
   smoke_cpu_rc_remediation.py \
-  smoke_restart_volume_recovery.sh \
+  smoke-restart-volume-recovery.sh \
   smoke_restart_volume_recovery.py \
   smoke_competition_web.py \
   start-cpu-rc.sh \
