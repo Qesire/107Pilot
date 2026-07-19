@@ -1,8 +1,8 @@
 # 107Pilot 当前状态索引
 
-快照日期：2026-07-18
+快照日期：2026-07-19
 当前环境：本机 D0/D1
-当前主线：自动执行至 CPU-only VM 部署准备完成。
+当前主线：模拟 Slurm 阶段封版候选（main @ `2ca04d2`，GitHub CI 全绿）。
 
 ## 权威入口
 
@@ -17,21 +17,18 @@
 
 | 项目 | 当前事实 |
 | --- | --- |
-| Python 源文件 | 73 |
-| Python 源码 | 33,210 行 |
-| Python 测试文件 | 76 |
-| Python 测试源码 | 18,617 行 |
-| Web 源码 | 5,235 行 |
-| Python/Shell 脚本 | 106 |
-| Python 测试 | 608 passed，13 PostgreSQL integration skipped，5 subtests passed |
+| Python 源文件 | 76 |
+| Python 测试文件 | 81 |
 | Recipe 模板 | 6 个；含 structured preflight、GPU shard array、fail-closed merge gate |
 | 已知错误规则 | 37 条 |
-| Ruff | passed |
-| mypy strict | 73 source files passed |
-| Vitest | 10 files / 64 tests passed |
-| Web production build | 1,914 modules built |
-| Docker core | CPU-RC MariaDB/API/Web/Worker/Slurm healthy；单 Slurm worker |
-| Compose contracts | base/competition/CPU-RC passed |
+| Ruff | passed（src/tests/scripts/simulator） |
+| mypy strict | 76 source files passed |
+| Python 测试 | 676 passed，13 PostgreSQL integration skipped，5 subtests passed |
+| Vitest | 12 files / 87 tests passed |
+| Playwright test:ui | 14/14 passed（Market→Adopt→Studio→Preflight→Run→Evidence，CI 阻塞门禁） |
+| Web production build | passed（static bundle 已与源码同步，CI 含 drift 检查） |
+| Compose contracts | base/competition/CPU-RC/slurm-host/app-node passed |
+| GitHub CI (main @ 2ca04d2) | python/web/web-ui/compose/security 全绿（run 29687521816） |
 
 完整测试已在允许本机回环 socket 的执行环境通过；受限沙箱内同一套代码仅有 7 个回环 HTTP 测试因 `PermissionError` 不能绑定端口，不是代码失败。项目已在 `pyproject.toml` 固定 `src` import path，不依赖隐式 `PYTHONPATH`。
 
@@ -44,25 +41,25 @@
 | Phase 3B | 平台事实、entitlement、preflight 已评审；工程治理基线已收敛 |
 | Phase 3C | Template/Market/Adoption 本地纵向链路已评审 |
 | Phase 3D | 工程纵向链路已评审；用户反馈无人数门禁、非阻塞 |
-| Phase 3E | Remediation 事件/输入/takeover、专用 action、provider-neutral LLM 安全 benchmark 已完成 |
+| Phase 3E | Remediation 事件/输入/takeover、专用 action、provider-neutral LLM 安全 benchmark 完成；provider 创建时序与 Worker LLM 环境已接通 |
 | Phase 3F | Run timeline/lineage/compare、安全命令与 Agent Evidence/diff/执行/前后结果工作台已完成 |
 | Phase 3G | ControlRepository PostgreSQL parity/运行时选择、Run/collection/Agent outbox fencing、恢复、持久 trace、LLM/SSE metrics 与安全基线完成；全领域业务 Store PG parity 仍进行中 |
-| Phase 3H | CPU-only 固定 revision 离线候选完成；真实 107 仅只读历史兼容探测 |
+| Phase 3H | CPU-only 固定 revision 离线候选完成；systemd 部署声明化；本阶段最终环境为 Docker Slurm simulator，真实 107 不属于本阶段验收范围 |
 
 ## 环境声明
 
 - D0：本机单元、契约、权限、迁移测试；
 - D1：本机 Docker Slurm simulator live behavior；
-- S1：8C/16G CPU VM 已部署并 G3 功能链通过（见 `s1_vm_deployment_evidence_20260718.md`）；固定发布候选在线运行；
+- S1：8C/16G CPU VM 已部署并 G3 功能链通过（见 `s1_vm_deployment_evidence_20260718.md`）；最新 SHA 重部署验收为后续 VM 工作项；
 - R0：开发者个人 SSH 辅助只读 probe；
 - R1：107Pilot 真实平台集成，当前不具备条件；
 - 校园多用户生产：NO-GO。
 
-Docker、fake/replay LLM 和本地 command gateway 的结果不得表述为真实 107、真实模型或校园生产能力。
+Docker、fake/replay LLM 和本地 command gateway 的结果不得表述为真实 107、真实模型或校园生产能力。系统通过 backend 与 capability profile 抽象了 Slurm 差异，本阶段在 Docker Slurm simulator 上完成闭环验证；真实集群主要替换连接、认证、资源与文件系统配置，但尚未纳入本阶段实测。
 
 ## 当前工程风险
 
 1. Run、Remediation、Template 等业务 Store 仍以 SQLite 为主，尚未完成全领域 PostgreSQL parity/接线；
 2. Prometheus 长期 retention/firing 与在线供应链扫描仍需目标运维/CI 环境验证；
-3. CPU-RC 已在 S1 (8C/16G VM) 部署并通过 G3 功能链（资源/磁盘性能已验证，见 `s1_vm_deployment_evidence_20260718.md`）；
-4. 真实身份和真实 107 均不在当前已验证能力内；VM 已在 S1 部署并通过 G3 功能链（Docker Slurm 模拟器，非真实 107）。
+3. CPU-RC 早期 revision 已在 S1 (8C/16G VM) 部署并通过 G3 功能链；最新 SHA (`2ca04d2`) 的 VM 重部署与同版本全量验收为待执行的 VM 工作项（见 `s1_vm_deployment_evidence_20260718.md`）；
+4. 真实身份和真实 107 均不在当前已验证能力内，亦不属于本阶段验收范围。

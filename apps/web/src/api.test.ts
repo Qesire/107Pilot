@@ -111,6 +111,7 @@ describe("API transport", () => {
         body: JSON.stringify({
           request_key: "ui:run/a",
           automation_policy: "manual_approval",
+          provider: "local",
         }),
       }),
     );

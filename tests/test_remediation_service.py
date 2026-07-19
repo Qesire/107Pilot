@@ -487,6 +487,49 @@ class RemediationServiceTests(unittest.TestCase):
         self.assertEqual(blocked.stop_reason, "manual_takeover")
         self.assertEqual(replayed, blocked)
 
+    def test_worker_advance_uses_persisted_session_provider(self) -> None:
+        """The Worker passes ``provider=None`` to ``advance``; the service must
+        read the persisted per-session provider and thread it into ``advise``
+        so the user's LLM choice is honored on the first planning cycle.
+        """
+        capturing = CapturingAdviceService(self.advice)
+        self.service.advice_service = capturing
+        session, _ = self.service.create(
+            owner="alice",
+            source_run_id="run_source",
+            request_key="request-persisted-provider",
+            provider="local",
+        )
+
+        # Simulate the Worker, which does not know the provider up-front and
+        # passes ``provider=None`` so the persisted value is used.
+        self.service.advance(session.session_id, worker_id="worker-1", provider=None)
+
+        self.assertEqual(capturing.providers, ["local"])
+        stored = self.remediations.get_session(session.session_id)
+        self.assertEqual(stored.provider, "local")
+
+
+class CapturingAdviceService(FakeAdviceService):
+    """Record the ``provider`` passed to ``advise`` so tests can assert the
+    Worker's auto-advance honors the persisted per-session provider."""
+
+    def __init__(self, inner: FakeAdviceService) -> None:
+        super().__init__()
+        self.providers: list[str] = []
+        # Mirror the inner service's advice record so approve/execute work.
+        self.record = inner.record
+
+    def advise(  # type: ignore[override]
+        self,
+        run_id: str,
+        *,
+        provider: str = "none",
+        idempotency_key: str | None = None,
+    ) -> AdviceResult:
+        self.providers.append(provider)
+        return super().advise(run_id, provider=provider, idempotency_key=idempotency_key)
+
 
 if __name__ == "__main__":
     unittest.main()

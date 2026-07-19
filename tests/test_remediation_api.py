@@ -210,6 +210,35 @@ class RemediationApiTests(unittest.TestCase):
         self.assertEqual(blocked.status, 200)
         self.assertEqual(blocked.payload["stop_reason"], "manual_takeover")
 
+    def test_create_persists_provider_from_request_body(self) -> None:
+        created = self.api.handle_post(
+            "/api/v1/runs/run_remediation_api/remediation-sessions",
+            body=_json(
+                {
+                    "request_key": "api-provider",
+                    "automation_policy": "manual_approval",
+                    "provider": "local",
+                }
+            ),
+            headers=self.headers,
+        )
+        default_created = self.api.handle_post(
+            "/api/v1/runs/run_remediation_api/remediation-sessions",
+            body=_json({"request_key": "api-provider-default"}),
+            headers=self.headers,
+        )
+
+        self.assertEqual(created.status, 201)
+        self.assertEqual(created.payload["provider"], "local")
+        self.assertEqual(default_created.status, 201)
+        self.assertEqual(default_created.payload["provider"], "none")
+
+        detail = self.api.handle_get(
+            f"/api/v1/remediation-sessions/{created.payload['session_id']}",
+            headers=self.headers,
+        )
+        self.assertEqual(detail.payload["provider"], "local")
+
 
 def _json(value: object) -> bytes:
     return json.dumps(value).encode()

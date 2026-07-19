@@ -780,7 +780,10 @@ def _row_to_session(row: sqlite3.Row) -> RemediationSession:
         ),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
-        provider=str(row["provider"]) if "provider" in row else "none",
+        # `in row` checks sqlite3.Row values, not column names; use .keys() to
+        # detect the provider column added by migration 003e.003. SIM118 does
+        # not apply to sqlite3.Row, so the noqa is intentional.
+        provider=str(row["provider"]) if "provider" in row.keys() else "none",  # noqa: SIM118
     )
 
 

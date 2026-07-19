@@ -44,13 +44,11 @@ jobs:
             exit 1
           fi
 
-  # Playwright UI suite (mocked API). Non-blocking: 8 tests have pre-existing
-  # failures (suite was never wired into CI before this change) tracked separately.
-  # Runs for visibility per audit recommendation; flip continue-on-error to false
-  # once tests/ui/visual.spec.js is stabilized.
+  # Playwright UI suite (mocked API). Blocking gate: tests/ui/visual.spec.js
+  # is stabilized (14/14 passing). Covers Market→Adopt→Studio→Preflight→Run→
+  # Evidence browser flows that unit tests cannot reach.
   web-ui:
     runs-on: ubuntu-24.04
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

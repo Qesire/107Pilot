@@ -161,15 +161,17 @@ class RemediationService:
         )
         if not claimed:
             return session
-        # Persist the caller's provider choice before advancing. When the
-        # Worker auto-advances it passes ``provider=None`` so the previously
-        # persisted user choice (default "none") is honored. When the UI
-        # advances with an explicit provider, that choice is recorded here.
+        # Resolve the effective provider: an explicit non-None provider from
+        # the caller (e.g. the API's manual-advance) overrides the session's
+        # persisted choice; ``None`` (the Worker's auto-advance) means "use
+        # what the user picked at creation time". The resolved value is
+        # persisted so later transitions / replanning cycles stay consistent.
         if provider is not None:
             session = self.remediation_store.update_provider(
                 session_id,
                 provider=provider,
             )
+        effective_provider = session.provider
         try:
             for _ in range(8):
                 session = self.remediation_store.get_session(session_id)
@@ -193,7 +195,7 @@ class RemediationService:
                     )
                     continue
                 if session.state == RemediationState.PLANNING:
-                    return self._plan_turn(session, provider=session.provider)
+                    return self._plan_turn(session, provider=effective_provider)
                 if session.state == RemediationState.EXECUTING:
                     return self._evaluate_execution(session)
                 if session.state == RemediationState.EVALUATING:

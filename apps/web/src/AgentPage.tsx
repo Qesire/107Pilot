@@ -42,8 +42,14 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
   const detail = useRemediationSession(user, selectedId);
   const selectSession = (sessionId: string) =>
     navigate(withSearch("/agent", location.search, { session: sessionId }));
+  // Provider chosen on the creation form. The Worker auto-advances through
+  // `planning` within ~1s of creation, so the user's LLM choice must ride on
+  // the create request itself — the detail-page selector only affects later
+  // replanning cycles. Defaults to "local" so the LLM explains when the
+  // gateway is configured; users who want pure rules can pick "none".
+  const [createProvider, setCreateProvider] = useState<LlmProvider>("local");
   const createRemediationSession = useMutation({
-    mutationFn: (runId: string) => api.createRemediationSession(user, runId),
+    mutationFn: (runId: string) => api.createRemediationSession(user, runId, createProvider),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["remediation-sessions", user] });
     },
@@ -89,6 +95,24 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
             emptyTitle="选择一个失败的 Run 开始修复"
             emptyDetail={
               <>
+                <div className="agent-create-controls">
+                  <label className="select-field">
+                    <Bot aria-hidden="true" size={16} />
+                    <span className="sr-only">LLM provider</span>
+                    <select
+                      value={createProvider}
+                      onChange={(event) => setCreateProvider(event.target.value as LlmProvider)}
+                      aria-label="LLM provider"
+                      className="llm-provider-select"
+                    >
+                      <option value="local">{providerLabel("local")}</option>
+                      <option value="none">{providerLabel("none")}</option>
+                    </select>
+                  </label>
+                  <p className="agent-safety-note">
+                    选择 Run 后会以当前 LLM 设置创建修复会话；Worker 将用该 provider 解释诊断。
+                  </p>
+                </div>
                 <RunPicker
                   runs={runs.data?.items ?? []}
                   filter={{ state: "FAILED" }}
