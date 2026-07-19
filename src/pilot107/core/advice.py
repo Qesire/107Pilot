@@ -17,6 +17,7 @@ from pilot107.core.control_repository import (
     ControlRepositoryConflict,
     OutboxMessage,
 )
+from pilot107.core.platform import CapabilityProfile
 from pilot107.core.run_service import (
     RunService,
     SubmissionInProgressError,
@@ -84,8 +85,14 @@ class AgentExecutionDispatchBatch:
 class AgentPolicyEngine:
     """Evaluate rule-authored contract patches without consulting an LLM."""
 
-    def __init__(self, *, contract_service: ContractService | None) -> None:
+    def __init__(
+        self,
+        *,
+        contract_service: ContractService | None,
+        capability_profile: CapabilityProfile | None = None,
+    ) -> None:
         self.contract_service = contract_service
+        self.capability_profile = capability_profile
 
     def actions_for(
         self,
@@ -102,6 +109,11 @@ class AgentPolicyEngine:
         diagnosis: DiagnosisRecord,
     ) -> dict[str, Any]:
         patch = diagnosis.suggested_patch
+        resolved_patch, resolution_notes = _resolve_patch(
+            patch,
+            run=run,
+            capability_profile=self.capability_profile,
+        )
         base = {
             "action_id": f"action_{diagnosis.diagnosis_id}",
             "type": "contract_patch_preview" if patch else "manual_remediation",
@@ -109,7 +121,9 @@ class AgentPolicyEngine:
             "rule_id": diagnosis.rule_id,
             "approval_required": True,
             "risk": _risk_for_patch(patch),
-            "proposed_patch": patch,
+            "proposed_patch": resolved_patch,
+            "original_patch": patch if resolved_patch != patch else None,
+            "resolution": resolution_notes or None,
         }
         if not patch:
             return {**base, "policy_status": "manual_only", "reasons": ["no_rule_patch"]}
@@ -122,7 +136,7 @@ class AgentPolicyEngine:
             }
         unresolved = sorted(
             field
-            for field, value in patch.items()
+            for field, value in resolved_patch.items()
             if value is None or (isinstance(value, str) and _PLACEHOLDER.search(value))
         )
         if unresolved:
@@ -141,7 +155,7 @@ class AgentPolicyEngine:
                     code="AGENT.CONTRACT_OWNER_MISMATCH",
                 )
             candidate = copy.deepcopy(contract.payload)
-            for field, value in patch.items():
+            for field, value in resolved_patch.items():
                 _set_dotted(candidate, field, value)
             validation = self.contract_service.validate(candidate)
         except (KeyError, TypeError, ValueError, ContractError) as exc:
@@ -898,6 +912,92 @@ def _initial_state(
     if "requires_input" in statuses:
         return "needs_input"
     return "no_safe_action"
+
+
+def _resolve_patch(
+    patch: dict[str, Any],
+    *,
+    run: RunRecord,
+    capability_profile: CapabilityProfile | None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Resolve ``null``-valued patch fields from the run's capability profile.
+
+    Returns a new patch dict with concrete values substituted where the
+    profile has a legal value. Fields that cannot be resolved (no profile,
+    unknown partition/QoS, or fields that have no capability source such as
+    ``entry.command``) keep their original ``None`` value so the policy
+    engine falls through to ``requires_input`` / ``blocked`` as before.
+
+    Backward compatibility: when ``capability_profile is None`` the patch is
+    returned unchanged (no resolution attempted).
+    """
+    if not patch or capability_profile is None:
+        return dict(patch), []
+    resource_plan = run.resource_plan or {}
+    partition = resource_plan.get("partition")
+    qos = resource_plan.get("qos")
+    partition_qos = capability_profile.partition_qos()
+    qos_limits = capability_profile.qos_limits()
+
+    def _qos_for_partition(partition_value: Any) -> str | None:
+        if not isinstance(partition_value, str):
+            return None
+        allowed = partition_qos.get(partition_value)
+        if allowed:
+            return allowed[0]
+        return None
+
+    def _resolve_qos(partition_value: Any) -> str | None:
+        if capability_profile.default_qos is not None:
+            return capability_profile.default_qos
+        return _qos_for_partition(partition_value)
+
+    def _limit_for_qos(qos_value: Any) -> Any:
+        if isinstance(qos_value, str) and qos_value in qos_limits:
+            return qos_limits[qos_value]
+        if isinstance(partition, str):
+            fallback = _qos_for_partition(partition)
+            if fallback is not None and fallback in qos_limits:
+                return qos_limits[fallback]
+        return None
+
+    notes: list[str] = []
+    resolved: dict[str, Any] = dict(patch)
+    for field, value in patch.items():
+        if value is not None:
+            continue
+        if field == "resources.partition":
+            replacement: Any = capability_profile.default_partition
+            if replacement:
+                resolved[field] = replacement
+                notes.append(f"resolved:{field}={replacement}")
+            continue
+        if field == "resources.qos":
+            replacement = _resolve_qos(partition)
+            if replacement:
+                resolved[field] = replacement
+                notes.append(f"resolved:{field}={replacement}")
+            continue
+        if field == "resources.memory":
+            limit = _limit_for_qos(qos)
+            if limit is not None and limit.max_memory_gb is not None:
+                replacement = f"{limit.max_memory_gb}G"
+                resolved[field] = replacement
+                notes.append(f"resolved:{field}={replacement}")
+            continue
+        if field == "resources.time_limit":
+            limit = _limit_for_qos(qos)
+            if limit is not None and limit.max_wall_hours is not None:
+                replacement = f"{int(limit.max_wall_hours):02d}:00:00"
+                resolved[field] = replacement
+                notes.append(f"resolved:{field}={replacement}")
+            continue
+        # resources.cpus_per_task / ntasks / nodes: no single capability
+        # source chooses a safe value (max_cpus is an upper bound, not a
+        # recommended request). Leave None -> requires_input.
+        # entry.command / runtime.conda_env: stay manual (the latter is
+        # also field_not_patchable -> blocked).
+    return resolved, notes
 
 
 def _set_dotted(payload: dict[str, Any], field: str, value: Any) -> None:

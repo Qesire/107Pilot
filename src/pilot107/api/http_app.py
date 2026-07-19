@@ -173,10 +173,14 @@ class Pilot107HttpApi:
                 evidence_root=evidence_query.evidence_store.root,
             ),
         )
+        self.capability_profile = capability_profile or docker_sim_capability_profile()
         self.agent_advice_service = agent_advice_service or AgentAdviceService(
             store=store,
             explain_service=self.agent_explain_service,
-            policy_engine=AgentPolicyEngine(contract_service=contract_service),
+            policy_engine=AgentPolicyEngine(
+                contract_service=contract_service,
+                capability_profile=self.capability_profile,
+            ),
             contract_service=contract_service,
             run_service=run_service,
         )
@@ -186,7 +190,6 @@ class Pilot107HttpApi:
             advice_service=self.agent_advice_service,
         )
         self.remediation_routes = RemediationRoutes(self.remediation_service)
-        self.capability_profile = capability_profile or docker_sim_capability_profile()
         self.platform_snapshot_store = platform_snapshot_store
         self.user_entitlement_store = user_entitlement_store
         self.template_market_store = template_market_store

@@ -39,6 +39,11 @@ from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalo
 from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.evidence_binding import EvidenceBinder
+from pilot107.core.platform import (
+    CapabilityProfile,
+    docker_sim_capability_profile,
+    load_capability_profile,
+)
 from pilot107.core.preflight import LocalPathChecker, PathChecker
 from pilot107.core.redaction import redact_sensitive_structure, redact_sensitive_text
 from pilot107.core.remediation_store import RemediationStore
@@ -94,6 +99,7 @@ class WorkerServiceConfig:
     enable_docker_volume_evidence_transport: bool = False
     auto_capsule_enabled: bool = True
     capsule_root: Path | None = None
+    capability_profile_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -342,6 +348,11 @@ def config_from_env(
             "PILOT107_CAPSULE_ROOT",
             runtime_dir / "capsules",
         ),
+        capability_profile_path=_optional_path(
+            values,
+            "PILOT107_CAPABILITY_PROFILE_PATH",
+            None,
+        ),
     )
 
 
@@ -372,9 +383,14 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         dispatcher_id=config.worker_id,
     )
     contract_store = ContractStore(config.db_path)
+    capability_profile = _worker_capability_profile(config)
+    partition_qos = capability_profile.partition_qos()
+    qos_limits = capability_profile.qos_limits()
     contract_service = ContractService(
-        catalog=RecipeCatalog(store=contract_store),
+        catalog=RecipeCatalog(store=contract_store, partition_qos=partition_qos),
         store=contract_store,
+        partition_qos=partition_qos,
+        qos_limits=qos_limits,
     )
     explain_service = AgentExplainService(
         store=store,
@@ -387,7 +403,10 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     advice_service = AgentAdviceService(
         store=store,
         explain_service=explain_service,
-        policy_engine=AgentPolicyEngine(contract_service=contract_service),
+        policy_engine=AgentPolicyEngine(
+            contract_service=contract_service,
+            capability_profile=capability_profile,
+        ),
         contract_service=contract_service,
         run_service=run_service,
     )
@@ -602,15 +621,26 @@ def _compose_target(config: WorkerServiceConfig) -> DockerComposeTarget:
 
 
 def _worker_shared_roots(config: WorkerServiceConfig) -> tuple[str, ...]:
-    from pilot107.core.platform import docker_sim_capability_profile
-
-    return docker_sim_capability_profile(slurm_rest_url=config.slurmrestd_url).shared_roots
+    return _worker_capability_profile(config).shared_roots
 
 
 def _worker_local_roots(config: WorkerServiceConfig) -> tuple[str, ...]:
-    from pilot107.core.platform import docker_sim_capability_profile
+    return _worker_capability_profile(config).local_roots
 
-    return docker_sim_capability_profile(slurm_rest_url=config.slurmrestd_url).local_roots
+
+def _worker_capability_profile(config: WorkerServiceConfig) -> CapabilityProfile:
+    """Load the worker's capability profile.
+
+    The worker mirrors the API's profile resolution: an explicit
+    ``PILOT107_CAPABILITY_PROFILE_PATH`` wins; otherwise the docker-sim
+    fallback profile is used (rooted at the worker's slurmrestd URL). The
+    profile gates both the ``ContractService`` QoS preflight and the
+    ``AgentPolicyEngine`` null-patch resolution, so the worker-driven
+    remediation auto-advance can close the rule -> derived-Run loop.
+    """
+    if config.capability_profile_path is not None:
+        return load_capability_profile(config.capability_profile_path)
+    return docker_sim_capability_profile(slurm_rest_url=config.slurmrestd_url)
 
 
 def _build_evidence_transport(config: WorkerServiceConfig) -> EvidenceTransport | None:
@@ -695,7 +725,9 @@ def _path(values: Mapping[str, str], name: str, default: Path) -> Path:
     return Path(value).expanduser() if value else default
 
 
-def _optional_path(values: Mapping[str, str], name: str, default: Path) -> Path | None:
+def _optional_path(
+    values: Mapping[str, str], name: str, default: Path | None = None
+) -> Path | None:
     value = values.get(name)
     if value is None:
         return default

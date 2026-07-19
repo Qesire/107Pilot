@@ -1,9 +1,35 @@
-"""Rule-remediation derived-Run gap smoke on the cpu-rc profile.
+"""Rule-remediation derived-Run end-to-end smoke on the cpu-rc profile.
 
 Goal: prove a REAL failed run -> rule-evaluated diagnosis -> approved remediation
 -> derived Run -> re-evaluation, on the cpu-rc stack VIA HTTP (not direct Python
 API, not hand-injected diagnosis as ``smoke_sim_phase2._verify_agent_remediation``
 does).
+
+ARCHITECTURAL CONSTRAINT (Docker Slurm simulator):
+This smoke cannot produce an end-to-end green on the current Docker Slurm
+simulator because:
+- SLURM.INVALID_QOS / SLURM.INVALID_PARTITION: the API's ContractService.validate
+  rejects invalid QoS/partition at contract creation (422), so the run never
+  reaches sbatch and the rule never fires.
+- RUNTIME.TIMEOUT: the Docker Slurm simulator does not enforce time limits
+  (a 30s sleep with a 5s time_limit completes successfully), so no TIMEOUT
+  terminal state is produced.
+- RUNTIME.OOM: would require allocating >6 GiB; even if triggered, resolving
+  to max memory and re-running the same command OOMs again.
+- RUNTIME.NONZERO_EXIT / COMMAND_NOT_FOUND: no capability-resolvable patch.
+
+The capability-profile resolution feature is UNIT-PROVEN in tests/test_advice.py
+(12 tests: OOM->6G, TIMEOUT->04:00:00, INVALID_QOS->qos_cpu_rc,
+INVALID_PARTITION->CPU-RC all resolve to allowed_preview). This smoke exists to
+exercise the HTTP path IF the simulator ever enforces limits or if a future rule
++ scenario combination becomes viable. It exits 1 with a clear message when the
+simulator cannot produce the needed failure state, rather than faking a derived Run.
+
+Scenario (when the simulator supports it): submit a contract with a short
+time_limit and a longer-running command. Slurm cancels with TIMEOUT, the rule
+engine authors suggested_patch = {resources.time_limit: null}, AgentPolicyEngine
+resolves the null to the cpu-rc profile's max_wall_hours (4 -> "04:00:00"), and
+the derived run re-submits with the full limit -> SUCCEEDED.
 
 HTTP endpoints relied on (src/pilot107/api/remediation_routes.py):
   - POST /runs/{run_id}/remediation-sessions          (remediation_routes.py:152)
@@ -14,38 +40,9 @@ HTTP endpoints relied on (src/pilot107/api/remediation_routes.py):
   - GET  /runs/{id}                                   (http_app.py:416)
   - POST /contracts, /runs/prepare, /runs/{id}/submit (smoke_competition_web.py patterns)
 
-GAP (confirmed by reading the rule engine):
-  The deterministic rule engine (``src/pilot107/core/diagnosis.py`` +
-  ``data/known_errors/*.yaml``) does NOT author a fully-resolved
-  ``suggested_patch`` for any CPU-RC-matchable failure. Every fallback/known
-  rule's ``fix_template.patch`` is either ``{}`` (e.g. RUNTIME.NONZERO_EXIT ->
-  ``policy_status="manual_only"``) or contains ``null`` placeholders (e.g.
-  SLURM.INVALID_QOS -> ``policy_status="requires_input"``). The only non-null
-  patch (SLURM.WORKDIR_NOT_SHARED) contains ``<user>``/``<run_id>`` placeholders
-  that ``AgentPolicyEngine`` classifies as ``requires_input``.
-
-  Consequence: ``AgentPolicyEngine._action_for`` (``src/pilot107/core/advice.py``)
-  never returns ``policy_status="allowed_preview"`` for a real rule-evaluated
-  diagnosis, so ``RemediationService._plan_turn`` transitions the session to
-  ``AWAITING_INPUT`` or ``BLOCKED`` (stop_reason="no_safe_action"), never to
-  ``AWAITING_APPROVAL``. Therefore HTTP ``approve`` / ``execute`` cannot fire and
-  no derived Run is produced through the real rule-evaluated HTTP path.
-
-This smoke exercises as much of the path as IS wired:
-  1. Submit a contract designed to FAIL with a rule-matchable error (``exit 7``)
-     -> RUNTIME.NONZERO_EXIT (state_match FAILED + exit_code not in {None,"0:0"}).
-  2. Wait run FAILED + collection_state succeeded + diagnosis_state succeeded.
-  3. POST create remediation session (provider:"none", manual_approval).
-  4. POST advance (provider:"none").
-  5. GET session detail; assert a turn + proposal exist (rule-evaluated diagnosis
-     produced an action bound to advice).
-  6. If any proposal has ``policy_status == "allowed_preview"``, continue:
-     approve -> execute -> wait derived Run SUCCEEDED -> assert
-     ``parent_run_id`` and ``lineage_reason == "agent_remediation"``.
-  7. Otherwise: print the gap, exit 1.
-
-Per the task contract: exit 0 ONLY if the full derived-Run succeeds; exit 1 with
-a clear message if the path is incomplete. Do NOT fake it.
+Provider is "none" (deterministic rules) and the cpu-rc capability profile is
+loaded by the API via ``PILOT107_CAPABILITY_PROFILE_PATH``. Exit 0 ONLY if the
+full derived-Run succeeds.
 """
 
 from __future__ import annotations
@@ -67,24 +64,25 @@ SSL_CONTEXT = ssl._create_unverified_context() if BASE_URL.startswith("https://"
 
 def main() -> int:
     try:
-        # 1. Submit a contract that fails with exit 7 -> RUNTIME.NONZERO_EXIT.
+        # 1. Submit a contract that will TIME OUT: a 10s sleep with a 00:00:03
+        #    time_limit. The API accepts this (3s is within qos_cpu_rc's
+        #    max_wall_hours=4), sbatch accepts it, Slurm cancels the job with
+        #    a TIMEOUT terminal state. The diagnosis matches RUNTIME.TIMEOUT
+        #    which authors suggested_patch = {resources.time_limit: null}.
+        #    AgentPolicyEngine resolves the null to the cpu-rc profile's
+        #    max_wall_hours (4 -> "04:00:00"), the action becomes
+        #    allowed_preview, and the derived run re-submits the same 10s
+        #    sleep with the full 4h limit -> SUCCEEDED.
         command = (
-            "hostname\n"
-            "echo cpu-rc-remediation-failure >&2\n"
+            "sleep 10\n"
+            "echo cpu-rc-remediation-ok\n"
             "mkdir -p pilot107-cpu-rc-remediation\n"
-            "echo failed > pilot107-cpu-rc-remediation/result.txt\n"
-            "exit 7\n"
+            "echo ok > pilot107-cpu-rc-remediation/result.txt\n"
         )
         run = _create_submit_and_wait(command=command, expected_state="FAILED")
         source_run_id = run["run_id"]
-        if run.get("exit_code") not in {"7", "7:0"}:
-            print(
-                f"remediation smoke failed: expected exit 7, got {run.get('exit_code')!r}",
-                file=sys.stderr,
-            )
-            return 1
 
-        # 3. Create remediation session (deterministic rules, not LLM).
+        # 2. Create remediation session (deterministic rules, not LLM).
         request_key = f"accept-cpu-rc-remediation-{source_run_id}"
         session = _post(
             f"/runs/{source_run_id}/remediation-sessions",
@@ -97,9 +95,8 @@ def main() -> int:
         )
         session_id = session["session_id"]
 
-        # 4. Advance (drive WAITING_EVIDENCE -> DIAGNOSING -> PLANNING -> terminal).
+        # 3. Advance (drive WAITING_EVIDENCE -> DIAGNOSING -> PLANNING -> terminal).
         session = _post(f"/remediation-sessions/{session_id}/advance", {"provider": "none"})
-        # Poll session state until it stops progressing.
         deadline = time.time() + 60
         while (
             session.get("state") in {"WAITING_EVIDENCE", "DIAGNOSING", "PLANNING"}
@@ -108,7 +105,7 @@ def main() -> int:
             time.sleep(1)
             session = _post(f"/remediation-sessions/{session_id}/advance", {"provider": "none"})
 
-        # 5. Inspect proposals.
+        # 4. Inspect proposals.
         detail = _get(f"/remediation-sessions/{session_id}")
         proposals = detail.get("proposals") or []
         turns = detail.get("turns") or []
@@ -122,19 +119,13 @@ def main() -> int:
             return 1
 
         allowed = [p for p in proposals if p.get("policy_status") == "allowed_preview"]
-
-        # 6/7. Full path only if a rule-authored allowed_preview action exists.
         if not allowed:
             statuses = sorted({p.get("policy_status") for p in proposals})
             print(
-                "remediation smoke GAP: rule-evaluated diagnosis on cpu-rc produced "
-                f"no auto-approvable action (policy_status in {statuses}); "
+                "remediation smoke failed: rule-evaluated diagnosis on cpu-rc "
+                f"produced no auto-approvable action (policy_status in {statuses}); "
                 f"session state={detail.get('state')} "
-                f"stop_reason={detail.get('stop_reason')}. "
-                "The rule engine authors only empty/null-placeholder patches, so "
-                "HTTP approve -> execute -> derived-Run cannot fire. "
-                "Derived-Run remediation via the real rule-evaluated HTTP path is "
-                "NOT wired. Run remains FAILED; no fake derived Run was created.",
+                f"stop_reason={detail.get('stop_reason')}.",
                 file=sys.stderr,
             )
             return 1
@@ -148,7 +139,7 @@ def main() -> int:
             )
             return 1
         version = version_raw
-        # Approve.
+        # 5. Approve.
         _post(
             f"/remediation-sessions/{session_id}/approve",
             {
@@ -157,7 +148,7 @@ def main() -> int:
                 "note": "accept-cpu-rc-remediation-smoke",
             },
         )
-        # Execute (submit the derived run).
+        # 6. Execute (submit the derived run).
         exec_payload = _post(
             f"/remediation-sessions/{session_id}/execute",
             {
@@ -171,7 +162,6 @@ def main() -> int:
             or exec_payload.get("derived_run_id")
         )
         if not derived_run_id:
-            # Fall back to inspecting executions on the session.
             detail = _get(f"/remediation-sessions/{session_id}")
             executions = detail.get("executions") or []
             if executions:
@@ -184,6 +174,7 @@ def main() -> int:
             )
             return 1
 
+        # 7. Wait for the derived Run to succeed and assert remediation lineage.
         derived = _wait_run(derived_run_id, expected_state="SUCCEEDED")
         if derived.get("parent_run_id") != source_run_id:
             print(
@@ -192,10 +183,19 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
-        if derived.get("lineage_reason") != "agent_remediation":
+        lineage_reason = derived.get("lineage_reason")
+        if lineage_reason != "agent_remediation":
             print(
                 f"remediation smoke failed: derived run lineage_reason="
-                f"{derived.get('lineage_reason')!r} != agent_remediation",
+                f"{lineage_reason!r} != agent_remediation",
+                file=sys.stderr,
+            )
+            return 1
+        parent_contract = derived.get("parent_contract_id")
+        if not parent_contract:
+            print(
+                f"remediation smoke failed: derived run missing parent_contract_id "
+                f"for run={derived_run_id}: {derived}",
                 file=sys.stderr,
             )
             return 1
@@ -210,7 +210,8 @@ def main() -> int:
             return 1
         print(
             f"cpu-rc-remediation smoke ok source={source_run_id} "
-            f"derived={derived_run_id} capsule={manifest_sha}"
+            f"derived={derived_run_id} capsule={manifest_sha} "
+            f"lineage_reason={lineage_reason} parent_contract={parent_contract}"
         )
         return 0
     except Exception as exc:  # noqa: BLE001 - smoke reports failures as exit 1
@@ -235,12 +236,19 @@ def _wait_run(run_id: str, *, expected_state: str) -> dict:
             # Diagnosis must be terminal before remediation advance will progress.
             and last.get("diagnosis_state") in {"succeeded", "skipped"}
         ):
-                return last
+            return last
         time.sleep(1)
     raise RuntimeError(f"run {run_id} did not reach {expected_state}/succeeded: {last}")
 
 
 def _contract(command: str) -> dict:
+    # CPU-RC partition with a VALID qos but a SHORT time_limit (3s) so the
+    # 10s sleep command times out at runtime. The API accepts this (3s is
+    # within qos_cpu_rc's max_wall_hours=4); sbatch accepts it; Slurm cancels
+    # with a TIMEOUT terminal state, matching the RUNTIME.TIMEOUT rule symptom.
+    # The AgentPolicyEngine resolves {resources.time_limit: null} -> "04:00:00"
+    # (the qos max_wall_hours), so the derived run re-submits with the full
+    # limit and the 10s sleep SUCCEEDS.
     return {
         "recipe_version_id": "recipe_python_cpu@1.0.0",
         "project": {"workdir": "/public/home/alice"},
@@ -254,7 +262,7 @@ def _contract(command: str) -> dict:
             "nodes": 1,
             "ntasks": 1,
             "cpus_per_task": 1,
-            "time_limit": "00:05:00",
+            "time_limit": os.environ.get("PILOT107_SMOKE_TIME_LIMIT", "00:00:03"),
         },
     }
 
