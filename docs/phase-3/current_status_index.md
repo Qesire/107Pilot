@@ -2,7 +2,7 @@
 
 快照日期：2026-07-20
 当前环境：本机 D0/D1
-当前主线：模拟 Slurm 阶段封版候选。已验证发布 revision：`0f4d3fc6ca0cc343173633ada6cf45a3df58c107`；验收证据 commit：`54c749ee2dc9819eb3da9a56f33da0e36ad577eb`（source acceptance 9/9 PASS + runtime acceptance 10/10 PASS，已声明全绿）。round-4 P1（output baseline + verified_success 语义）进行中，尚未声明全绿。
+当前主线：模拟 Slurm 阶段封版候选。已验证发布 revision：`f20ed9d58cc15ccf6db911db8efbe1501b7be11b`；验收证据：source acceptance 12/12 PASS + runtime acceptance 10/10 PASS（同一 SHA，seal mode）。round-4 P1（output baseline + verified_success 语义）已闭环；round-5 P1（API stores 注入 + 同 SHA 报告）已闭环。
 
 ## 权威入口
 
@@ -23,14 +23,14 @@
 | 已知错误规则 | 37 条 |
 | Ruff | passed（src/tests/scripts/simulator） |
 | mypy strict | 76 source files passed |
-| Python 测试 | 692 passed，13 PostgreSQL integration skipped，5 subtests passed |
-| Vitest | 12 files / 87 tests passed |
+| Python 测试 | 709 passed，13 PostgreSQL integration skipped，5 subtests passed |
+| Vitest | 12 files / 93 tests passed |
 | Playwright test:ui | 14/14 passed（Market→Adopt→Studio→Preflight→Run→Evidence，CI 阻塞门禁） |
 | Web production build | passed（static bundle 已与源码同步，CI 含 drift 检查） |
 | Compose contracts | base/competition/CPU-RC/slurm-host/app-node passed |
-| Source acceptance (0f4d3fc, commit 54c749e) | 9/9 PASS：ruff、mypy、pytest、typecheck、vitest、playwright、build、static_drift、compose_config |
-| Runtime acceptance (0f4d3fc, commit 54c749e) | 10/10 PASS：manifest_validate、import_images、start_stack、compose_readiness、check_cpu_rc、auto_capsule、rule_remediation、restart_recovery、image_binding、report |
-| GitHub CI (main @ 01f8c08) | 0f4d3fc 验收证据已全绿（9/9 + 10/10）；round-4 P1（output baseline + verified_success 语义）进行中，尚未声明全绿 |
+| Source acceptance (f20ed9d, seal mode) | 12/12 PASS：uv_sync、npm_ci、ruff、mypy、pytest、typecheck、vitest、playwright、build、static_drift、compose_config、sync_drift |
+| Runtime acceptance (f20ed9d, seal mode) | 10/10 PASS：manifest_validate、import_images、start_stack、compose_readiness、check_cpu_rc、auto_capsule、rule_remediation、restart_recovery、image_binding、report |
+| GitHub CI (main @ f20ed9d) | f20ed9d 验收证据已全绿（source 12/12 + runtime 10/10，同一 SHA，seal mode）；round-4 P1（output baseline + verified_success 语义）+ round-5 P1（API stores 注入 + 同 SHA 报告）已闭环 |
 
 完整测试已在允许本机回环 socket 的执行环境通过；受限沙箱内同一套代码仅有 7 个回环 HTTP 测试因 `PermissionError` 不能绑定端口，不是代码失败。项目已在 `pyproject.toml` 固定 `src` import path，不依赖隐式 `PYTHONPATH`。
 
@@ -63,5 +63,5 @@ Docker、fake/replay LLM 和本地 command gateway 的结果不得表述为真�
 
 1. Run、Remediation、Template 等业务 Store 仍以 SQLite 为主，尚未完成全领域 PostgreSQL parity/接线；
 2. Prometheus 长期 retention/firing 与在线供应链扫描仍需目标运维/CI 环境验证；
-3. CPU-RC 早期 revision 已在 S1 (8C/16G VM) 部署并通过 G3 功能链；发布 revision `0f4d3fc6ca0cc343173633ada6cf45a3df58c107` 的 source acceptance (9/9) + runtime acceptance (10/10) 已在 commit `54c749ee2dc9819eb3da9a56f33da0e36ad577eb` 全绿；round-4 P1（output baseline + verified_success 语义）进行中，尚未声明全绿；
+3. CPU-RC 早期 revision 已在 S1 (8C/16G VM) 部署并通过 G3 功能链；发布 revision `f20ed9d58cc15ccf6db911db8efbe1501b7be11b` 的 source acceptance (12/12) + runtime acceptance (10/10) 已在同一 SHA 全绿（seal mode）；round-4 P1（output baseline + verified_success 语义）+ round-5 P1（API stores 注入 + 同 SHA 报告）已闭环；
 4. 真实身份和真实 107 均不在当前已验证能力内，亦不属于本阶段验收范围。

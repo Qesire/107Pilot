@@ -1,0 +1,15 @@
+
+> pilot107-ui@0.1.0 build
+> vite build --config apps/web/vite.config.mts
+
+vite v6.4.3 building for production...
+transforming...
+✓ 1917 modules transformed.
+rendering chunks...
+computing gzip size...
+../../src/pilot107/web/static/index.html                  0.59 kB │ gzip:   0.40 kB
+../../src/pilot107/web/static/assets/styles.css          49.33 kB │ gzip:   9.31 kB
+../../src/pilot107/web/static/assets/chunk-DWLtnDav.js  260.51 kB │ gzip:  80.84 kB
+../../src/pilot107/web/static/assets/app.js             290.16 kB │ gzip:  84.95 kB
+../../src/pilot107/web/static/assets/chunk-Buan64fT.js  438.53 kB │ gzip: 144.34 kB
+✓ built in 2.77s

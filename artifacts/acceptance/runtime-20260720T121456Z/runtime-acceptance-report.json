@@ -1,0 +1,203 @@
+{
+  "profile": "cpu-rc-runtime-bundle",
+  "release_revision": "f20ed9d58cc15ccf6db911db8efbe1501b7be11b",
+  "release_revision_full": "f20ed9d58cc15ccf6db911db8efbe1501b7be11b",
+  "release_revision_short": "f20ed9d58cc1",
+  "bundle_dir": "/tmp/tmp.2n1oT7bRmI/107pilot-cpu-rc-f20ed9d58cc1-20260720T121230Z",
+  "images": [
+    {
+      "reference": "pilot107/slurm-sim:cpu-rc-f20ed9d58cc1",
+      "content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf"
+    },
+    {
+      "reference": "pilot107/api:cpu-rc-f20ed9d58cc1",
+      "content_digest": "sha256:421ef156a99679f7de406361f1368b1605f94a4b5166afc23849390f8043ee9f"
+    },
+    {
+      "reference": "pilot107/worker:cpu-rc-f20ed9d58cc1",
+      "content_digest": "sha256:421ef156a99679f7de406361f1368b1605f94a4b5166afc23849390f8043ee9f"
+    },
+    {
+      "reference": "pilot107/web:cpu-rc-f20ed9d58cc1",
+      "content_digest": "sha256:421ef156a99679f7de406361f1368b1605f94a4b5166afc23849390f8043ee9f"
+    }
+  ],
+  "image_binding_all_match": true,
+  "running_images": [
+    {
+      "container": "pilot107-cpu-rc-accept-f20ed9d58cc1-1784549696-935149-mariadb-1",
+      "service": "mariadb",
+      "config_image": "pilot107/slurm-sim:cpu-rc-f20ed9d58cc1",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-f20ed9d58cc1-1784549696-935149-slurmdbd-1",
+      "service": "slurmdbd",
+      "config_image": "pilot107/slurm-sim:cpu-rc-f20ed9d58cc1",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-f20ed9d58cc1-1784549696-935149-slurmctld-1",
+      "service": "slurmctld",
+      "config_image": "pilot107/slurm-sim:cpu-rc-f20ed9d58cc1",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-f20ed9d58cc1-1784549696-935149-worker-1-1",
+      "service": "worker-1",
+      "config_image": "pilot107/slurm-sim:cpu-rc-f20ed9d58cc1",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-f20ed9d58cc1-1784549696-935149-slurmrestd-1",
+      "service": "slurmrestd",
+      "config_image": "pilot107/slurm-sim:cpu-rc-f20ed9d58cc1",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-f20ed9d58cc1-1784549696-935149-pilot107-command-gateway-1",
+      "service": "pilot107-command-gateway",
+      "config_image": "pilot107/slurm-sim:cpu-rc-f20ed9d58cc1",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-f20ed9d58cc1-1784549696-935149-pilot107-api-1",
+      "service": "pilot107-api",
+      "config_image": "pilot107/api:cpu-rc-f20ed9d58cc1",
+      "image_id": "sha256:421ef156a99679f7de406361f1368b1605f94a4b5166afc23849390f8043ee9f",
+      "manifest_content_digest": "sha256:421ef156a99679f7de406361f1368b1605f94a4b5166afc23849390f8043ee9f",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-f20ed9d58cc1-1784549696-935149-pilot107-worker-1",
+      "service": "pilot107-worker",
+      "config_image": "pilot107/worker:cpu-rc-f20ed9d58cc1",
+      "image_id": "sha256:421ef156a99679f7de406361f1368b1605f94a4b5166afc23849390f8043ee9f",
+      "manifest_content_digest": "sha256:421ef156a99679f7de406361f1368b1605f94a4b5166afc23849390f8043ee9f",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-f20ed9d58cc1-1784549696-935149-pilot107-web-1",
+      "service": "pilot107-web",
+      "config_image": "pilot107/web:cpu-rc-f20ed9d58cc1",
+      "image_id": "sha256:421ef156a99679f7de406361f1368b1605f94a4b5166afc23849390f8043ee9f",
+      "manifest_content_digest": "sha256:421ef156a99679f7de406361f1368b1605f94a4b5166afc23849390f8043ee9f",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-f20ed9d58cc1-1784549696-935149-pilot107-reverse-proxy-1",
+      "service": "pilot107-reverse-proxy",
+      "config_image": "pilot107/web:cpu-rc-f20ed9d58cc1",
+      "image_id": "sha256:421ef156a99679f7de406361f1368b1605f94a4b5166afc23849390f8043ee9f",
+      "manifest_content_digest": "sha256:421ef156a99679f7de406361f1368b1605f94a4b5166afc23849390f8043ee9f",
+      "matches_manifest": true
+    }
+  ],
+  "started_at": "2026-07-20T12:14:56Z",
+  "ended_at": "2026-07-20T12:19:09Z",
+  "any_fail": false,
+  "steps": [
+    {
+      "name": "manifest_validate",
+      "status": "PASS",
+      "start": "2026-07-20T12:14:56Z",
+      "end": "2026-07-20T12:14:56Z",
+      "rc": null,
+      "log_path": "steps/manifest_validate.log",
+      "log_sha256": "54340cbfa7caaa642720f19b4b26b43cfb2279bccc175b3db8da07e2036858c6"
+    },
+    {
+      "name": "import_images",
+      "status": "PASS",
+      "start": "2026-07-20T12:14:56Z",
+      "end": "2026-07-20T12:14:58Z",
+      "rc": null,
+      "log_path": "steps/import_images.log",
+      "log_sha256": "e1b2ac0a4ce864d20ddce6eccbb949fc55ab8f9e241fa96681994e02ac0ec314"
+    },
+    {
+      "name": "start_stack",
+      "status": "PASS",
+      "start": "2026-07-20T12:14:58Z",
+      "end": "2026-07-20T12:15:27Z",
+      "rc": null,
+      "log_path": "steps/start_stack.log",
+      "log_sha256": "5a7f38b7610cb84906a8a68257f7924328f23b3a72f36aed1bbfdbd0065fa343"
+    },
+    {
+      "name": "compose_readiness",
+      "status": "PASS",
+      "start": "2026-07-20T12:15:27Z",
+      "end": "2026-07-20T12:15:27Z",
+      "rc": null,
+      "log_path": "steps/compose_readiness.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "check_cpu_rc",
+      "status": "PASS",
+      "start": "2026-07-20T12:15:27Z",
+      "end": "2026-07-20T12:15:36Z",
+      "rc": null,
+      "log_path": "steps/check_cpu_rc.log",
+      "log_sha256": "ab54aa734e8ae3f3986a24b693c538c1add676784333afaedc5c3e0cd99601e4"
+    },
+    {
+      "name": "auto_capsule",
+      "status": "PASS",
+      "start": "2026-07-20T12:15:36Z",
+      "end": "2026-07-20T12:15:41Z",
+      "rc": null,
+      "log_path": "steps/auto_capsule.log",
+      "log_sha256": "29e07dcc0bf3174a48f297fb7f9f98329fcdf40d40cdf1a8067e9ec737933ff9"
+    },
+    {
+      "name": "rule_remediation",
+      "status": "PASS",
+      "start": "2026-07-20T12:15:41Z",
+      "end": "2026-07-20T12:18:04Z",
+      "rc": null,
+      "log_path": "steps/rule_remediation.log",
+      "log_sha256": "4afb1a80c2d67ced78e9ae07303473e3248aa9d07536e0f15c468ec0de9b8516"
+    },
+    {
+      "name": "restart_recovery",
+      "status": "PASS",
+      "start": "2026-07-20T12:18:04Z",
+      "end": "2026-07-20T12:19:09Z",
+      "rc": null,
+      "log_path": "steps/restart_recovery.log",
+      "log_sha256": "c86e4345d5cd9095e0af2973622655ba8f1b3d55434679a2f7c8e315a2264966"
+    },
+    {
+      "name": "image_binding",
+      "status": "PASS",
+      "start": "2026-07-20T12:19:09Z",
+      "end": "2026-07-20T12:19:09Z",
+      "rc": null,
+      "log_path": "steps/image_binding.log",
+      "log_sha256": "2209cd332344005aa46c10abf2f66444c0abdbf6e228b0e50a9adbc34855e5a7"
+    },
+    {
+      "name": "report",
+      "status": "PASS",
+      "start": null,
+      "end": null,
+      "rc": null,
+      "log_path": null,
+      "log_sha256": null
+    }
+  ]
+}
