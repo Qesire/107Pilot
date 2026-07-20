@@ -1,0 +1,4 @@
+ok   pilot107/slurm-sim:cpu-rc-b7666ba3b063 (sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf)
+ok   pilot107/api:cpu-rc-b7666ba3b063 (sha256:fd315820041ea82f5bdec556b079057dcf3d44595dacf71fa754bbc7183cc100)
+ok   pilot107/worker:cpu-rc-b7666ba3b063 (sha256:fd315820041ea82f5bdec556b079057dcf3d44595dacf71fa754bbc7183cc100)
+ok   pilot107/web:cpu-rc-b7666ba3b063 (sha256:fd315820041ea82f5bdec556b079057dcf3d44595dacf71fa754bbc7183cc100)
