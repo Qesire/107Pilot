@@ -407,8 +407,8 @@ class BaselineCaptureTests(unittest.TestCase):
         self.assertEqual(payload["baselined_count"], 1)
 
     def test_baseline_records_status(self) -> None:
-        # Round-6 P1-2: payload has baseline_status field = "captured" when
-        # capture completes successfully.
+        # Round-6 P1-2 + Round-7 P2-1: payload has baseline_status field =
+        # "captured" when capture completes successfully with no truncation/timeout.
         service = self._service()
         run = service.submit(
             RunSubmitRequest(
@@ -434,6 +434,390 @@ class BaselineCaptureTests(unittest.TestCase):
         self.assertEqual(payload["baseline_status"], "captured")
         self.assertFalse(payload["timeout"])
         self.assertFalse(payload["truncated"])
+
+    def test_baseline_status_partial_truncated(self) -> None:
+        # Round-7 P2-1: 33 expected outputs → baseline_status=partial_truncated.
+        contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {
+                    "command": "true",
+                    "expected_outputs": [f"out_{i}.txt" for i in range(33)],
+                },
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        service = self._service()
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=self.workdir,
+                script="#!/bin/bash\ntrue\n",
+                resource_plan=ResourcePlan(
+                    partition="debug",
+                    qos="normal",
+                    nodes=1,
+                    ntasks=1,
+                    cpus_per_task=1,
+                    time_limit="00:05:00",
+                ),
+                contract_id=contract.contract_id,
+            )
+        )
+        payload = json.loads(
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(payload["baseline_status"], "partial_truncated")
+        self.assertTrue(payload["truncated"])
+        self.assertFalse(payload["timeout"])
+
+    def test_baseline_status_not_required_when_no_expected_outputs(self) -> None:
+        # Round-7 P2-1: contract with no expected_outputs → baseline_status=not_required.
+        contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {"command": "true"},
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        service = self._service()
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=self.workdir,
+                script="#!/bin/bash\ntrue\n",
+                resource_plan=ResourcePlan(
+                    partition="debug",
+                    qos="normal",
+                    nodes=1,
+                    ntasks=1,
+                    cpus_per_task=1,
+                    time_limit="00:05:00",
+                ),
+                contract_id=contract.contract_id,
+            )
+        )
+        payload = json.loads(
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(payload["baseline_status"], "not_required")
+        self.assertEqual(payload["baselined_count"], 0)
+
+    def test_baseline_status_unavailable_when_stores_not_injected(self) -> None:
+        # Round-7 P2-1: no stores → baseline NOT written at all (the guard
+        # returns before any payload). This is the "unavailable" case — we
+        # don't write a payload because there's no evidence_store to write to.
+        service = RunService(store=self.run_store, backend=InMemorySlurmBackend())
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=self.workdir,
+                script="#!/bin/bash\ntrue\n",
+                resource_plan=ResourcePlan(
+                    partition="debug",
+                    qos="normal",
+                    nodes=1,
+                    ntasks=1,
+                    cpus_per_task=1,
+                    time_limit="00:05:00",
+                ),
+                contract_id=self.contract.contract_id,
+            )
+        )
+        baseline_path = (
+            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
+        )
+        self.assertFalse(baseline_path.exists())
+
+    def test_baseline_deadline_stops_loop_with_timeout(self) -> None:
+        # Round-7 P1-1: zero budget → falls into the "insufficient budget"
+        # branch → baseline_status=unavailable + error_code.
+        from unittest.mock import patch
+
+        contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {
+                    "command": "true",
+                    "expected_outputs": ["a.txt", "b.txt", "c.txt"],
+                },
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        service = self._service()
+        with patch.object(RunService, "_baseline_budget", return_value=0.0):
+            run = service.submit(
+                RunSubmitRequest(
+                    owner="alice",
+                    workdir=self.workdir,
+                    script="#!/bin/bash\ntrue\n",
+                    resource_plan=ResourcePlan(
+                        partition="debug",
+                        qos="normal",
+                        nodes=1,
+                        ntasks=1,
+                        cpus_per_task=1,
+                        time_limit="00:05:00",
+                    ),
+                    contract_id=contract.contract_id,
+                )
+            )
+        payload = json.loads(
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(payload["baseline_status"], "unavailable")
+        self.assertEqual(payload["error_code"], "baseline_insufficient_budget")
+        self.assertEqual(payload["baselined_count"], 0)
+
+    def test_baseline_deadline_aborts_mid_loop(self) -> None:
+        # Round-7 P1-1: deadline exceeded mid-loop → timeout=true, remaining
+        # entries not started. Patch time.monotonic so the deadline passes
+        # after the first entry is processed.
+        from unittest.mock import patch
+
+        import pilot107.core.run_service as rs_module
+
+        contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {
+                    "command": "true",
+                    "expected_outputs": ["first.txt", "second.txt", "third.txt"],
+                },
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        service = self._service()
+        call_count = {"n": 0}
+
+        def fake_monotonic() -> float:
+            call_count["n"] += 1
+            # First few calls (budget calc + deadline set + first entry checks)
+            # return a baseline time; subsequent calls exceed the deadline.
+            if call_count["n"] <= 4:
+                return 1000.0
+            return 2000.0
+
+        with patch.object(rs_module.time, "monotonic", side_effect=fake_monotonic):
+            run = service.submit(
+                RunSubmitRequest(
+                    owner="alice",
+                    workdir=self.workdir,
+                    script="#!/bin/bash\ntrue\n",
+                    resource_plan=ResourcePlan(
+                        partition="debug",
+                        qos="normal",
+                        nodes=1,
+                        ntasks=1,
+                        cpus_per_task=1,
+                        time_limit="00:05:00",
+                    ),
+                    contract_id=contract.contract_id,
+                )
+            )
+        payload = json.loads(
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertTrue(payload["timeout"])
+        self.assertEqual(payload["baseline_status"], "partial_timeout")
+        paths = [e["path"] for e in payload["entries"]]
+        # first.txt was processed (missing file → baselined with exists=false).
+        self.assertIn("first.txt", paths)
+        # second.txt hit the deadline → recorded with status=timeout.
+        self.assertIn("second.txt", paths)
+        second_entry = next(e for e in payload["entries"] if e["path"] == "second.txt")
+        self.assertEqual(second_entry["status"], "timeout")
+        # third.txt must NOT appear — loop aborted before it.
+        self.assertNotIn("third.txt", paths)
+
+    def test_baseline_chunked_sha_aborts_on_deadline(self) -> None:
+        # Round-7 P1-1: local SHA256 streams in chunks and aborts mid-file
+        # when the deadline is exceeded. Use a large temp file + patched
+        # monotonic so the deadline passes during streaming.
+        from unittest.mock import patch
+
+        import pilot107.core.run_service as rs_module
+
+        # Create a large pre-existing file (5 MiB) so streaming takes multiple chunks.
+        big_file = self.workdir / "big.bin"
+        big_file.write_bytes(b"x" * (5 * 1024 * 1024))
+        contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {
+                    "command": "true",
+                    "expected_outputs": ["big.bin"],
+                },
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        service = self._service()
+        call_count = {"n": 0}
+
+        def fake_monotonic() -> float:
+            call_count["n"] += 1
+            # Initial calls (budget + deadline + stat) return 1000; once SHA
+            # streaming begins (call > 6), exceed the deadline.
+            if call_count["n"] <= 6:
+                return 1000.0
+            return 2000.0
+
+        with patch.object(rs_module.time, "monotonic", side_effect=fake_monotonic):
+            run = service.submit(
+                RunSubmitRequest(
+                    owner="alice",
+                    workdir=self.workdir,
+                    script="#!/bin/bash\ntrue\n",
+                    resource_plan=ResourcePlan(
+                        partition="debug",
+                        qos="normal",
+                        nodes=1,
+                        ntasks=1,
+                        cpus_per_task=1,
+                        time_limit="00:05:00",
+                    ),
+                    contract_id=contract.contract_id,
+                )
+            )
+        payload = json.loads(
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertTrue(payload["timeout"])
+        self.assertEqual(payload["baseline_status"], "partial_timeout")
+        # The entry for big.bin should be present with status=timeout.
+        big_entry = next(e for e in payload["entries"] if e["path"] == "big.bin")
+        self.assertEqual(big_entry["status"], "timeout")
+        # sha256 must NOT be present (streaming aborted before completion).
+        self.assertNotIn("sha256", big_entry)
+
+    def test_baseline_budget_reservation(self) -> None:
+        # Round-7 P1-1: budget = min(30s cap, lease - 15s reserve).
+        # Default 60s lease → min(30, 45) = 30.
+        service = self._service()
+        self.assertEqual(service._baseline_budget(), 30.0)
+
+        # Lease of 40s → 40-15 = 25 → min(30, 25) = 25 (reduced from cap).
+        medium_service = RunService(
+            store=self.run_store,
+            backend=InMemorySlurmBackend(),
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+            submission_lease_seconds=40,
+        )
+        self.assertEqual(medium_service._baseline_budget(), 25.0)
+
+        # Tiny lease: 10s → 10-15 = -5 → min(30, -5) = -5 → insufficient.
+        tiny_service = RunService(
+            store=self.run_store,
+            backend=InMemorySlurmBackend(),
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+            submission_lease_seconds=10,
+        )
+        self.assertLess(tiny_service._baseline_budget(), 0.0)
+
+    def test_baseline_failed_writes_payload_with_error_code(self) -> None:
+        # Round-7 P2-1: an exception during capture writes baseline.json with
+        # baseline_status=failed + error_code (does NOT silently return).
+        from unittest.mock import patch
+
+        contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {
+                    "command": "true",
+                    "expected_outputs": ["result.txt"],
+                },
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        service = self._service()
+        with patch(
+            "pilot107.core.run_service._resolve_expected_outputs",
+            side_effect=RuntimeError("boom"),
+        ):
+            run = service.submit(
+                RunSubmitRequest(
+                    owner="alice",
+                    workdir=self.workdir,
+                    script="#!/bin/bash\ntrue\n",
+                    resource_plan=ResourcePlan(
+                        partition="debug",
+                        qos="normal",
+                        nodes=1,
+                        ntasks=1,
+                        cpus_per_task=1,
+                        time_limit="00:05:00",
+                    ),
+                    contract_id=contract.contract_id,
+                )
+            )
+        baseline_path = (
+            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
+        )
+        self.assertTrue(baseline_path.exists())
+        payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["baseline_status"], "failed")
+        self.assertEqual(payload["error_code"], "baseline_exception")
 
 
 if __name__ == "__main__":

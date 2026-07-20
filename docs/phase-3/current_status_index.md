@@ -2,7 +2,7 @@
 
 快照日期：2026-07-20
 当前环境：本机 D0/D1
-当前主线：模拟 Slurm 阶段封版候选。已验证发布 revision：`b7666ba3b06315f0cc8314882a9c48753b81851d`；验收证据：source acceptance 12/12 PASS + runtime acceptance 10/10 PASS（同一 SHA，seal mode）。round-4 P1（output baseline + verified_success 语义）已闭环；round-5 P1（API stores 注入 + 同 SHA 报告）已闭环。
+当前主线：模拟 Slurm 阶段封版候选。已验证发布 revision：`b7666ba3b06315f0cc8314882a9c48753b81851d`；验收证据：source acceptance 12/12 PASS + runtime acceptance 10/10 PASS（同一 SHA，seal mode）。round-4 P1（output baseline + verified_success 语义）已闭环；round-5 P1（API stores 注入 + 同 SHA 报告）已闭环；round-6 P1（verification dependency fail-closed）已闭环，round-6 P1（baseline bounds / seal-mode JSON）已显著加强，round-7 P1（baseline 硬时间预算 / seal JSON 异常状态 / image-binding fail-closed）为收敛中硬化项。
 
 ## 权威入口
 
@@ -23,7 +23,7 @@
 | 已知错误规则 | 37 条 |
 | Ruff | passed（src/tests/scripts/simulator） |
 | mypy strict | 76 source files passed |
-| Python 测试 | 709 passed，13 PostgreSQL integration skipped，5 subtests passed |
+| Python 测试 | 723 passed，13 PostgreSQL integration skipped，5 subtests passed |
 | Vitest | 12 files / 93 tests passed |
 | Playwright test:ui | 14/14 passed（Market→Adopt→Studio→Preflight→Run→Evidence，CI 阻塞门禁） |
 | Web production build | passed（static bundle 已与源码同步，CI 含 drift 检查） |

@@ -713,33 +713,73 @@ class RunService:
         contract id are unavailable — or capture raises — the run still
         submits; attribution silently falls back to mtime-only classification.
 
-        Bounds (round-6 audit P1-2): the submission lease is 60s, so baseline
-        capture is bounded by ``_BASELINE_MAX_OUTPUTS`` (32 entries),
-        ``_BASELINE_MAX_PATH_LENGTH`` (512 chars), path validation, and a
-        total ``_BASELINE_TIME_BUDGET_SECONDS`` (30s) deadline. Truncation,
+        Bounds (round-6 audit P1-2 + round-7 P1-1): the submission lease is
+        60s, so baseline capture is bounded by ``_BASELINE_MAX_OUTPUTS`` (32
+        entries), ``_BASELINE_MAX_PATH_LENGTH`` (512 chars), path validation,
+        and a hard monotonic deadline. The budget is
+        ``min(_BASELINE_TIME_BUDGET_SECONDS, lease_seconds - reserve)`` so a
+        slow baseline cannot expire the submission fence. Each executor call
+        uses ``min(cap, remaining)`` and the local SHA256 path streams in
+        fixed-size chunks, checking the deadline between chunks. Truncation,
         invalid paths, and timeouts are recorded in the payload so operators
         can distinguish partial captures from full ones.
+
+        ``baseline_status`` (round-7 P2-1): ``captured`` | ``partial_truncated``
+        | ``partial_timeout`` | ``failed`` | ``unavailable`` | ``not_required``.
+        The ``failed`` path STILL writes baseline.json with a stable
+        ``error_code`` so operators can see capture failed (instead of the old
+        silent return).
         """
         if self.evidence_store is None or self.contract_store is None:
             return
         if run.contract_id is None:
             return
         captured_at_epoch = time.time()
+        # Round-7 P1-1: lease-aware budget reservation. If the reserved budget
+        # would be non-positive, baseline is skipped (we cannot safely run it
+        # without risking the submission lease). ``time.monotonic`` is used for
+        # the deadline so wall-clock adjustments don't extend capture.
+        budget = self._baseline_budget()
+        if budget <= _BASELINE_MIN_POSITIVE_BUDGET:
+            # Insufficient budget — record unavailable rather than risk the lease.
+            self._write_baseline_payload(
+                run,
+                captured_at_epoch,
+                total_count=0,
+                baselined_count=0,
+                truncated=False,
+                timeout=False,
+                baseline_status="unavailable",
+                entries=[],
+                error_code="baseline_insufficient_budget",
+            )
+            return
+        deadline = time.monotonic() + budget
         try:
             expected_outputs = _resolve_expected_outputs(
                 self.contract_store, run.contract_id
             )
             if not expected_outputs:
+                self._write_baseline_payload(
+                    run,
+                    captured_at_epoch,
+                    total_count=0,
+                    baselined_count=0,
+                    truncated=False,
+                    timeout=False,
+                    baseline_status="not_required",
+                    entries=[],
+                )
                 return
             total_count = len(expected_outputs)
             truncated = total_count > _BASELINE_MAX_OUTPUTS
             baselined_paths = expected_outputs[:_BASELINE_MAX_OUTPUTS]
-            deadline = captured_at_epoch + _BASELINE_TIME_BUDGET_SECONDS
             entries: list[dict[str, Any]] = []
             baselined_count = 0
             timeout = False
             for relative_path in baselined_paths:
-                if time.time() > deadline:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     timeout = True
                     break
                 invalid = _validate_baseline_path(relative_path)
@@ -752,45 +792,122 @@ class RunService:
                         }
                     )
                     continue
-                entry = self._baseline_entry(run, relative_path)
+                entry = self._baseline_entry(run, relative_path, deadline)
+                if entry.get("status") == "timeout":
+                    timeout = True
+                    entries.append(entry)
+                    break
                 entries.append(entry)
                 baselined_count += 1
-            self.evidence_store.write_json(
-                run_id=run.run_id,
-                logical_path="baseline/baseline.json",
-                payload={
-                    "schema": "pilot107.baseline.v1",
-                    "captured_at_epoch": captured_at_epoch,
-                    "contract_id": run.contract_id,
-                    "workdir": run.workdir,
-                    "total_count": total_count,
-                    "baselined_count": baselined_count,
-                    "truncated": truncated,
-                    "timeout": timeout,
-                    "baseline_status": "captured",
-                    "entries": entries,
-                    # Backward-compat alias: evidence.py _load_baseline reads
-                    # ``expected_outputs``; keep it pointing at the same list.
-                    "expected_outputs": entries,
-                },
+            baseline_status = "captured"
+            if timeout:
+                baseline_status = "partial_timeout"
+            elif truncated:
+                baseline_status = "partial_truncated"
+            self._write_baseline_payload(
+                run,
+                captured_at_epoch,
+                total_count=total_count,
+                baselined_count=baselined_count,
+                truncated=truncated,
+                timeout=timeout,
+                baseline_status=baseline_status,
+                entries=entries,
             )
         except Exception:  # noqa: BLE001 - baseline must never block submit
+            # Round-7 P2-1: still write a baseline.json with a stable error
+            # code so operators can distinguish a failed capture from a missing
+            # one (the old behavior silently returned, hiding failures).
+            try:
+                self._write_baseline_payload(
+                    run,
+                    captured_at_epoch,
+                    total_count=0,
+                    baselined_count=0,
+                    truncated=False,
+                    timeout=False,
+                    baseline_status="failed",
+                    entries=[],
+                    error_code="baseline_exception",
+                )
+            except Exception:  # noqa: BLE001 - never block submit
+                return
             return
 
-    def _baseline_entry(self, run: RunRecord, relative_path: str) -> dict[str, Any]:
+    def _baseline_budget(self) -> float:
+        """Compute the baseline time budget, reserving time for the submit.
+
+        ``min(_BASELINE_TIME_BUDGET_SECONDS, lease_seconds - reserve)``. The
+        lease duration is accessible via ``self.submission_lease_seconds``.
+        """
+        lease_budget = self.submission_lease_seconds - _BASELINE_LEASE_RESERVE_SECONDS
+        return min(_BASELINE_TIME_BUDGET_SECONDS, lease_budget)
+
+    def _write_baseline_payload(
+        self,
+        run: RunRecord,
+        captured_at_epoch: float,
+        *,
+        total_count: int,
+        baselined_count: int,
+        truncated: bool,
+        timeout: bool,
+        baseline_status: str,
+        entries: list[dict[str, Any]],
+        error_code: str | None = None,
+    ) -> None:
+        assert self.evidence_store is not None  # narrowed by _capture_baseline guard
+        payload: dict[str, Any] = {
+            "schema": "pilot107.baseline.v1",
+            "captured_at_epoch": captured_at_epoch,
+            "contract_id": run.contract_id,
+            "workdir": run.workdir,
+            "total_count": total_count,
+            "baselined_count": baselined_count,
+            "truncated": truncated,
+            "timeout": timeout,
+            "baseline_status": baseline_status,
+            "entries": entries,
+            # Backward-compat alias: evidence.py _load_baseline reads
+            # ``expected_outputs``; keep it pointing at the same list.
+            "expected_outputs": entries,
+        }
+        if error_code is not None:
+            payload["error_code"] = error_code
+        self.evidence_store.write_json(
+            run_id=run.run_id,
+            logical_path="baseline/baseline.json",
+            payload=payload,
+        )
+
+    def _baseline_entry(
+        self,
+        run: RunRecord,
+        relative_path: str,
+        deadline: float,
+    ) -> dict[str, Any]:
         absolute = posixpath.join(run.workdir, relative_path)
         executor = self.baseline_executor
         if executor is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"path": relative_path, "status": "timeout"}
+            stat_timeout = min(_BASELINE_STAT_TIMEOUT_CAP, remaining)
             stat = executor.run(
                 ["stat", "-c", "%s|%Y", absolute],
                 cwd=run.workdir,
                 user=run.owner,
-                timeout_seconds=10.0,
+                timeout_seconds=stat_timeout,
             )
             if stat.returncode != 0:
                 return _baseline_missing(relative_path)
             size_str, mtime_str = stat.stdout.strip().split("|", 1)
-            sha = _baseline_sha256(executor, run, absolute)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"path": relative_path, "status": "timeout"}
+            sha = _baseline_sha256(executor, run, absolute, deadline)
+            if sha == "timeout":
+                return {"path": relative_path, "status": "timeout"}
             return {
                 "path": relative_path,
                 "exists": True,
@@ -802,16 +919,34 @@ class RunService:
         # backends with local workdirs). Missing files — the normal case for a
         # fresh run — record exists=false so later inventory comparison classifies
         # the newly produced file as ``created``.
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"path": relative_path, "status": "timeout"}
         try:
             st = os.stat(absolute)
         except OSError:
             return _baseline_missing(relative_path)
+        # Round-7 P1-1: chunked SHA256 streaming with a per-chunk deadline
+        # check, so a large pre-existing file cannot block past the budget or
+        # load the whole file into memory.
         local_sha: str | None
+        timed_out = False
         try:
+            digest = hashlib.sha256()
             with open(absolute, "rb") as handle:  # noqa: PTH123
-                local_sha = hashlib.sha256(handle.read()).hexdigest()
+                while True:
+                    if time.monotonic() > deadline:
+                        timed_out = True
+                        break
+                    chunk = handle.read(_BASELINE_SHA256_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            local_sha = None if timed_out else digest.hexdigest()
         except OSError:
             local_sha = None
+        if timed_out:
+            return {"path": relative_path, "status": "timeout"}
         return {
             "path": relative_path,
             "exists": True,
@@ -1051,11 +1186,24 @@ def _resolve_expected_outputs(contract_store: ContractStore, contract_id: str) -
     return [str(item) for item in expected]
 
 
-# Round-6 audit P1-2: baseline capture bounds to stay well under the 60s
+# Round-6/7 audit: baseline capture bounds to stay well under the 60s
 # submission lease. These are module-level constants so tests can import them.
 _BASELINE_MAX_OUTPUTS = 32
 _BASELINE_MAX_PATH_LENGTH = 512
 _BASELINE_TIME_BUDGET_SECONDS = 30.0
+# Round-7 P1-1: reserve time for the real submit + receipt persistence so a
+# slow baseline cannot blow the lease. The budget is
+# ``min(_BASELINE_TIME_BUDGET_SECONDS, lease_seconds - _BASELINE_LEASE_RESERVE_SECONDS)``
+# (floored at a small positive value so we never pass a non-positive timeout).
+_BASELINE_LEASE_RESERVE_SECONDS = 15.0
+_BASELINE_MIN_POSITIVE_BUDGET = 0.5
+# Per-operation timeout caps (each executor call uses
+# ``min(cap, remaining_budget)`` so the total never exceeds the deadline).
+_BASELINE_STAT_TIMEOUT_CAP = 10.0
+_BASELINE_SHA256_TIMEOUT_CAP = 20.0
+# Round-7 P1-1: chunk size for local-fs SHA256 streaming (64 KiB). Keeps
+# memory bounded and lets us check the deadline between chunks.
+_BASELINE_SHA256_CHUNK_BYTES = 64 * 1024
 
 
 def _validate_baseline_path(path: str) -> tuple[str, str] | None:
@@ -1096,12 +1244,17 @@ def _baseline_sha256(
     executor: SimulatorExecutor,
     run: RunRecord,
     absolute: str,
+    deadline: float,
 ) -> str | None:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return "timeout"
+    timeout_seconds = min(_BASELINE_SHA256_TIMEOUT_CAP, remaining)
     result = executor.run(
         ["sha256sum", absolute],
         cwd=run.workdir,
         user=run.owner,
-        timeout_seconds=20.0,
+        timeout_seconds=timeout_seconds,
     )
     if result.returncode != 0:
         return None

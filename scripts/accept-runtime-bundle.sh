@@ -479,6 +479,13 @@ step_report() {
   # compute any_fail with the seal-mode-aware formula and emit seal_mode /
   # overall_status / process_exit_code fields that agree with the Bash
   # aggregation's overall_rc.
+  # P1-2 (round 7): the failure formula is UNIFIED with the Bash aggregation
+  # (missing/empty/unknown status → failed) and the Bash aggregation now
+  # READS process_exit_code from this JSON, so JSON and Bash agree by
+  # construction.
+  # P1-3 (round 7): image_binding is fail-closed — formal seal requires the
+  # step PASS + the JSON file present + parseable + all_match is true +
+  # running_images non-empty. Missing ANY → image_binding_all_match=False.
   python3 - "$artifact_dir" "$steps_dir" "$bundle_dir" "$started_iso" "$seal_mode" "${STEPS[@]}" <<'PY'
 import json
 import hashlib
@@ -494,6 +501,20 @@ seal_mode = sys.argv[5] == "1"
 step_specs = sys.argv[6:]
 
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+
+# P1-2 (round 7): the single source of truth for "is this step failed".
+# Matches the Bash aggregation: missing/empty/unknown status → failed,
+# explicit FAIL → failed, KNOWN_SKIP → failed only in seal mode.
+VALID_STATUSES = {"PASS", "FAIL", "KNOWN_SKIP"}
+
+
+def step_failed(status: str) -> bool:
+    return (
+        status not in VALID_STATUSES
+        or status == "FAIL"
+        or (seal_mode and status == "KNOWN_SKIP")
+    )
+
 
 manifest_path = bundle_dir / "RELEASE_MANIFEST.json"
 release_revision = ""
@@ -525,6 +546,31 @@ if binding_json.is_file():
         image_binding = json.loads(binding_json.read_text())
     except Exception:
         image_binding = None
+
+# P1-3 (round 7): image-binding fail-closed. A prior regression could let the
+# helper exit 0 with empty/corrupt JSON and default all_match=true — a false
+# green. Formal seal now requires ALL of:
+#   - image_binding.json file exists AND parses as JSON (image_binding is not None)
+#   - all_match is explicitly true
+#   - running_images is non-empty
+# Missing ANY → image_binding_all_match=False with a clear reason.
+# DESIGN CHOICE: we keep image_binding_all_match as a SEPARATE boolean field
+# (not a step-status downgrade) because the image_binding step's own status
+# reflects whether verify-cpu-rc-image-binding.sh exited 0, which is
+# independent of whether its JSON output is trustworthy evidence. The two
+# signals are OR-ed into any_fail below so a PASS step with corrupt JSON
+# still fails the seal.
+image_binding_all_match = False
+image_binding_reason = "unknown"
+if image_binding is None:
+    image_binding_reason = "binding_json_missing_or_unparseable"
+elif image_binding.get("all_match") is not True:
+    image_binding_reason = "all_match_not_true"
+elif not image_binding.get("running_images"):
+    image_binding_reason = "running_images_empty"
+else:
+    image_binding_all_match = True
+    image_binding_reason = "all_match"
 
 steps = []
 for spec in step_specs:
@@ -571,21 +617,12 @@ for spec in step_specs:
                 entry["rc"] = kv["rc"]
     steps.append(entry)
 
-# P1-4: if the image_binding step recorded any non-matching running image,
-# force overall result FAIL even if every smoke step passed — the running
-# images don't match the bundle, so the acceptance is invalid.
-image_binding_all_match = True
-if image_binding is not None:
-    image_binding_all_match = bool(image_binding.get("all_match", True))
-
-# P1-3 (round 6): seal-mode-aware any_fail. In seal mode, KNOWN_SKIP counts
-# as failing — this MUST match the Bash aggregation's overall_rc so a
-# JSON-only consumer never sees a false-green when the script exits 1. The
-# image_binding mismatch is OR-ed in to preserve the P1-4 invariant.
-any_fail = any(
-    s["status"] == "FAIL" or (seal_mode and s["status"] == "KNOWN_SKIP")
-    for s in steps
-) or not image_binding_all_match
+# P1-2 (round 7): unified failure formula. MISSING / empty / unknown status
+# values count as failed, matching the Bash aggregation's missing-file and
+# unknown-status guards. P1-4/P1-3: a False image_binding_all_match also
+# forces any_fail — this preserves the binding-mismatch invariant AND the
+# fail-closed-on-corrupt-JSON invariant.
+any_fail = any(step_failed(s["status"]) for s in steps) or not image_binding_all_match
 overall_status = "PASS" if not any_fail else "FAIL"
 process_exit_code = 0 if not any_fail else 1
 
@@ -596,11 +633,15 @@ report = {
     "release_revision_short": release_revision_short,
     "bundle_dir": str(bundle_dir),
     "images": image_digests,
-    # P1-4: running-image ↔ manifest binding detail. `running_images` lists
-    # each running container with its image_id (docker inspect .Image) and
-    # whether it matches the manifest's content_digest. `image_binding_all_match`
-    # is the rollup; if False, any_fail is forced True above.
+    # P1-4/P1-3: running-image ↔ manifest binding detail. `running_images`
+    # lists each running container with its image_id (docker inspect .Image)
+    # and whether it matches the manifest's content_digest.
+    # `image_binding_all_match` is the fail-closed rollup (P1-3 round 7): it
+    # is True only when the JSON exists, parses, all_match is true, AND
+    # running_images is non-empty. `image_binding_reason` explains the
+    # verdict. If False, any_fail is forced True above.
     "image_binding_all_match": image_binding_all_match,
+    "image_binding_reason": image_binding_reason,
     "running_images": (image_binding or {}).get("running_images", []) if image_binding else [],
     "started_at": started_iso,
     "ended_at": max((s["end"] or "" for s in steps), default=""),
@@ -620,6 +661,7 @@ print(f"release_revision: {release_revision}")
 print(f"release_revision_full: {release_revision_full}")
 print(f"release_revision_short: {release_revision_short}")
 print(f"image_binding_all_match: {image_binding_all_match}")
+print(f"image_binding_reason: {image_binding_reason}")
 print(f"report: {artifact_dir / 'runtime-acceptance-report.json'}")
 PY
   report_end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -632,54 +674,28 @@ for spec in "${STEPS[@]}"; do
   run_step "$name" "$fn"
 done
 
-# Final aggregation. A step is treated as FAIL (overall_rc=1) if:
-#   - its status file is missing (run_step never wrote it),
-#   - its status value is not one of PASS/FAIL/KNOWN_SKIP (corrupt/unparseable),
-#   - or it explicitly recorded status=FAIL.
-# The report step is excluded (it writes its own status after the JSON is
-# generated). The report JSON itself must exist and be parseable — a missing
-# or unparseable report is also a FAIL. The image_binding_all_match flag is
-# already forced into any_fail by step_report's Python; here we re-assert the
-# step-status + report-existence invariants in bash.
-# P2-4 (round 4): in seal mode (PILOT107_ACCEPT_SEAL_MODE=1), KNOWN_SKIP is
-# treated as FAIL — formal seal requires all 10 runtime steps to PASS.
-# Default (dev) keeps KNOWN_SKIP non-failing.
-overall_rc=0
-valid_statuses=' PASS FAIL KNOWN_SKIP '
-for spec in "${STEPS[@]}"; do
-  name="${spec%%|*}"
-  [[ "$name" == "report" ]] && continue
-  status_file="$steps_dir/$name.status"
-  if [[ ! -f "$status_file" ]]; then
-    log "=== AGGREGATION: step $name status file missing → FAIL ===" >&2
-    overall_rc=1
-    continue
-  fi
-  status_line="$(grep -m1 '^status=' "$status_file" || true)"
-  status_val="${status_line#status=}"
-  if [[ -z "$status_val" ]] || [[ " $valid_statuses " != *" $status_val "* ]]; then
-    log "=== AGGREGATION: step $name has unknown status '${status_val:-<empty>}' → FAIL ===" >&2
-    overall_rc=1
-    continue
-  fi
-  if [[ "$status_val" == "FAIL" ]]; then
-    overall_rc=1
-  fi
-  if [[ "$seal_mode" == "1" && "$status_val" == "KNOWN_SKIP" ]]; then
-    log "=== AGGREGATION: step $name KNOWN_SKIP → FAIL (seal mode) ===" >&2
-    overall_rc=1
-  fi
-done
-
-# The report JSON must exist and be parseable. A missing/unparseable report
-# means the acceptance produced no trustworthy evidence.
+# Final aggregation.
+# P1-2 (round 7): the report Python (step_report) is the single source of
+# truth for the process exit code. The Bash aggregation no longer re-derives
+# overall_rc from per-step status files; instead it READS process_exit_code
+# from the written JSON and exits with it. This makes JSON and Bash
+# consistent by construction — the unified failure formula (missing/empty/
+# unknown status → failed, FAIL → failed, KNOWN_SKIP → failed in seal mode,
+# image_binding_all_match=False → failed) lives in exactly one place
+# (step_report's Python above).
+#
+# Defensive fallback: if the report JSON is missing or unparseable, the
+# acceptance produced no trustworthy evidence — fail closed with exit 1 and a
+# clear message.
 report_json="$artifact_dir/runtime-acceptance-report.json"
+overall_rc=1
 if [[ ! -f "$report_json" ]]; then
-  log "=== AGGREGATION: $report_json missing → FAIL ===" >&2
-  overall_rc=1
+  log "=== AGGREGATION: $report_json missing → FAIL (fail-closed) ===" >&2
 elif ! python3 -c "import json, sys; json.load(open(sys.argv[1]))" "$report_json" >/dev/null 2>&1; then
-  log "=== AGGREGATION: $report_json unparseable → FAIL ===" >&2
-  overall_rc=1
+  log "=== AGGREGATION: $report_json unparseable → FAIL (fail-closed) ===" >&2
+else
+  # Read the authoritative process_exit_code from the report JSON.
+  overall_rc="$(python3 -c "import json, sys; print(int(json.load(open(sys.argv[1])).get('process_exit_code', 1)))" "$report_json" 2>/dev/null || echo 1)"
 fi
 
 if [[ "$overall_rc" -ne 0 ]]; then

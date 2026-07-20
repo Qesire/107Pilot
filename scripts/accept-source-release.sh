@@ -195,6 +195,14 @@ done
 # compute any_fail with the seal-mode-aware formula and emit seal_mode /
 # overall_status / process_exit_code fields that agree with the Bash
 # aggregation's overall_rc.
+# P1-2 (round 7): the failure formula is UNIFIED with the Bash aggregation.
+# Any step whose status is not in {PASS, FAIL, KNOWN_SKIP} (this includes the
+# initial "MISSING" sentinel for a never-written status file, an empty value,
+# or an unknown token) counts as failed — exactly mirroring the Bash guards
+# that fail on missing status file / empty status / unknown status. The Bash
+# aggregation now READS process_exit_code from this JSON and exits with it,
+# so JSON and Bash are consistent by construction (see aggregation block
+# below).
 python3 - "$artifact_dir" "$steps_dir" "$revision" "$started_iso" "$untracked_status" "$seal_mode" "${STEPS[@]}" <<'PY'
 import hashlib
 import json
@@ -210,6 +218,20 @@ seal_mode = sys.argv[6] == "1"
 step_specs = sys.argv[7:]
 
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+
+# P1-2 (round 7): the single source of truth for "is this step failed".
+# Matches the Bash aggregation: missing/empty/unknown status → failed,
+# explicit FAIL → failed, KNOWN_SKIP → failed only in seal mode.
+VALID_STATUSES = {"PASS", "FAIL", "KNOWN_SKIP"}
+
+
+def step_failed(status: str) -> bool:
+    return (
+        status not in VALID_STATUSES
+        or status == "FAIL"
+        or (seal_mode and status == "KNOWN_SKIP")
+    )
+
 
 steps = []
 for spec in step_specs:
@@ -242,13 +264,11 @@ for spec in step_specs:
                 entry["rc"] = kv["rc"]
     steps.append(entry)
 
-# P1-3 (round 6): seal-mode-aware any_fail. In seal mode, KNOWN_SKIP counts
-# as failing — this MUST match the Bash aggregation's overall_rc so a
-# JSON-only consumer never sees a false-green when the script exits 1.
-any_fail = any(
-    s["status"] == "FAIL" or (seal_mode and s["status"] == "KNOWN_SKIP")
-    for s in steps
-)
+# P1-2 (round 7): unified failure formula. MISSING / empty / unknown status
+# values count as failed, matching the Bash aggregation's missing-file and
+# unknown-status guards. This closes the prior gap where a step with
+# status="MISSING" left any_fail=false while Bash exited 1.
+any_fail = any(step_failed(s["status"]) for s in steps)
 overall_status = "PASS" if not any_fail else "FAIL"
 process_exit_code = 0 if not any_fail else 1
 
@@ -273,52 +293,27 @@ for s in steps:
 print(f"report: {artifact_dir / 'source-acceptance-report.json'}")
 PY
 
-# Final aggregation. A step is treated as FAIL (overall_rc=1) if:
-#   - its status file is missing (run_step never wrote it),
-#   - its status value is not one of PASS/FAIL/KNOWN_SKIP (corrupt/unparseable),
-#   - or it explicitly recorded status=FAIL.
-# The report step is excluded (it writes its own status after the JSON is
-# generated). The report JSON itself must exist and be parseable — a missing
-# or unparseable report is also a FAIL.
-# P2-4 (round 4): in seal mode (PILOT107_ACCEPT_SEAL_MODE=1), KNOWN_SKIP is
-# treated as FAIL — formal seal requires every step to PASS. Default (dev)
-# keeps KNOWN_SKIP non-failing.
-overall_rc=0
-valid_statuses=' PASS FAIL KNOWN_SKIP '
-for spec in "${STEPS[@]}"; do
-  name="${spec%%|*}"
-  [[ "$name" == "report" ]] && continue
-  status_file="$steps_dir/$name.status"
-  if [[ ! -f "$status_file" ]]; then
-    log "=== AGGREGATION: step $name status file missing → FAIL ===" >&2
-    overall_rc=1
-    continue
-  fi
-  status_line="$(grep -m1 '^status=' "$status_file" || true)"
-  status_val="${status_line#status=}"
-  if [[ -z "$status_val" ]] || [[ " $valid_statuses " != *" $status_val "* ]]; then
-    log "=== AGGREGATION: step $name has unknown status '${status_val:-<empty>}' → FAIL ===" >&2
-    overall_rc=1
-    continue
-  fi
-  if [[ "$status_val" == "FAIL" ]]; then
-    overall_rc=1
-  fi
-  if [[ "$seal_mode" == "1" && "$status_val" == "KNOWN_SKIP" ]]; then
-    log "=== AGGREGATION: step $name KNOWN_SKIP → FAIL (seal mode) ===" >&2
-    overall_rc=1
-  fi
-done
-
-# The report JSON must exist and be parseable. A missing/unparseable report
-# means the acceptance produced no trustworthy evidence.
+# Final aggregation.
+# P1-2 (round 7): the report Python is the single source of truth for the
+# process exit code. The Bash aggregation no longer re-derives overall_rc
+# from per-step status files; instead it READS process_exit_code from the
+# written JSON and exits with it. This makes JSON and Bash consistent by
+# construction — the unified failure formula (missing/empty/unknown status →
+# failed, FAIL → failed, KNOWN_SKIP → failed in seal mode) lives in exactly
+# one place (the report Python above).
+#
+# Defensive fallback: if the report JSON is missing or unparseable, the
+# acceptance produced no trustworthy evidence — fail closed with exit 1 and a
+# clear message.
 report_json="$artifact_dir/source-acceptance-report.json"
+overall_rc=1
 if [[ ! -f "$report_json" ]]; then
-  log "=== AGGREGATION: $report_json missing → FAIL ===" >&2
-  overall_rc=1
+  log "=== AGGREGATION: $report_json missing → FAIL (fail-closed) ===" >&2
 elif ! python3 -c "import json, sys; json.load(open(sys.argv[1]))" "$report_json" >/dev/null 2>&1; then
-  log "=== AGGREGATION: $report_json unparseable → FAIL ===" >&2
-  overall_rc=1
+  log "=== AGGREGATION: $report_json unparseable → FAIL (fail-closed) ===" >&2
+else
+  # Read the authoritative process_exit_code from the report JSON.
+  overall_rc="$(python3 -c "import json, sys; print(int(json.load(open(sys.argv[1])).get('process_exit_code', 1)))" "$report_json" 2>/dev/null || echo 1)"
 fi
 
 if [[ "$overall_rc" -ne 0 ]]; then
