@@ -151,14 +151,16 @@ step_manifest_validate() {
     echo "missing SHA256SUMS in $bundle_dir" >&2
     return 1
   fi
-  # Parse manifest (must be valid JSON with release_revision).
+  # Parse manifest (must be valid JSON with release_revision). The heredoc
+  # body MUST be at column 0: `<<'PY'` (no dash) does not strip indentation,
+  # so indented Python would raise IndentationError.
   if ! python3 - "$manifest" <<'PY'; then
-    import json, sys
-    m = json.loads(open(sys.argv[1]).read())
-    if not m.get("release_revision"):
-        print("RELEASE_MANIFEST.release_revision missing", file=sys.stderr)
-        sys.exit(1)
-    print("release_revision:", m["release_revision"])
+import json, sys
+m = json.loads(open(sys.argv[1]).read())
+if not m.get("release_revision"):
+    print("RELEASE_MANIFEST.release_revision missing", file=sys.stderr)
+    sys.exit(1)
+print("release_revision:", m["release_revision"])
 PY
     return 1
   fi
@@ -208,7 +210,53 @@ for ref in expected:
 PY
 }
 
+# Full set of cpu-rc compose services that must be running for the stack to be
+# considered "up". Used by stack_is_healthy below.
+CPU_RC_SERVICES=(
+  mariadb slurmdbd slurmctld worker-1 slurmrestd
+  pilot107-command-gateway pilot107-api pilot107-worker
+  pilot107-web pilot107-reverse-proxy
+)
+
+# Return 0 if every service in CPU_RC_SERVICES is running AND the API readiness
+# endpoint answers; return 1 otherwise. Used to make step_start_stack
+# idempotent: a genuinely-healthy stack is reused instead of re-running
+# start-cpu-rc.sh (which races on slurmdbd->mariadb auth when its .env.cpu-rc
+# is regenerated against a pre-existing volume).
+stack_is_healthy() {
+  local compose_dir="$bundle_root/simulator/compose"
+  local env_file="${PILOT107_CPU_RC_ENV_FILE:-$compose_dir/.env.cpu-rc}"
+  local project_name="${PILOT107_CPU_RC_PROJECT_NAME:-pilot107-cpu-rc}"
+  local compose=(
+    docker compose
+    --project-name "$project_name"
+    --env-file "$env_file"
+    -f "$compose_dir/compose.yml"
+    -f "$compose_dir/compose.competition.yml"
+    -f "$compose_dir/compose.cpu-rc.yml"
+    --profile competition
+  )
+  local svc
+  for svc in "${CPU_RC_SERVICES[@]}"; do
+    local id
+    id="$("${compose[@]}" ps --all -q "$svc" 2>/dev/null | head -n1)"
+    [[ -z "$id" ]] && return 1
+    [[ "$(docker inspect --format '{{.State.Running}}' "$id" 2>/dev/null || true)" == "true" ]] || return 1
+  done
+  # Slurmdbd must actually accept connections (not just be Running — it can be
+  # stuck retrying mariadb auth). If sacctmgr can't reach it, the stack is not
+  # healthy regardless of container state.
+  if ! "${compose[@]}" exec -T slurmdbd sacctmgr -n list cluster >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
 step_start_stack() {
+  if stack_is_healthy; then
+    log "  cpu-rc stack already up and healthy; skipping start-cpu-rc.sh"
+    return 0
+  fi
   ( cd "$bundle_root" && bash scripts/start-cpu-rc.sh )
 }
 
