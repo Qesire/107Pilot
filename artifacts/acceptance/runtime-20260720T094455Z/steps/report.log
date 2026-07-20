@@ -1,0 +1,16 @@
+=== RUNTIME BUNDLE ACCEPTANCE REPORT ===
+  manifest_validate: PASS
+  import_images: PASS
+  start_stack: PASS
+  compose_readiness: PASS
+  check_cpu_rc: PASS
+  auto_capsule: PASS
+  rule_remediation: PASS
+  restart_recovery: PASS
+  image_binding: PASS
+  report: PASS
+release_revision: a53412b74851cade69c0ec978302f6adb0f5d186
+release_revision_full: a53412b74851cade69c0ec978302f6adb0f5d186
+release_revision_short: a53412b74851
+image_binding_all_match: True
+report: /home/knowingthesea/107pilot/artifacts/acceptance/runtime-20260720T094455Z/runtime-acceptance-report.json
