@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+#
+# accept-source-release.sh — source-tree acceptance bound to a git SHA.
+#
+# Runs the full source-level CI gate (lint, types, unit tests, web unit tests,
+# Playwright UI tests, web build, static-build drift check, compose-config
+# validation) against a source checkout. It does NOT build or run the Docker
+# stack — runtime closure is the job of accept-runtime-bundle.sh.
+#
+# This script is the offline-bundle companion to check-ci-local.sh: it adds
+# the Playwright UI suite (`npm run test:ui`) that check-ci-local.sh omits, so
+# the source-level gate matches what GitHub CI blocks on.
+#
+# Emit a JSON report with the SHA and per-step PASS/FAIL. Exit non-zero if any
+# step FAILs.
+#
+# Env knobs:
+#   PILOT107_SOURCE_ACCEPT_ARTIFACT_DIR  default artifacts/acceptance/source-<sha>-<ts>
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if ! git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "accept-source-release.sh must run inside a git checkout (source tree)" >&2
+  exit 1
+fi
+
+revision="$(git -C "$root" rev-parse HEAD)"
+short_revision="${revision:0:12}"
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+artifact_dir="${PILOT107_SOURCE_ACCEPT_ARTIFACT_DIR:-$root/artifacts/acceptance/source-$short_revision-$timestamp}"
+mkdir -p "$artifact_dir"
+steps_dir="$artifact_dir/steps"
+mkdir -p "$steps_dir"
+started_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+log() { printf '%s\n' "$*"; }
+
+# Exit-code → status mapping (matches accept-runtime-bundle.sh):
+#   rc=0   → PASS
+#   rc=77  → KNOWN_SKIP (reserved for explicit capability-probe architectural
+#            skip; no source step emits 77 today)
+#   else   → FAIL  (strict; any non-zero other than 77 is a real regression)
+run_step() {
+  local name="$1" fn="$2"
+  local status_file="$steps_dir/$name.status"
+  local start_ts end_ts rc
+  start_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  log "=== STEP: $name ==="
+  rc=0
+  ( set -e; "$fn" ) || rc=$?
+  end_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if [[ "$rc" -eq 0 ]]; then
+    printf 'start=%s\nend=%s\nstatus=PASS\n' "$start_ts" "$end_ts" >"$status_file"
+    log "=== STEP: $name PASS ==="
+  elif [[ "$rc" -eq 77 ]]; then
+    printf 'start=%s\nend=%s\nstatus=KNOWN_SKIP\nrc=%s\n' "$start_ts" "$end_ts" "$rc" >"$status_file"
+    log "=== STEP: $name KNOWN_SKIP (rc=$rc) ==="
+  else
+    printf 'start=%s\nend=%s\nstatus=FAIL\nrc=%s\n' "$start_ts" "$end_ts" "$rc" >"$status_file"
+    log "=== STEP: $name FAIL (rc=$rc) ==="
+  fi
+  return 0
+}
+
+step_ruff() {
+  ( cd "$root" && uv run --extra dev ruff check src tests scripts )
+}
+
+step_mypy() {
+  ( cd "$root" && uv run --extra dev mypy src )
+}
+
+step_pytest() {
+  ( cd "$root" && uv run --extra dev pytest -q )
+}
+
+step_typecheck() {
+  ( cd "$root" && npm run typecheck )
+}
+
+step_vitest() {
+  ( cd "$root" && npm test -- --run )
+}
+
+step_playwright() {
+  # Playwright UI suite. On a fresh checkout browsers must be installed first:
+  #   npx playwright install
+  # (with --with-deps on CI hosts that lack browser shared libraries).
+  ( cd "$root" && npm run test:ui )
+}
+
+step_build() {
+  ( cd "$root" && npm run build )
+}
+
+step_static_drift() {
+  # The committed src/pilot107/web/static build must match the sources.
+  if ! git -C "$root" diff --exit-code -- src/pilot107/web/static >/dev/null 2>&1; then
+    git -C "$root" --no-pager diff -- src/pilot107/web/static >&2 || true
+    echo "static drift detected in src/pilot107/web/static; run npm run build and commit" >&2
+    return 1
+  fi
+}
+
+step_compose_config() {
+  ( cd "$root" && sh simulator/compose/scripts/check-compose-config.sh )
+}
+
+STEPS=(
+  "ruff|step_ruff"
+  "mypy|step_mypy"
+  "pytest|step_pytest"
+  "typecheck|step_typecheck"
+  "vitest|step_vitest"
+  "playwright|step_playwright"
+  "build|step_build"
+  "static_drift|step_static_drift"
+  "compose_config|step_compose_config"
+)
+
+for spec in "${STEPS[@]}"; do
+  name="${spec%%|*}"
+  fn="${spec#*|}"
+  run_step "$name" "$fn"
+done
+
+# JSON report.
+python3 - "$artifact_dir" "$steps_dir" "$revision" "$started_iso" "${STEPS[@]}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+artifact_dir = Path(sys.argv[1])
+steps_dir = Path(sys.argv[2])
+revision = sys.argv[3]
+started_iso = sys.argv[4]
+step_specs = sys.argv[5:]
+
+steps = []
+any_fail = False
+for spec in step_specs:
+    name = spec.split("|", 1)[0]
+    status_file = steps_dir / f"{name}.status"
+    entry = {"name": name, "status": "MISSING", "start": None, "end": None, "rc": None}
+    if status_file.is_file():
+        kv = {}
+        for line in status_file.read_text().splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                kv[k] = v
+        entry["status"] = kv.get("status", "MISSING")
+        entry["start"] = kv.get("start")
+        entry["end"] = kv.get("end")
+        if kv.get("rc") is not None:
+            try:
+                entry["rc"] = int(kv["rc"])
+            except ValueError:
+                entry["rc"] = kv["rc"]
+        if entry["status"] == "FAIL":
+            any_fail = True
+    steps.append(entry)
+
+report = {
+    "profile": "source",
+    "release_revision": revision,
+    "started_at": started_iso,
+    "ended_at": max((s["end"] or "" for s in steps), default=""),
+    "any_fail": any_fail,
+    "steps": steps,
+}
+(artifact_dir / "source-acceptance-report.json").write_text(
+    json.dumps(report, indent=2, ensure_ascii=False) + "\n"
+)
+print("=== SOURCE ACCEPTANCE REPORT ===")
+for s in steps:
+    print(f"  {s['name']}: {s['status']}")
+print(f"report: {artifact_dir / 'source-acceptance-report.json'}")
+PY
+
+overall_rc=0
+for spec in "${STEPS[@]}"; do
+  name="${spec%%|*}"
+  if [[ -f "$steps_dir/$name.status" ]] && grep -q '^status=FAIL' "$steps_dir/$name.status"; then
+    overall_rc=1
+  fi
+done
+
+if [[ "$overall_rc" -ne 0 ]]; then
+  log "=== SOURCE ACCEPTANCE FAILED (see $artifact_dir/source-acceptance-report.json) ==="
+else
+  log "=== SOURCE ACCEPTANCE PASSED (sha=$short_revision) ==="
+fi
+exit "$overall_rc"

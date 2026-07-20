@@ -21,6 +21,7 @@ Exits 0 on success, 1 on any mismatch.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import ssl
@@ -52,7 +53,11 @@ def main() -> int:
             "mkdir -p pilot107-restart-recovery-pre\n"
             "echo ok > pilot107-restart-recovery-pre/result.txt\n"
         )
-        pre = _create_submit_and_wait(command=command, expected_state="SUCCEEDED")
+        pre = _create_submit_and_wait(
+            command=command,
+            expected_state="SUCCEEDED",
+            expected_outputs=["pilot107-restart-recovery-pre/result.txt"],
+        )
         pre_run_id = pre["run_id"]
         pre = _wait_capsule_ready(pre_run_id)
         _assert_state(pre, "pre-restart")
@@ -124,10 +129,17 @@ def main() -> int:
             "mkdir -p pilot107-restart-recovery-post\n"
             "echo ok > pilot107-restart-recovery-post/result.txt\n"
         )
-        post = _create_submit_and_wait(command=new_command, expected_state="SUCCEEDED")
+        post = _create_submit_and_wait(
+            command=new_command,
+            expected_state="SUCCEEDED",
+            expected_outputs=["pilot107-restart-recovery-post/result.txt"],
+        )
         post_run_id = post["run_id"]
         post = _wait_capsule_ready(post_run_id)
         _assert_state(post, "post-restart")
+
+        # 6. Assert output evidence attribution for the post-restart run.
+        _assert_post_restart_inventory(post_run_id)
 
         print(f"restart-volume-recovery ok pre_restart={pre_run_id} post_restart={post_run_id}")
         return 0
@@ -160,8 +172,13 @@ def _wait_capsule_ready(run_id: str) -> dict:
     raise RuntimeError(f"run {run_id} did not reach SUCCEEDED/succeeded/ready: {last}")
 
 
-def _create_submit_and_wait(*, command: str, expected_state: str) -> dict:
-    contract = _post("/contracts", _contract(command))
+def _create_submit_and_wait(
+    *,
+    command: str,
+    expected_state: str,
+    expected_outputs: list[str],
+) -> dict:
+    contract = _post("/contracts", _contract(command, expected_outputs=expected_outputs))
     prepared = _post("/runs/prepare", {"contract_id": contract["contract_id"]})
     _post(f"/runs/{prepared['run_id']}/submit", {})
     return _wait_run(prepared["run_id"], expected_state=expected_state)
@@ -177,13 +194,13 @@ def _wait_run(run_id: str, *, expected_state: str) -> dict:
     raise RuntimeError(f"run {run_id} did not reach {expected_state}/succeeded: {last}")
 
 
-def _contract(command: str) -> dict:
+def _contract(command: str, *, expected_outputs: list[str]) -> dict:
     return {
         "recipe_version_id": "recipe_python_cpu@1.0.0",
         "project": {"workdir": "/public/home/alice"},
         "entry": {
             "command": command,
-            "expected_outputs": ["pilot107-restart-recovery-pre/result.txt"],
+            "expected_outputs": expected_outputs,
         },
         "resources": {
             "partition": os.environ.get("PILOT107_SMOKE_PARTITION", "CPU-RC"),
@@ -194,6 +211,87 @@ def _contract(command: str) -> dict:
             "time_limit": "00:05:00",
         },
     }
+
+
+def _assert_post_restart_inventory(post_run_id: str) -> None:
+    """Verify the post-restart run's outputs/inventory.json attributes files correctly.
+
+    The post-restart run shares the workdir with the pre-restart run, so the
+    pre-restart result.txt must appear as ``preexisting`` (mtime < post-run
+    started_at) while the post-restart result.txt must be ``created_by_run`` and
+    flagged ``in_expected_outputs``.
+    """
+    tree = _get(f"/runs/{post_run_id}/evidence")
+    object_id = next(
+        (
+            obj["object_id"]
+            for obj in tree.get("objects", [])
+            if obj.get("logical_path") == "outputs/inventory.json"
+        ),
+        None,
+    )
+    if object_id is None:
+        raise RuntimeError(
+            f"post-restart run {post_run_id}: outputs/inventory.json not found in evidence tree"
+        )
+    preview = _get(f"/runs/{post_run_id}/evidence/objects/{object_id}")
+    payload = preview.get("preview", {})
+    if not payload.get("available"):
+        raise RuntimeError(
+            f"post-restart run {post_run_id}: inventory preview unavailable: {payload!r}"
+        )
+    inventory = json.loads(payload["content"])
+    files_by_path = {item["relative_path"]: item for item in inventory.get("files", [])}
+
+    post_rel = "pilot107-restart-recovery-post/result.txt"
+    pre_rel = "pilot107-restart-recovery-pre/result.txt"
+
+    post_entry = files_by_path.get(post_rel)
+    if post_entry is None:
+        raise RuntimeError(
+            f"post-restart inventory missing {post_rel}: {list(files_by_path)}"
+        )
+    if post_entry.get("attribution") != "created_by_run":
+        raise RuntimeError(
+            f"post-restart {post_rel}: attribution={post_entry.get('attribution')!r} "
+            f"!= created_by_run"
+        )
+    if post_entry.get("in_expected_outputs") is not True:
+        raise RuntimeError(
+            f"post-restart {post_rel}: in_expected_outputs="
+            f"{post_entry.get('in_expected_outputs')!r} != true"
+        )
+
+    # The post-restart run writes ``ok\n`` to result.txt; assert the inventory
+    # captured its content SHA under final_sha256.
+    expected_sha = hashlib.sha256(b"ok\n").hexdigest()
+    actual_sha = post_entry.get("final_sha256")
+    if not isinstance(actual_sha, str) or not actual_sha:
+        raise RuntimeError(
+            f"post-restart {post_rel}: final_sha256 missing/empty: {actual_sha!r}"
+        )
+    if actual_sha != expected_sha:
+        raise RuntimeError(
+            f"post-restart {post_rel}: final_sha256={actual_sha!r} != expected {expected_sha!r}"
+        )
+
+    pre_entry = files_by_path.get(pre_rel)
+    if pre_entry is None:
+        raise RuntimeError(
+            f"post-restart inventory missing pre-restart leftover {pre_rel}: "
+            f"{list(files_by_path)}"
+        )
+    if pre_entry.get("attribution") != "preexisting":
+        raise RuntimeError(
+            f"pre-restart leftover {pre_rel}: attribution={pre_entry.get('attribution')!r} "
+            f"!= preexisting"
+        )
+
+    summary = inventory.get("attribution_summary", {})
+    if int(summary.get("created_by_run", 0)) < 1:
+        raise RuntimeError(
+            f"post-restart attribution_summary.created_by_run < 1: {summary!r}"
+        )
 
 
 def _get(path: str) -> dict:

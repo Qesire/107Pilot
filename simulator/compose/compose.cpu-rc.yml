@@ -13,8 +13,11 @@ services:
   slurmctld:
     cpus: 0.25
     mem_limit: 384m
+    cgroup: host
     volumes:
       - ./slurm-cpu-rc/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./slurm-cpu-rc/cgroup.conf:/etc/slurm/cgroup.conf:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
       - slurmctld-state:/var/spool/slurm/ctld
 
   slurmrestd:
@@ -26,8 +29,11 @@ services:
   worker-1:
     cpus: 4.0
     mem_limit: 7g
+    cgroup: host
     volumes:
       - ./slurm-cpu-rc/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./slurm-cpu-rc/cgroup.conf:/etc/slurm/cgroup.conf:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
 
   pilot107-command-gateway:
     cpus: 0.25

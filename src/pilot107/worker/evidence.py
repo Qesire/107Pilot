@@ -8,10 +8,12 @@ import json
 import posixpath
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from pilot107.adapters.slurm import CommandResult, SimulatorExecutor, SlurmTransportError
+from pilot107.core.contracts import ContractStore
 from pilot107.core.identity import UserIdentity
 from pilot107.core.paths import PathPolicyError, SafePath, authorize_path, reject_special_file
 from pilot107.core.run_store import RunRecord, RunStore, utc_now_iso
@@ -827,6 +829,7 @@ class DockerSlurmEvidenceCollector:
         evidence_policy: EvidencePolicy | None = None,
         log_tail_bytes: int = 65536,
         timeout_seconds: float = 20.0,
+        contract_store: ContractStore | None = None,
     ) -> None:
         self.store = store
         self.executor = executor
@@ -836,6 +839,7 @@ class DockerSlurmEvidenceCollector:
         self.evidence_policy = evidence_policy or EvidencePolicy()
         self.log_tail_bytes = log_tail_bytes
         self.timeout_seconds = timeout_seconds
+        self.contract_store = contract_store
 
     def collect(self, *, run: RunRecord, task_type: str) -> EvidenceCollectionResult:
         match task_type:
@@ -1241,11 +1245,16 @@ class DockerSlurmEvidenceCollector:
         warnings: list[str] = []
         if find.result.returncode != 0:
             warnings.append("find returned non-zero")
+        expected_outputs = self._resolve_expected_outputs(run)
+        started_at_iso = self._resolve_started_at(run)
+        started_at_epoch = _iso_to_epoch(started_at_iso)
         files = self._parse_inventory_rows(
             run=run,
             workdir=workdir,
             stdout=find.result.stdout if find.result.returncode == 0 else "",
             warnings=warnings,
+            expected_outputs=expected_outputs,
+            started_at_epoch=started_at_epoch,
         )
         artifacts = [
             self.store.write_json(
@@ -1257,6 +1266,9 @@ class DockerSlurmEvidenceCollector:
                     "workdir": workdir,
                     "max_depth": 3,
                     "excluded_patterns": ["slurm-*.out", "slurm-*.err", "pilot107-submit-*.sbatch"],
+                    "run_started_at": started_at_iso,
+                    "expected_outputs": expected_outputs,
+                    "attribution_summary": _attribution_summary(files),
                     "files": files,
                     "command": find.argv,
                     "returncode": find.result.returncode,
@@ -1285,19 +1297,45 @@ class DockerSlurmEvidenceCollector:
         )
         inventory = transport.inventory(identity, workdir, policy)
         warnings = list(inventory.skipped)
-        files = [
-            {
-                "path": file.path,
-                "relative_path": file.relative_path,
-                "size_bytes": file.size_bytes,
-                "mtime_epoch": file.mtime_epoch,
-                "owner": run.owner,
-                "group": run.owner,
-                "sha256": file.sha256,
-            }
-            for file in inventory.files
-            if not _is_excluded_output(file.relative_path)
-        ]
+        expected_outputs = self._resolve_expected_outputs(run)
+        started_at_iso = self._resolve_started_at(run)
+        started_at_epoch = _iso_to_epoch(started_at_iso)
+        files: list[dict[str, Any]] = []
+        for file in inventory.files:
+            if _is_excluded_output(file.relative_path):
+                continue
+            attribution = compute_file_attribution(
+                mtime_epoch=file.mtime_epoch,
+                started_at_epoch=started_at_epoch,
+                relative_path=file.relative_path,
+                expected_outputs=expected_outputs,
+            )
+            # The transport already computed sha256 during inventory, but we only
+            # surface it for files this run produced or declared; preexisting
+            # non-expected files get null to avoid implying ownership.
+            eligible = (
+                attribution["in_expected_outputs"]
+                or attribution["attribution"] == "created_by_run"
+            )
+            final_sha = file.sha256 if eligible else None
+            files.append(
+                {
+                    "path": file.path,
+                    "relative_path": file.relative_path,
+                    "size_bytes": file.size_bytes,
+                    "mtime_epoch": file.mtime_epoch,
+                    "owner": run.owner,
+                    "group": run.owner,
+                    # sha256 is the attribution-gated hash (null for preexisting
+                    # non-expected files), matching the local find-based path.
+                    "sha256": final_sha,
+                    "attribution": attribution["attribution"],
+                    "in_expected_outputs": attribution["in_expected_outputs"],
+                    "final_sha256": final_sha,
+                    "baseline_sha256": attribution["baseline_sha256"],
+                }
+            )
+        files = sorted(files, key=lambda item: item["relative_path"])
         artifacts = [
             self.store.write_json(
                 run_id=run.run_id,
@@ -1309,7 +1347,10 @@ class DockerSlurmEvidenceCollector:
                     "workdir": str(workdir.resolved),
                     "max_depth": policy.max_depth,
                     "excluded_patterns": list(policy.excluded_patterns),
-                    "files": sorted(files, key=lambda item: item["relative_path"]),
+                    "run_started_at": started_at_iso,
+                    "expected_outputs": expected_outputs,
+                    "attribution_summary": _attribution_summary(files),
+                    "files": files,
                     "command": None,
                     "returncode": 0,
                     "stderr": "",
@@ -1324,6 +1365,29 @@ class DockerSlurmEvidenceCollector:
             artifacts=artifacts,
             warnings=warnings,
         )
+
+    def _resolve_expected_outputs(self, run: RunRecord) -> list[str]:
+        if self.contract_store is None or run.contract_id is None:
+            return []
+        try:
+            contract = self.contract_store.get_contract(run.contract_id)
+        except Exception:  # noqa: BLE001 - attribution tagging must never crash collection
+            return []
+        outputs = contract.payload.get("outputs") or {}
+        expected = outputs.get("expected") or []
+        if not isinstance(expected, list):
+            return []
+        return [str(item) for item in expected]
+
+    def _resolve_started_at(self, run: RunRecord) -> str | None:
+        # RunRecord does not yet carry a dedicated started_at field; fall back to
+        # created_at (the run creation timestamp) as the run-start proxy so that
+        # attribution still works. If neither is available, attribution becomes
+        # "unknown" via compute_file_attribution.
+        started_at = getattr(run, "started_at", None)
+        if started_at is not None:
+            return str(started_at)
+        return run.created_at
 
     def _collect_result_summary(self, run: RunRecord) -> EvidenceCollectionResult:
         required_paths = {
@@ -1656,7 +1720,10 @@ class DockerSlurmEvidenceCollector:
         workdir: str,
         stdout: str,
         warnings: list[str],
+        expected_outputs: list[str] | None = None,
+        started_at_epoch: float | None = None,
     ) -> list[dict[str, Any]]:
+        expected = expected_outputs or []
         files: list[dict[str, Any]] = []
         for line in stdout.splitlines():
             if not line.strip():
@@ -1677,15 +1744,34 @@ class DockerSlurmEvidenceCollector:
                 continue
             if _is_excluded_output(relative_path):
                 continue
+            mtime = float(mtime_epoch)
+            attribution = compute_file_attribution(
+                mtime_epoch=mtime,
+                started_at_epoch=started_at_epoch,
+                relative_path=relative_path,
+                expected_outputs=expected,
+            )
+            # Only hash files this run actually produced or declared; skip
+            # preexisting non-expected files to avoid expensive sha256 on large
+            # shared workdir leftovers.
+            eligible = (
+                attribution["in_expected_outputs"]
+                or attribution["attribution"] == "created_by_run"
+            )
+            sha = self._sha256_file(run, authorized) if eligible else None
             files.append(
                 {
                     "path": authorized,
                     "relative_path": relative_path,
                     "size_bytes": int(size),
-                    "mtime_epoch": float(mtime_epoch),
+                    "mtime_epoch": mtime,
                     "owner": owner,
                     "group": group,
-                    "sha256": self._sha256_file(run, authorized),
+                    "sha256": sha,
+                    "attribution": attribution["attribution"],
+                    "in_expected_outputs": attribution["in_expected_outputs"],
+                    "final_sha256": sha,
+                    "baseline_sha256": attribution["baseline_sha256"],
                 }
             )
         return sorted(files, key=lambda item: item["relative_path"])
@@ -2082,3 +2168,48 @@ def _is_excluded_output(relative_path: str) -> bool:
         (name.startswith("pilot107-submit-") and name.endswith(".sbatch"))
         or name.startswith("slurm-") and (name.endswith(".out") or name.endswith(".err"))
     )
+
+
+def compute_file_attribution(
+    *,
+    mtime_epoch: float,
+    started_at_epoch: float | None,
+    relative_path: str,
+    expected_outputs: list[str],
+) -> dict[str, Any]:
+    """Attribute a single inventory file to a run.
+
+    Pure helper kept module-level for direct unit testing. Returns a dict with
+    ``attribution`` (``created_by_run`` | ``preexisting`` | ``unknown``),
+    ``in_expected_outputs`` (bool), and ``baseline_sha256`` (always None until
+    pre-run baseline capture is implemented).
+    """
+    if started_at_epoch is None:
+        attribution = "unknown"
+    elif mtime_epoch > started_at_epoch:
+        attribution = "created_by_run"
+    else:
+        attribution = "preexisting"
+    return {
+        "attribution": attribution,
+        "in_expected_outputs": relative_path in expected_outputs,
+        "baseline_sha256": None,
+    }
+
+
+def _iso_to_epoch(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _attribution_summary(files: list[dict[str, Any]]) -> dict[str, int]:
+    summary = {"created_by_run": 0, "preexisting": 0, "unknown": 0}
+    for item in files:
+        attribution = item.get("attribution", "unknown")
+        if attribution in summary:
+            summary[attribution] += 1
+    return summary

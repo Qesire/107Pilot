@@ -167,18 +167,25 @@ else
 fi
 
 # Validate the public origin the browser will use against the BFF CSRF check.
-# Non-destructive GET only; self-signed certs are accepted. A 403 or
-# CSRF.ORIGIN_DENIED means PILOT107_PUBLIC_URL does not match what the BFF
-# expects, which would silently break browser writes.
+# POSTs to a no-side-effect probe endpoint so the BFF's mutating-request
+# Origin check runs (a GET bypasses that check and cannot catch a misconfigured
+# Origin). Self-signed certs are accepted. A 403 or CSRF.ORIGIN_DENIED means
+# PILOT107_PUBLIC_URL does not match what the BFF expects, which would silently
+# break browser writes.
 if [[ "${PILOT107_SKIP_ORIGIN_VALIDATE:-0}" != "1" ]]; then
   if ! python3 - "$PILOT107_PUBLIC_URL" <<'PY'; then
 import sys, ssl, urllib.error, urllib.request
 base = sys.argv[1]
-url = base + "/api/v1/health/ready"
+url = base + "/api/v1/security/origin-probe"
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
-req = urllib.request.Request(url, headers={"Origin": base})
+req = urllib.request.Request(
+    url,
+    data=b"",
+    method="POST",
+    headers={"Origin": base, "Content-Type": "application/json"},
+)
 try:
     with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
         status, body = r.status, r.read().decode("utf-8", "replace")
@@ -196,5 +203,76 @@ PY
     exit 1
   fi
 fi
+
+# P1-4: image-tag sanity warning. If RELEASE_MANIFEST.json is present (e.g.
+# we're running inside an extracted bundle), compare each *_IMAGE tag in
+# .env.cpu-rc against the manifest's `images[].reference` fields. A mismatch
+# (e.g. .env.cpu-rc has a floating `:cpu-rc` tag but the manifest pins
+# `:cpu-rc-<rev>`) means running containers may not match the release
+# revision. This is advisory — it does NOT stop startup, because dev workflows
+# legitimately use floating tags — but it makes the stale-.env.cpu-rc risk
+# visible. The hard check lives in check-cpu-rc.sh / accept-runtime-bundle.sh.
+# Set PILOT107_SKIP_IMAGE_BINDING_WARNING=1 to suppress.
+warn_image_tags() {
+  if [[ "${PILOT107_SKIP_IMAGE_BINDING_WARNING:-0}" == "1" ]]; then
+    return 0
+  fi
+  local manifest="${PILOT107_RELEASE_MANIFEST_PATH:-$root/RELEASE_MANIFEST.json}"
+  if [[ ! -f "$manifest" ]]; then
+    return 0
+  fi
+  python3 - "$manifest" "$env_file" "$manifest" >&2 <<'PY'
+import json, re, sys
+from pathlib import Path
+
+manifest_path = Path(sys.argv[1])
+env_file = Path(sys.argv[2])
+try:
+    m = json.loads(manifest_path.read_text())
+except Exception:
+    sys.exit(0)
+refs = {r.get("reference") for r in m.get("images", []) if r.get("reference")}
+if not refs:
+    sys.exit(0)
+
+# Read each *_IMAGE assignment from .env.cpu-rc and compare to manifest refs.
+image_re = re.compile(r'^([A-Z0-9_]*IMAGE)=(.*)$')
+env_tags = {}
+for line in env_file.read_text().splitlines():
+    line = line.strip()
+    if not line or line.startswith("#"):
+        continue
+    mm = image_re.match(line)
+    if mm:
+        env_tags[mm.group(1)] = mm.group(2).strip()
+
+# The manifest stores one reference per image. Multiple .env vars may point at
+# the same reference (e.g. PILOT107_WEB_IMAGE and PILOT107_REVERSE_PROXY_IMAGE
+# both use the web image); that is fine. We warn only when an .env tag is NOT
+# among the manifest references.
+warning_count = 0
+for var, tag in env_tags.items():
+    if tag not in refs:
+        # Pick any manifest reference that shares the image name (everything
+        # before the last `:`) so the warning is actionable.
+        name = tag.rsplit(":", 1)[0] if ":" in tag else tag
+        suggestion = next((r for r in refs if r.rsplit(":", 1)[0] == name), "")
+        print(
+            "WARNING: .env.cpu-rc image tag %s does not match RELEASE_MANIFEST.json reference %s; "
+            "running containers may not match the release revision. Set PILOT107_SKIP_IMAGE_BINDING_WARNING=1 to suppress."
+            % (tag, suggestion or "<no matching reference in manifest>"),
+            file=sys.stderr,
+        )
+        warning_count += 1
+if warning_count:
+    print(
+        "WARNING: %d .env.cpu-rc image tag(s) do not match RELEASE_MANIFEST.json (release_revision=%s). "
+        "Run scripts/check-cpu-rc.sh for the hard binding check."
+        % (warning_count, m.get("release_revision", "")),
+        file=sys.stderr,
+    )
+PY
+}
+warn_image_tags
 
 echo "CPU-only 8C/16G release candidate is running: https://127.0.0.1:${https_port:-8443}/"

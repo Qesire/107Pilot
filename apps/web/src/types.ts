@@ -327,6 +327,13 @@ export interface RemediationSession {
   source_diagnosis_digest: string;
   source_evidence_digest: string;
   automation_policy: string;
+  // Backend emits `provider` on every GET (remediation_service.py:707) and
+  // persists it via the `provider` column (migration 003e.003). Kept as a
+  // string so unknown values degrade gracefully instead of breaking the UI.
+  provider: string;
+  // Backend emits `lease` on every GET (remediation_service.py:712-715). Both
+  // fields are nullable: an idle session has no lease owner or expiry.
+  lease: { owner: string | null; expires_at: string | null };
   budget: RemediationBudget;
   usage: RemediationUsage;
   stop_reason: string | null;

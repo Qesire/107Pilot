@@ -5,31 +5,18 @@ Goal: prove a REAL failed run -> rule-evaluated diagnosis -> approved remediatio
 API, not hand-injected diagnosis as ``smoke_sim_phase2._verify_agent_remediation``
 does).
 
-ARCHITECTURAL CONSTRAINT (Docker Slurm simulator):
-This smoke cannot produce an end-to-end green on the current Docker Slurm
-simulator because:
-- SLURM.INVALID_QOS / SLURM.INVALID_PARTITION: the API's ContractService.validate
-  rejects invalid QoS/partition at contract creation (422), so the run never
-  reaches sbatch and the rule never fires.
-- RUNTIME.TIMEOUT: the Docker Slurm simulator does not enforce time limits
-  (a 30s sleep with a 5s time_limit completes successfully), so no TIMEOUT
-  terminal state is produced.
-- RUNTIME.OOM: would require allocating >6 GiB; even if triggered, resolving
-  to max memory and re-running the same command OOMs again.
-- RUNTIME.NONZERO_EXIT / COMMAND_NOT_FOUND: no capability-resolvable patch.
+This smoke requires the cpu-rc Docker Slurm simulator to enforce walltime via
+task/cgroup (ProctrackType=proctrack/cgroup, TaskPlugin=task/cgroup,
+CgroupPlugin=cgroup/v2, /sys/fs/cgroup mounted rw, cgroup: host). With that in
+place, Slurm cancels a job that exceeds its time_limit with a TIMEOUT terminal
+state, which the rule engine matches as RUNTIME.TIMEOUT.
 
-The capability-profile resolution feature is UNIT-PROVEN in tests/test_advice.py
-(12 tests: OOM->6G, TIMEOUT->04:00:00, INVALID_QOS->qos_cpu_rc,
-INVALID_PARTITION->CPU-RC all resolve to allowed_preview). This smoke exists to
-exercise the HTTP path IF the simulator ever enforces limits or if a future rule
-+ scenario combination becomes viable. It exits 1 with a clear message when the
-simulator cannot produce the needed failure state, rather than faking a derived Run.
-
-Scenario (when the simulator supports it): submit a contract with a short
-time_limit and a longer-running command. Slurm cancels with TIMEOUT, the rule
-engine authors suggested_patch = {resources.time_limit: null}, AgentPolicyEngine
-resolves the null to the cpu-rc profile's max_wall_hours (4 -> "04:00:00"), and
-the derived run re-submits with the full limit -> SUCCEEDED.
+Scenario: submit a contract with a 00:01:00 time_limit and a 75s sleep that
+creates the expected output file AFTER the sleep. Slurm cancels with TIMEOUT
+before the output is produced, the rule engine authors suggested_patch =
+{resources.time_limit: null}, AgentPolicyEngine resolves the null to the cpu-rc
+profile's max_wall_hours (4 -> "04:00:00"), and the derived run re-submits the
+same 75s sleep with the full 4h limit -> SUCCEEDED (output produced).
 
 HTTP endpoints relied on (src/pilot107/api/remediation_routes.py):
   - POST /runs/{run_id}/remediation-sessions          (remediation_routes.py:152)
@@ -42,7 +29,8 @@ HTTP endpoints relied on (src/pilot107/api/remediation_routes.py):
 
 Provider is "none" (deterministic rules) and the cpu-rc capability profile is
 loaded by the API via ``PILOT107_CAPABILITY_PROFILE_PATH``. Exit 0 ONLY if the
-full derived-Run succeeds.
+full derived-Run chain succeeds; exit 1 on any failure (API error, wrong state,
+missing capsule, etc.).
 """
 
 from __future__ import annotations
@@ -64,22 +52,27 @@ SSL_CONTEXT = ssl._create_unverified_context() if BASE_URL.startswith("https://"
 
 def main() -> int:
     try:
-        # 1. Submit a contract that will TIME OUT: a 10s sleep with a 00:00:03
-        #    time_limit. The API accepts this (3s is within qos_cpu_rc's
-        #    max_wall_hours=4), sbatch accepts it, Slurm cancels the job with
-        #    a TIMEOUT terminal state. The diagnosis matches RUNTIME.TIMEOUT
-        #    which authors suggested_patch = {resources.time_limit: null}.
-        #    AgentPolicyEngine resolves the null to the cpu-rc profile's
-        #    max_wall_hours (4 -> "04:00:00"), the action becomes
-        #    allowed_preview, and the derived run re-submits the same 10s
-        #    sleep with the full 4h limit -> SUCCEEDED.
+        # 1. Submit a contract that will TIME OUT: a 75s sleep with a 00:01:00
+        #    time_limit. The API accepts this (1m is within qos_cpu_rc's
+        #    max_wall_hours=4), sbatch accepts it, Slurm (task/cgroup) cancels
+        #    the job with a TIMEOUT terminal state once it exceeds 1 minute.
+        #    The expected output file is created AFTER the sleep, so a TIMEOUT
+        #    kills the job before the output is produced. The diagnosis matches
+        #    RUNTIME.TIMEOUT which authors suggested_patch =
+        #    {resources.time_limit: null}. AgentPolicyEngine resolves the null
+        #    to the cpu-rc profile's max_wall_hours (4 -> "04:00:00"), the
+        #    action becomes allowed_preview, and the derived run re-submits the
+        #    same 75s sleep with the full 4h limit -> SUCCEEDED.
         command = (
-            "sleep 10\n"
-            "echo cpu-rc-remediation-ok\n"
+            "sleep 75\n"
             "mkdir -p pilot107-cpu-rc-remediation\n"
             "echo ok > pilot107-cpu-rc-remediation/result.txt\n"
         )
-        run = _create_submit_and_wait(command=command, expected_state="FAILED")
+        run = _create_submit_and_wait(
+            command=command,
+            expected_state="FAILED",
+            expected_terminal_state="TIMEOUT",
+        )
         source_run_id = run["run_id"]
 
         # 2. Create remediation session (deterministic rules, not LLM).
@@ -131,6 +124,18 @@ def main() -> int:
             return 1
 
         proposal = allowed[0]
+        # The RUNTIME.TIMEOUT rule authors a patch on resources.time_limit.
+        # Assert the diagnosis actually resolved to TIMEOUT (not some other
+        # rule) by inspecting the allowed proposal's proposed_patch payload.
+        patch = (proposal.get("payload") or {}).get("proposed_patch") or {}
+        if "resources.time_limit" not in patch:
+            print(
+                "remediation smoke failed: allowed proposal patch does not target "
+                f"resources.time_limit (diagnosis was not RUNTIME.TIMEOUT): "
+                f"patch={patch}",
+                file=sys.stderr,
+            )
+            return 1
         version_raw = detail.get("version")
         if not isinstance(version_raw, int):
             print(
@@ -191,10 +196,10 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
-        parent_contract = derived.get("parent_contract_id")
-        if not parent_contract:
+        derived_contract_id = derived.get("contract_id")
+        if not derived_contract_id:
             print(
-                f"remediation smoke failed: derived run missing parent_contract_id "
+                f"remediation smoke failed: derived run missing contract_id "
                 f"for run={derived_run_id}: {derived}",
                 file=sys.stderr,
             )
@@ -211,7 +216,7 @@ def main() -> int:
         print(
             f"cpu-rc-remediation smoke ok source={source_run_id} "
             f"derived={derived_run_id} capsule={manifest_sha} "
-            f"lineage_reason={lineage_reason} parent_contract={parent_contract}"
+            f"lineage_reason={lineage_reason} derived_contract_id={derived_contract_id}"
         )
         return 0
     except Exception as exc:  # noqa: BLE001 - smoke reports failures as exit 1
@@ -219,14 +224,25 @@ def main() -> int:
         return 1
 
 
-def _create_submit_and_wait(*, command: str, expected_state: str) -> dict:
+def _create_submit_and_wait(
+    *, command: str, expected_state: str, expected_terminal_state: str | None = None
+) -> dict:
     contract = _post("/contracts", _contract(command))
     prepared = _post("/runs/prepare", {"contract_id": contract["contract_id"]})
     _post(f"/runs/{prepared['run_id']}/submit", {})
-    return _wait_run(prepared["run_id"], expected_state=expected_state)
+    return _wait_run(
+        prepared["run_id"],
+        expected_state=expected_state,
+        expected_terminal_state=expected_terminal_state,
+    )
 
 
-def _wait_run(run_id: str, *, expected_state: str) -> dict:
+def _wait_run(
+    run_id: str,
+    *,
+    expected_state: str,
+    expected_terminal_state: str | None = None,
+) -> dict:
     last: dict = {}
     for _ in range(240):
         last = _get(f"/runs/{run_id}")
@@ -235,20 +251,29 @@ def _wait_run(run_id: str, *, expected_state: str) -> dict:
             and last.get("collection_state") == "succeeded"
             # Diagnosis must be terminal before remediation advance will progress.
             and last.get("diagnosis_state") in {"succeeded", "skipped"}
+            and (
+                expected_terminal_state is None
+                or last.get("terminal_state") == expected_terminal_state
+            )
         ):
             return last
         time.sleep(1)
-    raise RuntimeError(f"run {run_id} did not reach {expected_state}/succeeded: {last}")
+    raise RuntimeError(
+        f"run {run_id} did not reach {expected_state}/succeeded"
+        f"{f' terminal_state={expected_terminal_state}' if expected_terminal_state else ''}"
+        f": {last}"
+    )
 
 
 def _contract(command: str) -> dict:
-    # CPU-RC partition with a VALID qos but a SHORT time_limit (3s) so the
-    # 10s sleep command times out at runtime. The API accepts this (3s is
-    # within qos_cpu_rc's max_wall_hours=4); sbatch accepts it; Slurm cancels
-    # with a TIMEOUT terminal state, matching the RUNTIME.TIMEOUT rule symptom.
-    # The AgentPolicyEngine resolves {resources.time_limit: null} -> "04:00:00"
-    # (the qos max_wall_hours), so the derived run re-submits with the full
-    # limit and the 10s sleep SUCCEEDS.
+    # CPU-RC partition with a VALID qos and a 00:01:00 time_limit so the
+    # 75s sleep command times out at runtime (task/cgroup enforces walltime).
+    # The API accepts this (1m is within qos_cpu_rc's max_wall_hours=4);
+    # sbatch accepts it; Slurm cancels with a TIMEOUT terminal state, matching
+    # the RUNTIME.TIMEOUT rule symptom. The AgentPolicyEngine resolves
+    # {resources.time_limit: null} -> "04:00:00" (the qos max_wall_hours), so
+    # the derived run re-submits with the full limit and the 75s sleep SUCCEEDS
+    # (producing the expected output file).
     return {
         "recipe_version_id": "recipe_python_cpu@1.0.0",
         "project": {"workdir": "/public/home/alice"},
@@ -262,7 +287,7 @@ def _contract(command: str) -> dict:
             "nodes": 1,
             "ntasks": 1,
             "cpus_per_task": 1,
-            "time_limit": os.environ.get("PILOT107_SMOKE_TIME_LIMIT", "00:00:03"),
+            "time_limit": os.environ.get("PILOT107_SMOKE_TIME_LIMIT", "00:01:00"),
         },
     }
 

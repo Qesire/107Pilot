@@ -1,0 +1,72 @@
+{
+  "profile": "cpu-rc",
+  "revision": "",
+  "started_at": "2026-07-19T17:01:55Z",
+  "ended_at": "2026-07-19T17:08:53Z",
+  "any_fail": false,
+  "steps": [
+    {
+      "name": "preflight",
+      "status": "PASS",
+      "start": "2026-07-19T17:01:55Z",
+      "end": "2026-07-19T17:03:04Z",
+      "rc": null
+    },
+    {
+      "name": "build_images",
+      "status": "PASS",
+      "start": "2026-07-19T17:03:04Z",
+      "end": "2026-07-19T17:03:04Z",
+      "rc": null
+    },
+    {
+      "name": "start_stack",
+      "status": "PASS",
+      "start": "2026-07-19T17:03:04Z",
+      "end": "2026-07-19T17:03:31Z",
+      "rc": null
+    },
+    {
+      "name": "compose_contract",
+      "status": "PASS",
+      "start": "2026-07-19T17:03:31Z",
+      "end": "2026-07-19T17:03:31Z",
+      "rc": null
+    },
+    {
+      "name": "check_cpu_rc",
+      "status": "PASS",
+      "start": "2026-07-19T17:03:31Z",
+      "end": "2026-07-19T17:03:41Z",
+      "rc": null
+    },
+    {
+      "name": "auto_capsule",
+      "status": "PASS",
+      "start": "2026-07-19T17:03:41Z",
+      "end": "2026-07-19T17:03:46Z",
+      "rc": null
+    },
+    {
+      "name": "rule_remediation",
+      "status": "KNOWN_SKIP",
+      "start": "2026-07-19T17:03:46Z",
+      "end": "2026-07-19T17:07:50Z",
+      "rc": 1
+    },
+    {
+      "name": "restart_recovery",
+      "status": "PASS",
+      "start": "2026-07-19T17:07:50Z",
+      "end": "2026-07-19T17:08:53Z",
+      "rc": null
+    },
+    {
+      "name": "report",
+      "status": "MISSING",
+      "start": null,
+      "end": null,
+      "rc": null
+    }
+  ]
+}

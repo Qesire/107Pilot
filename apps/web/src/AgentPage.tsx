@@ -1,11 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { ArrowRight, Ban, Bot, CheckCircle2, Play, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
+import { ArrowRight, Ban, Bot, CheckCircle2, Play, Plus, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 import { api } from "./api";
 import { QueryBoundary, SectionHeading, StatusBadge, formatTimestamp } from "./components";
 import { RunPicker } from "./RunPicker";
-import { useRemediationSession, useRemediationSessions, useRuns } from "./query";
-import type { RemediationProposal, RemediationSession, RemediationState } from "./types";
+import { useHealth, useRemediationSession, useRemediationSessions, useRuns } from "./query";
+import type { HealthReady, RemediationProposal, RemediationSession, RemediationState } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
 
@@ -38,6 +38,8 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
   const requestedSession = location.search.get("session");
   const sessions = useRemediationSessions(user, state || undefined);
   const runs = useRuns(user, "FAILED");
+  const health = useHealth(user);
+  const llmConfigured = llmConfiguredFromHealth(health.data);
   const selectedId = requestedSession ?? sessions.data?.items[0]?.session_id ?? null;
   const detail = useRemediationSession(user, selectedId);
   const selectSession = (sessionId: string) =>
@@ -45,13 +47,22 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
   // Provider chosen on the creation form. The Worker auto-advances through
   // `planning` within ~1s of creation, so the user's LLM choice must ride on
   // the create request itself — the detail-page selector only affects later
-  // replanning cycles. Defaults to "local" so the LLM explains when the
-  // gateway is configured; users who want pure rules can pick "none".
-  const [createProvider, setCreateProvider] = useState<LlmProvider>("local");
+  // replanning cycles. We track an override rather than a fixed initial value
+  // so the default can react to `useHealth` resolving (LLM-configured sites
+  // offer "local"; unconfigured sites fall back to "none") without freezing
+  // the first-render value before health has loaded.
+  const [createProviderOverride, setCreateProviderOverride] = useState<LlmProvider | null>(null);
+  const createProvider = createProviderOverride ?? defaultProvider({ llmConfigured });
+  // Toggles the inline "new session" controls above the session list. Only
+  // relevant when at least one session already exists — the empty state has
+  // its own create controls and never sets this.
+  const [showCreate, setShowCreate] = useState(false);
   const createRemediationSession = useMutation({
     mutationFn: (runId: string) => api.createRemediationSession(user, runId, createProvider),
-    onSuccess: () => {
+    onSuccess: (session) => {
+      setShowCreate(false);
       void queryClient.invalidateQueries({ queryKey: ["remediation-sessions", user] });
+      selectSession(session.session_id);
     },
   });
 
@@ -86,7 +97,21 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
         <section className="panel agent-queue" aria-labelledby="agent-queue-heading">
           <div className="panel-heading">
             <div><p className="panel-kicker">Session queue</p><h2 id="agent-queue-heading">{sessions.data?.items.length ?? 0} 个会话</h2></div>
-            {sessions.isFetching ? <StatusBadge label="同步中" tone="info" /> : null}
+            <div className="agent-queue-actions">
+              {(sessions.data?.items.length ?? 0) > 0 ? (
+                <button
+                  type="button"
+                  className="button secondary"
+                  aria-expanded={showCreate}
+                  aria-controls="agent-new-session"
+                  onClick={() => setShowCreate((value) => !value)}
+                >
+                  <Plus aria-hidden="true" size={15} />
+                  {showCreate ? "取消新建" : "新建修复会话"}
+                </button>
+              ) : null}
+              {sessions.isFetching ? <StatusBadge label="同步中" tone="info" /> : null}
+            </div>
           </div>
           <QueryBoundary
             pending={sessions.isPending}
@@ -101,7 +126,7 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
                     <span className="sr-only">LLM provider</span>
                     <select
                       value={createProvider}
-                      onChange={(event) => setCreateProvider(event.target.value as LlmProvider)}
+                      onChange={(event) => setCreateProviderOverride(event.target.value as LlmProvider)}
                       aria-label="LLM provider"
                       className="llm-provider-select"
                     >
@@ -131,6 +156,40 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
               </>
             }
           >
+            {showCreate && (sessions.data?.items.length ?? 0) > 0 ? (
+              <section id="agent-new-session" className="agent-new-session" aria-label="新建修复会话">
+                <div className="agent-create-controls">
+                  <label className="select-field">
+                    <Bot aria-hidden="true" size={16} />
+                    <span className="sr-only">LLM provider</span>
+                    <select
+                      value={createProvider}
+                      onChange={(event) => setCreateProviderOverride(event.target.value as LlmProvider)}
+                      aria-label="LLM provider"
+                      className="llm-provider-select"
+                    >
+                      <option value="local">{providerLabel("local")}</option>
+                      <option value="none">{providerLabel("none")}</option>
+                    </select>
+                  </label>
+                  <p className="agent-safety-note">
+                    选择 Run 后会以当前 LLM 设置创建修复会话；Worker 将用该 provider 解释诊断。
+                  </p>
+                </div>
+                <RunPicker
+                  runs={runs.data?.items ?? []}
+                  filter={{ state: "FAILED" }}
+                  onSelect={(runId) => createRemediationSession.mutate(runId)}
+                />
+                {createRemediationSession.error ? (
+                  <p className="agent-safety-note" role="alert">
+                    {createRemediationSession.error instanceof Error
+                      ? createRemediationSession.error.message
+                      : "创建会话失败"}
+                  </p>
+                ) : null}
+              </section>
+            ) : null}
             <div className="agent-session-list">
               {(sessions.data?.items ?? []).map((session) => (
                 <button
@@ -156,7 +215,7 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
             emptyTitle="选择一个会话"
             emptyDetail="队列会保留审批、执行和评价的完整审计记录。"
           >
-            {detail.data ? <SessionDetail user={user} session={detail.data} /> : null}
+            {detail.data ? <SessionDetail key={detail.data.session_id} user={user} session={detail.data} /> : null}
           </QueryBoundary>
         </section>
       </div>
@@ -166,7 +225,22 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
 
 function SessionDetail({ user, session }: { user: string; session: RemediationSession }) {
   const queryClient = useQueryClient();
-  const [provider, setProvider] = useState<LlmProvider>("local");
+  const health = useHealth(user);
+  const llmConfigured = llmConfiguredFromHealth(health.data);
+  // The provider dropdown mirrors the session's persisted provider. We track
+  // an override (not a fixed initial value) so that:
+  //   - On first render, before the user touches anything, the dropdown shows
+  //     `session.provider` — the value the Worker has been using. Advancing
+  //     re-sends that same value instead of silently overwriting it with
+  //     "local" (the old hard-coded default).
+  //   - If `session.provider` is missing/unknown, we fall back to
+  //     `defaultProvider({ llmConfigured })` so unconfigured-LLM sites get
+  //     "none" and configured sites get "local".
+  //   - If the session is refreshed and `session.provider` changes, the
+  //     dropdown follows it — unless the user has already picked, in which
+  //     case the override sticks.
+  const [providerOverride, setProviderOverride] = useState<LlmProvider | null>(null);
+  const provider: LlmProvider = providerOverride ?? sessionProviderValue(session.provider, defaultProvider({ llmConfigured }));
   const refresh = (updated?: RemediationSession) => {
     if (updated) queryClient.setQueryData(
       ["remediation-session", user, session.session_id],
@@ -177,6 +251,10 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
       queryKey: ["remediation-session", user, session.session_id],
     });
   };
+  // We always send the dropdown's current value. Because the dropdown is
+  // initialized from `session.provider`, this is a no-op unless the user
+  // intentionally picks a different provider — it does not silently overwrite
+  // the persisted value the way the old hard-coded "local" did.
   const advance = useMutation({
     mutationFn: () => api.advanceRemediationSession(
       user,
@@ -247,7 +325,7 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
                   <span className="sr-only">LLM provider</span>
                   <select
                     value={provider}
-                    onChange={(event) => setProvider(event.target.value as LlmProvider)}
+                    onChange={(event) => setProviderOverride(event.target.value as LlmProvider)}
                     aria-label="LLM provider"
                     className="llm-provider-select"
                   >
@@ -339,6 +417,23 @@ export type LlmProvider = "local" | "none";
 
 export function defaultProvider(opts: { llmConfigured: boolean }): LlmProvider {
   return opts.llmConfigured ? "local" : "none";
+}
+
+// Derives whether the local LLM gateway is configured from the readiness
+// payload. The backend emits a `local_llm` check whose status is "configured"
+// when the gateway is enabled and "disabled" otherwise (health.py:102,
+// `_configured_check`). Treat anything other than "configured" as
+// unconfigured so a missing/unknown check degrades to the safe "none" default.
+export function llmConfiguredFromHealth(health: HealthReady | undefined): boolean {
+  return health?.checks?.["local_llm"]?.status === "configured";
+}
+
+// Coerces the session's persisted provider string into the dropdown's union
+// type. Unknown/empty values fall back to `fallback` so the UI never shows a
+// blank option or sends a value the backend would reject.
+export function sessionProviderValue(value: string | undefined, fallback: LlmProvider): LlmProvider {
+  if (value === "local" || value === "none") return value;
+  return fallback;
 }
 
 export function providerLabel(provider: LlmProvider): string {

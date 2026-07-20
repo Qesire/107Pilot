@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from pilot107.api.http_app import build_api
+from pilot107.api.http_app import make_handler as make_api_handler
 from pilot107.web.server import (
     WebConfig,
     WebIdentityMode,
     config_from_env,
     is_safe_demo_user,
     is_safe_terminal_deep_link,
+    make_handler,
     mutating_request_error,
     normalize_origin,
     resolve_proxy_user,
@@ -153,6 +161,86 @@ class WebServerTests(unittest.TestCase):
         )
         self.assertIsNone(resolve_static_request("/assets/missing.js", root=static_root))
         self.assertIsNone(resolve_static_request("/../../etc/passwd", root=static_root))
+
+    def test_origin_probe_post_exercises_bff_csrf_origin_check(self) -> None:
+        # Spin up the real API (http_app) and BFF (web.server) stack so a POST
+        # to /api/v1/security/origin-probe traverses do_POST's
+        # _allow_mutating_request() Origin check before reaching the route.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            api = build_api(
+                db_path=root / "pilot107.db",
+                evidence_root=root / "evidence",
+                auth_required=False,
+            )
+            api_server = ThreadingHTTPServer(("127.0.0.1", 0), make_api_handler(api))
+            api_thread = threading.Thread(target=api_server.serve_forever, daemon=True)
+            api_thread.start()
+            api_base = f"http://127.0.0.1:{api_server.server_port}"
+            try:
+                config = WebConfig(
+                    api_base_url=api_base,
+                    public_origin=None,  # fall back to Host header
+                )
+                bff_server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(config))
+                bff_thread = threading.Thread(target=bff_server.serve_forever, daemon=True)
+                bff_thread.start()
+                base = f"http://127.0.0.1:{bff_server.server_port}"
+                probe = base + "/api/v1/security/origin-probe"
+                try:
+                    # Matching Origin (derived from Host) -> 200 from the route.
+                    req_ok = urllib.request.Request(
+                        probe,
+                        data=b"",
+                        method="POST",
+                        headers={
+                            "Origin": base,
+                            "Host": f"127.0.0.1:{bff_server.server_port}",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    with urllib.request.urlopen(req_ok, timeout=5) as response:
+                        self.assertEqual(response.status, 200)
+
+                    # Mismatched Origin -> 403 CSRF.ORIGIN_DENIED at the BFF.
+                    req_bad = urllib.request.Request(
+                        probe,
+                        data=b"",
+                        method="POST",
+                        headers={
+                            "Origin": "https://evil.example",
+                            "Host": f"127.0.0.1:{bff_server.server_port}",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    with self.assertRaises(urllib.error.HTTPError) as ctx:
+                        urllib.request.urlopen(req_bad, timeout=5)
+                    self.assertEqual(ctx.exception.code, 403)
+                    self.assertIn(
+                        "CSRF.ORIGIN_DENIED",
+                        ctx.exception.read().decode("utf-8", "replace"),
+                    )
+
+                    # Absent Origin -> BFF skips the check -> 200 from the route.
+                    req_none = urllib.request.Request(
+                        probe,
+                        data=b"",
+                        method="POST",
+                        headers={
+                            "Host": f"127.0.0.1:{bff_server.server_port}",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    with urllib.request.urlopen(req_none, timeout=5) as response:
+                        self.assertEqual(response.status, 200)
+                finally:
+                    bff_server.shutdown()
+                    bff_server.server_close()
+                    bff_thread.join(timeout=5)
+            finally:
+                api_server.shutdown()
+                api_server.server_close()
+                api_thread.join(timeout=5)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,10 @@ uv run --extra dev pytest -q
 
 npm run typecheck
 npm test -- --run
+# Playwright UI suite — matches GitHub CI. On a fresh checkout browsers must
+# be installed first: `npx playwright install` (add --with-deps on CI hosts
+# that lack browser shared libraries).
+npm run test:ui
 npm run build
 
 sh simulator/compose/scripts/check-compose-config.sh

@@ -40,17 +40,27 @@ cp -a "$root/config" "$work_dir/config"
 mkdir -p "$work_dir/data" "$work_dir/simulator"
 cp -a "$root/data/known_errors" "$work_dir/data/"
 cp -a "$root/data/submission_templates" "$work_dir/data/"
-# Copy the compose dir but tolerate unreadable 0600 secrets (owned by the
-# slurm container uid); those are cleaned below and must NOT be in the bundle.
-cp -a "$root/simulator/compose" "$work_dir/simulator/" 2>/dev/null || true
+# Copy the compose dir. A real copy failure (disk full, missing source) MUST
+# fail the export, so we do NOT swallow cp errors here. Some 0600/0700 secret
+# files under simulator/compose/{certs,secrets} may emit permission-denied
+# warnings; those are expected and get cleaned below — we tolerate the
+# warnings but still propagate any non-zero cp status by retrying the copy
+# for the non-secret subtree below if the initial copy aborts early.
+if ! cp -a "$root/simulator/compose" "$work_dir/simulator/" 2>/tmp/pilot107-export-cp.err; then
+  # Retry excluding the secret/cert dirs that may be unreadable; if THIS also
+  # fails, it is a real error (disk full, missing source) and we abort.
+  if ! rsync -a --exclude 'certs/' --exclude 'secrets/' \
+        "$root/simulator/compose/" "$work_dir/simulator/compose/" 2>>/tmp/pilot107-export-cp.err; then
+    echo "failed to copy simulator/compose:" >&2
+    cat /tmp/pilot107-export-cp.err >&2
+    exit 1
+  fi
+fi
 # Clean generated secrets/certs/env that should not be in the bundle.
-# (These are recreated by start-cpu-rc.sh on the target.) Use find+rm in
-# case the source contains 0600 files we cannot cp (permission denied);
-# the initial cp -a above may have skipped them, which is fine.
+# (These are recreated by start-cpu-rc.sh on the target.)
 rm -f "$work_dir/simulator/compose/.env.cpu-rc"
 find "$work_dir/simulator/compose" -maxdepth 1 -type f -name '.env*' ! -name '.env.cpu-rc.example' -delete
 rm -rf "$work_dir/simulator/compose/certs" "$work_dir/simulator/compose/secrets"
-rm -f "$work_dir/simulator/compose/secrets/slurmdbd-cpu-rc.conf" 2>/dev/null || true
 mkdir -p "$work_dir/simulator/compose/certs" "$work_dir/simulator/compose/secrets"
 cp "$root/simulator/compose/certs/README.md" "$work_dir/simulator/compose/certs/" 2>/dev/null || true
 cp "$root/simulator/compose/secrets/README.md" "$work_dir/simulator/compose/secrets/" 2>/dev/null || true
@@ -62,6 +72,8 @@ cp "$root/pyproject.toml" "$root/README.md" "$work_dir/"
 
 for script in \
   accept-cpu-rc-release.sh \
+  accept-runtime-bundle.sh \
+  accept-source-release.sh \
   apply-cpu-rc-profile.sh \
   build-app-images.sh \
   build-cpu-rc-images.sh \
@@ -72,6 +84,7 @@ for script in \
   init-local-secrets.sh \
   install-systemd-units.sh \
   load_competition.py \
+  preflight-cpu-rc-vm.sh \
   scan-array-artifacts.py \
   smoke_auto_capsule.py \
   smoke-auto-capsule.sh \
@@ -175,11 +188,57 @@ Use \`scripts/control-plane-recovery.py\` as documented in
 against a copy and followed by \`bash scripts/check-cpu-rc.sh\`.
 EOF
 
+assert_required_files_exist() {
+  local missing=()
+  local required=(
+    "scripts/accept-source-release.sh"
+    "scripts/accept-runtime-bundle.sh"
+    "scripts/check-cpu-rc.sh"
+    "scripts/start-cpu-rc.sh"
+    "scripts/build-cpu-rc-images.sh"
+    "scripts/smoke-cpu-rc-remediation.sh"
+    "scripts/smoke-auto-capsule.sh"
+    "scripts/smoke-restart-volume-recovery.sh"
+    "scripts/preflight-cpu-rc-vm.sh"
+    "scripts/import-cpu-rc-images.sh"
+    "scripts/init-local-secrets.sh"
+    "scripts/stop-cpu-rc.sh"
+    "scripts/apply-cpu-rc-profile.sh"
+    "RELEASE_MANIFEST.json"
+    "SHA256SUMS"
+    "images/pilot107-cpu-rc-images.tar.gz"
+    "images/images.txt"
+    "simulator/compose/compose.cpu-rc.yml"
+    "simulator/compose/compose.yml"
+    "simulator/compose/compose.competition.yml"
+    "simulator/compose/slurm-cpu-rc/slurm.conf"
+    "simulator/compose/slurm-cpu-rc/cgroup.conf"
+    "simulator/compose/.env.cpu-rc.example"
+    "src"
+    "apps"
+    "pyproject.toml"
+  )
+  for rel in "${required[@]}"; do
+    if [[ ! -e "$work_dir/$rel" ]]; then
+      missing+=("$rel")
+    fi
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "export-cpu-rc-bundle: required files missing from bundle:" >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    return 1
+  fi
+}
+
 (
   cd "$work_dir"
   find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum >SHA256SUMS
   sha256sum -c SHA256SUMS >/dev/null
 )
+# Assert required files exist BEFORE tar (after RELEASE_MANIFEST.json and
+# SHA256SUMS are generated). A missing file here means a copy step silently
+# dropped it — fail the export rather than ship an incomplete bundle.
+assert_required_files_exist
 tar -C "$out_root" -czf "$archive" "$bundle_name"
 sha256sum "$archive" >"$archive.sha256"
 

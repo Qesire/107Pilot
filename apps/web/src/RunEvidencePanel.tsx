@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "./api";
+import { defaultProvider, llmConfiguredFromHealth } from "./AgentPage";
 import { FactState, QueryBoundary, StatusBadge, formatTimestamp } from "./components";
 import {
   asObject,
@@ -29,6 +30,7 @@ import {
 } from "./evidence-state";
 import {
   useEvidenceObject,
+  useHealth,
   useRun,
   useRunCapsule,
   useRunDiagnoses,
@@ -95,6 +97,13 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
     tab === "results" ? resultSummary?.object_id ?? null : null,
   );
   const queryClient = useQueryClient();
+  // The evidence-panel "进入 Agent" entry point has no provider picker, so it
+  // uses the runtime-aware default: "local" when the LLM gateway is
+  // configured, "none" otherwise. Without this, unconfigured-LLM users would
+  // silently create sessions with provider="local" (the api.ts default) and
+  // the Worker would try to call a gateway that isn't there.
+  const health = useHealth(user);
+  const remediationProvider = defaultProvider({ llmConfigured: llmConfiguredFromHealth(health.data) });
   const diagnose = useMutation({
     mutationFn: () => api.diagnoseRun(user, run.run_id),
     onSuccess: (result) => {
@@ -110,7 +119,7 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
     },
   });
   const startRemediation = useMutation({
-    mutationFn: () => api.createRemediationSession(user, run.run_id),
+    mutationFn: () => api.createRemediationSession(user, run.run_id, remediationProvider),
     onSuccess: (session) => navigate(
       `/agent?user=${encodeURIComponent(user)}&session=${encodeURIComponent(session.session_id)}`,
     ),

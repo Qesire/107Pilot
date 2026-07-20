@@ -363,8 +363,9 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         postgres_dsn=config.control_postgres_dsn,
     )
     evidence_store = EvidenceStore(config.evidence_root)
+    contract_store = ContractStore(config.db_path)
     backend, task_handler, reconcile_backend = _build_backend_and_task_handler(
-        config, store, evidence_store
+        config, store, evidence_store, contract_store
     )
     path_checker, path_checker_factory = _worker_preflight_checkers(config)
     run_service = RunService(
@@ -382,7 +383,6 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         control_repository=control_repository,
         dispatcher_id=config.worker_id,
     )
-    contract_store = ContractStore(config.db_path)
     capability_profile = _worker_capability_profile(config)
     partition_qos = capability_profile.partition_qos()
     qos_limits = capability_profile.qos_limits()
@@ -518,6 +518,7 @@ def _build_backend_and_task_handler(
     config: WorkerServiceConfig,
     store: RunStore,
     evidence_store: EvidenceStore,
+    contract_store: ContractStore | None,
 ) -> tuple[SlurmBackend, CollectionTaskHandler | None, TokenMintingRestBackend | None]:
     if config.backend == "in-memory":
         return InMemorySlurmBackend(), None, None
@@ -574,6 +575,7 @@ def _build_backend_and_task_handler(
                 run_store=store,
                 evidence_transport=_build_evidence_transport(config),
                 timeout_seconds=config.command_timeout_seconds,
+                contract_store=contract_store,
             ),
             None,
         )
@@ -596,6 +598,7 @@ def _build_backend_and_task_handler(
                 run_store=store,
                 evidence_transport=_build_evidence_transport(config),
                 timeout_seconds=config.command_timeout_seconds,
+                contract_store=contract_store,
             ),
             None,
         )

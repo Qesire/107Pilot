@@ -1,0 +1,455 @@
+#!/usr/bin/env bash
+#
+# accept-runtime-bundle.sh — validate a 107pilot CPU-RC offline runtime bundle.
+#
+# This script is the offline-bundle half of the封版门 #4 acceptance matrix.
+# It proves the bundle carries a self-consistent, integrity-verified runtime
+# closure: manifest + digests, fixed images, compose stack, and the cpu-rc
+# behavioral smokes. It does NOT re-run source CI — source tests are bound to
+# the git SHA by accept-source-release.sh (or GitHub CI) against the source
+# tree, not the bundle.
+#
+# Steps (in order):
+#   1. manifest_validate   — RELEASE_MANIFEST.json present + parseable;
+#                            SHA256SUMS verified (sha256sum -c); archive
+#                            sha256 verified when a .tar.gz is supplied.
+#   2. import_images       — docker load bundled image tarball; verify each
+#                            loaded image Id equals RELEASE_MANIFEST
+#                            content_digest.
+#   3. start_stack         — bash scripts/start-cpu-rc.sh (generates local
+#                            .env.cpu-rc from the bundled .env.cpu-rc.example).
+#   4. compose_readiness   — compose config validation + container health wait.
+#   5. check_cpu_rc        — partition assertion + success/fail/cancel + Evidence
+#                            + explicit Capsule (bash scripts/check-cpu-rc.sh).
+#   6. auto_capsule        — Worker auto-Capsule WITHOUT explicit POST.
+#   7. rule_remediation    — rule-evaluated diagnosis → HTTP remediation session.
+#   8. restart_recovery    — docker compose down + restart preserves volume state.
+#   9. report              — JSON report; exit 1 if any step FAILED.
+#
+# Exit-code mapping (preserved from Phase 1):
+#   rc=0   → PASS
+#   rc=77  → KNOWN_SKIP — exit 77 = reserved for explicit capability-probe
+#            architectural skip; any other non-zero is a real regression.
+#   else   → FAIL  (strict; only FAIL fails the overall release)
+#
+# Env knobs (with defaults):
+#   PILOT107_PUBLIC_URL            REQUIRED (no default). Full public origin.
+#   PILOT107_BUNDLE_DIR            If set, the extracted bundle dir to validate.
+#   PILOT107_BUNDLE_ARCHIVE        If set, a .tar.gz to verify (.sha256) and
+#                                  extract before validating. Used when
+#                                  PILOT107_BUNDLE_DIR is unset.
+#   PILOT107_SKIP_ORIGIN_VALIDATE  default 0; passed to start-cpu-rc.sh.
+#   PILOT107_ACCEPT_ARTIFACT_DIR   default artifacts/acceptance/runtime-<rev>-<ts>
+#   PILOT107_ACCEPT_LEAVE_UP       default 0; 1 leaves the stack running on exit.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -z "${PILOT107_PUBLIC_URL:-}" ]]; then
+  echo "PILOT107_PUBLIC_URL is unset or empty. Set it to the full public origin" >&2
+  echo "the browser uses to reach the deployment, e.g. https://pilot.example.edu:8443" >&2
+  exit 1
+fi
+
+# Resolve the bundle directory: either an explicit dir, or extract an archive.
+bundle_dir=""
+extracted_tmp=""
+if [[ -n "${PILOT107_BUNDLE_DIR:-}" ]]; then
+  bundle_dir="$PILOT107_BUNDLE_DIR"
+elif [[ -n "${PILOT107_BUNDLE_ARCHIVE:-}" ]]; then
+  archive="$PILOT107_BUNDLE_ARCHIVE"
+  if [[ ! -f "$archive" ]]; then
+    echo "PILOT107_BUNDLE_ARCHIVE=$archive not found" >&2
+    exit 1
+  fi
+  sha_file="${archive}.sha256"
+  if [[ -f "$sha_file" ]]; then
+    ( cd "$(dirname "$archive")" && sha256sum -c "$(basename "$sha_file")" )
+  else
+    echo "WARNING: $sha_file missing; skipping archive digest check" >&2
+  fi
+  extracted_tmp="$(mktemp -d)"
+  tar -xzf "$archive" -C "$extracted_tmp"
+  # The archive contains a single top-level bundle dir.
+  bundle_dir="$(find "$extracted_tmp" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  if [[ -z "$bundle_dir" ]]; then
+    echo "extracted archive $archive has no top-level dir" >&2
+    exit 1
+  fi
+else
+  echo "set PILOT107_BUNDLE_DIR (extracted bundle) or PILOT107_BUNDLE_ARCHIVE (.tar.gz)" >&2
+  exit 1
+fi
+
+if [[ ! -d "$bundle_dir" ]]; then
+  echo "bundle dir not found: $bundle_dir" >&2
+  exit 1
+fi
+
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+artifact_dir="${PILOT107_ACCEPT_ARTIFACT_DIR:-$root/artifacts/acceptance/runtime-$timestamp}"
+mkdir -p "$artifact_dir"
+steps_dir="$artifact_dir/steps"
+mkdir -p "$steps_dir"
+started_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# Export knobs consumed by child scripts. Images are imported from the bundle
+# in step_import_images, so start-cpu-rc.sh must NOT rebuild them.
+export PILOT107_PUBLIC_URL
+export PILOT107_SKIP_BUILD=1
+export PILOT107_SKIP_ORIGIN_VALIDATE="${PILOT107_SKIP_ORIGIN_VALIDATE:-0}"
+export PILOT107_SMOKE_PARTITION="${PILOT107_SMOKE_PARTITION:-CPU-RC}"
+export PILOT107_SMOKE_QOS="${PILOT107_SMOKE_QOS:-qos_cpu_rc}"
+export PILOT107_COMPETITION_BASE_URL="${PILOT107_COMPETITION_BASE_URL:-${PILOT107_PUBLIC_URL%/}/api/v1}"
+
+log() { printf '%s\n' "$*"; }
+
+# Exit-code → status mapping. KNOWN_SKIP_STEPS is intentionally empty: every
+# step must PASS or FAIL. A step may still signal an architectural skip by
+# exiting 77 (probe-gated); run_step maps rc==77 to KNOWN_SKIP below.
+#
+# exit 77 = reserved for explicit capability-probe architectural skip; any
+# other non-zero is a real regression.
+KNOWN_SKIP_STEPS=""
+
+run_step() {
+  local name="$1" fn="$2"
+  local status_file="$steps_dir/$name.status"
+  local start_ts end_ts rc
+  start_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  log "=== STEP: $name ==="
+  rc=0
+  ( set -e; "$fn" ) || rc=$?
+  end_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if [[ "$rc" -eq 0 ]]; then
+    printf 'start=%s\nend=%s\nstatus=PASS\n' "$start_ts" "$end_ts" >"$status_file"
+    log "=== STEP: $name PASS ==="
+  elif [[ "$rc" -eq 77 ]]; then
+    printf 'start=%s\nend=%s\nstatus=KNOWN_SKIP\nrc=%s\n' "$start_ts" "$end_ts" "$rc" >"$status_file"
+    log "=== STEP: $name KNOWN_SKIP (rc=$rc; probe-gated architectural skip) ==="
+  else
+    printf 'start=%s\nend=%s\nstatus=FAIL\nrc=%s\n' "$start_ts" "$end_ts" "$rc" >"$status_file"
+    log "=== STEP: $name FAIL (rc=$rc) ==="
+  fi
+  return 0
+}
+
+# Resolve the bundle-relative root for child scripts. The bundle ships scripts/
+# at $bundle_dir/scripts and the compose tree at $bundle_dir/simulator/compose.
+# start-cpu-rc.sh and the smokes compute their own `root` from BASH_SOURCE, so
+# we run them with BASH_SOURCE pointing inside $bundle_dir by cd-ing there.
+bundle_root="$bundle_dir"
+
+step_manifest_validate() {
+  local manifest="$bundle_dir/RELEASE_MANIFEST.json"
+  local sums="$bundle_dir/SHA256SUMS"
+  if [[ ! -f "$manifest" ]]; then
+    echo "missing RELEASE_MANIFEST.json in $bundle_dir" >&2
+    return 1
+  fi
+  if [[ ! -f "$sums" ]]; then
+    echo "missing SHA256SUMS in $bundle_dir" >&2
+    return 1
+  fi
+  # Parse manifest (must be valid JSON with release_revision).
+  if ! python3 - "$manifest" <<'PY'; then
+    import json, sys
+    m = json.loads(open(sys.argv[1]).read())
+    if not m.get("release_revision"):
+        print("RELEASE_MANIFEST.release_revision missing", file=sys.stderr)
+        sys.exit(1)
+    print("release_revision:", m["release_revision"])
+PY
+    return 1
+  fi
+  # Verify every file listed in SHA256SUMS is present and unmodified.
+  ( cd "$bundle_dir" && sha256sum -c SHA256SUMS >/dev/null )
+}
+
+step_import_images() {
+  local images_tar="$bundle_dir/images/pilot107-cpu-rc-images.tar.gz"
+  local images_txt="$bundle_dir/images/images.txt"
+  if [[ ! -f "$images_tar" || ! -f "$images_txt" ]]; then
+    echo "bundle missing images/pilot107-cpu-rc-images.tar.gz or images/images.txt" >&2
+    return 1
+  fi
+  docker load -i "$images_tar" >/dev/null
+  # Verify each loaded image Id matches RELEASE_MANIFEST content_digest, AND
+  # that images.txt and the manifest agree as sets (no extra un-manifested
+  # image in images.txt, no manifest ref missing from images.txt).
+  python3 - "$bundle_dir/RELEASE_MANIFEST.json" "$images_txt" <<'PY'
+import json, subprocess, sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text())
+release_revision = manifest.get("release_revision", "")
+expected = {rec["reference"]: rec["content_digest"] for rec in manifest.get("images", [])}
+loaded = [ln.strip() for ln in Path(sys.argv[2]).read_text().splitlines() if ln.strip()]
+loaded_set = set(loaded)
+expected_refs = set(expected)
+
+# manifest ⊆ loaded: every manifest ref must appear in images.txt.
+missing = [r for r in expected if r not in loaded_set]
+if missing:
+    print("images.txt missing entries for: %s" % missing, file=sys.stderr)
+    sys.exit(1)
+# loaded ⊆ manifest: no extra un-manifested ref in images.txt.
+extra = [r for r in loaded if r not in expected_refs]
+if extra:
+    for r in extra:
+        print("images.txt contains reference %s not in RELEASE_MANIFEST.json (release_revision=%s)" % (r, release_revision), file=sys.stderr)
+    sys.exit(1)
+for ref in expected:
+    payload = json.loads(subprocess.check_output(["docker", "image", "inspect", ref]))[0]
+    if payload["Id"] != expected[ref]:
+        print("digest mismatch for %s: got %s, manifest says %s" % (ref, payload["Id"], expected[ref]), file=sys.stderr)
+        sys.exit(1)
+    print("ok   %s (%s)" % (ref, payload["Id"]))
+PY
+}
+
+step_start_stack() {
+  ( cd "$bundle_root" && bash scripts/start-cpu-rc.sh )
+}
+
+step_compose_readiness() {
+  # Compose config validation + health wait. start-cpu-rc.sh already waits for
+  # container health before returning, so here we re-assert the compose config
+  # renders and that the public health endpoint answers.
+  local compose_dir="$bundle_root/simulator/compose"
+  local env_file="${PILOT107_CPU_RC_ENV_FILE:-$compose_dir/.env.cpu-rc}"
+  local project_name="${PILOT107_CPU_RC_PROJECT_NAME:-pilot107-cpu-rc}"
+  docker compose \
+    --project-name "$project_name" \
+    --env-file "$env_file" \
+    -f "$compose_dir/compose.yml" \
+    -f "$compose_dir/compose.competition.yml" \
+    -f "$compose_dir/compose.cpu-rc.yml" \
+    --profile competition \
+    config >/dev/null
+  # Health probe: the API readiness endpoint must answer within ~60s.
+  https_port="$(awk -F= '/^PILOT107_HTTPS_PORT=/{print $2}' "$env_file" | tail -1)"
+  : "${https_port:=8443}"
+  python3 - "$https_port" <<'PY'
+import ssl, sys, time, urllib.request
+port = sys.argv[1]
+url = "https://127.0.0.1:%s/api/v1/health/ready" % port
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+deadline = time.time() + 60
+last = None
+while time.time() < deadline:
+    try:
+        with urllib.request.urlopen(url, timeout=5, context=ctx) as r:
+            if r.status < 500:
+                sys.exit(0)
+    except Exception as e:
+        last = e
+        time.sleep(2)
+print("API readiness never answered: %s" % last, file=sys.stderr)
+sys.exit(1)
+PY
+}
+
+step_check_cpu_rc() {
+  ( cd "$bundle_root" && bash scripts/check-cpu-rc.sh )
+}
+
+step_auto_capsule() {
+  ( cd "$bundle_root" && bash scripts/smoke-auto-capsule.sh )
+}
+
+step_rule_remediation() {
+  ( cd "$bundle_root" && bash scripts/smoke-cpu-rc-remediation.sh )
+}
+
+step_restart_recovery() {
+  ( cd "$bundle_root" && bash scripts/smoke-restart-volume-recovery.sh )
+}
+
+# P1-4: post-smoke binding check. Even if every smoke step passed, the
+# acceptance is invalid if a running container's image ID does not match the
+# RELEASE_MANIFEST.json content_digest for its reference — that means the
+# bundle's "report SHA" no longer describes what is actually running. This
+# step writes its JSON output to $steps_dir/image_binding.json so step_report
+# can embed it in the final report. The step FAILs (rc=1) on any mismatch,
+# which propagates through run_step → overall_rc=1.
+step_image_binding() {
+  local out="$steps_dir/image_binding.json"
+  local compose_dir="$bundle_root/simulator/compose"
+  local env_file="${PILOT107_CPU_RC_ENV_FILE:-$compose_dir/.env.cpu-rc}"
+  local project_name="${PILOT107_CPU_RC_PROJECT_NAME:-pilot107-cpu-rc}"
+  # The helper resolves its own compose context from these env vars + the
+  # script-relative compose_dir. Run from $bundle_root so its script_root is
+  # the bundle, and point it at the bundle's RELEASE_MANIFEST.json.
+  ( cd "$bundle_root" \
+    && PILOT107_RELEASE_MANIFEST_PATH="$bundle_dir/RELEASE_MANIFEST.json" \
+       PILOT107_CPU_RC_ENV_FILE="$env_file" \
+       PILOT107_CPU_RC_PROJECT_NAME="$project_name" \
+       bash scripts/verify-cpu-rc-image-binding.sh >"$out" )
+}
+
+STEPS=(
+  "manifest_validate|step_manifest_validate"
+  "import_images|step_import_images"
+  "start_stack|step_start_stack"
+  "compose_readiness|step_compose_readiness"
+  "check_cpu_rc|step_check_cpu_rc"
+  "auto_capsule|step_auto_capsule"
+  "rule_remediation|step_rule_remediation"
+  "restart_recovery|step_restart_recovery"
+  "image_binding|step_image_binding"
+  "report|step_report"
+)
+
+cleanup() {
+  if [[ -n "$extracted_tmp" && -d "$extracted_tmp" ]]; then
+    rm -rf "$extracted_tmp" || true
+  fi
+  if [[ "${PILOT107_ACCEPT_LEAVE_UP:-0}" != "1" ]]; then
+    log "=== CLEANUP: stopping cpu-rc stack (best-effort) ==="
+    ( cd "$bundle_root" && bash scripts/stop-cpu-rc.sh ) || true
+  else
+    log "=== CLEANUP: PILOT107_ACCEPT_LEAVE_UP=1; leaving stack running ==="
+  fi
+}
+trap cleanup EXIT
+
+step_report() {
+  local report_start report_end
+  report_start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  python3 - "$artifact_dir" "$steps_dir" "$bundle_dir" "$started_iso" "${STEPS[@]}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+artifact_dir = Path(sys.argv[1])
+steps_dir = Path(sys.argv[2])
+bundle_dir = Path(sys.argv[3])
+started_iso = sys.argv[4]
+step_specs = sys.argv[5:]
+
+manifest_path = bundle_dir / "RELEASE_MANIFEST.json"
+release_revision = ""
+release_revision_full = ""
+release_revision_short = ""
+image_digests = []
+image_binding = None
+if manifest_path.is_file():
+    try:
+        m = json.loads(manifest_path.read_text())
+        release_revision = m.get("release_revision", "") or ""
+        release_revision_full = release_revision
+        release_revision_short = release_revision[:12] if release_revision else ""
+        image_digests = [
+            {"reference": r.get("reference"), "content_digest": r.get("content_digest")}
+            for r in m.get("images", [])
+        ]
+    except Exception:
+        pass
+
+# P1-4: read the image_binding step's JSON output (if present) so the final
+# report records exactly which running containers were checked, their image
+# IDs, and whether each matched the manifest. If the step ran, its status is
+# already reflected in $steps_dir/image_binding.status; here we embed the
+# structured detail.
+binding_json = steps_dir / "image_binding.json"
+if binding_json.is_file():
+    try:
+        image_binding = json.loads(binding_json.read_text())
+    except Exception:
+        image_binding = None
+
+steps = []
+any_fail = False
+for spec in step_specs:
+    name = spec.split("|", 1)[0]
+    if name == "report":
+        steps.append({"name": name, "status": "PASS", "start": None, "end": None, "rc": None})
+        continue
+    status_file = steps_dir / f"{name}.status"
+    entry = {"name": name, "status": "MISSING", "start": None, "end": None, "rc": None}
+    if status_file.is_file():
+        kv = {}
+        for line in status_file.read_text().splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                kv[k] = v
+        entry["status"] = kv.get("status", "MISSING")
+        entry["start"] = kv.get("start")
+        entry["end"] = kv.get("end")
+        if kv.get("rc") is not None:
+            try:
+                entry["rc"] = int(kv["rc"])
+            except ValueError:
+                entry["rc"] = kv["rc"]
+        if entry["status"] == "FAIL":
+            any_fail = True
+    steps.append(entry)
+
+# P1-4: if the image_binding step recorded any non-matching running image,
+# force overall result FAIL even if every smoke step passed — the running
+# images don't match the bundle, so the acceptance is invalid.
+image_binding_all_match = True
+if image_binding is not None:
+    image_binding_all_match = bool(image_binding.get("all_match", True))
+    if not image_binding_all_match:
+        any_fail = True
+
+report = {
+    "profile": "cpu-rc-runtime-bundle",
+    "release_revision": release_revision,
+    "release_revision_full": release_revision_full,
+    "release_revision_short": release_revision_short,
+    "bundle_dir": str(bundle_dir),
+    "images": image_digests,
+    # P1-4: running-image ↔ manifest binding detail. `running_images` lists
+    # each running container with its image_id (docker inspect .Image) and
+    # whether it matches the manifest's content_digest. `image_binding_all_match`
+    # is the rollup; if False, any_fail is forced True above.
+    "image_binding_all_match": image_binding_all_match,
+    "running_images": (image_binding or {}).get("running_images", []) if image_binding else [],
+    "started_at": started_iso,
+    "ended_at": max((s["end"] or "" for s in steps), default=""),
+    "any_fail": any_fail,
+    "steps": steps,
+}
+(artifact_dir / "runtime-acceptance-report.json").write_text(
+    json.dumps(report, indent=2, ensure_ascii=False) + "\n"
+)
+print("=== RUNTIME BUNDLE ACCEPTANCE REPORT ===")
+for s in steps:
+    print(f"  {s['name']}: {s['status']}")
+print(f"release_revision: {release_revision}")
+print(f"release_revision_full: {release_revision_full}")
+print(f"release_revision_short: {release_revision_short}")
+print(f"image_binding_all_match: {image_binding_all_match}")
+print(f"report: {artifact_dir / 'runtime-acceptance-report.json'}")
+PY
+  report_end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'start=%s\nend=%s\nstatus=PASS\n' "$report_start" "$report_end" >"$steps_dir/report.status"
+}
+
+for spec in "${STEPS[@]}"; do
+  name="${spec%%|*}"
+  fn="${spec#*|}"
+  run_step "$name" "$fn"
+done
+
+overall_rc=0
+for spec in "${STEPS[@]}"; do
+  name="${spec%%|*}"
+  [[ "$name" == "report" ]] && continue
+  if [[ -f "$steps_dir/$name.status" ]] && grep -q '^status=FAIL' "$steps_dir/$name.status"; then
+    overall_rc=1
+  fi
+done
+
+if [[ "$overall_rc" -ne 0 ]]; then
+  log "=== RUNTIME BUNDLE ACCEPTANCE FAILED (see $artifact_dir/runtime-acceptance-report.json) ==="
+else
+  log "=== RUNTIME BUNDLE ACCEPTANCE PASSED ==="
+fi
+exit "$overall_rc"

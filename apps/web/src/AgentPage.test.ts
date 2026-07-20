@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   defaultProvider,
+  llmConfiguredFromHealth,
   proposalPatchRows,
   providerLabel,
   remediationStateLabel,
   remediationStateTone,
+  sessionProviderValue,
 } from "./AgentPage";
-import type { RemediationState } from "./types";
+import type { HealthReady, RemediationState } from "./types";
 
 describe("Agent remediation state presentation", () => {
   it.each<[RemediationState, string, string]>([
@@ -64,5 +66,45 @@ describe("LLM provider selection", () => {
   it("labels providers in Chinese", () => {
     expect(providerLabel("local")).toBe("USTC LLM (glm-5.2-107)");
     expect(providerLabel("none")).toBe("确定性规则（无 LLM）");
+  });
+});
+
+describe("llmConfiguredFromHealth", () => {
+  it("returns true when the local_llm check is configured", () => {
+    const health: HealthReady = {
+      status: "ready",
+      checks: { local_llm: { status: "configured" } },
+    };
+    expect(llmConfiguredFromHealth(health)).toBe(true);
+  });
+
+  it("returns false when the local_llm check is disabled", () => {
+    const health: HealthReady = {
+      status: "ready",
+      checks: { local_llm: { status: "disabled" } },
+    };
+    expect(llmConfiguredFromHealth(health)).toBe(false);
+  });
+
+  it("returns false when health has not loaded yet", () => {
+    expect(llmConfiguredFromHealth(undefined)).toBe(false);
+  });
+
+  it("returns false when the local_llm check is missing", () => {
+    const health: HealthReady = { status: "ready", checks: {} };
+    expect(llmConfiguredFromHealth(health)).toBe(false);
+  });
+});
+
+describe("sessionProviderValue", () => {
+  it("passes through known provider values", () => {
+    expect(sessionProviderValue("local", "none")).toBe("local");
+    expect(sessionProviderValue("none", "local")).toBe("none");
+  });
+
+  it("falls back when the persisted provider is missing or unknown", () => {
+    expect(sessionProviderValue(undefined, "local")).toBe("local");
+    expect(sessionProviderValue("", "none")).toBe("none");
+    expect(sessionProviderValue("rule", "local")).toBe("local");
   });
 });

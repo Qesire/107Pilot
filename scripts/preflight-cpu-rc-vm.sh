@@ -50,6 +50,44 @@ check "docker compose v2" docker compose version
 check "python3" command -v python3
 check "openssl" command -v openssl
 
+# --- cgroup v2 delegation (required for cpu-rc walltime enforcement) ---
+# The cpu-rc compose envelope mounts /sys/fs/cgroup rw and runs containers with
+# `cgroup: host`, so Slurm's proctrack/cgroup + task/cgroup can enforce walltime.
+# The target host must delegate the host cgroup namespace to Docker containers
+# and expose cgroup v2 writably.
+cgroup_fs_type="$(stat -fc %T /sys/fs/cgroup 2>/dev/null || true)"
+if [[ "$cgroup_fs_type" == "cgroup2fs" ]]; then
+  echo "ok   cgroup v2 filesystem at /sys/fs/cgroup"
+else
+  echo "fail cgroup v2 filesystem at /sys/fs/cgroup: got '${cgroup_fs_type:-unknown}' (expected cgroup2fs)"
+  echo "cpu-rc VM preflight: target host must support cgroup v2 delegation to Docker containers for the cpu-rc sim to enforce walltime" >&2
+  failures=$((failures + 1))
+fi
+
+cgroup_probe_image=""
+for candidate in alpine:3.20 alpine:3 "${PILOT107_PREFLIGHT_BASE_IMAGE:-}"; do
+  [[ -z "$candidate" ]] && continue
+  if docker image inspect "$candidate" >/dev/null 2>&1; then
+    cgroup_probe_image="$candidate"
+    break
+  fi
+done
+if [[ -z "$cgroup_probe_image" ]]; then
+  cgroup_probe_image="alpine:3.20"
+fi
+
+cgroup_probe_out="$(docker run --rm --cgroup host \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  "$cgroup_probe_image" \
+  sh -c 'touch /sys/fs/cgroup/.pilot107_probe 2>/dev/null && rm -f /sys/fs/cgroup/.pilot107_probe && echo writable' 2>/dev/null || true)"
+if [[ "$cgroup_probe_out" == *"writable"* ]]; then
+  echo "ok   cgroup v2 writable from Docker container with cgroup: host"
+else
+  echo "fail cgroup v2 writable from Docker container with cgroup: host"
+  echo "cpu-rc VM preflight: target host must support cgroup v2 delegation to Docker containers for the cpu-rc sim to enforce walltime" >&2
+  failures=$((failures + 1))
+fi
+
 # --- Compose config (CPU-RC profile) ---
 check "cpu-rc compose config" docker compose \
   --env-file "$env_file" \

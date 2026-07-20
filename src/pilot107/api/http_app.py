@@ -713,6 +713,12 @@ class Pilot107HttpApi:
         )
         if remediation_response is not None:
             return remediation_response
+        # CSRF Origin verification probe: a POST target with no business side
+        # effects. The BFF's mutating-request Origin check runs in do_POST
+        # BEFORE this route is reached, so a misconfigured Origin yields
+        # 403 CSRF.ORIGIN_DENIED upstream while a correct Origin yields 200.
+        if len(parts) == 2 and parts == ["security", "origin-probe"]:
+            return ApiResponse(status=200, payload={})
         if len(parts) == 1 and parts[0] == "template-drafts":
             return self._create_template_draft(body=body, identity=identity)
         if (

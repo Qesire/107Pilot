@@ -33,10 +33,15 @@ class CpuReleaseCandidateProfileTests(unittest.TestCase):
         self.assertIn("PartitionName=CPU-RC", slurm)
         self.assertNotIn("GresTypes", slurm)
         self.assertNotIn("GPU", slurm)
+        self.assertIn("TaskPlugin=task/cgroup", slurm)
+        self.assertIn("ProctrackType=proctrack/cgroup", slurm)
         self.assertIn('PILOT107_ALLOW_GPU_RECIPES: "false"', compose)
         self.assertIn("cpus: 4.0", compose)
         self.assertNotIn("worker-2:", compose)
         self.assertIn("slurmctld-state:/var/spool/slurm/ctld", compose)
+        self.assertIn("./slurm-cpu-rc/cgroup.conf:/etc/slurm/cgroup.conf:ro", compose)
+        self.assertIn("cgroup: host", compose)
+        self.assertIn("/sys/fs/cgroup:/sys/fs/cgroup:rw", compose)
 
     def test_cpu_api_hides_gpu_recipes_and_reports_only_cpu_capability(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
