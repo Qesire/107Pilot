@@ -1,0 +1,207 @@
+{
+  "profile": "cpu-rc-runtime-bundle",
+  "release_revision": "be9bb93933a0cb827876f4042edee0d600176f75",
+  "release_revision_full": "be9bb93933a0cb827876f4042edee0d600176f75",
+  "release_revision_short": "be9bb93933a0",
+  "bundle_dir": "/home/knowingthesea/107pilot/artifacts/deployment/107pilot-cpu-rc-be9bb93933a0-20260720T170256Z",
+  "images": [
+    {
+      "reference": "pilot107/slurm-sim:cpu-rc-be9bb93933a0",
+      "content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf"
+    },
+    {
+      "reference": "pilot107/api:cpu-rc-be9bb93933a0",
+      "content_digest": "sha256:6e4d0cbbf2c505971b5610589b928efa3da48335528411fc295cc2b95c10625b"
+    },
+    {
+      "reference": "pilot107/worker:cpu-rc-be9bb93933a0",
+      "content_digest": "sha256:6e4d0cbbf2c505971b5610589b928efa3da48335528411fc295cc2b95c10625b"
+    },
+    {
+      "reference": "pilot107/web:cpu-rc-be9bb93933a0",
+      "content_digest": "sha256:6e4d0cbbf2c505971b5610589b928efa3da48335528411fc295cc2b95c10625b"
+    }
+  ],
+  "image_binding_all_match": true,
+  "image_binding_reason": "all_match",
+  "running_images": [
+    {
+      "container": "pilot107-cpu-rc-accept-be9bb93933a0-1784567324-1019213-mariadb-1",
+      "service": "mariadb",
+      "config_image": "pilot107/slurm-sim:cpu-rc-be9bb93933a0",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-be9bb93933a0-1784567324-1019213-slurmdbd-1",
+      "service": "slurmdbd",
+      "config_image": "pilot107/slurm-sim:cpu-rc-be9bb93933a0",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-be9bb93933a0-1784567324-1019213-slurmctld-1",
+      "service": "slurmctld",
+      "config_image": "pilot107/slurm-sim:cpu-rc-be9bb93933a0",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-be9bb93933a0-1784567324-1019213-worker-1-1",
+      "service": "worker-1",
+      "config_image": "pilot107/slurm-sim:cpu-rc-be9bb93933a0",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-be9bb93933a0-1784567324-1019213-slurmrestd-1",
+      "service": "slurmrestd",
+      "config_image": "pilot107/slurm-sim:cpu-rc-be9bb93933a0",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-be9bb93933a0-1784567324-1019213-pilot107-command-gateway-1",
+      "service": "pilot107-command-gateway",
+      "config_image": "pilot107/slurm-sim:cpu-rc-be9bb93933a0",
+      "image_id": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "manifest_content_digest": "sha256:8eb4ad3c1cd0d043a16cee12922e53e73178e9e3d23a786cdcba2a4270eb12cf",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-be9bb93933a0-1784567324-1019213-pilot107-api-1",
+      "service": "pilot107-api",
+      "config_image": "pilot107/api:cpu-rc-be9bb93933a0",
+      "image_id": "sha256:6e4d0cbbf2c505971b5610589b928efa3da48335528411fc295cc2b95c10625b",
+      "manifest_content_digest": "sha256:6e4d0cbbf2c505971b5610589b928efa3da48335528411fc295cc2b95c10625b",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-be9bb93933a0-1784567324-1019213-pilot107-worker-1",
+      "service": "pilot107-worker",
+      "config_image": "pilot107/worker:cpu-rc-be9bb93933a0",
+      "image_id": "sha256:6e4d0cbbf2c505971b5610589b928efa3da48335528411fc295cc2b95c10625b",
+      "manifest_content_digest": "sha256:6e4d0cbbf2c505971b5610589b928efa3da48335528411fc295cc2b95c10625b",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-be9bb93933a0-1784567324-1019213-pilot107-web-1",
+      "service": "pilot107-web",
+      "config_image": "pilot107/web:cpu-rc-be9bb93933a0",
+      "image_id": "sha256:6e4d0cbbf2c505971b5610589b928efa3da48335528411fc295cc2b95c10625b",
+      "manifest_content_digest": "sha256:6e4d0cbbf2c505971b5610589b928efa3da48335528411fc295cc2b95c10625b",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-be9bb93933a0-1784567324-1019213-pilot107-reverse-proxy-1",
+      "service": "pilot107-reverse-proxy",
+      "config_image": "pilot107/web:cpu-rc-be9bb93933a0",
+      "image_id": "sha256:6e4d0cbbf2c505971b5610589b928efa3da48335528411fc295cc2b95c10625b",
+      "manifest_content_digest": "sha256:6e4d0cbbf2c505971b5610589b928efa3da48335528411fc295cc2b95c10625b",
+      "matches_manifest": true
+    }
+  ],
+  "started_at": "2026-07-20T17:08:44Z",
+  "ended_at": "2026-07-20T17:12:58Z",
+  "seal_mode": true,
+  "overall_status": "PASS",
+  "process_exit_code": 0,
+  "any_fail": false,
+  "steps": [
+    {
+      "name": "manifest_validate",
+      "status": "PASS",
+      "start": "2026-07-20T17:08:44Z",
+      "end": "2026-07-20T17:08:44Z",
+      "rc": null,
+      "log_path": "steps/manifest_validate.log",
+      "log_sha256": "76ed3cf3e4ff7ef7755044a925f7d253869adbaa19b0990ed06ccf7ad6b70893"
+    },
+    {
+      "name": "import_images",
+      "status": "PASS",
+      "start": "2026-07-20T17:08:44Z",
+      "end": "2026-07-20T17:08:46Z",
+      "rc": null,
+      "log_path": "steps/import_images.log",
+      "log_sha256": "62459f3322b6724bd67de0003f2639d866b83947b2fb201b53abde5e12c54818"
+    },
+    {
+      "name": "start_stack",
+      "status": "PASS",
+      "start": "2026-07-20T17:08:46Z",
+      "end": "2026-07-20T17:09:15Z",
+      "rc": null,
+      "log_path": "steps/start_stack.log",
+      "log_sha256": "ce949b2febe90e387786a8753b557a9c68e16c9936030a4f8023ffbc3ed11cca"
+    },
+    {
+      "name": "compose_readiness",
+      "status": "PASS",
+      "start": "2026-07-20T17:09:15Z",
+      "end": "2026-07-20T17:09:15Z",
+      "rc": null,
+      "log_path": "steps/compose_readiness.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "check_cpu_rc",
+      "status": "PASS",
+      "start": "2026-07-20T17:09:15Z",
+      "end": "2026-07-20T17:09:21Z",
+      "rc": null,
+      "log_path": "steps/check_cpu_rc.log",
+      "log_sha256": "f47fa6ff78de4c90803a3fb116293d827b483eb1b91bef7f039a3dedff71cff0"
+    },
+    {
+      "name": "auto_capsule",
+      "status": "PASS",
+      "start": "2026-07-20T17:09:21Z",
+      "end": "2026-07-20T17:09:24Z",
+      "rc": null,
+      "log_path": "steps/auto_capsule.log",
+      "log_sha256": "e4389c833d3d03dd540aadd1502540603beef6170ec7a71e62b4044acf0f318b"
+    },
+    {
+      "name": "rule_remediation",
+      "status": "PASS",
+      "start": "2026-07-20T17:09:24Z",
+      "end": "2026-07-20T17:11:53Z",
+      "rc": null,
+      "log_path": "steps/rule_remediation.log",
+      "log_sha256": "ba8fe4bbb8e5ce0a0309bcc7cc0bf61330822fe9607d1b07c1797efe83665929"
+    },
+    {
+      "name": "restart_recovery",
+      "status": "PASS",
+      "start": "2026-07-20T17:11:53Z",
+      "end": "2026-07-20T17:12:57Z",
+      "rc": null,
+      "log_path": "steps/restart_recovery.log",
+      "log_sha256": "43b85340cf6344b96a24b9808f1de3fa1b8b92a0df7579a00d89566fb00ae1c5"
+    },
+    {
+      "name": "image_binding",
+      "status": "PASS",
+      "start": "2026-07-20T17:12:57Z",
+      "end": "2026-07-20T17:12:58Z",
+      "rc": null,
+      "log_path": "steps/image_binding.log",
+      "log_sha256": "279f51c241c0bf77db97d02d8f7873ffedaddcd6bdce196f4d4187fc18b05bbd"
+    },
+    {
+      "name": "report",
+      "status": "PASS",
+      "start": null,
+      "end": null,
+      "rc": null,
+      "log_path": null,
+      "log_sha256": null
+    }
+  ]
+}
