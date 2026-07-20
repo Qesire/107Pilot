@@ -251,10 +251,17 @@ def _assert_post_restart_inventory(post_run_id: str) -> None:
         raise RuntimeError(
             f"post-restart inventory missing {post_rel}: {list(files_by_path)}"
         )
-    if post_entry.get("attribution") != "created_by_run":
+    # Round 4 changed compute_file_attribution so expected outputs with a
+    # captured baseline classify as "created"/"modified"/"unchanged"/"missing"
+    # (strict baseline-vs-final) instead of the mtime-based "created_by_run".
+    # The post-restart run genuinely produces its expected output, so accept
+    # either "created" (baseline-aware, current) or "created_by_run" (legacy
+    # mtime fallback when no baseline was captured).
+    post_attribution = post_entry.get("attribution")
+    if post_attribution not in {"created", "modified", "created_by_run"}:
         raise RuntimeError(
-            f"post-restart {post_rel}: attribution={post_entry.get('attribution')!r} "
-            f"!= created_by_run"
+            f"post-restart {post_rel}: attribution={post_attribution!r} "
+            f"not in created/modified/created_by_run"
         )
     if post_entry.get("in_expected_outputs") is not True:
         raise RuntimeError(
@@ -288,9 +295,18 @@ def _assert_post_restart_inventory(post_run_id: str) -> None:
         )
 
     summary = inventory.get("attribution_summary", {})
-    if int(summary.get("created_by_run", 0)) < 1:
+    # Round 4 reclassified expected outputs as created/modified/unchanged/missing
+    # (baseline-aware). The post-restart run produces its expected output, so
+    # either the new "created"/"modified" or the legacy "created_by_run" bucket
+    # must be non-empty.
+    produced_count = (
+        int(summary.get("created", 0))
+        + int(summary.get("modified", 0))
+        + int(summary.get("created_by_run", 0))
+    )
+    if produced_count < 1:
         raise RuntimeError(
-            f"post-restart attribution_summary.created_by_run < 1: {summary!r}"
+            f"post-restart attribution_summary produced count < 1: {summary!r}"
         )
 
 
