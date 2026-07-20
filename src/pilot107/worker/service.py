@@ -413,6 +413,10 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         contract_service=contract_service,
         run_service=run_service,
     )
+    # Production requires contract_store + evidence_store for fail-closed
+    # expected-output verification (round-6 audit P1-1). They are Optional in
+    # RemediationService.__init__ only for test backward compat; here they are
+    # always non-None (both constructed above).
     remediation_service = RemediationService(
         run_store=store,
         remediation_store=RemediationStore(config.db_path),

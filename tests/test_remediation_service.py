@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from pilot107.core.advice import AdviceResult
 from pilot107.core.remediation import EvaluationOutcome, RemediationBudget, RemediationState
@@ -654,13 +655,84 @@ class VerifyExpectedOutputsTests(unittest.TestCase):
         self.assertEqual(result["expected_outputs"][0]["status"], "inventory_unreadable")
 
     def test_no_stores_falls_back_to_legacy(self) -> None:
-        # Backward compat: no stores injected → resolved=False, ok=True (legacy path).
+        # Round-6 P1-1: a derived run WITH contract_id but no stores injected
+        # must FAIL CLOSED (ok=False, resolved=True) — not silently fall back
+        # to legacy VERIFIED_SUCCESS. The placeholder entry makes
+        # has_expected_outputs=True → enforce_expected=True → UNVERIFIED.
         result = self._verify(
             run=self.derived_run,
             contract_store=None,
             evidence_store=None,
         )
+        self.assertTrue(result["resolved"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(len(result["expected_outputs"]), 1)
+        self.assertEqual(
+            result["expected_outputs"][0]["status"],
+            "verification_dependencies_unavailable",
+        )
+
+    def test_no_contract_id_falls_back_to_legacy(self) -> None:
+        # Genuinely nothing to verify: no contract_id → ok=True, resolved=False.
+        run_no_contract = replace(self.derived_run, contract_id=None)
+        result = self._verify(
+            run=run_no_contract,
+            contract_store=None,
+            evidence_store=None,
+        )
         self.assertFalse(result["resolved"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["expected_outputs"], [])
+
+    def test_contract_resolution_failed_fails_closed(self) -> None:
+        # Stores present but contract_store.get_contract raises (broken
+        # contract_id) → ok=False, resolved=True, status contract_resolution_failed.
+        run_bad_contract = replace(self.derived_run, contract_id="contract_nonexistent")
+
+        class _RaisingContractStore:
+            def get_contract(self, contract_id: str) -> Any:
+                raise KeyError(contract_id)
+
+        result = self._verify(
+            run=run_bad_contract,
+            contract_store=_RaisingContractStore(),  # type: ignore[arg-type]
+            evidence_store=self.evidence_store,
+        )
+        self.assertTrue(result["resolved"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["expected_outputs"][0]["status"],
+            "contract_resolution_failed",
+        )
+
+    def test_contract_no_expected_outputs_ok(self) -> None:
+        # Contract read succeeds and declares no expected outputs → genuinely
+        # nothing to verify. ok=True, resolved=True (we DID resolve the contract).
+        from pilot107.core.contracts import ContractStore as _CS
+
+        empty_contract = _CS(self.db_path).create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": "/public/home/alice"},
+                "entry": {"command": "true"},
+                "resources": {
+                    "partition": "CPU-RC",
+                    "qos": "qos_cpu_rc",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        run_empty = replace(self.derived_run, contract_id=empty_contract.contract_id)
+        result = self._verify(
+            run=run_empty,
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+        )
+        self.assertTrue(result["resolved"])
         self.assertTrue(result["ok"])
         self.assertEqual(result["expected_outputs"], [])
 

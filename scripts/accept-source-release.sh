@@ -49,6 +49,12 @@ mkdir -p "$artifact_dir"
 steps_dir="$artifact_dir/steps"
 mkdir -p "$steps_dir"
 started_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# P1-3 (round 6): seal_mode is read ONCE here (before the report Python) so
+# both the JSON report writer and the final Bash aggregation see the same
+# value and produce a consistent exit/any_fail pair. The report Python uses
+# it to compute any_fail with the seal-mode-aware formula; the Bash
+# aggregation uses it to treat KNOWN_SKIP as FAIL.
+seal_mode="${PILOT107_ACCEPT_SEAL_MODE:-0}"
 
 log() { printf '%s\n' "$*"; }
 
@@ -185,7 +191,11 @@ for spec in "${STEPS[@]}"; do
 done
 
 # JSON report.
-python3 - "$artifact_dir" "$steps_dir" "$revision" "$started_iso" "$untracked_status" "${STEPS[@]}" <<'PY'
+# P1-3 (round 6): seal_mode is passed as argv[6] so the report Python can
+# compute any_fail with the seal-mode-aware formula and emit seal_mode /
+# overall_status / process_exit_code fields that agree with the Bash
+# aggregation's overall_rc.
+python3 - "$artifact_dir" "$steps_dir" "$revision" "$started_iso" "$untracked_status" "$seal_mode" "${STEPS[@]}" <<'PY'
 import hashlib
 import json
 import sys
@@ -196,12 +206,12 @@ steps_dir = Path(sys.argv[2])
 revision = sys.argv[3]
 started_iso = sys.argv[4]
 untracked_status = sys.argv[5]
-step_specs = sys.argv[6:]
+seal_mode = sys.argv[6] == "1"
+step_specs = sys.argv[7:]
 
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
 steps = []
-any_fail = False
 for spec in step_specs:
     name = spec.split("|", 1)[0]
     status_file = steps_dir / f"{name}.status"
@@ -230,15 +240,26 @@ for spec in step_specs:
                 entry["rc"] = int(kv["rc"])
             except ValueError:
                 entry["rc"] = kv["rc"]
-        if entry["status"] == "FAIL":
-            any_fail = True
     steps.append(entry)
+
+# P1-3 (round 6): seal-mode-aware any_fail. In seal mode, KNOWN_SKIP counts
+# as failing — this MUST match the Bash aggregation's overall_rc so a
+# JSON-only consumer never sees a false-green when the script exits 1.
+any_fail = any(
+    s["status"] == "FAIL" or (seal_mode and s["status"] == "KNOWN_SKIP")
+    for s in steps
+)
+overall_status = "PASS" if not any_fail else "FAIL"
+process_exit_code = 0 if not any_fail else 1
 
 report = {
     "profile": "source",
     "release_revision": revision,
     "started_at": started_iso,
     "ended_at": max((s["end"] or "" for s in steps), default=""),
+    "seal_mode": seal_mode,
+    "overall_status": overall_status,
+    "process_exit_code": process_exit_code,
     "any_fail": any_fail,
     "untracked_files_status": untracked_status,
     "steps": steps,
@@ -263,7 +284,6 @@ PY
 # treated as FAIL — formal seal requires every step to PASS. Default (dev)
 # keeps KNOWN_SKIP non-failing.
 overall_rc=0
-seal_mode="${PILOT107_ACCEPT_SEAL_MODE:-0}"
 valid_statuses=' PASS FAIL KNOWN_SKIP '
 for spec in "${STEPS[@]}"; do
   name="${spec%%|*}"

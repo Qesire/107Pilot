@@ -865,22 +865,56 @@ def _verify_expected_outputs(
         final_sha256, status};
       ``ok`` (bool) — True iff every declared output is ``created`` or
         ``modified`` (newly produced or changed by this run).
+
+    Fail-closed semantics (round-6 audit P1-1): when the derived run HAS a
+    ``contract_id`` but verification dependencies (stores) are unavailable or
+    contract resolution fails, we return ``ok=False`` with ``resolved=True`` so
+    ``enforce_expected=True`` → ``EXECUTION_SUCCESS_UNVERIFIED``. The ONLY
+    ``ok=True`` paths are: (a) no ``contract_id`` (genuinely nothing to verify),
+    and (b) contract read succeeds AND declares no expected outputs.
     """
-    empty: dict[str, Any] = {
-        "resolved": False,
-        "expected_outputs": [],
-        "ok": True,
-    }
-    if contract_store is None or evidence_store is None or run.contract_id is None:
-        return empty
+    # No contract_id → genuinely nothing to verify. Legacy path.
+    if run.contract_id is None:
+        return {"resolved": False, "expected_outputs": [], "ok": True}
+    # Contract_id present but verification dependencies unavailable → fail closed.
+    # We cannot know whether the contract declares expected outputs, so we must
+    # NOT silently upgrade to VERIFIED_SUCCESS. Return a placeholder entry so
+    # has_expected_outputs=True → enforce_expected=True → ok=False → UNVERIFIED.
+    if contract_store is None or evidence_store is None:
+        return {
+            "resolved": True,
+            "expected_outputs": [
+                {
+                    "path": "<unknown>",
+                    "baseline_sha256": None,
+                    "final_sha256": None,
+                    "status": "verification_dependencies_unavailable",
+                }
+            ],
+            "ok": False,
+        }
     try:
         contract = contract_store.get_contract(run.contract_id)
     except Exception:  # noqa: BLE001 - verification must never crash evaluation
-        return empty
+        # Contract resolution failed → fail closed (same rationale as above).
+        return {
+            "resolved": True,
+            "expected_outputs": [
+                {
+                    "path": "<unknown>",
+                    "baseline_sha256": None,
+                    "final_sha256": None,
+                    "status": "contract_resolution_failed",
+                }
+            ],
+            "ok": False,
+        }
     outputs = contract.payload.get("outputs") or {}
     expected = outputs.get("expected") or []
     if not isinstance(expected, list) or not expected:
-        return empty
+        # Contract read succeeded and declares no expected outputs → genuinely
+        # nothing to verify. ok=True, resolved=True (we DID resolve the contract).
+        return {"resolved": True, "expected_outputs": [], "ok": True}
     expected_paths = [str(item) for item in expected]
     inventory_path = evidence_store.run_root(run.run_id) / "outputs" / "inventory.json"
     try:

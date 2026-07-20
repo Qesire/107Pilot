@@ -236,7 +236,14 @@ class BaselineCaptureTests(unittest.TestCase):
         self.assertEqual(payload["schema"], "pilot107.baseline.v1")
         self.assertEqual(payload["contract_id"], self.contract.contract_id)
         self.assertIn("captured_at_epoch", payload)
-        entries = payload["expected_outputs"]
+        # Round-6 P1-2: new payload metadata fields.
+        self.assertEqual(payload["baseline_status"], "captured")
+        self.assertEqual(payload["total_count"], 1)
+        self.assertEqual(payload["baselined_count"], 1)
+        self.assertFalse(payload["truncated"])
+        self.assertFalse(payload["timeout"])
+        self.assertIn("entries", payload)
+        entries = payload["entries"]
         self.assertEqual([entry["path"] for entry in entries], ["result.txt"])
         # Expected output not yet produced at submit time => exists=false.
         self.assertFalse(entries[0]["exists"])
@@ -288,6 +295,145 @@ class BaselineCaptureTests(unittest.TestCase):
             self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
         )
         self.assertFalse(baseline_path.exists())
+
+    def test_baseline_truncates_over_32_outputs(self) -> None:
+        # Round-6 P1-2: contract declares 33 expected outputs → baseline.json
+        # has baselined_count=32, truncated=true, total_count=33.
+        contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {
+                    "command": "true",
+                    "expected_outputs": [f"out_{i}.txt" for i in range(33)],
+                },
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        service = self._service()
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=self.workdir,
+                script="#!/bin/bash\ntrue\n",
+                resource_plan=ResourcePlan(
+                    partition="debug",
+                    qos="normal",
+                    nodes=1,
+                    ntasks=1,
+                    cpus_per_task=1,
+                    time_limit="00:05:00",
+                ),
+                contract_id=contract.contract_id,
+            )
+        )
+        baseline_path = (
+            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
+        )
+        self.assertTrue(baseline_path.exists())
+        payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["total_count"], 33)
+        self.assertEqual(payload["baselined_count"], 32)
+        self.assertTrue(payload["truncated"])
+        self.assertEqual(len(payload["entries"]), 32)
+
+    def test_baseline_skips_invalid_paths(self) -> None:
+        # Round-6 P1-2: expected output with absolute path / ``..`` is recorded
+        # as path_invalid, not baselined as a file entry.
+        contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {
+                    "command": "true",
+                    "expected_outputs": [
+                        "/etc/passwd",  # absolute → path_invalid
+                        "../escape.txt",  # parent traversal → path_invalid
+                        "valid.txt",  # valid relative path
+                    ],
+                },
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        service = self._service()
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=self.workdir,
+                script="#!/bin/bash\ntrue\n",
+                resource_plan=ResourcePlan(
+                    partition="debug",
+                    qos="normal",
+                    nodes=1,
+                    ntasks=1,
+                    cpus_per_task=1,
+                    time_limit="00:05:00",
+                ),
+                contract_id=contract.contract_id,
+            )
+        )
+        baseline_path = (
+            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
+        )
+        self.assertTrue(baseline_path.exists())
+        payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+        entries = payload["entries"]
+        by_path = {e["path"]: e for e in entries}
+        self.assertIn("/etc/passwd", by_path)
+        self.assertEqual(by_path["/etc/passwd"]["status"], "path_invalid")
+        self.assertIn("../escape.txt", by_path)
+        self.assertEqual(by_path["../escape.txt"]["status"], "path_invalid")
+        self.assertIn("valid.txt", by_path)
+        # valid.txt was not produced at submit time → exists=false (baselined).
+        self.assertIn("exists", by_path["valid.txt"])
+        self.assertFalse(by_path["valid.txt"]["exists"])
+        # baselined_count counts only successfully processed entries (valid.txt).
+        self.assertEqual(payload["baselined_count"], 1)
+
+    def test_baseline_records_status(self) -> None:
+        # Round-6 P1-2: payload has baseline_status field = "captured" when
+        # capture completes successfully.
+        service = self._service()
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=self.workdir,
+                script="#!/bin/bash\necho hi > result.txt\n",
+                resource_plan=ResourcePlan(
+                    partition="debug",
+                    qos="normal",
+                    nodes=1,
+                    ntasks=1,
+                    cpus_per_task=1,
+                    time_limit="00:05:00",
+                ),
+                contract_id=self.contract.contract_id,
+            )
+        )
+        baseline_path = (
+            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
+        )
+        self.assertTrue(baseline_path.exists())
+        payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["baseline_status"], "captured")
+        self.assertFalse(payload["timeout"])
+        self.assertFalse(payload["truncated"])
 
 
 if __name__ == "__main__":

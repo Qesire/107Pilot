@@ -116,6 +116,11 @@ mkdir -p "$artifact_dir"
 steps_dir="$artifact_dir/steps"
 mkdir -p "$steps_dir"
 started_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# P1-3 (round 6): seal_mode is read ONCE here (before step_report runs) so
+# both the JSON report writer (step_report's Python) and the final Bash
+# aggregation see the same value and produce a consistent
+# process_exit_code/any_fail vs overall_rc pair.
+seal_mode="${PILOT107_ACCEPT_SEAL_MODE:-0}"
 
 # Export knobs consumed by child scripts. Images are imported from the bundle
 # in step_import_images, so start-cpu-rc.sh must NOT rebuild them.
@@ -470,7 +475,11 @@ trap cleanup EXIT
 step_report() {
   local report_start report_end
   report_start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  python3 - "$artifact_dir" "$steps_dir" "$bundle_dir" "$started_iso" "${STEPS[@]}" <<'PY'
+  # P1-3 (round 6): seal_mode is passed as argv[5] so the report Python can
+  # compute any_fail with the seal-mode-aware formula and emit seal_mode /
+  # overall_status / process_exit_code fields that agree with the Bash
+  # aggregation's overall_rc.
+  python3 - "$artifact_dir" "$steps_dir" "$bundle_dir" "$started_iso" "$seal_mode" "${STEPS[@]}" <<'PY'
 import json
 import hashlib
 import os
@@ -481,7 +490,8 @@ artifact_dir = Path(sys.argv[1])
 steps_dir = Path(sys.argv[2])
 bundle_dir = Path(sys.argv[3])
 started_iso = sys.argv[4]
-step_specs = sys.argv[5:]
+seal_mode = sys.argv[5] == "1"
+step_specs = sys.argv[6:]
 
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
@@ -517,7 +527,6 @@ if binding_json.is_file():
         image_binding = None
 
 steps = []
-any_fail = False
 for spec in step_specs:
     name = spec.split("|", 1)[0]
     if name == "report":
@@ -560,8 +569,6 @@ for spec in step_specs:
                 entry["rc"] = int(kv["rc"])
             except ValueError:
                 entry["rc"] = kv["rc"]
-        if entry["status"] == "FAIL":
-            any_fail = True
     steps.append(entry)
 
 # P1-4: if the image_binding step recorded any non-matching running image,
@@ -570,8 +577,17 @@ for spec in step_specs:
 image_binding_all_match = True
 if image_binding is not None:
     image_binding_all_match = bool(image_binding.get("all_match", True))
-    if not image_binding_all_match:
-        any_fail = True
+
+# P1-3 (round 6): seal-mode-aware any_fail. In seal mode, KNOWN_SKIP counts
+# as failing — this MUST match the Bash aggregation's overall_rc so a
+# JSON-only consumer never sees a false-green when the script exits 1. The
+# image_binding mismatch is OR-ed in to preserve the P1-4 invariant.
+any_fail = any(
+    s["status"] == "FAIL" or (seal_mode and s["status"] == "KNOWN_SKIP")
+    for s in steps
+) or not image_binding_all_match
+overall_status = "PASS" if not any_fail else "FAIL"
+process_exit_code = 0 if not any_fail else 1
 
 report = {
     "profile": "cpu-rc-runtime-bundle",
@@ -588,6 +604,9 @@ report = {
     "running_images": (image_binding or {}).get("running_images", []) if image_binding else [],
     "started_at": started_iso,
     "ended_at": max((s["end"] or "" for s in steps), default=""),
+    "seal_mode": seal_mode,
+    "overall_status": overall_status,
+    "process_exit_code": process_exit_code,
     "any_fail": any_fail,
     "steps": steps,
 }
@@ -626,7 +645,6 @@ done
 # treated as FAIL — formal seal requires all 10 runtime steps to PASS.
 # Default (dev) keeps KNOWN_SKIP non-failing.
 overall_rc=0
-seal_mode="${PILOT107_ACCEPT_SEAL_MODE:-0}"
 valid_statuses=' PASS FAIL KNOWN_SKIP '
 for spec in "${STEPS[@]}"; do
   name="${spec%%|*}"

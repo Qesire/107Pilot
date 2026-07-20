@@ -30,7 +30,8 @@
 | Compose contracts | base/competition/CPU-RC/slurm-host/app-node passed |
 | Source acceptance (f20ed9d, seal mode) | 12/12 PASS：uv_sync、npm_ci、ruff、mypy、pytest、typecheck、vitest、playwright、build、static_drift、compose_config、sync_drift |
 | Runtime acceptance (f20ed9d, seal mode) | 10/10 PASS：manifest_validate、import_images、start_stack、compose_readiness、check_cpu_rc、auto_capsule、rule_remediation、restart_recovery、image_binding、report |
-| GitHub CI (main @ f20ed9d) | f20ed9d 验收证据已全绿（source 12/12 + runtime 10/10，同一 SHA，seal mode）；round-4 P1（output baseline + verified_success 语义）+ round-5 P1（API stores 注入 + 同 SHA 报告）已闭环 |
+| Local seal acceptance (f20ed9d) | f20ed9d 验收证据已全绿（source 12/12 + runtime 10/10，同一 SHA，seal mode）；round-4 P1（output baseline + verified_success 语义）+ round-5 P1（API stores 注入 + 同 SHA 报告）已闭环 |
+| GitHub CI | 当前可用 connector 未返回 `f20ed9d` 的 workflow run；本地 seal 验收已全绿，GitHub Actions 独立验证待 workflow run ID/check URL 补录 |
 
 完整测试已在允许本机回环 socket 的执行环境通过；受限沙箱内同一套代码仅有 7 个回环 HTTP 测试因 `PermissionError` 不能绑定端口，不是代码失败。项目已在 `pyproject.toml` 固定 `src` import path，不依赖隐式 `PYTHONPATH`。
 

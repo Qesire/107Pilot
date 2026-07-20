@@ -712,22 +712,49 @@ class RunService:
         Baseline is an enhancement: if the contract store, evidence store, or
         contract id are unavailable — or capture raises — the run still
         submits; attribution silently falls back to mtime-only classification.
+
+        Bounds (round-6 audit P1-2): the submission lease is 60s, so baseline
+        capture is bounded by ``_BASELINE_MAX_OUTPUTS`` (32 entries),
+        ``_BASELINE_MAX_PATH_LENGTH`` (512 chars), path validation, and a
+        total ``_BASELINE_TIME_BUDGET_SECONDS`` (30s) deadline. Truncation,
+        invalid paths, and timeouts are recorded in the payload so operators
+        can distinguish partial captures from full ones.
         """
         if self.evidence_store is None or self.contract_store is None:
             return
         if run.contract_id is None:
             return
+        captured_at_epoch = time.time()
         try:
             expected_outputs = _resolve_expected_outputs(
                 self.contract_store, run.contract_id
             )
             if not expected_outputs:
                 return
-            captured_at_epoch = time.time()
-            entries = [
-                self._baseline_entry(run, relative_path)
-                for relative_path in expected_outputs
-            ]
+            total_count = len(expected_outputs)
+            truncated = total_count > _BASELINE_MAX_OUTPUTS
+            baselined_paths = expected_outputs[:_BASELINE_MAX_OUTPUTS]
+            deadline = captured_at_epoch + _BASELINE_TIME_BUDGET_SECONDS
+            entries: list[dict[str, Any]] = []
+            baselined_count = 0
+            timeout = False
+            for relative_path in baselined_paths:
+                if time.time() > deadline:
+                    timeout = True
+                    break
+                invalid = _validate_baseline_path(relative_path)
+                if invalid is not None:
+                    entries.append(
+                        {
+                            "path": relative_path,
+                            "status": invalid[0],
+                            "reason": invalid[1],
+                        }
+                    )
+                    continue
+                entry = self._baseline_entry(run, relative_path)
+                entries.append(entry)
+                baselined_count += 1
             self.evidence_store.write_json(
                 run_id=run.run_id,
                 logical_path="baseline/baseline.json",
@@ -736,6 +763,14 @@ class RunService:
                     "captured_at_epoch": captured_at_epoch,
                     "contract_id": run.contract_id,
                     "workdir": run.workdir,
+                    "total_count": total_count,
+                    "baselined_count": baselined_count,
+                    "truncated": truncated,
+                    "timeout": timeout,
+                    "baseline_status": "captured",
+                    "entries": entries,
+                    # Backward-compat alias: evidence.py _load_baseline reads
+                    # ``expected_outputs``; keep it pointing at the same list.
                     "expected_outputs": entries,
                 },
             )
@@ -1014,6 +1049,37 @@ def _resolve_expected_outputs(contract_store: ContractStore, contract_id: str) -
     if not isinstance(expected, list):
         return []
     return [str(item) for item in expected]
+
+
+# Round-6 audit P1-2: baseline capture bounds to stay well under the 60s
+# submission lease. These are module-level constants so tests can import them.
+_BASELINE_MAX_OUTPUTS = 32
+_BASELINE_MAX_PATH_LENGTH = 512
+_BASELINE_TIME_BUDGET_SECONDS = 30.0
+
+
+def _validate_baseline_path(path: str) -> tuple[str, str] | None:
+    """Return ``(status, reason)`` if the path is invalid for baseline; None if OK.
+
+    Expected-output paths must be relative, within the workdir (no ``..``),
+    and free of NUL / control characters. Paths exceeding the max length are
+    also rejected. This is a pure string-level check — no filesystem access —
+    so it runs identically across local-fs and simulator-executor backends.
+    """
+    if len(path) > _BASELINE_MAX_PATH_LENGTH:
+        return (
+            "path_too_long",
+            f"path length {len(path)} exceeds {_BASELINE_MAX_PATH_LENGTH}",
+        )
+    if path.startswith("/"):
+        return ("path_invalid", "absolute path")
+    if ".." in path.split("/"):
+        return ("path_invalid", "contains parent traversal")
+    if "\x00" in path:
+        return ("path_invalid", "contains NUL byte")
+    if any(ord(c) < 0x20 for c in path):
+        return ("path_invalid", "contains control character")
+    return None
 
 
 def _baseline_missing(relative_path: str) -> dict[str, Any]:
