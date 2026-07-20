@@ -954,6 +954,45 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(response.status, 404)
         self.assertEqual(response.payload["error"]["code"], "not_found")
 
+    def test_remediation_service_receives_stores_when_injected(self) -> None:
+        # P1-1 (round 5 audit): the API process's RemediationService must
+        # receive contract_store + evidence_store so manual /advance performs
+        # strict expected-output verification (same as the Worker path).
+        contract_store = ContractStore(self.db_path)
+        api = Pilot107HttpApi(
+            store=self.run_store,
+            evidence_query=EvidenceQueryService(
+                store=self.run_store,
+                evidence_store=self.evidence_store,
+            ),
+            run_service=self.run_service,
+            recipe_catalog=self.recipe_catalog,
+            contract_service=self.contract_service,
+            contract_store=contract_store,
+            evidence_store=self.evidence_store,
+        )
+        self.assertIsNotNone(api.remediation_service.contract_store)
+        self.assertIsNotNone(api.remediation_service.evidence_store)
+
+    def test_remediation_service_stores_default_to_none_without_injection(self) -> None:
+        # Backward compat: when stores are NOT injected (legacy callers), the
+        # RemediationService falls back to legacy VERIFIED_SUCCESS. This is the
+        # behavior the round-5 audit flagged for the API path — now fixed by
+        # build_api_service threading the stores through. This test documents
+        # the fallback so a future regression is visible.
+        api = Pilot107HttpApi(
+            store=self.run_store,
+            evidence_query=EvidenceQueryService(
+                store=self.run_store,
+                evidence_store=self.evidence_store,
+            ),
+            run_service=self.run_service,
+            recipe_catalog=self.recipe_catalog,
+            contract_service=self.contract_service,
+        )
+        self.assertIsNone(api.remediation_service.contract_store)
+        self.assertIsNone(api.remediation_service.evidence_store)
+
 
 def _submit_body() -> bytes:
     return _json(_submit_payload())

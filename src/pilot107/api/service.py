@@ -356,6 +356,14 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     except Exception as exc:  # noqa: BLE001 - startup must not crash on seed failure
         print(f"[phase-a-seed] FATAL: {type(exc).__name__}: {exc}", flush=True)
 
+    # P1-1 (round 5 audit): inject contract_store + a shared EvidenceStore into
+    # Pilot107HttpApi so the API process's RemediationService can perform strict
+    # expected-output verification (same as the Worker path). Without this, API
+    # manual /advance falls back to legacy VERIFIED_SUCCESS without checking
+    # expected outputs. Reuse one EvidenceStore instance for evidence_query,
+    # capsule_service, and the remediation path to avoid divergent roots.
+    shared_evidence_store = EvidenceStore(config.evidence_root)
+
     return Pilot107HttpApi(
         store=store,
         control_repository=control_repository,
@@ -363,17 +371,19 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         metrics=metrics,
         evidence_query=EvidenceQueryService(
             store=store,
-            evidence_store=EvidenceStore(config.evidence_root),
+            evidence_store=shared_evidence_store,
         ),
         capsule_service=RawCapsuleService(
             store=store,
-            evidence_store=EvidenceStore(config.evidence_root),
+            evidence_store=shared_evidence_store,
             capsule_root=config.capsule_root,
             creator="pilot107-api",
         ),
         run_service=run_service,
         recipe_catalog=catalog,
         contract_service=contract_service,
+        contract_store=contract_store,
+        evidence_store=shared_evidence_store,
         template_market_store=template_market_store,
         template_role_directory=template_role_directory,
         template_verification_service=template_verification_service,
