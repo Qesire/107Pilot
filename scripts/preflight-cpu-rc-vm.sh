@@ -76,16 +76,27 @@ if [[ -z "$cgroup_probe_image" ]]; then
   cgroup_probe_image="alpine:3.20"
 fi
 
-cgroup_probe_out="$(docker run --rm --cgroup host \
-  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-  "$cgroup_probe_image" \
-  sh -c 'touch /sys/fs/cgroup/.pilot107_probe 2>/dev/null && rm -f /sys/fs/cgroup/.pilot107_probe && echo writable' 2>/dev/null || true)"
-if [[ "$cgroup_probe_out" == *"writable"* ]]; then
-  echo "ok   cgroup v2 writable from Docker container with cgroup: host"
-else
+# NOTE: Docker's flag is `--cgroupns=host`, NOT `--cgroup host`. If the
+# installed Docker CLI does not support `--cgroupns`, the probe must fail
+# closed with a clear message — we do NOT swallow that error.
+cgroup_probe_out=""
+if ! docker run --help 2>/dev/null | grep -q -- '--cgroupns'; then
   echo "fail cgroup v2 writable from Docker container with cgroup: host"
-  echo "cpu-rc VM preflight: target host must support cgroup v2 delegation to Docker containers for the cpu-rc sim to enforce walltime" >&2
+  echo "cpu-rc VM preflight: installed Docker CLI lacks --cgroupns support; cannot probe cgroup delegation" >&2
   failures=$((failures + 1))
+else
+  cgroup_probe_out="$(docker run --rm --cgroupns=host \
+    -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+    "$cgroup_probe_image" \
+    sh -c 'mkdir /sys/fs/cgroup/pilot107-probe-$$ && rmdir /sys/fs/cgroup/pilot107-probe-$$ && echo writable' 2>/tmp/pilot107-cpu-rc-preflight-cgroup.err || true)"
+  if [[ "$cgroup_probe_out" == *"writable"* ]]; then
+    echo "ok   cgroup v2 writable from Docker container with cgroup: host"
+  else
+    echo "fail cgroup v2 writable from Docker container with cgroup: host"
+    cat /tmp/pilot107-cpu-rc-preflight-cgroup.err >&2 || true
+    echo "cpu-rc VM preflight: target host must support cgroup v2 delegation to Docker containers for the cpu-rc sim to enforce walltime" >&2
+    failures=$((failures + 1))
+  fi
 fi
 
 # --- Compose config (CPU-RC profile) ---
@@ -171,18 +182,44 @@ done
 
 # --- Image presence (opt-in) ---
 if [[ "$require_images" == "1" ]]; then
-  for image in \
-    pilot107/slurm-sim:cpu-rc-9f0187e5ff38 \
-    pilot107/api:cpu-rc-9f0187e5ff38 \
-    pilot107/worker:cpu-rc-9f0187e5ff38 \
-    pilot107/web:cpu-rc-9f0187e5ff38; do
-    if docker image inspect "$image" >/dev/null 2>&1; then
-      echo "ok   image $image"
-    else
-      echo "fail image missing: $image"
-      failures=$((failures + 1))
-    fi
-  done
+  # Read the image list dynamically. Prefer RELEASE_MANIFEST.json (via
+  # PILOT107_RELEASE_MANIFEST_PATH or default $root/RELEASE_MANIFEST.json);
+  # fall back to images/images.txt. If neither is available, warn and skip the
+  # image check rather than hardcode a stale revision.
+  require_image_list=()
+  manifest_path="${PILOT107_RELEASE_MANIFEST_PATH:-$root/RELEASE_MANIFEST.json}"
+  images_txt_path="$root/images/images.txt"
+  if [[ -f "$manifest_path" ]]; then
+    while IFS= read -r ref; do
+      [[ -z "$ref" ]] && continue
+      require_image_list+=("$ref")
+    done < <(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+for entry in data.get('images', []):
+    ref = entry.get('reference') if isinstance(entry, dict) else None
+    if ref:
+        print(ref)
+" "$manifest_path")
+  elif [[ -f "$images_txt_path" ]]; then
+    while IFS= read -r ref; do
+      [[ -z "$ref" ]] && continue
+      require_image_list+=("$ref")
+    done <"$images_txt_path"
+  else
+    warn "image presence check skipped: no RELEASE_MANIFEST.json or images/images.txt found (set PILOT107_RELEASE_MANIFEST_PATH or run from a bundle root)"
+  fi
+  if [[ ${#require_image_list[@]} -gt 0 ]]; then
+    for image in "${require_image_list[@]}"; do
+      if docker image inspect "$image" >/dev/null 2>&1; then
+        echo "ok   image $image"
+      else
+        echo "fail image missing: $image"
+        failures=$((failures + 1))
+      fi
+    done
+  fi
 fi
 
 # --- Verdict ---

@@ -16,31 +16,37 @@
 # so a manifest content_digest `sha256:abc...` matches an inspect image id
 # `sha256:abc...` (and tolerates a missing-prefix on either side).
 #
+# Fail-closed semantics (P1-3): on the "we ARE checking" path, every anomaly
+# is a binding FAILURE (all_match=false, exit 1):
+#   - `docker compose ps` returns non-zero        → FAIL
+#   - a line of compose ps output can't be parsed → FAIL (parse_errors)
+#   - zero running containers found               → FAIL (not "nothing to bind")
+#   - any of the 10 expected services missing     → FAIL (missing_services)
+#   - a service's container exists but isn't      → FAIL
+#     State.Running=true
+#   - running image_id not in manifest            → FAIL
+# The only legitimate skips are the explicit env flag
+# PILOT107_SKIP_IMAGE_BINDING_CHECK=1 and manifest-absent (deployment context).
+#
 # Output (stdout): a single JSON object:
 #   {
-#     "manifest_path": "...",
+#     "manifest_path": "..." or null,
 #     "release_revision_full": "<40-char SHA or ''>",
 #     "release_revision_short": "<12-char SHA or ''>",
-#     "running_images": [
-#       {
-#         "container": "<name>",
-#         "service": "<compose service>",
-#         "config_image": "<tag the container was started with>",
-#         "image_id": "sha256:...",
-#         "manifest_content_digest": "sha256:..." or "",
-#         "matches_manifest": true|false
-#       }
-#     ],
+#     "running_images": [ {container, service, config_image, image_id,
+#                          manifest_content_digest, matches_manifest} ],
 #     "all_match": true|false,
 #     "skipped": true|false,
-#     "skip_reason": "..." or null
+#     "skip_reason": "..." or null,
+#     "error": "..." or null,            # P1-3: top-level error reason
+#     "missing_services": [...],          # P1-3: expected services not running
+#     "parse_errors": [...]               # P1-3: unparseable compose ps lines
 #   }
 #
 # Exit codes:
-#   0  — all running images match manifest, OR check skipped (manifest absent
-#        or PILOT107_SKIP_IMAGE_BINDING_CHECK=1).
-#   1  — at least one running image does NOT match the manifest. A clear
-#        per-container FAIL message is printed to stderr.
+#   0  — check skipped (PILOT107_SKIP_IMAGE_BINDING_CHECK=1 OR manifest absent).
+#   1  — any binding failure (compose ps failed, parse error, zero containers,
+#        missing service, container not Running, image mismatch).
 #
 # Env knobs:
 #   PILOT107_RELEASE_MANIFEST_PATH    path to RELEASE_MANIFEST.json. If unset,
@@ -54,6 +60,22 @@
 #   PILOT107_SKIP_IMAGE_BINDING_CHECK if "1", skip and exit 0 with skipped=true.
 set -euo pipefail
 
+# The 10 cpu-rc services (must match accept-runtime-bundle.sh's CPU_RC_SERVICES
+# and the compose files). If any is not found running by `docker compose ps`,
+# that is a binding failure — see "missing service" path below.
+EXPECTED_SERVICES=(
+  mariadb
+  slurmdbd
+  slurmctld
+  worker-1
+  slurmrestd
+  pilot107-command-gateway
+  pilot107-api
+  pilot107-worker
+  pilot107-web
+  pilot107-reverse-proxy
+)
+
 # ----- skip handling ---------------------------------------------------------
 if [[ "${PILOT107_SKIP_IMAGE_BINDING_CHECK:-0}" == "1" ]]; then
   python3 - <<'PY'
@@ -66,6 +88,9 @@ print(json.dumps({
     "all_match": True,
     "skipped": True,
     "skip_reason": "PILOT107_SKIP_IMAGE_BINDING_CHECK=1",
+    "error": None,
+    "missing_services": [],
+    "parse_errors": [],
 }, ensure_ascii=False))
 PY
   exit 0
@@ -87,6 +112,9 @@ print(json.dumps({
     "all_match": True,
     "skipped": True,
     "skip_reason": "manifest absent: %s" % sys.argv[1],
+    "error": None,
+    "missing_services": [],
+    "parse_errors": [],
 }, ensure_ascii=False))
 PY
   exit 0
@@ -97,7 +125,11 @@ compose_dir="$script_root/simulator/compose"
 env_file="${PILOT107_CPU_RC_ENV_FILE:-$compose_dir/.env.cpu-rc}"
 project_name="${PILOT107_CPU_RC_PROJECT_NAME:-pilot107-cpu-rc}"
 
-python3 - "$manifest" "$project_name" "$env_file" "$compose_dir" <<'PY'
+# Hand the EXPECTED_SERVICES list to Python by joining on spaces; the service
+# names contain no spaces so this is safe.
+expected_services_arg="${EXPECTED_SERVICES[*]}"
+
+python3 - "$manifest" "$project_name" "$env_file" "$compose_dir" "$expected_services_arg" <<'PY'
 import json
 import subprocess
 import sys
@@ -107,6 +139,7 @@ manifest_path = Path(sys.argv[1])
 project_name = sys.argv[2]
 env_file = sys.argv[3]
 compose_dir = Path(sys.argv[4])
+expected_services = sys.argv[5].split()
 
 manifest = json.loads(manifest_path.read_text())
 release_revision_full = manifest.get("release_revision", "") or ""
@@ -130,6 +163,37 @@ def norm_digest(d):
     return d.lower()
 
 
+def emit(report):
+    """Print the JSON report on stdout (single document, caller reads it)."""
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+
+
+def fail(report, message):
+    """Mark the report as a binding failure, emit it, print a stderr summary,
+    and exit 1. `message` is a short human-readable summary line."""
+    report["all_match"] = False
+    report["skipped"] = False
+    report["skip_reason"] = None
+    print("FAIL: %s (release_revision=%s)" % (message, release_revision_full), file=sys.stderr)
+    emit(report)
+    sys.exit(1)
+
+
+# Top-level report scaffold. Fields are filled in as we go; on any anomaly we
+# call fail() which sets all_match=False and exits 1.
+report = {
+    "manifest_path": str(manifest_path),
+    "release_revision_full": release_revision_full,
+    "release_revision_short": release_revision_short,
+    "running_images": [],
+    "all_match": True,
+    "skipped": False,
+    "skip_reason": None,
+    "error": None,
+    "missing_services": [],
+    "parse_errors": [],
+}
+
 compose_cmd = [
     "docker", "compose",
     "--project-name", project_name,
@@ -146,6 +210,17 @@ ps = subprocess.run(
     compose_cmd + ["ps", "--format", "json"],
     capture_output=True, text=True,
 )
+
+# P1-3 fix #1: compose ps itself failed — fail-closed. Do NOT attempt to
+# parse stdout (which may be empty or partial) when the invocation errored.
+if ps.returncode != 0:
+    report["error"] = "compose ps failed (rc=%d): %s" % (
+        ps.returncode, (ps.stderr or "").strip()[:500],
+    )
+    fail(report, "docker compose ps failed (rc=%d)" % ps.returncode)
+
+# P1-3 fix #3: JSON parse failure → fail-closed. Record the offending line in
+# parse_errors rather than silently dropping it.
 containers = []
 for line in ps.stdout.splitlines():
     line = line.strip()
@@ -153,31 +228,131 @@ for line in ps.stdout.splitlines():
         continue
     try:
         containers.append(json.loads(line))
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        report["parse_errors"].append({
+            "line": line[:200],
+            "error": str(e),
+        })
 
-running_images = []
-all_match = True
+if report["parse_errors"]:
+    report["error"] = "compose ps emitted %d unparseable line(s)" % len(report["parse_errors"])
+    fail(report, report["error"])
 
+# P1-3 fix #4: zero containers → fail-closed. This is NOT "nothing to bind" —
+# if we got here the manifest exists and the check is not skipped, so an empty
+# running set means the stack is down, which is a binding failure.
+if not containers:
+    report["error"] = "no running containers found"
+    fail(report, "no running cpu-rc containers found by compose ps")
+
+# Index the found containers by compose service name so we can assert each of
+# the 10 expected services is present.
+by_service = {}
 for c in containers:
-    # Tolerate field-name casing differences across compose versions.
     def get(*keys):
         for k in keys:
             if k in c and c[k] not in (None, ""):
                 return c[k]
         return ""
-    service = get("Service", "service", "Names")
+    service = get("Service", "service")
+    if not service:
+        # `Names` may be "pilot107-cpu-rc-api-1"; we can't reliably recover
+        # the service from it, so leave blank and let the missing-service
+        # check below catch it.
+        service = ""
+    by_service[service] = c
+
+# P1-3 fix #2: assert all 10 expected services are running.
+missing = [s for s in expected_services if s not in by_service]
+if missing:
+    report["missing_services"] = missing
+    report["error"] = "missing %d expected service(s): %s" % (len(missing), ", ".join(missing))
+    for s in missing:
+        print(
+            "FAIL: expected service %s is not running (release_revision=%s)"
+            % (s, release_revision_full),
+            file=sys.stderr,
+        )
+    fail(report, report["error"])
+
+running_images = []
+all_match = True
+
+for service in expected_services:
+    c = by_service[service]
+
+    def get(*keys):
+        for k in keys:
+            if k in c and c[k] not in (None, ""):
+                return c[k]
+        return ""
     name = get("Name", "name", "Container")
     cid = get("ID", "Id", "id", "ContainerID", "ContainerId")
     if not cid:
         # Fall back to the container name; docker inspect accepts names too.
         cid = name
     if not cid:
+        # Should not happen — compose ps gave us a row with no usable id.
+        all_match = False
+        running_images.append({
+            "container": name or "",
+            "service": service,
+            "config_image": "",
+            "image_id": "",
+            "manifest_content_digest": "",
+            "matches_manifest": False,
+        })
+        print(
+            "FAIL: service %s has no usable container id in compose ps output (release_revision=%s)"
+            % (service, release_revision_full),
+            file=sys.stderr,
+        )
         continue
-    state = get("State", "state")
-    # Skip exited/dead containers — only running ones can bind to a digest.
-    if state and str(state).lower() not in ("running", "healthy", "restarting"):
+
+    # P1-3 fix #5: each service must be Running. If the container exists but
+    # isn't Running, that's a binding failure (we can't trust .Image on a
+    # stopped container). compose ps's State field is authoritative for the
+    # row; we additionally re-assert via docker inspect so a race between ps
+    # and inspect (container stopped in between) is also caught.
+    ps_state = get("State", "state")
+    if ps_state and str(ps_state).lower() != "running":
+        all_match = False
+        running_images.append({
+            "container": name or cid,
+            "service": service,
+            "config_image": "",
+            "image_id": "",
+            "manifest_content_digest": "",
+            "matches_manifest": False,
+        })
+        print(
+            "FAIL: service %s container %s is not Running (state=%s; release_revision=%s)"
+            % (service, name or cid, ps_state, release_revision_full),
+            file=sys.stderr,
+        )
         continue
+
+    inspect_running = subprocess.run(
+        ["docker", "inspect", "--format", "{{.State.Running}}", cid],
+        capture_output=True, text=True,
+    )
+    if inspect_running.returncode != 0 or inspect_running.stdout.strip() != "true":
+        all_match = False
+        running_images.append({
+            "container": name or cid,
+            "service": service,
+            "config_image": "",
+            "image_id": "",
+            "manifest_content_digest": "",
+            "matches_manifest": False,
+        })
+        print(
+            "FAIL: service %s container %s State.Running is not true (release_revision=%s)"
+            % (service, name or cid, release_revision_full),
+            file=sys.stderr,
+        )
+        continue
+
     # Image ID (sha256:...) and the image reference (tag) the container was
     # started with.
     image_id = subprocess.run(
@@ -208,8 +383,15 @@ for c in containers:
                 manifest_digest_for_record = dg
                 break
 
+    # P1-3 fix #6: every running image id must exist in the manifest. Any
+    # mismatch → all_match=false → exit 1.
     if not matches:
         all_match = False
+        print(
+            "FAIL: container %s running image %s not in RELEASE_MANIFEST.json (release_revision=%s)"
+            % (name or cid, image_id, release_revision_full),
+            file=sys.stderr,
+        )
 
     running_images.append({
         "container": name or cid,
@@ -220,30 +402,15 @@ for c in containers:
         "matches_manifest": matches,
     })
 
-report = {
-    "manifest_path": str(manifest_path),
-    "release_revision_full": release_revision_full,
-    "release_revision_short": release_revision_short,
-    "running_images": running_images,
-    "all_match": all_match,
-    "skipped": False,
-    "skip_reason": None,
-}
-print(json.dumps(report, indent=2, ensure_ascii=False))
+report["running_images"] = running_images
+report["all_match"] = all_match
+emit(report)
 
 # Human-readable summary to stderr (stdout is reserved for the JSON document).
-if not running_images:
-    print("WARNING: no running cpu-rc containers found by compose ps; nothing to bind", file=sys.stderr)
-elif all_match:
+if all_match:
     print("all running containers match RELEASE_MANIFEST.json release_revision=%s" % release_revision_full, file=sys.stderr)
-else:
-    for r in running_images:
-        if not r["matches_manifest"]:
-            print(
-                "FAIL: container %s running image %s not in RELEASE_MANIFEST.json (release_revision=%s)"
-                % (r["container"], r["image_id"], release_revision_full),
-                file=sys.stderr,
-            )
+# Per-container FAIL lines were already printed above as each mismatch was
+# discovered; no need to reprint them here.
 
 sys.exit(0 if all_match else 1)
 PY

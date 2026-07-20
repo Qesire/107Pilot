@@ -2,7 +2,7 @@
 
 快照日期：2026-07-20
 当前环境：本机 D0/D1
-当前主线：模拟 Slurm 阶段封版候选（main @ `b2975ba8a26f8c7d59719456c2426795dfb02c5a`，GitHub CI 全绿）。
+当前主线：模拟 Slurm 阶段封版候选（main @ `01f8c082c2e450e9675520ee66e314b2aaa8368b`，round-3 convergence 进行中：P1-1 至 P1-4 正并行 re-fix，尚未声明全绿）。
 
 ## 权威入口
 
@@ -23,12 +23,12 @@
 | 已知错误规则 | 37 条 |
 | Ruff | passed（src/tests/scripts/simulator） |
 | mypy strict | 76 source files passed |
-| Python 测试 | 691 passed，13 PostgreSQL integration skipped，5 subtests passed |
+| Python 测试 | 692 passed，13 PostgreSQL integration skipped，5 subtests passed |
 | Vitest | 12 files / 87 tests passed |
 | Playwright test:ui | 14/14 passed（Market→Adopt→Studio→Preflight→Run→Evidence，CI 阻塞门禁） |
 | Web production build | passed（static bundle 已与源码同步，CI 含 drift 检查） |
 | Compose contracts | base/competition/CPU-RC/slurm-host/app-node passed |
-| GitHub CI (main @ b2975ba) | python/web/web-ui/compose/security 全绿（run 29687521816） |
+| GitHub CI (main @ 01f8c08) | round-3 convergence 进行中：P1-1 至 P1-4 正并行 re-fix，尚未声明全绿（收敛中，不绿） |
 
 完整测试已在允许本机回环 socket 的执行环境通过；受限沙箱内同一套代码仅有 7 个回环 HTTP 测试因 `PermissionError` 不能绑定端口，不是代码失败。项目已在 `pyproject.toml` 固定 `src` import path，不依赖隐式 `PYTHONPATH`。
 
@@ -61,5 +61,5 @@ Docker、fake/replay LLM 和本地 command gateway 的结果不得表述为真�
 
 1. Run、Remediation、Template 等业务 Store 仍以 SQLite 为主，尚未完成全领域 PostgreSQL parity/接线；
 2. Prometheus 长期 retention/firing 与在线供应链扫描仍需目标运维/CI 环境验证；
-3. CPU-RC 早期 revision 已在 S1 (8C/16G VM) 部署并通过 G3 功能链；最新 SHA (`b2975ba8a26f8c7d59719456c2426795dfb02c5a`) 的 VM 重部署与同版本全量验收仍待最终验证通过（收敛中，尚未声明全绿）；P1-1 至 P1-4 整改项正并行收口，状态见各自 lane；
+3. CPU-RC 早期 revision 已在 S1 (8C/16G VM) 部署并通过 G3 功能链；最新 SHA (`01f8c082c2e450e9675520ee66e314b2aaa8368b`) 的 VM 重部署与同版本全量验收仍待最终验证通过（收敛中，尚未声明全绿）；P1-1 至 P1-4 整改项正并行 re-fix，状态见各自 lane；
 4. 真实身份和真实 107 均不在当前已验证能力内，亦不属于本阶段验收范围。

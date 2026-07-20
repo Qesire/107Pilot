@@ -27,6 +27,18 @@ fi
 
 revision="$(git -C "$root" rev-parse HEAD)"
 short_revision="${revision:0:12}"
+
+# Dirty-worktree guard (matches export-cpu-rc-bundle.sh). The report records
+# `git rev-parse HEAD`; if tracked files are modified, uncommitted code can
+# pass while the report claims the HEAD sha. Fail closed on tracked dirty;
+# untracked files are recorded for transparency but do not fail.
+if ! git -C "$root" diff --quiet || ! git -C "$root" diff --cached --quiet; then
+  echo "source acceptance requires a clean tracked worktree; commit or stash changes before running" >&2
+  git -C "$root" --no-pager diff >&2 || true
+  exit 1
+fi
+untracked_status="$(git -C "$root" status --porcelain --untracked-files)"
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${PILOT107_SOURCE_ACCEPT_ARTIFACT_DIR:-$root/artifacts/acceptance/source-$short_revision-$timestamp}"
 mkdir -p "$artifact_dir"
@@ -47,8 +59,18 @@ run_step() {
   local start_ts end_ts rc
   start_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   log "=== STEP: $name ==="
+  # CRITICAL: do NOT use `( set -e; "$fn" ) || rc=$?`. A subshell on the LHS
+  # of `||` is in a conditional context, so `set -e` inside it does NOT
+  # reliably propagate — an intermediate failing command can be swallowed
+  # and the function may continue to a final success, yielding a false PASS.
+  # Run the subshell outside any conditional, capturing rc directly. The
+  # `set +e` / `set -e` bracket preserves the script's errexit expectations
+  # around this block.
   rc=0
-  ( set -e; "$fn" ) || rc=$?
+  set +e
+  ( set -e; "$fn" )
+  rc=$?
+  set -e
   end_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [[ "$rc" -eq 0 ]]; then
     printf 'start=%s\nend=%s\nstatus=PASS\n' "$start_ts" "$end_ts" >"$status_file"
@@ -126,7 +148,7 @@ for spec in "${STEPS[@]}"; do
 done
 
 # JSON report.
-python3 - "$artifact_dir" "$steps_dir" "$revision" "$started_iso" "${STEPS[@]}" <<'PY'
+python3 - "$artifact_dir" "$steps_dir" "$revision" "$started_iso" "$untracked_status" "${STEPS[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -135,7 +157,8 @@ artifact_dir = Path(sys.argv[1])
 steps_dir = Path(sys.argv[2])
 revision = sys.argv[3]
 started_iso = sys.argv[4]
-step_specs = sys.argv[5:]
+untracked_status = sys.argv[5]
+step_specs = sys.argv[6:]
 
 steps = []
 any_fail = False
@@ -167,6 +190,7 @@ report = {
     "started_at": started_iso,
     "ended_at": max((s["end"] or "" for s in steps), default=""),
     "any_fail": any_fail,
+    "untracked_files_status": untracked_status,
     "steps": steps,
 }
 (artifact_dir / "source-acceptance-report.json").write_text(
@@ -178,13 +202,46 @@ for s in steps:
 print(f"report: {artifact_dir / 'source-acceptance-report.json'}")
 PY
 
+# Final aggregation. A step is treated as FAIL (overall_rc=1) if:
+#   - its status file is missing (run_step never wrote it),
+#   - its status value is not one of PASS/FAIL/KNOWN_SKIP (corrupt/unparseable),
+#   - or it explicitly recorded status=FAIL.
+# The report step is excluded (it writes its own status after the JSON is
+# generated). The report JSON itself must exist and be parseable — a missing
+# or unparseable report is also a FAIL.
 overall_rc=0
+valid_statuses=' PASS FAIL KNOWN_SKIP '
 for spec in "${STEPS[@]}"; do
   name="${spec%%|*}"
-  if [[ -f "$steps_dir/$name.status" ]] && grep -q '^status=FAIL' "$steps_dir/$name.status"; then
+  [[ "$name" == "report" ]] && continue
+  status_file="$steps_dir/$name.status"
+  if [[ ! -f "$status_file" ]]; then
+    log "=== AGGREGATION: step $name status file missing → FAIL ===" >&2
+    overall_rc=1
+    continue
+  fi
+  status_line="$(grep -m1 '^status=' "$status_file" || true)"
+  status_val="${status_line#status=}"
+  if [[ -z "$status_val" ]] || [[ " $valid_statuses " != *" $status_val "* ]]; then
+    log "=== AGGREGATION: step $name has unknown status '${status_val:-<empty>}' → FAIL ===" >&2
+    overall_rc=1
+    continue
+  fi
+  if [[ "$status_val" == "FAIL" ]]; then
     overall_rc=1
   fi
 done
+
+# The report JSON must exist and be parseable. A missing/unparseable report
+# means the acceptance produced no trustworthy evidence.
+report_json="$artifact_dir/source-acceptance-report.json"
+if [[ ! -f "$report_json" ]]; then
+  log "=== AGGREGATION: $report_json missing → FAIL ===" >&2
+  overall_rc=1
+elif ! python3 -c "import json, sys; json.load(open(sys.argv[1]))" "$report_json" >/dev/null 2>&1; then
+  log "=== AGGREGATION: $report_json unparseable → FAIL ===" >&2
+  overall_rc=1
+fi
 
 if [[ "$overall_rc" -ne 0 ]]; then
   log "=== SOURCE ACCEPTANCE FAILED (see $artifact_dir/source-acceptance-report.json) ==="

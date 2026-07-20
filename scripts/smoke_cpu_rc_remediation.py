@@ -3,7 +3,9 @@
 Goal: prove a REAL failed run -> rule-evaluated diagnosis -> approved remediation
 -> derived Run -> re-evaluation, on the cpu-rc stack VIA HTTP (not direct Python
 API, not hand-injected diagnosis as ``smoke_sim_phase2._verify_agent_remediation``
-does).
+does). This smoke closes the FULL chain: diagnosis, execution, AND result
+evaluation are all proven (the remediation session reaches ``succeeded`` with a
+``verified_success`` evaluation bound to the derived run).
 
 This smoke requires the cpu-rc Docker Slurm simulator to enforce walltime via
 task/cgroup (ProctrackType=proctrack/cgroup, TaskPlugin=task/cgroup,
@@ -16,7 +18,11 @@ creates the expected output file AFTER the sleep. Slurm cancels with TIMEOUT
 before the output is produced, the rule engine authors suggested_patch =
 {resources.time_limit: null}, AgentPolicyEngine resolves the null to the cpu-rc
 profile's max_wall_hours (4 -> "04:00:00"), and the derived run re-submits the
-same 75s sleep with the full 4h limit -> SUCCEEDED (output produced).
+same 75s sleep with the full 4h limit -> SUCCEEDED (output produced). The smoke
+then drives the session through evaluation and asserts the evaluation closure:
+session state == succeeded, >=1 evaluation bound to the derived run and the
+current execution, outcome == verified_success, non-empty comparison, and
+non-empty evidence_refs.
 
 HTTP endpoints relied on (src/pilot107/api/remediation_routes.py):
   - POST /runs/{run_id}/remediation-sessions          (remediation_routes.py:152)
@@ -29,8 +35,8 @@ HTTP endpoints relied on (src/pilot107/api/remediation_routes.py):
 
 Provider is "none" (deterministic rules) and the cpu-rc capability profile is
 loaded by the API via ``PILOT107_CAPABILITY_PROFILE_PATH``. Exit 0 ONLY if the
-full derived-Run chain succeeds; exit 1 on any failure (API error, wrong state,
-missing capsule, etc.).
+full diagnosis -> execution -> evaluation chain succeeds; exit 1 on any failure
+(API error, wrong state, missing capsule, missing/incorrect evaluation, etc.).
 """
 
 from __future__ import annotations
@@ -166,14 +172,24 @@ def main() -> int:
             exec_payload.get("execution", {}).get("derived_run_id")
             or exec_payload.get("derived_run_id")
         )
+        execution_id = exec_payload.get("execution_id")
         if not derived_run_id:
             detail = _get(f"/remediation-sessions/{session_id}")
             executions = detail.get("executions") or []
             if executions:
                 derived_run_id = executions[-1].get("derived_run_id")
+                if not execution_id:
+                    execution_id = executions[-1].get("execution_id")
         if not derived_run_id:
             print(
                 f"remediation smoke failed: execute did not produce a derived_run_id "
+                f"for session={session_id}: {exec_payload}",
+                file=sys.stderr,
+            )
+            return 1
+        if not execution_id:
+            print(
+                f"remediation smoke failed: execute did not produce an execution_id "
                 f"for session={session_id}: {exec_payload}",
                 file=sys.stderr,
             )
@@ -213,10 +229,105 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+
+        # 8. Drive the remediation session through evaluation to a terminal
+        #    state. After the derived Run reaches SUCCEEDED, the session is in
+        #    EXECUTING; calling /advance transitions EXECUTING -> EVALUATING
+        #    (appends the EvaluationResult) -> SUCCEEDED (on verified_success).
+        #    See src/pilot107/services/remediation_service.py:200,511,545.
+        non_terminal = {
+            "waiting_evidence",
+            "diagnosing",
+            "planning",
+            "awaiting_input",
+            "awaiting_approval",
+            "preparing",
+            "executing",
+            "evaluating",
+        }
+        detail = _get(f"/remediation-sessions/{session_id}")
+        deadline = time.time() + 120
+        while detail.get("state") in non_terminal and time.time() < deadline:
+            detail = _post(
+                f"/remediation-sessions/{session_id}/advance",
+                {"provider": "none"},
+            )
+            if detail.get("state") in non_terminal:
+                time.sleep(1)
+                detail = _get(f"/remediation-sessions/{session_id}")
+
+        # 9. Assert the session reached the succeeded terminal state.
+        session_state = detail.get("state")
+        if session_state != "succeeded":
+            print(
+                f"remediation smoke failed: session did not reach succeeded; "
+                f"state={session_state!r} stop_reason={detail.get('stop_reason')!r} "
+                f"for session={session_id}",
+                file=sys.stderr,
+            )
+            return 1
+
+        # 10. Assert the evaluation closure: at least one evaluation bound to
+        #     this execution and derived run, with a verified-success outcome,
+        #     a non-empty comparison, and non-empty evidence_refs.
+        evaluations = detail.get("evaluations") or []
+        if not evaluations:
+            print(
+                f"remediation smoke failed: session succeeded but has no "
+                f"evaluations for session={session_id}: {detail}",
+                file=sys.stderr,
+            )
+            return 1
+        matching = [
+            ev
+            for ev in evaluations
+            if ev.get("derived_run_id") == derived_run_id
+            and ev.get("execution_id") == execution_id
+        ]
+        if not matching:
+            print(
+                f"remediation smoke failed: no evaluation bound to "
+                f"derived_run_id={derived_run_id} execution_id={execution_id}; "
+                f"evaluations={evaluations}",
+                file=sys.stderr,
+            )
+            return 1
+        evaluation = matching[-1]
+        outcome = evaluation.get("outcome")
+        # EvaluationOutcome enum (src/pilot107/core/remediation.py:38-42):
+        # verified_success | execution_success_unverified | failed | inconclusive.
+        # verified_success is the only outcome that drives the session to
+        # succeeded (remediation_service.py:573-575).
+        if outcome != "verified_success":
+            print(
+                f"remediation smoke failed: evaluation outcome={outcome!r} "
+                f"!= verified_success for session={session_id}: {evaluation}",
+                file=sys.stderr,
+            )
+            return 1
+        comparison = evaluation.get("comparison") or {}
+        if not comparison:
+            print(
+                f"remediation smoke failed: evaluation comparison empty for "
+                f"session={session_id}: {evaluation}",
+                file=sys.stderr,
+            )
+            return 1
+        evidence_refs = evaluation.get("evidence_refs") or []
+        if not evidence_refs:
+            print(
+                f"remediation smoke failed: evaluation evidence_refs empty for "
+                f"session={session_id}: {evaluation}",
+                file=sys.stderr,
+            )
+            return 1
         print(
             f"cpu-rc-remediation smoke ok source={source_run_id} "
             f"derived={derived_run_id} capsule={manifest_sha} "
-            f"lineage_reason={lineage_reason} derived_contract_id={derived_contract_id}"
+            f"lineage_reason={lineage_reason} derived_contract_id={derived_contract_id} "
+            f"session_state={session_state} outcome={outcome} "
+            f"evaluation_id={evaluation.get('evaluation_id')} "
+            f"evidence_refs={len(evidence_refs)}"
         )
         return 0
     except Exception as exc:  # noqa: BLE001 - smoke reports failures as exit 1

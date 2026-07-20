@@ -86,6 +86,27 @@ if [[ ! -d "$bundle_dir" ]]; then
   exit 1
 fi
 
+# P1-2: derive the release revision short SHA from the bundle's manifest so we
+# can build an isolated compose project name. Computing it here (rather than
+# only inside step_report's Python) lets every compose invocation in this
+# script and in the child scripts target a project name that is unique to
+# this acceptance run, so it never collides with an ambient
+# `pilot107-cpu-rc` deployment and `down -v` fully removes its volumes.
+release_revision_full="$(python3 - "$bundle_dir/RELEASE_MANIFEST.json" <<'PY'
+import json, sys
+try:
+    m = json.loads(open(sys.argv[1]).read())
+    print(m.get("release_revision", "") or "")
+except Exception:
+    pass
+PY
+)"
+release_revision_short="${release_revision_full:0:12}"
+# Unique-per-process id (epoch seconds + PID) so concurrent acceptance runs of
+# the same revision don't collide on project name either.
+acceptance_id="$(date +%s)-$$"
+export PILOT107_CPU_RC_PROJECT_NAME="pilot107-cpu-rc-accept-${release_revision_short}-${acceptance_id}"
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${PILOT107_ACCEPT_ARTIFACT_DIR:-$root/artifacts/acceptance/runtime-$timestamp}"
 mkdir -p "$artifact_dir"
@@ -95,6 +116,10 @@ started_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Export knobs consumed by child scripts. Images are imported from the bundle
 # in step_import_images, so start-cpu-rc.sh must NOT rebuild them.
+# PILOT107_CPU_RC_PROJECT_NAME is already exported above (P1-2 isolated
+# project). All child scripts (start-cpu-rc.sh, check-cpu-rc.sh, the smoke
+# wrappers, stop-cpu-rc.sh, verify-cpu-rc-image-binding.sh, and the Python
+# smokes) honor this env var with a `pilot107-cpu-rc` default.
 export PILOT107_PUBLIC_URL
 export PILOT107_SKIP_BUILD=1
 export PILOT107_SKIP_ORIGIN_VALIDATE="${PILOT107_SKIP_ORIGIN_VALIDATE:-0}"
@@ -118,8 +143,18 @@ run_step() {
   local start_ts end_ts rc
   start_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   log "=== STEP: $name ==="
+  # CRITICAL: do NOT use `( set -e; "$fn" ) || rc=$?`. A subshell on the LHS
+  # of `||` is in a conditional context, so `set -e` inside it does NOT
+  # reliably propagate — an intermediate failing command can be swallowed
+  # and the function may continue to a final success, yielding a false PASS.
+  # Run the subshell outside any conditional, capturing rc directly. The
+  # `set +e` / `set -e` bracket preserves the script's errexit expectations
+  # around this block.
   rc=0
-  ( set -e; "$fn" ) || rc=$?
+  set +e
+  ( set -e; "$fn" )
+  rc=$?
+  set -e
   end_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [[ "$rc" -eq 0 ]]; then
     printf 'start=%s\nend=%s\nstatus=PASS\n' "$start_ts" "$end_ts" >"$status_file"
@@ -223,10 +258,21 @@ CPU_RC_SERVICES=(
 # idempotent: a genuinely-healthy stack is reused instead of re-running
 # start-cpu-rc.sh (which races on slurmdbd->mariadb auth when its .env.cpu-rc
 # is regenerated against a pre-existing volume).
+#
+# P1-2: on a freshly-extracted bundle there is NO .env.cpu-rc (the export
+# script ships only .env.cpu-rc.example). In that case the stack cannot
+# already be up under our isolated project name, so return 1 immediately —
+# step_start_stack will run start-cpu-rc.sh, which generates a fresh
+# .env.cpu-rc + fresh volumes (isolated project name → fresh volumes, so the
+# credential-mismatch race is impossible).
 stack_is_healthy() {
   local compose_dir="$bundle_root/simulator/compose"
   local env_file="${PILOT107_CPU_RC_ENV_FILE:-$compose_dir/.env.cpu-rc}"
   local project_name="${PILOT107_CPU_RC_PROJECT_NAME:-pilot107-cpu-rc}"
+  # No env file → stack was never started under this project name.
+  if [[ ! -f "$env_file" ]]; then
+    return 1
+  fi
   local compose=(
     docker compose
     --project-name "$project_name"
@@ -276,10 +322,13 @@ step_compose_readiness() {
     --profile competition \
     config >/dev/null
   # Health probe: the API readiness endpoint must answer within ~60s.
+  # Strict: require HTTP 200 AND a JSON body with status == "ready"
+  # (matches src/pilot107/api/health.py: ready_payload is
+  # {"status": "ready" | "not_ready", "checks": [...]}).
   https_port="$(awk -F= '/^PILOT107_HTTPS_PORT=/{print $2}' "$env_file" | tail -1)"
   : "${https_port:=8443}"
   python3 - "$https_port" <<'PY'
-import ssl, sys, time, urllib.request
+import json, ssl, sys, time, urllib.request
 port = sys.argv[1]
 url = "https://127.0.0.1:%s/api/v1/health/ready" % port
 ctx = ssl.create_default_context()
@@ -290,12 +339,23 @@ last = None
 while time.time() < deadline:
     try:
         with urllib.request.urlopen(url, timeout=5, context=ctx) as r:
-            if r.status < 500:
-                sys.exit(0)
+            if r.status == 200:
+                body = r.read().decode("utf-8", errors="replace")
+                try:
+                    payload = json.loads(body)
+                except json.JSONDecodeError as exc:
+                    last = "non-JSON body: %s" % exc
+                    time.sleep(2)
+                    continue
+                if isinstance(payload, dict) and payload.get("status") == "ready":
+                    sys.exit(0)
+                last = "status not ready: %r" % payload.get("status")
+            else:
+                last = "http status %s" % r.status
     except Exception as e:
         last = e
         time.sleep(2)
-print("API readiness never answered: %s" % last, file=sys.stderr)
+print("API readiness never answered ready: %s" % last, file=sys.stderr)
 sys.exit(1)
 PY
 }
@@ -352,14 +412,51 @@ STEPS=(
 )
 
 cleanup() {
-  if [[ -n "$extracted_tmp" && -d "$extracted_tmp" ]]; then
-    rm -rf "$extracted_tmp" || true
-  fi
+  # P1-2: cleanup order MUST be stop-stack-then-remove-extracted-dir. The
+  # prior code did `rm -rf "$extracted_tmp"` FIRST, then tried to `cd
+  # "$bundle_root" && bash scripts/stop-cpu-rc.sh` — but in archive mode
+  # $bundle_root IS $extracted_tmp, so cd failed (dir already gone) and stop
+  # was swallowed by `|| true`, leaving the stack (and its named volumes)
+  # running. stop-cpu-rc.sh does plain `down` (no -v), so we also run an
+  # explicit `down -v` with the isolated project name to fully remove the
+  # acceptance run's volumes.
   if [[ "${PILOT107_ACCEPT_LEAVE_UP:-0}" != "1" ]]; then
-    log "=== CLEANUP: stopping cpu-rc stack (best-effort) ==="
-    ( cd "$bundle_root" && bash scripts/stop-cpu-rc.sh ) || true
+    log "=== CLEANUP: stopping cpu-rc stack (best-effort, with -v) ==="
+    if [[ -d "$bundle_root" ]]; then
+      ( cd "$bundle_root" && bash scripts/stop-cpu-rc.sh ) \
+        && log "  stop-cpu-rc.sh ok" \
+        || log "  stop-cpu-rc.sh failed (continuing)" >&2
+      # Belt-and-suspenders: stop-cpu-rc.sh does plain `down`; explicitly
+      # remove volumes for the isolated project so repeated acceptance runs
+      # don't accumulate orphan volumes.
+      local compose_dir="$bundle_root/simulator/compose"
+      local env_file="${PILOT107_CPU_RC_ENV_FILE:-$compose_dir/.env.cpu-rc}"
+      if [[ -f "$env_file" ]]; then
+        docker compose \
+          --project-name "$PILOT107_CPU_RC_PROJECT_NAME" \
+          --env-file "$env_file" \
+          -f "$compose_dir/compose.yml" \
+          -f "$compose_dir/compose.competition.yml" \
+          -f "$compose_dir/compose.cpu-rc.yml" \
+          --profile competition \
+          down -v >>"$artifact_dir/cleanup-down-v.log" 2>&1 \
+          && log "  down -v ok" \
+          || log "  down -v failed (continuing)" >&2
+      else
+        log "  no .env.cpu-rc; skipping down -v (volumes already absent or named elsewhere)" >&2
+      fi
+    else
+      log "  bundle_root gone; cannot run stop-cpu-rc.sh" >&2
+    fi
   else
     log "=== CLEANUP: PILOT107_ACCEPT_LEAVE_UP=1; leaving stack running ==="
+  fi
+  # Remove the extracted bundle dir LAST — stop-cpu-rc.sh and the down -v
+  # above need $bundle_root (== $extracted_tmp in archive mode) to exist.
+  if [[ -n "$extracted_tmp" && -d "$extracted_tmp" ]]; then
+    rm -rf "$extracted_tmp" \
+      && log "  removed extracted tmp $extracted_tmp" \
+      || log "  failed to remove $extracted_tmp" >&2
   fi
 }
 trap cleanup EXIT
@@ -486,14 +583,48 @@ for spec in "${STEPS[@]}"; do
   run_step "$name" "$fn"
 done
 
+# Final aggregation. A step is treated as FAIL (overall_rc=1) if:
+#   - its status file is missing (run_step never wrote it),
+#   - its status value is not one of PASS/FAIL/KNOWN_SKIP (corrupt/unparseable),
+#   - or it explicitly recorded status=FAIL.
+# The report step is excluded (it writes its own status after the JSON is
+# generated). The report JSON itself must exist and be parseable — a missing
+# or unparseable report is also a FAIL. The image_binding_all_match flag is
+# already forced into any_fail by step_report's Python; here we re-assert the
+# step-status + report-existence invariants in bash.
 overall_rc=0
+valid_statuses=' PASS FAIL KNOWN_SKIP '
 for spec in "${STEPS[@]}"; do
   name="${spec%%|*}"
   [[ "$name" == "report" ]] && continue
-  if [[ -f "$steps_dir/$name.status" ]] && grep -q '^status=FAIL' "$steps_dir/$name.status"; then
+  status_file="$steps_dir/$name.status"
+  if [[ ! -f "$status_file" ]]; then
+    log "=== AGGREGATION: step $name status file missing → FAIL ===" >&2
+    overall_rc=1
+    continue
+  fi
+  status_line="$(grep -m1 '^status=' "$status_file" || true)"
+  status_val="${status_line#status=}"
+  if [[ -z "$status_val" ]] || [[ " $valid_statuses " != *" $status_val "* ]]; then
+    log "=== AGGREGATION: step $name has unknown status '${status_val:-<empty>}' → FAIL ===" >&2
+    overall_rc=1
+    continue
+  fi
+  if [[ "$status_val" == "FAIL" ]]; then
     overall_rc=1
   fi
 done
+
+# The report JSON must exist and be parseable. A missing/unparseable report
+# means the acceptance produced no trustworthy evidence.
+report_json="$artifact_dir/runtime-acceptance-report.json"
+if [[ ! -f "$report_json" ]]; then
+  log "=== AGGREGATION: $report_json missing → FAIL ===" >&2
+  overall_rc=1
+elif ! python3 -c "import json, sys; json.load(open(sys.argv[1]))" "$report_json" >/dev/null 2>&1; then
+  log "=== AGGREGATION: $report_json unparseable → FAIL ===" >&2
+  overall_rc=1
+fi
 
 if [[ "$overall_rc" -ne 0 ]]; then
   log "=== RUNTIME BUNDLE ACCEPTANCE FAILED (see $artifact_dir/runtime-acceptance-report.json) ==="
