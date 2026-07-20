@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import posixpath
 import re
 import sqlite3
 import time
@@ -11,10 +13,11 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
 from pilot107.adapters.slurm import (
+    SimulatorExecutor,
     SlurmBackend,
     SlurmBackendError,
     SlurmTransportError,
@@ -38,6 +41,13 @@ from pilot107.core.resources import (
 from pilot107.core.run_store import RunRecord, RunStore, RunStoreFenceConflict
 from pilot107.core.states import RunState
 from pilot107.core.submission_reconcile import ReconcileBackend, reconcile_submission
+
+if TYPE_CHECKING:
+    # ``ContractStore`` lives in ``pilot107.core.contracts``, which itself
+    # imports ``RunSubmitRequest``/``WorkflowPolicy`` from this module. Importing
+    # it eagerly would create a circular dependency, so the type annotation is
+    # guarded by ``TYPE_CHECKING`` and only used as a string-quoted hint.
+    from pilot107.core.contracts import ContractStore
 
 
 @dataclass(frozen=True)
@@ -158,6 +168,23 @@ class SubmissionRecoveryRequiredError(SlurmBackendError):
     pass
 
 
+class BaselineEvidenceSink(Protocol):
+    """Minimal evidence-store interface needed for baseline capture.
+
+    :class:`pilot107.worker.evidence.EvidenceStore` satisfies this structurally
+    so ``core`` does not need to import from ``worker`` (which would create a
+    circular dependency).
+    """
+
+    def write_json(
+        self,
+        *,
+        run_id: str,
+        logical_path: str,
+        payload: dict[str, Any],
+    ) -> Any: ...
+
+
 @dataclass(frozen=True)
 class SubmissionDispatchError:
     message_id: str
@@ -194,6 +221,9 @@ class RunService:
         submission_lease_seconds: int = 60,
         submission_retry_delay_seconds: int = 5,
         submission_max_attempts: int = 5,
+        contract_store: ContractStore | None = None,
+        evidence_store: BaselineEvidenceSink | None = None,
+        baseline_executor: SimulatorExecutor | None = None,
     ) -> None:
         self.store = store
         self.backend = backend
@@ -222,6 +252,9 @@ class RunService:
         self.submission_lease_seconds = submission_lease_seconds
         self.submission_retry_delay_seconds = submission_retry_delay_seconds
         self.submission_max_attempts = submission_max_attempts
+        self.contract_store = contract_store
+        self.evidence_store = evidence_store
+        self.baseline_executor = baseline_executor
 
     def submit(self, request: RunSubmitRequest) -> RunRecord:
         run = self.prepare(request)
@@ -375,6 +408,7 @@ class RunService:
             if current.job_id is not None:
                 return current
             raise SubmissionInProgressError("run submission is already in progress")
+        self._capture_baseline(run)
         submitted_after = time.time()
         try:
             receipt = self.backend.submit(intent)
@@ -429,6 +463,7 @@ class RunService:
             if recovered is not None:
                 return recovered
 
+        self._capture_baseline(run)
         submitted_after = time.time()
         try:
             receipt = self.backend.submit(intent)
@@ -665,6 +700,91 @@ class RunService:
     # Preflight + reconciliation helpers
     # ------------------------------------------------------------------ #
 
+    def _capture_baseline(self, run: RunRecord) -> None:
+        """Capture a pre-run baseline of declared expected outputs.
+
+        Records ``exists/size/mtime/sha256`` for each path declared in the
+        contract's ``outputs.expected`` *before* the job is submitted, so the
+        evidence collector can later distinguish ``created`` (newly produced)
+        from ``modified`` / ``unchanged`` / ``missing`` via strict comparison
+        (see ``compute_file_attribution`` in ``worker.evidence``).
+
+        Baseline is an enhancement: if the contract store, evidence store, or
+        contract id are unavailable — or capture raises — the run still
+        submits; attribution silently falls back to mtime-only classification.
+        """
+        if self.evidence_store is None or self.contract_store is None:
+            return
+        if run.contract_id is None:
+            return
+        try:
+            expected_outputs = _resolve_expected_outputs(
+                self.contract_store, run.contract_id
+            )
+            if not expected_outputs:
+                return
+            captured_at_epoch = time.time()
+            entries = [
+                self._baseline_entry(run, relative_path)
+                for relative_path in expected_outputs
+            ]
+            self.evidence_store.write_json(
+                run_id=run.run_id,
+                logical_path="baseline/baseline.json",
+                payload={
+                    "schema": "pilot107.baseline.v1",
+                    "captured_at_epoch": captured_at_epoch,
+                    "contract_id": run.contract_id,
+                    "workdir": run.workdir,
+                    "expected_outputs": entries,
+                },
+            )
+        except Exception:  # noqa: BLE001 - baseline must never block submit
+            return
+
+    def _baseline_entry(self, run: RunRecord, relative_path: str) -> dict[str, Any]:
+        absolute = posixpath.join(run.workdir, relative_path)
+        executor = self.baseline_executor
+        if executor is not None:
+            stat = executor.run(
+                ["stat", "-c", "%s|%Y", absolute],
+                cwd=run.workdir,
+                user=run.owner,
+                timeout_seconds=10.0,
+            )
+            if stat.returncode != 0:
+                return _baseline_missing(relative_path)
+            size_str, mtime_str = stat.stdout.strip().split("|", 1)
+            sha = _baseline_sha256(executor, run, absolute)
+            return {
+                "path": relative_path,
+                "exists": True,
+                "size_bytes": int(size_str),
+                "mtime_epoch": float(mtime_str),
+                "sha256": sha,
+            }
+        # No simulator executor: probe the local filesystem (in-memory / demo
+        # backends with local workdirs). Missing files — the normal case for a
+        # fresh run — record exists=false so later inventory comparison classifies
+        # the newly produced file as ``created``.
+        try:
+            st = os.stat(absolute)
+        except OSError:
+            return _baseline_missing(relative_path)
+        local_sha: str | None
+        try:
+            with open(absolute, "rb") as handle:  # noqa: PTH123
+                local_sha = hashlib.sha256(handle.read()).hexdigest()
+        except OSError:
+            local_sha = None
+        return {
+            "path": relative_path,
+            "exists": True,
+            "size_bytes": st.st_size,
+            "mtime_epoch": float(st.st_mtime),
+            "sha256": local_sha,
+        }
+
     def _run_preflight(self, run: RunRecord) -> None:
         """Aggregate resource-plan and workdir preflight findings.
 
@@ -881,6 +1001,45 @@ def _submission_job_name(prefix: str, run_id: str) -> str:
         raise ValueError("job_name_marker must use safe Slurm name characters")
     digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:20]
     return f"{prefix}-{digest}"
+
+
+def _resolve_expected_outputs(contract_store: ContractStore, contract_id: str) -> list[str]:
+    """Resolve ``outputs.expected`` for a contract, tolerant of schema gaps."""
+    try:
+        contract = contract_store.get_contract(contract_id)
+    except Exception:  # noqa: BLE001 - baseline must never crash submit
+        return []
+    outputs = contract.payload.get("outputs") or {}
+    expected = outputs.get("expected") or []
+    if not isinstance(expected, list):
+        return []
+    return [str(item) for item in expected]
+
+
+def _baseline_missing(relative_path: str) -> dict[str, Any]:
+    return {
+        "path": relative_path,
+        "exists": False,
+        "size_bytes": None,
+        "mtime_epoch": None,
+        "sha256": None,
+    }
+
+
+def _baseline_sha256(
+    executor: SimulatorExecutor,
+    run: RunRecord,
+    absolute: str,
+) -> str | None:
+    result = executor.run(
+        ["sha256sum", absolute],
+        cwd=run.workdir,
+        user=run.owner,
+        timeout_seconds=20.0,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip().split()[0] if result.stdout.strip() else None
 
 
 def _submission_message_id(run_id: str) -> str:

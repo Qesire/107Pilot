@@ -233,7 +233,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         partition_qos=partition_qos,
     )
     run_service, token_validity_probe = _build_run_service_and_probe(
-        config, store, control_repository
+        config, store, control_repository, contract_store, config.evidence_root
     )
     platform_snapshot_store = PlatformSnapshotStore(config.db_path)
     user_entitlement_store = UserEntitlementStore(config.db_path)
@@ -403,9 +403,18 @@ def _build_run_service(
     config: ApiServiceConfig,
     store: RunStore,
     control_repository: ControlRepository,
+    contract_store: ContractStore | None = None,
+    evidence_root: Path | None = None,
     *,
     rest_token_provider: SimulatorRestTokenProvider | None = None,
 ) -> RunService | None:
+    evidence_store: EvidenceStore | None = (
+        EvidenceStore(evidence_root) if evidence_root is not None else None
+    )
+    baseline_kwargs: dict[str, Any] = {
+        "contract_store": contract_store,
+        "evidence_store": evidence_store,
+    }
     if config.backend == "none":
         return None
     if config.backend == "in-memory":
@@ -413,6 +422,7 @@ def _build_run_service(
             store=store,
             backend=InMemorySlurmBackend(),
             control_repository=control_repository,
+            **baseline_kwargs,
             **_run_flags(config, backend_kind="in-memory"),
         )
     if config.backend == "demo":
@@ -420,12 +430,14 @@ def _build_run_service(
             store=store,
             backend=DemoSlurmBackend(),
             control_repository=control_repository,
+            **baseline_kwargs,
             **_run_flags(config, backend_kind="demo"),
         )
     if config.backend == "rest-native":
         return RunService(
             store=store,
             control_repository=control_repository,
+            **baseline_kwargs,
             **_rest_native_kwargs(config, provider=rest_token_provider),
         )
     if config.backend == "command":
@@ -436,6 +448,7 @@ def _build_run_service(
                 allowed_roots=[Path(root) for root in config.allowed_roots],
                 timeout_seconds=config.command_timeout_seconds,
             ),
+            **baseline_kwargs,
             **_run_flags(config, backend_kind="command"),
         )
     if config.backend == "docker-compose-command":
@@ -461,6 +474,8 @@ def _build_run_service(
                 allowed_roots=list(config.allowed_roots),
                 timeout_seconds=config.command_timeout_seconds,
             ),
+            baseline_executor=executor,
+            **baseline_kwargs,
             **_run_flags(config, backend_kind="docker-compose-command"),
         )
     if config.backend == "command-gateway":
@@ -477,6 +492,8 @@ def _build_run_service(
                 allowed_roots=list(config.allowed_roots),
                 timeout_seconds=config.command_timeout_seconds,
             ),
+            baseline_executor=gateway_executor,
+            **baseline_kwargs,
             **_run_flags(
                 config,
                 backend_kind="command-gateway",
@@ -490,6 +507,8 @@ def _build_run_service_and_probe(
     config: ApiServiceConfig,
     store: RunStore,
     control_repository: ControlRepository,
+    contract_store: ContractStore | None = None,
+    evidence_root: Path | None = None,
 ) -> tuple[RunService | None, TokenValidityProbe | None]:
     """Build the RunService and the token-validity probe together.
 
@@ -501,13 +520,23 @@ def _build_run_service_and_probe(
     backends the probe is ``None``.
     """
     if config.backend != "rest-native" or not config.rest_token_provider_enabled:
-        return _build_run_service(config, store, control_repository), None
+        return (
+            _build_run_service(
+                config, store, control_repository, contract_store, evidence_root
+            ),
+            None,
+        )
     provider: TokenValidityProbe = SimulatorRestTokenProvider(
         executor=DockerComposeExecutor(_compose_target(config)),
         refresh_margin_seconds=config.slurm_token_refresh_margin_seconds,
     )
     run_service = _build_run_service(
-        config, store, control_repository, rest_token_provider=provider  # type: ignore[arg-type]
+        config,
+        store,
+        control_repository,
+        contract_store,
+        evidence_root,
+        rest_token_provider=provider,  # type: ignore[arg-type]
     )
     return run_service, provider
 

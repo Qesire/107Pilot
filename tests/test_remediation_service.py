@@ -531,5 +531,139 @@ class CapturingAdviceService(FakeAdviceService):
         return super().advise(run_id, provider=provider, idempotency_key=idempotency_key)
 
 
+class VerifyExpectedOutputsTests(unittest.TestCase):
+    """P1 (round 4): _verify_expected_outputs strict baseline-vs-final classification.
+
+    Covers the enforce_expected=True branch that the legacy RemediationServiceTests
+    (no stores injected) cannot reach. Tests the 4 required scenarios:
+    created→ok, missing→not ok, unchanged→not ok, inventory-missing→fail-closed.
+    """
+
+    def setUp(self) -> None:
+        from pilot107.core.contracts import ContractStore
+        from pilot107.services.remediation_service import _verify_expected_outputs
+        from pilot107.worker.evidence import EvidenceStore
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self._tmp.name) / "pilot107.db"
+        self.evidence_root = Path(self._tmp.name) / "evidence"
+        self.contract_store = ContractStore(self.db_path)
+        self.evidence_store = EvidenceStore(self.evidence_root)
+        self._verify = _verify_expected_outputs
+        self.run_id = "run_derived"
+        # Contract declares one expected output.
+        self.contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": "/public/home/alice"},
+                "entry": {
+                    "command": "echo ok > out/result.txt",
+                    "expected_outputs": ["out/result.txt"],
+                },
+                "resources": {
+                    "partition": "CPU-RC",
+                    "qos": "qos_cpu_rc",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        # Minimal derived run record carrying the contract_id.
+        self.derived_run = RunStore(self.db_path).create_run(
+            run_id=self.run_id,
+            owner="alice",
+            workdir="/public/home/alice",
+            script="true",
+            contract_id=self.contract.contract_id,
+        )
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _write_inventory(self, files: list[dict]) -> None:
+        self.evidence_store.write_json(
+            run_id=self.run_id,
+            logical_path="outputs/inventory.json",
+            payload={"files": files},
+        )
+
+    def test_created_expected_output_verifies(self) -> None:
+        # Expected output newly produced by the run (baseline absent, now present).
+        self._write_inventory([
+            {
+                "relative_path": "out/result.txt",
+                "attribution": "created",
+                "baseline_sha256": None,
+                "final_sha256": "abc123",
+            }
+        ])
+        result = self._verify(
+            run=self.derived_run,
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+        )
+        self.assertTrue(result["resolved"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["expected_outputs"]), 1)
+        self.assertEqual(result["expected_outputs"][0]["status"], "created")
+
+    def test_missing_expected_output_does_not_verify(self) -> None:
+        # Expected output absent from inventory → status "missing" → ok=False.
+        self._write_inventory([])
+        result = self._verify(
+            run=self.derived_run,
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+        )
+        self.assertTrue(result["resolved"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["expected_outputs"][0]["status"], "missing")
+
+    def test_unchanged_expected_output_does_not_verify(self) -> None:
+        # Expected output present but attribution "unchanged" (baseline==final) → ok=False.
+        self._write_inventory([
+            {
+                "relative_path": "out/result.txt",
+                "attribution": "unchanged",
+                "baseline_sha256": "same",
+                "final_sha256": "same",
+            }
+        ])
+        result = self._verify(
+            run=self.derived_run,
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+        )
+        self.assertTrue(result["resolved"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["expected_outputs"][0]["status"], "unchanged")
+
+    def test_inventory_missing_fails_closed(self) -> None:
+        # Stores present + expected outputs declared, but inventory.json absent.
+        # Must NOT fall back to legacy VERIFIED_SUCCESS — fail closed.
+        result = self._verify(
+            run=self.derived_run,
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+        )
+        self.assertTrue(result["resolved"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["expected_outputs"][0]["status"], "inventory_unreadable")
+
+    def test_no_stores_falls_back_to_legacy(self) -> None:
+        # Backward compat: no stores injected → resolved=False, ok=True (legacy path).
+        result = self._verify(
+            run=self.derived_run,
+            contract_store=None,
+            evidence_store=None,
+        )
+        self.assertFalse(result["resolved"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["expected_outputs"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -313,6 +313,47 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+        # P1 (round 4): the evaluation must actually verify expected outputs
+        # were newly produced (created/modified), not just trust the outcome
+        # string. Assert the comparison carries an expected_outputs block, the
+        # rollup ok flag, per-output status, and the expected_outputs_verified
+        # check.
+        expected_outputs_block = comparison.get("expected_outputs")
+        if not expected_outputs_block or not isinstance(expected_outputs_block, list):
+            print(
+                f"remediation smoke failed: evaluation comparison.expected_outputs "
+                f"missing/empty: {comparison}",
+                file=sys.stderr,
+            )
+            return 1
+        if comparison.get("expected_outputs_ok") is not True:
+            print(
+                f"remediation smoke failed: expected_outputs_ok is not true: "
+                f"{comparison.get('expected_outputs_ok')!r}",
+                file=sys.stderr,
+            )
+            return 1
+        for entry in expected_outputs_block:
+            status = entry.get("status")
+            if status not in {"created", "modified"}:
+                print(
+                    f"remediation smoke failed: expected output "
+                    f"{entry.get('path')!r} status={status!r} not in created/modified",
+                    file=sys.stderr,
+                )
+                return 1
+        checks = evaluation.get("checks") or []
+        if not any(
+            c.get("name") == "expected_outputs_verified"
+            and c.get("status") == "passed"
+            for c in checks
+        ):
+            print(
+                f"remediation smoke failed: expected_outputs_verified check not "
+                f"passed: {checks}",
+                file=sys.stderr,
+            )
+            return 1
         evidence_refs = evaluation.get("evidence_refs") or []
         if not evidence_refs:
             print(
@@ -327,7 +368,8 @@ def main() -> int:
             f"lineage_reason={lineage_reason} derived_contract_id={derived_contract_id} "
             f"session_state={session_state} outcome={outcome} "
             f"evaluation_id={evaluation.get('evaluation_id')} "
-            f"evidence_refs={len(evidence_refs)}"
+            f"evidence_refs={len(evidence_refs)} "
+            f"expected_outputs_ok={comparison.get('expected_outputs_ok')}"
         )
         return 0
     except Exception as exc:  # noqa: BLE001 - smoke reports failures as exit 1

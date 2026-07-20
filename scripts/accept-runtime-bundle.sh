@@ -41,6 +41,9 @@
 #   PILOT107_SKIP_ORIGIN_VALIDATE  default 0; passed to start-cpu-rc.sh.
 #   PILOT107_ACCEPT_ARTIFACT_DIR   default artifacts/acceptance/runtime-<rev>-<ts>
 #   PILOT107_ACCEPT_LEAVE_UP       default 0; 1 leaves the stack running on exit.
+#   PILOT107_ACCEPT_SEAL_MODE      default 0. When 1, KNOWN_SKIP is treated as
+#                                  FAIL in the final aggregation (formal seal
+#                                  mode requires all 10 runtime steps to PASS).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -140,6 +143,7 @@ KNOWN_SKIP_STEPS=""
 run_step() {
   local name="$1" fn="$2"
   local status_file="$steps_dir/$name.status"
+  local log_file="$steps_dir/$name.log"
   local start_ts end_ts rc
   start_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   log "=== STEP: $name ==="
@@ -147,13 +151,15 @@ run_step() {
   # of `||` is in a conditional context, so `set -e` inside it does NOT
   # reliably propagate — an intermediate failing command can be swallowed
   # and the function may continue to a final success, yielding a false PASS.
-  # Run the subshell outside any conditional, capturing rc directly. The
-  # `set +e` / `set -e` bracket preserves the script's errexit expectations
-  # around this block.
+  # Run the subshell outside any conditional, capturing rc directly via
+  # PIPESTATUS[0] (the subshell's rc, NOT tee's). The `set +e` / `set -e`
+  # bracket preserves the script's errexit expectations around this block.
+  # `tee` streams the step's full stdout+stderr to the console AND captures
+  # it to $log_file for the per-step evidence log.
   rc=0
   set +e
-  ( set -e; "$fn" )
-  rc=$?
+  ( set -e; "$fn" ) 2>&1 | tee "$log_file"
+  rc=${PIPESTATUS[0]}
   set -e
   end_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [[ "$rc" -eq 0 ]]; then
@@ -466,6 +472,7 @@ step_report() {
   report_start="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   python3 - "$artifact_dir" "$steps_dir" "$bundle_dir" "$started_iso" "${STEPS[@]}" <<'PY'
 import json
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -475,6 +482,8 @@ steps_dir = Path(sys.argv[2])
 bundle_dir = Path(sys.argv[3])
 started_iso = sys.argv[4]
 step_specs = sys.argv[5:]
+
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
 manifest_path = bundle_dir / "RELEASE_MANIFEST.json"
 release_revision = ""
@@ -512,10 +521,31 @@ any_fail = False
 for spec in step_specs:
     name = spec.split("|", 1)[0]
     if name == "report":
-        steps.append({"name": name, "status": "PASS", "start": None, "end": None, "rc": None})
+        # The report step's own log is self-referential (this Python IS the
+        # report step's output), so record null log fields rather than read
+        # a half-written file.
+        steps.append({
+            "name": name,
+            "status": "PASS",
+            "start": None,
+            "end": None,
+            "rc": None,
+            "log_path": None,
+            "log_sha256": None,
+        })
         continue
     status_file = steps_dir / f"{name}.status"
-    entry = {"name": name, "status": "MISSING", "start": None, "end": None, "rc": None}
+    log_file = steps_dir / f"{name}.log"
+    log_rel = f"steps/{name}.log"
+    entry = {
+        "name": name,
+        "status": "MISSING",
+        "start": None,
+        "end": None,
+        "rc": None,
+        "log_path": log_rel,
+        "log_sha256": hashlib.sha256(log_file.read_bytes()).hexdigest() if log_file.is_file() else EMPTY_SHA256,
+    }
     if status_file.is_file():
         kv = {}
         for line in status_file.read_text().splitlines():
@@ -592,7 +622,11 @@ done
 # or unparseable report is also a FAIL. The image_binding_all_match flag is
 # already forced into any_fail by step_report's Python; here we re-assert the
 # step-status + report-existence invariants in bash.
+# P2-4 (round 4): in seal mode (PILOT107_ACCEPT_SEAL_MODE=1), KNOWN_SKIP is
+# treated as FAIL — formal seal requires all 10 runtime steps to PASS.
+# Default (dev) keeps KNOWN_SKIP non-failing.
 overall_rc=0
+seal_mode="${PILOT107_ACCEPT_SEAL_MODE:-0}"
 valid_statuses=' PASS FAIL KNOWN_SKIP '
 for spec in "${STEPS[@]}"; do
   name="${spec%%|*}"
@@ -611,6 +645,10 @@ for spec in "${STEPS[@]}"; do
     continue
   fi
   if [[ "$status_val" == "FAIL" ]]; then
+    overall_rc=1
+  fi
+  if [[ "$seal_mode" == "1" && "$status_val" == "KNOWN_SKIP" ]]; then
+    log "=== AGGREGATION: step $name KNOWN_SKIP → FAIL (seal mode) ===" >&2
     overall_rc=1
   fi
 done

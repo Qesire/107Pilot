@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from pilot107.core.advice import AdviceResult
+from pilot107.core.contracts import ContractStore
 from pilot107.core.remediation import (
     TERMINAL_REMEDIATION_STATES,
     ActionDecision,
@@ -35,6 +36,7 @@ from pilot107.core.states import (
     DiagnosisState,
     RunState,
 )
+from pilot107.worker.evidence import EvidenceStore
 
 _REQUEST_KEY = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 
@@ -92,10 +94,14 @@ class RemediationService:
         run_store: RunStore,
         remediation_store: RemediationStore,
         advice_service: AdviceService,
+        contract_store: ContractStore | None = None,
+        evidence_store: EvidenceStore | None = None,
     ) -> None:
         self.run_store = run_store
         self.remediation_store = remediation_store
         self.advice_service = advice_service
+        self.contract_store = contract_store
+        self.evidence_store = evidence_store
 
     def create(
         self,
@@ -538,6 +544,8 @@ class RemediationService:
             execution=execution,
             run=run,
             evidence=self.run_store.list_evidence_objects(run.run_id),
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
         )
         self.remediation_store.append_evaluation(evaluation)
         return self._finish_evaluation(evaluating)
@@ -564,6 +572,8 @@ class RemediationService:
                     execution=execution,
                     run=run,
                     evidence=self.run_store.list_evidence_objects(run.run_id),
+                    contract_store=self.contract_store,
+                    evidence_store=self.evidence_store,
                 )
             )
             evaluations = self.remediation_store.list_evaluations(session.session_id)
@@ -753,6 +763,8 @@ def _evaluate_run(
     execution: ActionExecution,
     run: RunRecord,
     evidence: list[Any],
+    contract_store: ContractStore | None = None,
+    evidence_store: EvidenceStore | None = None,
 ) -> EvaluationResult:
     exit_zero = run.exit_code in {"0", "0:0"}
     execution_succeeded = run.state == RunState.SUCCEEDED and exit_zero
@@ -760,15 +772,31 @@ def _evaluate_run(
         run.collection_state == CollectionState.SUCCEEDED
         and run.diagnosis_state in {DiagnosisState.SUCCEEDED, DiagnosisState.SKIPPED}
     )
+    expected_verification = _verify_expected_outputs(
+        run=run,
+        contract_store=contract_store,
+        evidence_store=evidence_store,
+    )
+    expected_outputs_ok = expected_verification["ok"]
+    has_expected_outputs = bool(expected_verification["expected_outputs"])
+    # Strict run attribution: when the derived contract declares expected
+    # outputs AND we can read the baseline+inventory, verified_success requires
+    # the outputs to be newly produced (created/modified). If we cannot resolve
+    # expected outputs (no stores, no contract, no inventory), preserve the
+    # legacy condition so runs without declared outputs stay backward-compatible.
+    enforce_expected = has_expected_outputs and expected_verification["resolved"]
     if execution_succeeded and evidence_complete:
-        outcome = EvaluationOutcome.VERIFIED_SUCCESS
+        if enforce_expected and not expected_outputs_ok:
+            outcome = EvaluationOutcome.EXECUTION_SUCCESS_UNVERIFIED
+        else:
+            outcome = EvaluationOutcome.VERIFIED_SUCCESS
     elif execution_succeeded:
         outcome = EvaluationOutcome.EXECUTION_SUCCESS_UNVERIFIED
     elif run.state in {RunState.FAILED, RunState.CANCELLED, RunState.SUBMIT_FAILED}:
         outcome = EvaluationOutcome.FAILED
     else:
         outcome = EvaluationOutcome.INCONCLUSIVE
-    checks = (
+    checks: tuple[dict[str, Any], ...] = (
         {
             "name": "terminal_execution",
             "status": "passed" if execution_succeeded else "failed",
@@ -783,6 +811,14 @@ def _evaluate_run(
             "diagnosis_state": run.diagnosis_state.value,
         },
     )
+    if enforce_expected:
+        checks = checks + (
+            {
+                "name": "expected_outputs_verified",
+                "status": "passed" if expected_outputs_ok else "failed",
+                "expected_outputs": expected_verification["expected_outputs"],
+            },
+        )
     evidence_refs = tuple(
         f"evidence://runs/{run.run_id}/{item.logical_path}"
         for item in evidence
@@ -791,6 +827,15 @@ def _evaluate_run(
     evaluation_id = "remeval_" + hashlib.sha256(
         f"{session.session_id}\0{execution.execution_id}".encode()
     ).hexdigest()[:32]
+    comparison: dict[str, Any] = {
+        "source_run_id": session.source_run_id,
+        "derived_run_id": run.run_id,
+        "source_diagnosis_digest": session.source_diagnosis_digest,
+        "source_evidence_digest": session.source_evidence_digest,
+    }
+    if has_expected_outputs:
+        comparison["expected_outputs"] = expected_verification["expected_outputs"]
+        comparison["expected_outputs_ok"] = expected_outputs_ok
     return EvaluationResult(
         evaluation_id=evaluation_id,
         session_id=session.session_id,
@@ -799,15 +844,106 @@ def _evaluate_run(
         derived_run_id=run.run_id,
         outcome=outcome,
         checks=checks,
-        comparison={
-            "source_run_id": session.source_run_id,
-            "derived_run_id": run.run_id,
-            "source_diagnosis_digest": session.source_diagnosis_digest,
-            "source_evidence_digest": session.source_evidence_digest,
-        },
+        comparison=comparison,
         evidence_refs=evidence_refs,
         created_at=datetime.now(UTC).isoformat(),
     )
+
+
+def _verify_expected_outputs(
+    *,
+    run: RunRecord,
+    contract_store: ContractStore | None,
+    evidence_store: EvidenceStore | None,
+) -> dict[str, Any]:
+    """Strictly verify declared expected outputs were newly produced.
+
+    Returns a dict with:
+      ``resolved`` (bool) — whether we could resolve the contract AND read the
+        derived run's inventory (False => fall back to legacy verification);
+      ``expected_outputs`` (list[dict]) — per-output {path, baseline_sha256,
+        final_sha256, status};
+      ``ok`` (bool) — True iff every declared output is ``created`` or
+        ``modified`` (newly produced or changed by this run).
+    """
+    empty: dict[str, Any] = {
+        "resolved": False,
+        "expected_outputs": [],
+        "ok": True,
+    }
+    if contract_store is None or evidence_store is None or run.contract_id is None:
+        return empty
+    try:
+        contract = contract_store.get_contract(run.contract_id)
+    except Exception:  # noqa: BLE001 - verification must never crash evaluation
+        return empty
+    outputs = contract.payload.get("outputs") or {}
+    expected = outputs.get("expected") or []
+    if not isinstance(expected, list) or not expected:
+        return empty
+    expected_paths = [str(item) for item in expected]
+    inventory_path = evidence_store.run_root(run.run_id) / "outputs" / "inventory.json"
+    try:
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError):
+        # Fail CLOSED: stores are present and expected outputs are declared, but
+        # the inventory is missing/unparseable. The audit's requirement #3
+        # ("missing expected output → degraded/not verified") is violated if we
+        # fall back to legacy VERIFIED_SUCCESS. Mark every expected output as
+        # inventory_unreadable with ok=False so enforce_expected=True →
+        # EXECUTION_SUCCESS_UNVERIFIED.
+        return {
+            "resolved": True,
+            "expected_outputs": [
+                {
+                    "path": p,
+                    "baseline_sha256": None,
+                    "final_sha256": None,
+                    "status": "inventory_unreadable",
+                }
+                for p in expected_paths
+            ],
+            "ok": False,
+        }
+    files = inventory.get("files") if isinstance(inventory, dict) else None
+    if not isinstance(files, list):
+        # Same fail-closed semantics for a structurally-invalid inventory.
+        return {
+            "resolved": True,
+            "expected_outputs": [
+                {
+                    "path": p,
+                    "baseline_sha256": None,
+                    "final_sha256": None,
+                    "status": "inventory_unreadable",
+                }
+                for p in expected_paths
+            ],
+            "ok": False,
+        }
+    by_path: dict[str, dict[str, Any]] = {
+        str(item.get("relative_path")): item
+        for item in files
+        if isinstance(item, dict) and item.get("relative_path") is not None
+    }
+    entries: list[dict[str, Any]] = []
+    ok = True
+    for path in expected_paths:
+        item = by_path.get(path)
+        status = "missing" if item is None else str(item.get("attribution") or "unknown")
+        entries.append(
+            {
+                "path": path,
+                "baseline_sha256": (
+                    None if item is None else item.get("baseline_sha256")
+                ),
+                "final_sha256": None if item is None else item.get("final_sha256"),
+                "status": status,
+            }
+        )
+        if status not in {"created", "modified"}:
+            ok = False
+    return {"resolved": True, "expected_outputs": entries, "ok": ok}
 
 
 def _usage_with_elapsed_time(session: RemediationSession) -> RemediationUsage:

@@ -1,12 +1,15 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from pilot107.adapters.slurm import InMemorySlurmBackend, SlurmSubmissionRejected, SubmitIntent
+from pilot107.core.contracts import ContractStore
 from pilot107.core.resources import ResourcePlan
 from pilot107.core.run_service import RunService, RunSubmitRequest
 from pilot107.core.run_store import RunStore
 from pilot107.core.states import CollectionState, ResultStatus, RunState
+from pilot107.worker.evidence import EvidenceStore
 
 
 def _plan(time_limit: str | None = "00:05:00") -> ResourcePlan:
@@ -162,6 +165,129 @@ class RunServiceTests(unittest.TestCase):
             row = conn.execute("SELECT run_id FROM runs").fetchone()
         assert row is not None
         return str(row["run_id"])
+
+
+class BaselineCaptureTests(unittest.TestCase):
+    """A1: RunService captures a pre-run baseline of declared expected outputs."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self._tmp.name) / "pilot107.db"
+        self.evidence_root = Path(self._tmp.name) / "evidence"
+        self.run_store = RunStore(self.db_path)
+        self.contract_store = ContractStore(self.db_path)
+        self.evidence_store = EvidenceStore(self.evidence_root)
+        self.workdir = Path(self._tmp.name) / "workdir"
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        self.contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {
+                    "command": "echo hi",
+                    "expected_outputs": ["result.txt"],
+                },
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _service(self) -> RunService:
+        return RunService(
+            store=self.run_store,
+            backend=InMemorySlurmBackend(),
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+        )
+
+    def test_baseline_written_when_stores_injected(self) -> None:
+        service = self._service()
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=self.workdir,
+                script="#!/bin/bash\necho hi > result.txt\n",
+                resource_plan=ResourcePlan(
+                    partition="debug",
+                    qos="normal",
+                    nodes=1,
+                    ntasks=1,
+                    cpus_per_task=1,
+                    time_limit="00:05:00",
+                ),
+                contract_id=self.contract.contract_id,
+            )
+        )
+        baseline_path = (
+            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
+        )
+        self.assertTrue(baseline_path.exists())
+        payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["schema"], "pilot107.baseline.v1")
+        self.assertEqual(payload["contract_id"], self.contract.contract_id)
+        self.assertIn("captured_at_epoch", payload)
+        entries = payload["expected_outputs"]
+        self.assertEqual([entry["path"] for entry in entries], ["result.txt"])
+        # Expected output not yet produced at submit time => exists=false.
+        self.assertFalse(entries[0]["exists"])
+        self.assertIsNone(entries[0]["sha256"])
+
+    def test_baseline_skipped_when_stores_not_injected(self) -> None:
+        # No contract_store / evidence_store => baseline capture is silently
+        # skipped; submit still succeeds and no baseline.json is written.
+        service = RunService(store=self.run_store, backend=InMemorySlurmBackend())
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=self.workdir,
+                script="#!/bin/bash\ntrue\n",
+                resource_plan=ResourcePlan(
+                    partition="debug",
+                    qos="normal",
+                    nodes=1,
+                    ntasks=1,
+                    cpus_per_task=1,
+                    time_limit="00:05:00",
+                ),
+                contract_id=self.contract.contract_id,
+            )
+        )
+        baseline_path = (
+            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
+        )
+        self.assertFalse(baseline_path.exists())
+
+    def test_baseline_skipped_when_contract_id_missing(self) -> None:
+        service = self._service()
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=self.workdir,
+                script="#!/bin/bash\ntrue\n",
+                resource_plan=ResourcePlan(
+                    partition="debug",
+                    qos="normal",
+                    nodes=1,
+                    ntasks=1,
+                    cpus_per_task=1,
+                    time_limit="00:05:00",
+                ),
+            )
+        )
+        baseline_path = (
+            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
+        )
+        self.assertFalse(baseline_path.exists())
 
 
 if __name__ == "__main__":

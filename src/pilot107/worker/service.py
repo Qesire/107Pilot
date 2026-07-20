@@ -364,7 +364,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     )
     evidence_store = EvidenceStore(config.evidence_root)
     contract_store = ContractStore(config.db_path)
-    backend, task_handler, reconcile_backend = _build_backend_and_task_handler(
+    backend, task_handler, reconcile_backend, baseline_executor = _build_backend_and_task_handler(
         config, store, evidence_store, contract_store
     )
     path_checker, path_checker_factory = _worker_preflight_checkers(config)
@@ -382,6 +382,9 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         job_name_marker=DEFAULT_JOB_NAME_MARKER,
         control_repository=control_repository,
         dispatcher_id=config.worker_id,
+        contract_store=contract_store,
+        evidence_store=evidence_store,
+        baseline_executor=baseline_executor,
     )
     capability_profile = _worker_capability_profile(config)
     partition_qos = capability_profile.partition_qos()
@@ -414,6 +417,8 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         run_store=store,
         remediation_store=RemediationStore(config.db_path),
         advice_service=advice_service,
+        contract_store=contract_store,
+        evidence_store=evidence_store,
     )
     capsule_service: RawCapsuleService | None = None
     if config.auto_capsule_enabled and config.capsule_root is not None:
@@ -519,13 +524,19 @@ def _build_backend_and_task_handler(
     store: RunStore,
     evidence_store: EvidenceStore,
     contract_store: ContractStore | None,
-) -> tuple[SlurmBackend, CollectionTaskHandler | None, TokenMintingRestBackend | None]:
+) -> tuple[
+    SlurmBackend,
+    CollectionTaskHandler | None,
+    TokenMintingRestBackend | None,
+    SimulatorExecutor | None,
+]:
     if config.backend == "in-memory":
-        return InMemorySlurmBackend(), None, None
+        return InMemorySlurmBackend(), None, None, None
     if config.backend == "demo":
         return (
             DemoSlurmBackend(),
             DemoEvidenceCollector(store=evidence_store, run_store=store),
+            None,
             None,
         )
     if config.backend == "rest-native":
@@ -545,8 +556,8 @@ def _build_backend_and_task_handler(
                 executor=DockerComposeExecutor(_compose_target(config))
             )
             wrapper = TokenMintingRestBackend(inner=inner, provider=provider)
-            return wrapper, None, wrapper
-        return inner, None, None
+            return wrapper, None, wrapper, None
+        return inner, None, None, None
     if config.backend == "docker-compose-command":
         if (
             config.compose_file is None
@@ -578,6 +589,7 @@ def _build_backend_and_task_handler(
                 contract_store=contract_store,
             ),
             None,
+            compose_executor,
         )
     if config.backend == "command-gateway":
         gateway_executor: SimulatorExecutor = HttpCommandGatewayExecutor(
@@ -601,6 +613,7 @@ def _build_backend_and_task_handler(
                 contract_store=contract_store,
             ),
             None,
+            gateway_executor,
         )
     raise ValueError(f"unsupported worker backend: {config.backend}")
 

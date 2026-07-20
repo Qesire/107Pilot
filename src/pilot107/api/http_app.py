@@ -143,6 +143,8 @@ class Pilot107HttpApi:
         control_repository: ControlRepository | None = None,
         worker_metrics_root: Path | None = None,
         metrics: ControlPlaneMetrics | None = None,
+        contract_store: ContractStore | None = None,
+        evidence_store: EvidenceStore | None = None,
         auth_required: bool = False,
         trusted_user_header: str = "X-Pilot107-User",
         proxy_hmac_secret: bytes | None = None,
@@ -188,6 +190,8 @@ class Pilot107HttpApi:
             run_store=store,
             remediation_store=RemediationStore(store.db_path),
             advice_service=self.agent_advice_service,
+            contract_store=contract_store,
+            evidence_store=evidence_store,
         )
         self.remediation_routes = RemediationRoutes(self.remediation_service)
         self.platform_snapshot_store = platform_snapshot_store

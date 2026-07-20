@@ -1248,6 +1248,7 @@ class DockerSlurmEvidenceCollector:
         expected_outputs = self._resolve_expected_outputs(run)
         started_at_iso = self._resolve_started_at(run)
         started_at_epoch = _iso_to_epoch(started_at_iso)
+        baseline_map = _load_baseline(self.store.run_root(run.run_id))
         files = self._parse_inventory_rows(
             run=run,
             workdir=workdir,
@@ -1255,7 +1256,9 @@ class DockerSlurmEvidenceCollector:
             warnings=warnings,
             expected_outputs=expected_outputs,
             started_at_epoch=started_at_epoch,
+            baseline_map=baseline_map,
         )
+        _append_missing_expected(files, expected_outputs, baseline_map)
         artifacts = [
             self.store.write_json(
                 run_id=run.run_id,
@@ -1300,24 +1303,30 @@ class DockerSlurmEvidenceCollector:
         expected_outputs = self._resolve_expected_outputs(run)
         started_at_iso = self._resolve_started_at(run)
         started_at_epoch = _iso_to_epoch(started_at_iso)
+        baseline_map = _load_baseline(self.store.run_root(run.run_id))
         files: list[dict[str, Any]] = []
         for file in inventory.files:
             if _is_excluded_output(file.relative_path):
                 continue
+            is_expected = file.relative_path in expected_outputs
+            baseline_entry = baseline_map.get(file.relative_path) if is_expected else None
+            eligible = is_expected or (
+                baseline_entry is None
+                and (
+                    started_at_epoch is None
+                    or file.mtime_epoch > started_at_epoch
+                )
+            )
+            final_sha = file.sha256 if eligible else None
             attribution = compute_file_attribution(
                 mtime_epoch=file.mtime_epoch,
                 started_at_epoch=started_at_epoch,
                 relative_path=file.relative_path,
                 expected_outputs=expected_outputs,
+                baseline_entry=baseline_entry,
+                is_expected=is_expected,
+                final_sha256=final_sha,
             )
-            # The transport already computed sha256 during inventory, but we only
-            # surface it for files this run produced or declared; preexisting
-            # non-expected files get null to avoid implying ownership.
-            eligible = (
-                attribution["in_expected_outputs"]
-                or attribution["attribution"] == "created_by_run"
-            )
-            final_sha = file.sha256 if eligible else None
             files.append(
                 {
                     "path": file.path,
@@ -1335,7 +1344,8 @@ class DockerSlurmEvidenceCollector:
                     "baseline_sha256": attribution["baseline_sha256"],
                 }
             )
-        files = sorted(files, key=lambda item: item["relative_path"])
+        _append_missing_expected(files, expected_outputs, baseline_map)
+        files = sorted(files, key=lambda item: str(item.get("relative_path")))
         artifacts = [
             self.store.write_json(
                 run_id=run.run_id,
@@ -1452,12 +1462,33 @@ class DockerSlurmEvidenceCollector:
             },
             "outputs": {
                 "file_count": len(output_files),
-                "total_size_bytes": sum(int(item.get("size_bytes", 0)) for item in output_files),
+                "total_size_bytes": sum(int(item.get("size_bytes") or 0) for item in output_files),
+                "attributed_file_count": sum(
+                    1
+                    for item in output_files
+                    if item.get("attribution")
+                    in {"created_by_run", "created", "modified"}
+                ),
+                "attribution_summary": _attribution_summary(output_files),
+                "expected_outputs": [
+                    {
+                        "path": item.get("relative_path"),
+                        "attribution": item.get("attribution"),
+                        "baseline_sha256": item.get("baseline_sha256"),
+                        "final_sha256": item.get("final_sha256"),
+                    }
+                    for item in output_files
+                    if item.get("in_expected_outputs")
+                ],
                 "files": [
                     {
                         "relative_path": item.get("relative_path"),
                         "size_bytes": item.get("size_bytes"),
                         "sha256": item.get("sha256"),
+                        "attribution": item.get("attribution"),
+                        "in_expected_outputs": item.get("in_expected_outputs"),
+                        "baseline_sha256": item.get("baseline_sha256"),
+                        "final_sha256": item.get("final_sha256"),
                     }
                     for item in output_files[:50]
                 ],
@@ -1722,8 +1753,10 @@ class DockerSlurmEvidenceCollector:
         warnings: list[str],
         expected_outputs: list[str] | None = None,
         started_at_epoch: float | None = None,
+        baseline_map: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         expected = expected_outputs or []
+        baseline = baseline_map or {}
         files: list[dict[str, Any]] = []
         for line in stdout.splitlines():
             if not line.strip():
@@ -1745,20 +1778,28 @@ class DockerSlurmEvidenceCollector:
             if _is_excluded_output(relative_path):
                 continue
             mtime = float(mtime_epoch)
+            is_expected = relative_path in expected
+            baseline_entry = baseline.get(relative_path) if is_expected else None
+            # Only hash files this run actually produced or declared; skip
+            # preexisting non-expected files to avoid expensive sha256 on large
+            # shared workdir leftovers.
+            eligible = is_expected or (
+                baseline_entry is None
+                and (
+                    started_at_epoch is None
+                    or mtime > started_at_epoch
+                )
+            )
+            sha = self._sha256_file(run, authorized) if eligible else None
             attribution = compute_file_attribution(
                 mtime_epoch=mtime,
                 started_at_epoch=started_at_epoch,
                 relative_path=relative_path,
                 expected_outputs=expected,
+                baseline_entry=baseline_entry,
+                is_expected=is_expected,
+                final_sha256=sha,
             )
-            # Only hash files this run actually produced or declared; skip
-            # preexisting non-expected files to avoid expensive sha256 on large
-            # shared workdir leftovers.
-            eligible = (
-                attribution["in_expected_outputs"]
-                or attribution["attribution"] == "created_by_run"
-            )
-            sha = self._sha256_file(run, authorized) if eligible else None
             files.append(
                 {
                     "path": authorized,
@@ -1849,6 +1890,65 @@ def _read_json_or_none(path: Path) -> dict[str, Any] | None:
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return payload if isinstance(payload, dict) else None
+
+
+def _load_baseline(run_root: Path) -> dict[str, dict[str, Any]]:
+    """Load the pre-run baseline map of expected-output relative path -> entry.
+
+    Returns an empty dict if no baseline was captured (e.g. stores were not
+    injected at submit time); callers then fall back to mtime-only attribution.
+    """
+    baseline = _read_json_or_none(run_root / "baseline" / "baseline.json")
+    if baseline is None:
+        return {}
+    entries = baseline.get("expected_outputs") or []
+    if not isinstance(entries, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        if isinstance(path, str):
+            result[path] = entry
+    return result
+
+
+def _append_missing_expected(
+    files: list[dict[str, Any]],
+    expected_outputs: list[str],
+    baseline_map: dict[str, dict[str, Any]],
+) -> None:
+    """Append ``missing`` placeholder rows for expected outputs not inventoried.
+
+    Expected outputs that did not appear in the run's output directory are
+    recorded with ``attribution == "missing"`` so the evaluation step can fail
+    strict expected-output verification instead of silently passing.
+    """
+    present = {item.get("relative_path") for item in files}
+    for relative_path in expected_outputs:
+        if relative_path in present:
+            continue
+        baseline_entry = baseline_map.get(relative_path)
+        baseline_sha = (
+            baseline_entry.get("sha256") if baseline_entry is not None else None
+        )
+        files.append(
+            {
+                "path": None,
+                "relative_path": relative_path,
+                "size_bytes": None,
+                "mtime_epoch": None,
+                "owner": None,
+                "group": None,
+                "sha256": None,
+                "attribution": "missing",
+                "in_expected_outputs": True,
+                "final_sha256": None,
+                "baseline_sha256": baseline_sha,
+            }
+        )
+    files.sort(key=lambda item: str(item.get("relative_path")))
 
 
 def _metadata_status(payload: dict[str, Any] | None) -> str | None:
@@ -2176,24 +2276,65 @@ def compute_file_attribution(
     started_at_epoch: float | None,
     relative_path: str,
     expected_outputs: list[str],
+    baseline_entry: dict[str, Any] | None = None,
+    is_expected: bool = False,
+    final_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Attribute a single inventory file to a run.
 
-    Pure helper kept module-level for direct unit testing. Returns a dict with
-    ``attribution`` (``created_by_run`` | ``preexisting`` | ``unknown``),
-    ``in_expected_outputs`` (bool), and ``baseline_sha256`` (always None until
-    pre-run baseline capture is implemented).
+    Pure helper kept module-level for direct unit testing.
+
+    Two classification regimes:
+
+    * **Expected outputs with a baseline** (``is_expected`` and
+      ``baseline_entry`` both provided): strict baseline-vs-final comparison —
+      ``created`` (baseline did not exist, now present), ``modified`` (baseline
+      sha256 differs from final), ``unchanged`` (baseline sha256 equals final),
+      or ``missing`` (expected output not present in the current inventory).
+      ``final_sha256`` is the hash computed by the caller for the current file;
+      pass ``None`` when the file is absent (so the helper can return
+      ``missing`` for expected outputs that did not appear).
+    * **Everything else** (non-expected files, or no baseline): mtime-based
+      fallback — ``created_by_run`` (mtime after run start), ``preexisting``,
+      or ``unknown`` (no run-start timestamp).
+
+    Returns a dict with ``attribution``, ``in_expected_outputs`` (bool),
+    ``baseline_sha256`` (the baseline sha256 or None), and ``final_sha256``
+    (echoed back for caller convenience).
     """
-    if started_at_epoch is None:
-        attribution = "unknown"
-    elif mtime_epoch > started_at_epoch:
-        attribution = "created_by_run"
+    in_expected = relative_path in expected_outputs or is_expected
+    # baseline_sha is only meaningful for expected outputs (the baseline tracks
+    # expected-output state before the run). For non-expected files, baseline
+    # capture doesn't apply, so baseline_sha256 stays None and attribution
+    # falls back to mtime-based logic.
+    baseline_sha = (
+        baseline_entry.get("sha256")
+        if (baseline_entry is not None and in_expected)
+        else None
+    )
+    if in_expected and baseline_entry is not None:
+        baseline_exists = bool(baseline_entry.get("exists"))
+        current_exists = final_sha256 is not None or mtime_epoch is not None
+        if not baseline_exists and current_exists:
+            attribution = "created"
+        elif not current_exists:
+            attribution = "missing"
+        elif baseline_sha is not None and final_sha256 is not None and baseline_sha != final_sha256:
+            attribution = "modified"
+        else:
+            attribution = "unchanged"
     else:
-        attribution = "preexisting"
+        if started_at_epoch is None:
+            attribution = "unknown"
+        elif mtime_epoch > started_at_epoch:
+            attribution = "created_by_run"
+        else:
+            attribution = "preexisting"
     return {
         "attribution": attribution,
-        "in_expected_outputs": relative_path in expected_outputs,
-        "baseline_sha256": None,
+        "in_expected_outputs": in_expected,
+        "baseline_sha256": baseline_sha,
+        "final_sha256": final_sha256,
     }
 
 
@@ -2207,9 +2348,19 @@ def _iso_to_epoch(value: str | None) -> float | None:
 
 
 def _attribution_summary(files: list[dict[str, Any]]) -> dict[str, int]:
-    summary = {"created_by_run": 0, "preexisting": 0, "unknown": 0}
+    summary: dict[str, int] = {
+        "created_by_run": 0,
+        "preexisting": 0,
+        "unknown": 0,
+        "created": 0,
+        "modified": 0,
+        "unchanged": 0,
+        "missing": 0,
+    }
     for item in files:
         attribution = item.get("attribution", "unknown")
         if attribution in summary:
             summary[attribution] += 1
+        else:
+            summary[item.get("attribution", "unknown")] = 1
     return summary
