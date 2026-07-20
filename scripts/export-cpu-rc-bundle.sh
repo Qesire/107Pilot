@@ -94,7 +94,8 @@ for script in \
   smoke_restart_volume_recovery.py \
   smoke_competition_web.py \
   start-cpu-rc.sh \
-  stop-cpu-rc.sh
+  stop-cpu-rc.sh \
+  verify-cpu-rc-image-binding.sh
 do
   cp "$root/scripts/$script" "$work_dir/scripts/"
 done
@@ -204,6 +205,7 @@ assert_required_files_exist() {
     "scripts/init-local-secrets.sh"
     "scripts/stop-cpu-rc.sh"
     "scripts/apply-cpu-rc-profile.sh"
+    "scripts/verify-cpu-rc-image-binding.sh"
     "RELEASE_MANIFEST.json"
     "SHA256SUMS"
     "images/pilot107-cpu-rc-images.tar.gz"
