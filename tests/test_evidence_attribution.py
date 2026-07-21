@@ -231,6 +231,82 @@ class ComputeFileAttributionTests(unittest.TestCase):
         self.assertEqual(result["attribution"], "created_by_run")
         self.assertIsNone(result["baseline_sha256"])
 
+    # Round-8 P1-1: baseline entries written by ``_capture_baseline`` with a
+    # probe-failure ``status`` (timeout / path_invalid / path_too_long / error)
+    # are unusable for attribution. They must NOT be treated as baseline-missing
+    # (which would let a pre-existing file masquerade as ``created`` /
+    # ``modified`` and falsely satisfy expected-output verification). Instead
+    # emit the stricter ``baseline_unavailable`` so remediation fails closed.
+
+    def test_baseline_timeout_with_existing_final_is_baseline_unavailable(self) -> None:
+        # Pre-create result.txt; baseline probe times out; job does NOT modify
+        # the file; final still exists. MUST NOT classify as ``created``.
+        result = compute_file_attribution(
+            mtime_epoch=1000.0,
+            started_at_epoch=500.0,
+            relative_path="r",
+            expected_outputs=["r"],
+            baseline_entry={"path": "r", "status": "timeout"},
+            is_expected=True,
+            final_sha256="abc",
+        )
+        self.assertEqual(result["attribution"], "baseline_unavailable")
+
+    def test_baseline_path_invalid_with_existing_final_is_baseline_unavailable(self) -> None:
+        result = compute_file_attribution(
+            mtime_epoch=1000.0,
+            started_at_epoch=500.0,
+            relative_path="r",
+            expected_outputs=["r"],
+            baseline_entry={"path": "r", "status": "path_invalid"},
+            is_expected=True,
+            final_sha256="abc",
+        )
+        self.assertEqual(result["attribution"], "baseline_unavailable")
+
+    def test_baseline_error_with_missing_final_is_baseline_unavailable(self) -> None:
+        # Even when the final file is missing, an unavailable baseline must not
+        # downgrade to ``missing`` (which the verifier could misread).
+        result = compute_file_attribution(
+            mtime_epoch=None,  # type: ignore[arg-type]
+            started_at_epoch=500.0,
+            relative_path="r",
+            expected_outputs=["r"],
+            baseline_entry={"path": "r", "status": "error"},
+            is_expected=True,
+            final_sha256=None,
+        )
+        self.assertEqual(result["attribution"], "baseline_unavailable")
+
+    def test_captured_baseline_unchanged_is_regression_guard(self) -> None:
+        # A captured baseline (no ``status`` key) with matching final sha must
+        # still classify as ``unchanged`` — the legitimate path must not regress.
+        result = compute_file_attribution(
+            mtime_epoch=1000.0,
+            started_at_epoch=500.0,
+            relative_path="r",
+            expected_outputs=["r"],
+            baseline_entry={"path": "r", "exists": True, "sha256": "abc"},
+            is_expected=True,
+            final_sha256="abc",
+        )
+        self.assertEqual(result["attribution"], "unchanged")
+
+    def test_captured_missing_baseline_with_final_is_created_regression_guard(self) -> None:
+        # A captured-missing baseline (no ``status``, ``exists=False``) with a
+        # final file present must still classify as ``created`` — the LEGITIMATE
+        # created path must keep working.
+        result = compute_file_attribution(
+            mtime_epoch=1000.0,
+            started_at_epoch=500.0,
+            relative_path="r",
+            expected_outputs=["r"],
+            baseline_entry={"path": "r", "exists": False},
+            is_expected=True,
+            final_sha256="abc",
+        )
+        self.assertEqual(result["attribution"], "created")
+
 
 if __name__ == "__main__":
     unittest.main()

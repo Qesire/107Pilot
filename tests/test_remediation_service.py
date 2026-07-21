@@ -736,6 +736,129 @@ class VerifyExpectedOutputsTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["expected_outputs"], [])
 
+    # Round-8 P1-1: when the pre-run baseline probe failed (status=timeout /
+    # path_invalid / path_too_long / error), the evidence collector emits
+    # ``attribution="baseline_unavailable"`` for the affected expected output.
+    # This must fail-closed the same way ``missing`` / ``unchanged`` do — the
+    # session ends BLOCKED via EXECUTION_SUCCESS_UNVERIFIED, NOT
+    # VERIFIED_SUCCESS. This is the audit's negative test at the integration
+    # level: it proves the attribution→evaluation→session path is fail-closed
+    # end-to-end without needing a multi-GB file to force a real timeout.
+
+    def test_baseline_unavailable_expected_output_does_not_verify(self) -> None:
+        # Simulates: pre-create result.txt; baseline probe times out; job
+        # succeeds but does NOT modify result.txt; final file exists unchanged.
+        # The collector would emit attribution="baseline_unavailable".
+        self._write_inventory([
+            {
+                "relative_path": "out/result.txt",
+                "attribution": "baseline_unavailable",
+                "baseline_sha256": None,
+                "final_sha256": "abc123",
+            }
+        ])
+        result = self._verify(
+            run=self.derived_run,
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+        )
+        self.assertTrue(result["resolved"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(len(result["expected_outputs"]), 1)
+        self.assertEqual(
+            result["expected_outputs"][0]["status"],
+            "baseline_unavailable",
+        )
+
+    def test_baseline_unavailable_drives_unverified_blocked_outcome(self) -> None:
+        # End-to-end: _evaluate_run with a baseline_unavailable inventory entry
+        # must yield EXECUTION_SUCCESS_UNVERIFIED (NOT VERIFIED_SUCCESS), which
+        # the service maps to RemediationState.BLOCKED. This is the audit's
+        # primary acceptance gate at the integration level.
+        from pilot107.core.remediation import (
+            ActionExecution,
+            RemediationBudget,
+            RemediationSession,
+            RemediationUsage,
+        )
+        from pilot107.services.remediation_service import _evaluate_run
+
+        self._write_inventory([
+            {
+                "relative_path": "out/result.txt",
+                "attribution": "baseline_unavailable",
+                "baseline_sha256": None,
+                "final_sha256": "abc123",
+            }
+        ])
+        # Mark the derived run as a clean execution success with complete
+        # evidence so the ONLY thing blocking VERIFIED_SUCCESS is the
+        # baseline_unavailable expected output.
+        with RunStore(self.db_path).connect() as conn:
+            conn.execute(
+                """
+                UPDATE runs
+                SET state = 'SUCCEEDED', terminal_state = 'COMPLETED',
+                    exit_code = '0:0', collection_state = 'succeeded',
+                    diagnosis_state = 'skipped'
+                WHERE run_id = 'run_derived'
+                """
+            )
+        derived_run = RunStore(self.db_path).get_run("run_derived")
+        now = utc_now_iso()
+        session = RemediationSession(
+            session_id="sess_baseline_unavailable",
+            owner="alice",
+            request_key="request-baseline-unavailable",
+            state=RemediationState.EVALUATING,
+            version=1,
+            source_run_id="run_source",
+            source_contract_id=None,
+            source_diagnosis_digest="d" * 64,
+            source_evidence_digest="e" * 64,
+            automation_policy="manual",
+            budget=RemediationBudget(),
+            usage=RemediationUsage(),
+            stop_reason=None,
+            takeover_reason=None,
+            lease_owner=None,
+            lease_expires_at=None,
+            created_at=now,
+            updated_at=now,
+            provider="none",
+        )
+        execution = ActionExecution(
+            execution_id="exec_baseline_unavailable",
+            session_id=session.session_id,
+            proposal_id="proposal_fake",
+            state="completed",
+            derived_contract_id=self.contract.contract_id,
+            derived_run_id="run_derived",
+            error_code=None,
+            error_message=None,
+            created_at=now,
+            updated_at=now,
+        )
+        result = _evaluate_run(
+            session=session,
+            execution=execution,
+            run=derived_run,
+            evidence=[],
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+        )
+        self.assertEqual(result.outcome, EvaluationOutcome.EXECUTION_SUCCESS_UNVERIFIED)
+        self.assertNotEqual(result.outcome, EvaluationOutcome.VERIFIED_SUCCESS)
+        # The session-state transition (UNVERIFIED → BLOCKED) is performed by
+        # RemediationService.advance via the same wiring exercised by
+        # test_success_with_degraded_evidence_requires_takeover; here we prove
+        # the outcome + expected_outputs_ok flag that drive that transition.
+        self.assertFalse(result.comparison.get("expected_outputs_ok", True))
+        self.assertEqual(
+            result.comparison["expected_outputs"][0]["status"],
+            "baseline_unavailable",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

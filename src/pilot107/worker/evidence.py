@@ -1933,6 +1933,17 @@ def _append_missing_expected(
         baseline_sha = (
             baseline_entry.get("sha256") if baseline_entry is not None else None
         )
+        # Round-8 P1-1: when the pre-run baseline probe failed (timeout /
+        # path_invalid / path_too_long / error), the entry carries a ``status``
+        # key and is unusable for attribution. Even if the expected output is
+        # also absent from the final inventory, we must NOT report a plain
+        # ``missing`` (which the verifier could misread as "legitimately not
+        # produced"); emit ``baseline_unavailable`` so remediation fails closed.
+        attribution = (
+            "baseline_unavailable"
+            if _baseline_entry_unavailable(baseline_entry)
+            else "missing"
+        )
         files.append(
             {
                 "path": None,
@@ -1942,7 +1953,7 @@ def _append_missing_expected(
                 "owner": None,
                 "group": None,
                 "sha256": None,
-                "attribution": "missing",
+                "attribution": attribution,
                 "in_expected_outputs": True,
                 "final_sha256": None,
                 "baseline_sha256": baseline_sha,
@@ -2270,6 +2281,23 @@ def _is_excluded_output(relative_path: str) -> bool:
     )
 
 
+def _baseline_entry_unavailable(entry: Any) -> bool:
+    """Return True if a baseline entry is unusable for attribution.
+
+    A baseline entry written by ``_capture_baseline`` carries a ``status`` key
+    (``timeout`` / ``path_invalid`` / ``path_too_long`` / ``error``) ONLY when
+    the pre-run probe could not determine the file's actual state. Captured
+    entries (the good ones) carry ``exists`` / ``sha256`` / ``mtime_epoch``
+    with NO ``status`` key.
+
+    Treating such an entry as ``baseline_missing`` (the historical bug) lets a
+    pre-existing file appear as ``created`` / ``modified`` and falsely satisfy
+    expected-output verification. Callers must instead emit the stricter
+    ``baseline_unavailable`` attribution so remediation fails closed.
+    """
+    return isinstance(entry, dict) and bool(entry.get("status"))
+
+
 def compute_file_attribution(
     *,
     mtime_epoch: float,
@@ -2290,10 +2318,13 @@ def compute_file_attribution(
       ``baseline_entry`` both provided): strict baseline-vs-final comparison —
       ``created`` (baseline did not exist, now present), ``modified`` (baseline
       sha256 differs from final), ``unchanged`` (baseline sha256 equals final),
-      or ``missing`` (expected output not present in the current inventory).
-      ``final_sha256`` is the hash computed by the caller for the current file;
-      pass ``None`` when the file is absent (so the helper can return
-      ``missing`` for expected outputs that did not appear).
+      ``missing`` (expected output not present in the current inventory), or
+      ``baseline_unavailable`` (baseline entry was written with a probe failure
+      ``status`` such as ``timeout`` / ``path_invalid`` / ``path_too_long`` /
+      ``error`` — the pre-run state is unknown so we must not pretend the run
+      produced the file). ``final_sha256`` is the hash computed by the caller
+      for the current file; pass ``None`` when the file is absent (so the
+      helper can return ``missing`` for expected outputs that did not appear).
     * **Everything else** (non-expected files, or no baseline): mtime-based
       fallback — ``created_by_run`` (mtime after run start), ``preexisting``,
       or ``unknown`` (no run-start timestamp).
@@ -2313,16 +2344,31 @@ def compute_file_attribution(
         else None
     )
     if in_expected and baseline_entry is not None:
-        baseline_exists = bool(baseline_entry.get("exists"))
-        current_exists = final_sha256 is not None or mtime_epoch is not None
-        if not baseline_exists and current_exists:
-            attribution = "created"
-        elif not current_exists:
-            attribution = "missing"
-        elif baseline_sha is not None and final_sha256 is not None and baseline_sha != final_sha256:
-            attribution = "modified"
+        # Round-8 P1-1: a baseline entry carrying a probe-failure ``status``
+        # (timeout / path_invalid / path_too_long / error) is NOT a usable
+        # baseline. The pre-run state is unknown, so we must not compare
+        # exists/sha256 — doing so would let a pre-existing file masquerade as
+        # ``created`` / ``modified`` and falsely satisfy expected-output
+        # verification. Emit ``baseline_unavailable`` so remediation fails
+        # closed to EXECUTION_SUCCESS_UNVERIFIED (BLOCKED) instead of upgrading
+        # to VERIFIED_SUCCESS.
+        if _baseline_entry_unavailable(baseline_entry):
+            attribution = "baseline_unavailable"
         else:
-            attribution = "unchanged"
+            baseline_exists = bool(baseline_entry.get("exists"))
+            current_exists = final_sha256 is not None or mtime_epoch is not None
+            if not baseline_exists and current_exists:
+                attribution = "created"
+            elif not current_exists:
+                attribution = "missing"
+            elif (
+                baseline_sha is not None
+                and final_sha256 is not None
+                and baseline_sha != final_sha256
+            ):
+                attribution = "modified"
+            else:
+                attribution = "unchanged"
     else:
         if started_at_epoch is None:
             attribution = "unknown"
@@ -2356,6 +2402,7 @@ def _attribution_summary(files: list[dict[str, Any]]) -> dict[str, int]:
         "modified": 0,
         "unchanged": 0,
         "missing": 0,
+        "baseline_unavailable": 0,
     }
     for item in files:
         attribution = item.get("attribution", "unknown")

@@ -975,6 +975,15 @@ def _verify_expected_outputs(
                 "status": status,
             }
         )
+        # Round-8 P1-1: only ``created`` / ``modified`` satisfy strict
+        # expected-output verification. The ``baseline_unavailable`` attribution
+        # (emitted by ``compute_file_attribution`` when the pre-run baseline
+        # probe failed with ``status=timeout`` / ``path_invalid`` /
+        # ``path_too_long`` / ``error``) is intentionally NOT in this allow-set:
+        # we cannot prove the run produced the file, so ok=False →
+        # EXECUTION_SUCCESS_UNVERIFIED → session BLOCKED. This is an ADDITIONAL
+        # fail-closed condition on top of the round-6 stores-unavailable /
+        # contract-failure semantics; it does not regress them.
         if status not in {"created", "modified"}:
             ok = False
     return {"resolved": True, "expected_outputs": entries, "ok": ok}

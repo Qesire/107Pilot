@@ -463,7 +463,7 @@ class RunService:
             if recovered is not None:
                 return recovered
 
-        self._capture_baseline(run)
+        self._capture_baseline(run, lease_expires_at=message.lease_expires_at)
         submitted_after = time.time()
         try:
             receipt = self.backend.submit(intent)
@@ -700,7 +700,12 @@ class RunService:
     # Preflight + reconciliation helpers
     # ------------------------------------------------------------------ #
 
-    def _capture_baseline(self, run: RunRecord) -> None:
+    def _capture_baseline(
+        self,
+        run: RunRecord,
+        *,
+        lease_expires_at: str | None = None,
+    ) -> None:
         """Capture a pre-run baseline of declared expected outputs.
 
         Records ``exists/size/mtime/sha256`` for each path declared in the
@@ -713,16 +718,24 @@ class RunService:
         contract id are unavailable — or capture raises — the run still
         submits; attribution silently falls back to mtime-only classification.
 
-        Bounds (round-6 audit P1-2 + round-7 P1-1): the submission lease is
-        60s, so baseline capture is bounded by ``_BASELINE_MAX_OUTPUTS`` (32
-        entries), ``_BASELINE_MAX_PATH_LENGTH`` (512 chars), path validation,
-        and a hard monotonic deadline. The budget is
-        ``min(_BASELINE_TIME_BUDGET_SECONDS, lease_seconds - reserve)`` so a
-        slow baseline cannot expire the submission fence. Each executor call
-        uses ``min(cap, remaining)`` and the local SHA256 path streams in
-        fixed-size chunks, checking the deadline between chunks. Truncation,
-        invalid paths, and timeouts are recorded in the payload so operators
-        can distinguish partial captures from full ones.
+        Bounds (round-6 P1-2 + round-7 P1-1 + round-8 P1-2): the budget is
+        computed from the ACTUAL remaining outbox lease when available
+        (``lease_expires_at`` from the claimed ``OutboxMessage``), NOT the
+        configured lease duration. By the time baseline runs, preflight / dep
+        resolution / fence acquisition have already consumed real wall-clock
+        time, so the configured lease overstates what remains. The formula is::
+
+            remaining_lease = lease_expires_at - now
+            budget = min(_BASELINE_TIME_BUDGET_SECONDS, remaining_lease - reserve)
+
+        For the inline path (no outbox / no lease), the budget falls back to
+        ``min(cap, configured_lease - reserve)`` since there is no lease to
+        expire. ``time.monotonic`` is used for the per-operation deadline so
+        wall-clock adjustments don't extend capture. Each executor call uses
+        ``min(cap, remaining)`` and the local SHA256 path streams in fixed-size
+        chunks, checking the deadline between chunks. Truncation, invalid
+        paths, and timeouts are recorded in the payload so operators can
+        distinguish partial captures from full ones.
 
         ``baseline_status`` (round-7 P2-1): ``captured`` | ``partial_truncated``
         | ``partial_timeout`` | ``failed`` | ``unavailable`` | ``not_required``.
@@ -735,13 +748,13 @@ class RunService:
         if run.contract_id is None:
             return
         captured_at_epoch = time.time()
-        # Round-7 P1-1: lease-aware budget reservation. If the reserved budget
-        # would be non-positive, baseline is skipped (we cannot safely run it
-        # without risking the submission lease). ``time.monotonic`` is used for
-        # the deadline so wall-clock adjustments don't extend capture.
-        budget = self._baseline_budget()
-        if budget <= _BASELINE_MIN_POSITIVE_BUDGET:
-            # Insufficient budget — record unavailable rather than risk the lease.
+        # Round-8 P1-2: compute budget from the ACTUAL remaining lease when
+        # ``lease_expires_at`` is available (outbox path). Fall back to the
+        # configured-lease budget for the inline path (no outbox lease).
+        budget, insufficient_lease = self._baseline_budget(lease_expires_at)
+        if insufficient_lease or budget <= _BASELINE_MIN_POSITIVE_BUDGET:
+            # Insufficient remaining lease — record unavailable rather than
+            # risk expiring the submission fence.
             self._write_baseline_payload(
                 run,
                 captured_at_epoch,
@@ -751,7 +764,11 @@ class RunService:
                 timeout=False,
                 baseline_status="unavailable",
                 entries=[],
-                error_code="baseline_insufficient_budget",
+                error_code=(
+                    "baseline_insufficient_lease"
+                    if insufficient_lease
+                    else "baseline_insufficient_budget"
+                ),
             )
             return
         deadline = time.monotonic() + budget
@@ -834,14 +851,43 @@ class RunService:
                 return
             return
 
-    def _baseline_budget(self) -> float:
+    def _baseline_budget(
+        self,
+        lease_expires_at: str | None = None,
+    ) -> tuple[float, bool]:
         """Compute the baseline time budget, reserving time for the submit.
 
-        ``min(_BASELINE_TIME_BUDGET_SECONDS, lease_seconds - reserve)``. The
-        lease duration is accessible via ``self.submission_lease_seconds``.
+        Returns ``(budget, insufficient_lease)``. When ``lease_expires_at`` is
+        provided (outbox path), the budget is computed from the ACTUAL remaining
+        lease: ``min(cap, (lease_expires_at - now) - reserve)``. When it is
+        ``None`` (inline path — no outbox lease), the budget falls back to
+        ``min(cap, configured_lease - reserve)``. ``insufficient_lease`` is True
+        when the remaining lease is too small to safely run baseline (so the
+        caller can record a distinct ``baseline_insufficient_lease`` error code).
         """
+        if lease_expires_at is not None:
+            try:
+                expires_at = datetime.fromisoformat(lease_expires_at)
+            except (ValueError, TypeError):
+                # Unparseable expiry → cannot compute remaining lease; fall back
+                # to the configured-lease budget (safe default).
+                lease_budget = (
+                    self.submission_lease_seconds - _BASELINE_LEASE_RESERVE_SECONDS
+                )
+                return min(_BASELINE_TIME_BUDGET_SECONDS, lease_budget), False
+            now = datetime.now(UTC)
+            if expires_at.tzinfo is None:
+                # Naive ISO timestamp — assume UTC (the control repository
+                # stores UTC timestamps).
+                expires_at = expires_at.replace(tzinfo=UTC)
+            remaining_lease = (expires_at - now).total_seconds()
+            remaining_after_reserve = remaining_lease - _BASELINE_LEASE_RESERVE_SECONDS
+            if remaining_after_reserve <= _BASELINE_MIN_POSITIVE_BUDGET:
+                return remaining_after_reserve, True
+            return min(_BASELINE_TIME_BUDGET_SECONDS, remaining_after_reserve), False
+        # Inline path: no outbox lease to expire — use the configured lease.
         lease_budget = self.submission_lease_seconds - _BASELINE_LEASE_RESERVE_SECONDS
-        return min(_BASELINE_TIME_BUDGET_SECONDS, lease_budget)
+        return min(_BASELINE_TIME_BUDGET_SECONDS, lease_budget), False
 
     def _write_baseline_payload(
         self,

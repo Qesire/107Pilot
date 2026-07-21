@@ -574,7 +574,7 @@ class BaselineCaptureTests(unittest.TestCase):
             },
         )
         service = self._service()
-        with patch.object(RunService, "_baseline_budget", return_value=0.0):
+        with patch.object(RunService, "_baseline_budget", return_value=(0.0, False)):
             run = service.submit(
                 RunSubmitRequest(
                     owner="alice",
@@ -741,10 +741,11 @@ class BaselineCaptureTests(unittest.TestCase):
         self.assertNotIn("sha256", big_entry)
 
     def test_baseline_budget_reservation(self) -> None:
-        # Round-7 P1-1: budget = min(30s cap, lease - 15s reserve).
+        # Round-7 P1-1 + Round-8 P1-2: budget = min(30s cap, lease - 15s reserve)
+        # when no lease_expires_at (inline path). Returns (budget, insufficient).
         # Default 60s lease → min(30, 45) = 30.
         service = self._service()
-        self.assertEqual(service._baseline_budget(), 30.0)
+        self.assertEqual(service._baseline_budget(), (30.0, False))
 
         # Lease of 40s → 40-15 = 25 → min(30, 25) = 25 (reduced from cap).
         medium_service = RunService(
@@ -754,7 +755,7 @@ class BaselineCaptureTests(unittest.TestCase):
             evidence_store=self.evidence_store,
             submission_lease_seconds=40,
         )
-        self.assertEqual(medium_service._baseline_budget(), 25.0)
+        self.assertEqual(medium_service._baseline_budget(), (25.0, False))
 
         # Tiny lease: 10s → 10-15 = -5 → min(30, -5) = -5 → insufficient.
         tiny_service = RunService(
@@ -764,7 +765,98 @@ class BaselineCaptureTests(unittest.TestCase):
             evidence_store=self.evidence_store,
             submission_lease_seconds=10,
         )
-        self.assertLess(tiny_service._baseline_budget(), 0.0)
+        budget, insufficient = tiny_service._baseline_budget()
+        self.assertLess(budget, 0.0)
+        self.assertFalse(insufficient)  # configured-lease fallback, not actual-lease
+
+    def test_baseline_budget_uses_actual_remaining_lease(self) -> None:
+        # Round-8 P1-2: when lease_expires_at is provided, budget is computed
+        # from the ACTUAL remaining lease, not the configured duration.
+        # Simulate a lease that expires 20s from now → 20-15 = 5 → min(30, 5) = 5.
+        from datetime import UTC, datetime, timedelta
+
+        expires_soon = (
+            datetime.now(UTC) + timedelta(seconds=20)
+        ).isoformat()
+        service = self._service()
+        budget, insufficient = service._baseline_budget(expires_soon)
+        self.assertFalse(insufficient)
+        # Budget should be ~5s (allow slack for test execution time).
+        self.assertLessEqual(budget, 5.5)
+        self.assertGreater(budget, 3.0)
+
+        # Lease far from expiry (120s) → 120-15 = 105 → min(30, 105) = 30 (capped).
+        expires_far = (
+            datetime.now(UTC) + timedelta(seconds=120)
+        ).isoformat()
+        budget_far, _ = service._baseline_budget(expires_far)
+        self.assertEqual(budget_far, 30.0)
+
+    def test_baseline_budget_insufficient_remaining_lease(self) -> None:
+        # Round-8 P1-2: lease_expires_at close to now → remaining - reserve < min
+        # → insufficient_lease=True.
+        from datetime import UTC, datetime, timedelta
+
+        # Expires in 10s → 10-15 = -5 < 0.5 → insufficient.
+        expires_soon = (
+            datetime.now(UTC) + timedelta(seconds=10)
+        ).isoformat()
+        service = self._service()
+        budget, insufficient = service._baseline_budget(expires_soon)
+        self.assertTrue(insufficient)
+        self.assertLess(budget, 0.0)
+
+    def test_baseline_skipped_with_insufficient_lease_error_code(self) -> None:
+        # Round-8 P1-2: insufficient remaining lease → baseline_status=unavailable
+        # + error_code=baseline_insufficient_lease. We simulate this by calling
+        # _capture_baseline directly with a near-expiry lease_expires_at.
+        from datetime import UTC, datetime, timedelta
+
+        contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {
+                    "command": "true",
+                    "expected_outputs": ["result.txt"],
+                },
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        run = self.run_store.create_run(
+            run_id="run_test_insufficient_lease",
+            owner="alice",
+            workdir=str(self.workdir),
+            script="true",
+            contract_id=contract.contract_id,
+        )
+        service = self._service()
+        # Lease expires in 5s → 5-15 = -10 < 0.5 → insufficient_lease=True.
+        expires_soon = (
+            datetime.now(UTC) + timedelta(seconds=5)
+        ).isoformat()
+        service._capture_baseline(run, lease_expires_at=expires_soon)
+        payload = json.loads(
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(payload["baseline_status"], "unavailable")
+        self.assertEqual(payload["error_code"], "baseline_insufficient_lease")
+
+    def test_baseline_budget_unparseable_lease_falls_back(self) -> None:
+        # Round-8 P1-2: unparseable lease_expires_at → fall back to configured.
+        service = self._service()
+        budget, insufficient = service._baseline_budget("not-a-timestamp")
+        self.assertFalse(insufficient)
+        self.assertEqual(budget, 30.0)  # default 60s lease → min(30, 45) = 30
 
     def test_baseline_failed_writes_payload_with_error_code(self) -> None:
         # Round-7 P2-1: an exception during capture writes baseline.json with
