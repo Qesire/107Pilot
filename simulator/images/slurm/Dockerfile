@@ -3,7 +3,8 @@
 # 23.11.x runtime exactly. Ubuntu's slurm-wlm-basic-plugins ships rest_auth_jwt.so
 # but NOT auth_jwt.so (control-plane). We build only that plugin with --with-jwt
 # + libjwt-dev (libjwt2 runtime is already a slurmrestd dependency).
-FROM ubuntu:24.04 AS jwt-builder
+# ubuntu:24.04, pinned 2026-07-21 (digest pin for reproducible base).
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS jwt-builder
 ENV DEBIAN_FRONTEND=noninteractive
 
 # deb822: append deb-src so apt-get source / build-dep work.
@@ -30,7 +31,8 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.s
     && make -C src/plugins/auth/jwt
 
 # Final stage: the simulator image with auth_jwt.so installed.
-FROM ubuntu:24.04
+# ubuntu:24.04, pinned 2026-07-21 (digest pin for reproducible base).
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
 
 ENV DEBIAN_FRONTEND=noninteractive
 
