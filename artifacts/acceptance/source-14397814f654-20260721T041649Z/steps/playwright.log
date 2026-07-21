@@ -1,0 +1,38 @@
+
+> pilot107-ui@0.1.0 test:ui
+> npm run build && playwright test
+
+
+> pilot107-ui@0.1.0 build
+> vite build --config apps/web/vite.config.mts
+
+vite v6.4.3 building for production...
+transforming...
+✓ 1917 modules transformed.
+rendering chunks...
+computing gzip size...
+../../src/pilot107/web/static/index.html                  0.59 kB │ gzip:   0.40 kB
+../../src/pilot107/web/static/assets/styles.css          49.33 kB │ gzip:   9.31 kB
+../../src/pilot107/web/static/assets/chunk-DWLtnDav.js  260.51 kB │ gzip:  80.84 kB
+../../src/pilot107/web/static/assets/app.js             290.16 kB │ gzip:  84.95 kB
+../../src/pilot107/web/static/assets/chunk-Buan64fT.js  438.53 kB │ gzip: 144.34 kB
+✓ built in 2.63s
+
+Running 14 tests using 1 worker
+
+  ✓   1 [chromium] › tests/ui/visual.spec.js:12:1 › workspace renders live run and platform read models (586ms)
+  ✓   2 [chromium] › tests/ui/visual.spec.js:23:1 › run filters are URL-controlled and narrow the server query (251ms)
+  ✓   3 [chromium] › tests/ui/visual.spec.js:34:1 › run deep link survives direct navigation and wraps long workdir (320ms)
+  ✓   4 [chromium] › tests/ui/visual.spec.js:46:1 › successful run exposes shareable logs, results, and verified capsule (499ms)
+  ✓   5 [chromium] › tests/ui/visual.spec.js:65:1 › run detail makes an omitted workdir explicit (275ms)
+  ✓   6 [chromium] › tests/ui/visual.spec.js:72:1 › switching user updates URL and invalidates scoped queries (263ms)
+  ✓   7 [chromium] › tests/ui/visual.spec.js:82:1 › an untrusted URL user is normalized before it reaches API or shell output (273ms)
+  ✓   8 [chromium] › tests/ui/visual.spec.js:90:1 › stale and degraded dynamic facts remain explicit (184ms)
+  ✓   9 [chromium] › tests/ui/visual.spec.js:98:1 › forbidden capability scope renders an authorization state (182ms)
+  ✓  10 [chromium] › tests/ui/visual.spec.js:106:1 › mobile layout exposes primary destinations without horizontal overflow (250ms)
+  ✓  11 [chromium] › tests/ui/visual.spec.js:117:1 › studio requires server validation before creating a canonical contract (487ms)
+  ✓  12 [chromium] › tests/ui/visual.spec.js:130:1 › dirty source is not silently overwritten by a basic form update (457ms)
+  ✓  13 [chromium] › tests/ui/visual.spec.js:140:1 › market release adoption opens the server-created canonical contract (344ms)
+  ✓  14 [chromium] › tests/ui/visual.spec.js:150:1 › persisted contract requires object-level confirmation before submit (535ms)
+
+  14 passed (5.9s)

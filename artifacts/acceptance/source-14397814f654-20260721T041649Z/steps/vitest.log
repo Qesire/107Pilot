@@ -1,0 +1,25 @@
+
+> pilot107-ui@0.1.0 test
+> vitest run --config apps/web/vite.config.mts --run
+
+
+ RUN  v3.2.7 /home/knowingthesea/107pilot/apps/web
+
+ ✓ src/run-filters.test.ts (2 tests) 4ms
+ ✓ src/market-state.test.ts (2 tests) 8ms
+ ✓ src/evidence-state.test.ts (4 tests) 6ms
+ ✓ src/url.test.ts (3 tests) 4ms
+ ✓ src/run-status.test.ts (17 tests) 6ms
+ ✓ src/EnvBoundaryBanner.test.tsx (2 tests) 7ms
+ ✓ src/RunPicker.test.ts (5 tests) 6ms
+ ✓ src/api.test.ts (12 tests) 18ms
+ ✓ src/contract-state.test.ts (13 tests) 25ms
+ ✓ src/AgentPage.test.ts (25 tests) 14ms
+ ✓ src/RunEvidencePanel.test.ts (3 tests) 6ms
+ ✓ src/StudioPage.test.ts (5 tests) 48ms
+
+ Test Files  12 passed (12)
+      Tests  93 passed (93)
+   Start at  12:17:59
+   Duration  878ms (transform 850ms, setup 0ms, collect 2.28s, tests 151ms, environment 3ms, prepare 1.52s)
+
