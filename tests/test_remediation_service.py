@@ -736,6 +736,55 @@ class VerifyExpectedOutputsTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["expected_outputs"], [])
 
+    def test_typed_expected_output_object_resolves_to_path(self) -> None:
+        # Round-8 P2-2: a contract declaring expected outputs as typed objects
+        # ({"path": "out/result.txt", "type": "json"}) must flow through
+        # _verify_expected_outputs with the PATH used to match inventory rows,
+        # not a dict-repr garbage string. Regression for the str(item) bug.
+        from pilot107.core.contracts import ContractStore as _CS
+
+        typed_contract = _CS(self.db_path).create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": "/public/home/alice"},
+                "entry": {"command": "echo ok > out/result.txt"},
+                "resources": {
+                    "partition": "CPU-RC",
+                    "qos": "qos_cpu_rc",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+                "outputs": {
+                    "expected": [{"path": "out/result.txt", "type": "json"}],
+                    "success_conditions": ["slurm_exit_code_zero"],
+                },
+            },
+        )
+        run_typed = replace(self.derived_run, contract_id=typed_contract.contract_id)
+        # Inventory carries the created expected output keyed by its PATH.
+        self._write_inventory([
+            {
+                "relative_path": "out/result.txt",
+                "attribution": "created",
+                "baseline_sha256": None,
+                "final_sha256": "abc123",
+            }
+        ])
+        result = self._verify(
+            run=run_typed,
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+        )
+        self.assertTrue(result["resolved"])
+        self.assertTrue(result["ok"])
+        self.assertEqual(len(result["expected_outputs"]), 1)
+        # The expected output was matched by its extracted path, NOT a dict repr.
+        self.assertEqual(result["expected_outputs"][0]["path"], "out/result.txt")
+        self.assertEqual(result["expected_outputs"][0]["status"], "created")
+
     # Round-8 P1-1: when the pre-run baseline probe failed (status=timeout /
     # path_invalid / path_too_long / error), the evidence collector emits
     # ``attribution="baseline_unavailable"`` for the affected expected output.

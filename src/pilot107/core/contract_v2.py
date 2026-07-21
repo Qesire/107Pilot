@@ -24,6 +24,60 @@ _TOP_LEVEL_FIELDS = {
 }
 _AUTOMATION_LEVELS = {"explain", "suggest", "approved_execute", "bounded_auto"}
 
+# Round-8 P2-3: success conditions that the evaluation layer actually enforces.
+# ``slurm_exit_code_zero`` is the only condition remediation's ``_evaluate_run``
+# checks (via the run exit code). Any other condition is accepted by the
+# schema today but silently ignored at evaluation time — the audit's
+# "accept-then-ignore" anti-pattern. Reject unsupported conditions at
+# normalize time so contracts can't declare conditions we won't enforce.
+_SUPPORTED_SUCCESS_CONDITIONS = {"slurm_exit_code_zero"}
+
+
+def parse_expected_output(item: Any) -> str:
+    """Extract the relative path string from one ``outputs.expected`` entry.
+
+    The ContractV2 schema allows expected outputs as either a plain path
+    string (``"metrics.json"``) or a typed object (``{"path": "metrics.json",
+    "type": "json"}``). Three call sites (evidence collector, baseline capture,
+    remediation verifier) need the path string to match against inventory rows;
+    naively calling ``str(item)`` on a dict turns it into a Python repr like
+    ``"{'path': 'metrics.json', 'type': 'json'}"`` — a garbage path that never
+    matches any real file. This shared parser is the single enforcement point
+    for the dict shape at USE time.
+
+    Rules:
+      * ``str`` item → returned stripped; empty-after-strip raises.
+      * ``dict`` item → return ``item["path"]`` if it's a non-empty string,
+        else raise ``ContractV2Error(code="CONTRACT.OUTPUTS_INVALID")``.
+      * any other type → raise the same error.
+
+    NOTE: the ``type`` key on a dict item is RESERVED for future use (e.g.
+    validating the file IS valid JSON when ``type == "json"``). It is accepted
+    and currently IGNORED — do not implement type-based validation here, the
+    audit only requires that object-type items extract their ``path`` instead
+    of becoming garbage.
+    """
+    if isinstance(item, str):
+        path = item.strip()
+        if not path:
+            raise ContractV2Error(
+                "outputs.expected string path must be non-empty",
+                code="CONTRACT.OUTPUTS_INVALID",
+            )
+        return path
+    if isinstance(item, dict):
+        raw_path: Any = item.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ContractV2Error(
+                "outputs.expected typed object missing string 'path'",
+                code="CONTRACT.OUTPUTS_INVALID",
+            )
+        return raw_path.strip()
+    raise ContractV2Error(
+        "outputs.expected entries must be a string or an object with a 'path' string",
+        code="CONTRACT.OUTPUTS_INVALID",
+    )
+
 
 class ContractV2Error(ValueError):
     def __init__(self, message: str, *, code: str) -> None:
@@ -334,10 +388,32 @@ def _validate_outputs(outputs: dict[str, Any]) -> None:
             "outputs.expected must contain paths or typed output objects",
             code="CONTRACT.OUTPUTS_INVALID",
         )
+    # Round-8 P2-2: defensively enforce the dict shape at normalize time too
+    # (the parser is the use-time enforcement, but catching bad contracts at
+    # creation/update is the audit's "reject at creation" intent). A dict item
+    # without a non-empty string ``path`` is rejected here.
+    for item in expected:
+        # Raises CONTRACT.OUTPUTS_INVALID on bad shape; safe to call for both
+        # str and dict items.
+        parse_expected_output(item)
     if not _string_list(outputs.get("success_conditions")):
         raise ContractV2Error(
             "outputs.success_conditions must be an array of strings",
             code="CONTRACT.OUTPUTS_INVALID",
+        )
+    # Round-8 P2-3: reject success conditions the evaluation layer does not
+    # enforce. The default ``["slurm_exit_code_zero"]`` is valid; an empty
+    # list is valid (no conditions, evaluation falls back to exit-code-only);
+    # any unknown condition fails at normalize time so we stop accepting
+    # conditions we won't enforce.
+    conditions = outputs.get("success_conditions") or []
+    unsupported = [c for c in conditions if c not in _SUPPORTED_SUCCESS_CONDITIONS]
+    if unsupported:
+        raise ContractV2Error(
+            "unsupported outputs.success_conditions: "
+            f"{', '.join(sorted(set(unsupported)))} "
+            f"(supported: {sorted(_SUPPORTED_SUCCESS_CONDITIONS)})",
+            code="CONTRACT.SUCCESS_CONDITION_UNSUPPORTED",
         )
 
 

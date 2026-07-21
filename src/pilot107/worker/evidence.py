@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pilot107.adapters.slurm import CommandResult, SimulatorExecutor, SlurmTransportError
+from pilot107.core.contract_v2 import parse_expected_output
 from pilot107.core.contracts import ContractStore
 from pilot107.core.identity import UserIdentity
 from pilot107.core.paths import PathPolicyError, SafePath, authorize_path, reject_special_file
@@ -1387,7 +1388,10 @@ class DockerSlurmEvidenceCollector:
         expected = outputs.get("expected") or []
         if not isinstance(expected, list):
             return []
-        return [str(item) for item in expected]
+        # Round-8 P2-2: use the shared parser so typed objects like
+        # {"path": "metrics.json", "type": "json"} extract their path instead
+        # of becoming a dict-repr garbage string via str(item).
+        return [parse_expected_output(item) for item in expected]
 
     def _resolve_started_at(self, run: RunRecord) -> str | None:
         # RunRecord does not yet carry a dedicated started_at field; fall back to

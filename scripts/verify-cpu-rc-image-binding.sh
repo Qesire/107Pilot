@@ -40,7 +40,9 @@
 #     "skip_reason": "..." or null,
 #     "error": "..." or null,            # P1-3: top-level error reason
 #     "missing_services": [...],          # P1-3: expected services not running
-#     "parse_errors": [...]               # P1-3: unparseable compose ps lines
+#     "parse_errors": [...],              # P1-3: unparseable compose ps lines
+#     "service_instance_counts": {...},   # P2-1: service→instance count
+#     "duplicate_services": [...]         # P2-1: services with >1 instance
 #   }
 #
 # Exit codes:
@@ -91,6 +93,8 @@ print(json.dumps({
     "error": None,
     "missing_services": [],
     "parse_errors": [],
+    "service_instance_counts": {},
+    "duplicate_services": [],
 }, ensure_ascii=False))
 PY
   exit 0
@@ -115,6 +119,8 @@ print(json.dumps({
     "error": None,
     "missing_services": [],
     "parse_errors": [],
+    "service_instance_counts": {},
+    "duplicate_services": [],
 }, ensure_ascii=False))
 PY
   exit 0
@@ -192,6 +198,8 @@ report = {
     "error": None,
     "missing_services": [],
     "parse_errors": [],
+    "service_instance_counts": {},
+    "duplicate_services": [],
 }
 
 compose_cmd = [
@@ -246,8 +254,12 @@ if not containers:
     fail(report, "no running cpu-rc containers found by compose ps")
 
 # Index the found containers by compose service name so we can assert each of
-# the 10 expected services is present.
+# the 10 expected services is present. P2-1 (round 8): track ALL instances per
+# service — a service with >1 running instance is a binding failure because one
+# instance may have the correct image while another has a wrong one, and the
+# old code let the later container silently overwrite the earlier one.
 by_service = {}
+service_instances = {}
 for c in containers:
     def get(*keys):
         for k in keys:
@@ -260,7 +272,34 @@ for c in containers:
         # the service from it, so leave blank and let the missing-service
         # check below catch it.
         service = ""
-    by_service[service] = c
+    service_instances.setdefault(service, []).append(c)
+    # Keep the first instance as the representative (for the image check).
+    # The duplicate-instance check below runs before the image check, so if
+    # there are duplicates we fail before ever reading by_service[service].
+    if service not in by_service:
+        by_service[service] = c
+
+# P2-1 (round 8): record the instance counts in the report for evidence.
+report["service_instance_counts"] = {
+    s: len(insts) for s, insts in service_instances.items()
+}
+
+# P2-1 (round 8): fail-closed if any expected service has >1 running instance.
+# These are single-instance services in the CPU-RC topology; a duplicate means
+# an unexpected scale event where one instance may escape image verification.
+duplicate = [s for s in expected_services if len(service_instances.get(s, [])) > 1]
+if duplicate:
+    report["duplicate_services"] = duplicate
+    report["error"] = "duplicate service instances: %s" % ", ".join(
+        "%s(%d)" % (s, len(service_instances[s])) for s in duplicate
+    )
+    for s in duplicate:
+        print(
+            "FAIL: service %s has %d running instances; expected exactly 1 (release_revision=%s)"
+            % (s, len(service_instances[s]), release_revision_full),
+            file=sys.stderr,
+        )
+    fail(report, report["error"])
 
 # P1-3 fix #2: assert all 10 expected services are running.
 missing = [s for s in expected_services if s not in by_service]

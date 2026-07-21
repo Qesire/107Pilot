@@ -48,8 +48,7 @@
       "complete/task_<id>.COMPLETE"
     ],
     "success_conditions": [
-      "artifact_integrity",
-      "complete_marker"
+      "slurm_exit_code_zero"
     ]
   }
 }

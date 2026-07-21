@@ -4,7 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pilot107.core.contract_v2 import CONTRACT_SCHEMA_V2, ContractV2Error, normalize_contract
+from pilot107.core.contract_v2 import (
+    CONTRACT_SCHEMA_V2,
+    ContractV2Error,
+    normalize_contract,
+    parse_expected_output,
+)
 from pilot107.core.contracts import (
     ContractError,
     ContractService,
@@ -219,6 +224,132 @@ class ContractV2Tests(unittest.TestCase):
 
         self.assertEqual(record.schema_version, "pilot107.contract/v1")
         self.assertEqual(record.payload["unknown"], "preserve for manual repair")
+
+
+class ParseExpectedOutputTests(unittest.TestCase):
+    """Round-8 P2-2: the shared parser extracts a path string from an
+    ``outputs.expected`` entry (str or typed object) and rejects bad shapes."""
+
+    def test_str_item_returned(self) -> None:
+        self.assertEqual(parse_expected_output("metrics.json"), "metrics.json")
+
+    def test_str_item_stripped(self) -> None:
+        self.assertEqual(parse_expected_output("  metrics.json  "), "metrics.json")
+
+    def test_empty_str_raises(self) -> None:
+        with self.assertRaises(ContractV2Error) as raised:
+            parse_expected_output("   ")
+        self.assertEqual(raised.exception.code, "CONTRACT.OUTPUTS_INVALID")
+
+    def test_dict_with_path_returned(self) -> None:
+        self.assertEqual(
+            parse_expected_output({"path": "metrics.json", "type": "json"}),
+            "metrics.json",
+        )
+
+    def test_dict_path_stripped(self) -> None:
+        self.assertEqual(
+            parse_expected_output({"path": "  metrics.json  "}),
+            "metrics.json",
+        )
+
+    def test_dict_without_path_raises(self) -> None:
+        with self.assertRaises(ContractV2Error) as raised:
+            parse_expected_output({"type": "json"})
+        self.assertEqual(raised.exception.code, "CONTRACT.OUTPUTS_INVALID")
+        self.assertIn("path", str(raised.exception))
+
+    def test_dict_with_non_string_path_raises(self) -> None:
+        with self.assertRaises(ContractV2Error) as raised:
+            parse_expected_output({"path": 123})
+        self.assertEqual(raised.exception.code, "CONTRACT.OUTPUTS_INVALID")
+
+    def test_dict_with_empty_path_raises(self) -> None:
+        with self.assertRaises(ContractV2Error) as raised:
+            parse_expected_output({"path": ""})
+        self.assertEqual(raised.exception.code, "CONTRACT.OUTPUTS_INVALID")
+
+    def test_non_str_non_dict_raises(self) -> None:
+        for bad in (123, 1.5, None, True, ["metrics.json"], ("a", "b")):
+            with self.subTest(value=bad):
+                with self.assertRaises(ContractV2Error) as raised:
+                    parse_expected_output(bad)
+                self.assertEqual(raised.exception.code, "CONTRACT.OUTPUTS_INVALID")
+
+
+class SuccessConditionsValidationTests(unittest.TestCase):
+    """Round-8 P2-3: reject unsupported success_conditions at normalize time."""
+
+    def test_default_success_conditions_normalized_and_valid(self) -> None:
+        payload = _legacy_contract()
+        # No success_conditions field; normalize should default + validate.
+        normalized = normalize_contract(payload)
+        self.assertEqual(
+            normalized["outputs"]["success_conditions"],
+            ["slurm_exit_code_zero"],
+        )
+
+    def test_supported_condition_ok(self) -> None:
+        payload = _legacy_contract()
+        payload["outputs"] = {
+            "expected": ["result.txt"],
+            "success_conditions": ["slurm_exit_code_zero"],
+        }
+        normalized = normalize_contract(payload)
+        self.assertEqual(
+            normalized["outputs"]["success_conditions"],
+            ["slurm_exit_code_zero"],
+        )
+
+    def test_empty_conditions_ok(self) -> None:
+        # Empty list = no conditions; evaluation falls back to exit-code-only.
+        payload = _legacy_contract()
+        payload["outputs"] = {
+            "expected": ["result.txt"],
+            "success_conditions": [],
+        }
+        normalized = normalize_contract(payload)
+        self.assertEqual(normalized["outputs"]["success_conditions"], [])
+
+    def test_unsupported_condition_rejected(self) -> None:
+        payload = _legacy_contract()
+        payload["outputs"] = {
+            "expected": ["result.txt"],
+            "success_conditions": ["slurm_exit_code_zero", "custom_metric_above_5"],
+        }
+        with self.assertRaises(ContractV2Error) as raised:
+            normalize_contract(payload)
+        self.assertEqual(
+            raised.exception.code,
+            "CONTRACT.SUCCESS_CONDITION_UNSUPPORTED",
+        )
+        self.assertIn("custom_metric_above_5", str(raised.exception))
+        self.assertIn("slurm_exit_code_zero", str(raised.exception))
+
+    def test_typed_expected_output_object_normalizes(self) -> None:
+        # P2-2 integration: a typed object expected output survives normalize
+        # (the parser accepts it at validate time).
+        payload = _legacy_contract()
+        payload["outputs"] = {
+            "expected": [{"path": "metrics.json", "type": "json"}],
+            "success_conditions": ["slurm_exit_code_zero"],
+        }
+        normalized = normalize_contract(payload)
+        self.assertEqual(
+            normalized["outputs"]["expected"],
+            [{"path": "metrics.json", "type": "json"}],
+        )
+
+    def test_typed_expected_output_missing_path_rejected_at_normalize(self) -> None:
+        # P2-2 defensive: a dict without a string path is rejected at normalize.
+        payload = _legacy_contract()
+        payload["outputs"] = {
+            "expected": [{"type": "json"}],
+            "success_conditions": ["slurm_exit_code_zero"],
+        }
+        with self.assertRaises(ContractV2Error) as raised:
+            normalize_contract(payload)
+        self.assertEqual(raised.exception.code, "CONTRACT.OUTPUTS_INVALID")
 
 
 def _legacy_contract() -> dict:

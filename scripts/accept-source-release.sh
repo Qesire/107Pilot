@@ -43,6 +43,20 @@ if ! git -C "$root" diff --quiet || ! git -C "$root" diff --cached --quiet; then
 fi
 untracked_status="$(git -C "$root" status --porcelain --untracked-files)"
 
+# P2-4 (round 8): seal mode requires a fully clean worktree — untracked files
+# can leak into the bundle and escape review. Fail fast BEFORE running the 12
+# steps so the seal gate is immediate and clear. In non-seal mode, untracked
+# files are recorded in the report for transparency but do not fail.
+seal_mode="${PILOT107_ACCEPT_SEAL_MODE:-0}"
+if [[ "$seal_mode" == "1" ]]; then
+  untracked_count="$(printf '%s\n' "$untracked_status" | grep -c '^??' || true)"
+  if [[ "$untracked_count" -gt 0 ]]; then
+    echo "seal mode requires clean worktree: $untracked_count untracked file(s) found" >&2
+    printf '%s\n' "$untracked_status" | grep '^??' >&2 || true
+    exit 1
+  fi
+fi
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="${PILOT107_SOURCE_ACCEPT_ARTIFACT_DIR:-$root/artifacts/acceptance/source-$short_revision-$timestamp}"
 mkdir -p "$artifact_dir"

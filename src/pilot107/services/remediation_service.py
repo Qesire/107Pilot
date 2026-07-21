@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from pilot107.core.advice import AdviceResult
+from pilot107.core.contract_v2 import parse_expected_output
 from pilot107.core.contracts import ContractStore
 from pilot107.core.remediation import (
     TERMINAL_REMEDIATION_STATES,
@@ -915,7 +916,7 @@ def _verify_expected_outputs(
         # Contract read succeeded and declares no expected outputs → genuinely
         # nothing to verify. ok=True, resolved=True (we DID resolve the contract).
         return {"resolved": True, "expected_outputs": [], "ok": True}
-    expected_paths = [str(item) for item in expected]
+    expected_paths = [parse_expected_output(item) for item in expected]
     inventory_path = evidence_store.run_root(run.run_id) / "outputs" / "inventory.json"
     try:
         inventory = json.loads(inventory_path.read_text(encoding="utf-8"))

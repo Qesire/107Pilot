@@ -25,6 +25,7 @@ from pilot107.adapters.slurm import (
     SubmitIntent,
     SubmitReceipt,
 )
+from pilot107.core.contract_v2 import parse_expected_output
 from pilot107.core.control_repository import (
     ControlRepository,
     ControlRepositoryConflict,
@@ -1229,7 +1230,10 @@ def _resolve_expected_outputs(contract_store: ContractStore, contract_id: str) -
     expected = outputs.get("expected") or []
     if not isinstance(expected, list):
         return []
-    return [str(item) for item in expected]
+    # Round-8 P2-2: use the shared parser so typed objects like
+    # {"path": "metrics.json", "type": "json"} extract their path instead
+    # of becoming a dict-repr garbage string via str(item).
+    return [parse_expected_output(item) for item in expected]
 
 
 # Round-6/7 audit: baseline capture bounds to stay well under the 60s

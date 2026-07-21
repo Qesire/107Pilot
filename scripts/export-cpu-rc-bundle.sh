@@ -15,6 +15,19 @@ if ! git -C "$root" diff --quiet || ! git -C "$root" diff --cached --quiet; then
   exit 1
 fi
 
+# P2-4 (round 8): untracked files in the bundle source dirs can leak into the
+# exported bundle and escape review. Refuse to export if any untracked files
+# exist under src/, apps/, or config/ — the only dirs copied into the bundle.
+# Untracked files elsewhere (artifacts/, docs/) do not ship in the bundle and
+# are tolerated.
+untracked_in_bundle="$(git -C "$root" status --porcelain --untracked-files -- src apps config | grep '^??' || true)"
+if [[ -n "$untracked_in_bundle" ]]; then
+  echo "refusing to export a bundle with untracked files in src/ apps/ config/:" >&2
+  printf '%s\n' "$untracked_in_bundle" >&2
+  echo "commit or remove these files before exporting" >&2
+  exit 1
+fi
+
 mkdir -p "$out_root"
 rm -rf "$work_dir"
 rm -f "$archive" "$archive.sha256"
