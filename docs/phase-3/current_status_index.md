@@ -2,7 +2,7 @@
 
 快照日期：2026-07-20
 当前环境：本机 D0/D1
-当前主线：模拟 Slurm 阶段封版候选。已验证发布 revision：`be9bb93933a0cb827876f4042edee0d600176f75`；验收证据：source acceptance 12/12 PASS + runtime acceptance 10/10 PASS（同一 SHA，seal mode）。round-4 P1（output baseline + verified_success 语义）已闭环；round-5 P1（API stores 注入 + 同 SHA 报告）已闭环；round-6 P1（verification dependency fail-closed）已闭环，round-6 P1（baseline bounds / seal-mode JSON）已显著加强，round-7 P1（baseline 硬时间预算 / seal JSON 异常状态 / image-binding fail-closed）已闭环。
+当前主线：模拟 Slurm 阶段封版候选。已验证发布 revision：`29af8451c8d9bcb12f0afd5b3d80481f5214bc24`；验收证据：source acceptance 12/12 PASS + runtime acceptance 10/10 PASS（同一 SHA，seal mode）。round-4 P1（output baseline + verified_success 语义）已闭环；round-5 P1（API stores 注入 + 同 SHA 报告）已闭环；round-6 P1（verification dependency fail-closed / baseline bounds / seal-mode JSON）已闭环；round-7 P1（baseline 硬时间预算 / seal JSON 异常状态 / image-binding fail-closed）已闭环；round-8 P1（baseline attribution fail-closed / lease-aware baseline 预算）已闭环，模拟 Slurm 阶段封版为无条件 GO。
 
 ## 权威入口
 
@@ -23,15 +23,15 @@
 | 已知错误规则 | 37 条 |
 | Ruff | passed（src/tests/scripts/simulator） |
 | mypy strict | 76 source files passed |
-| Python 测试 | 723 passed，13 PostgreSQL integration skipped，5 subtests passed |
+| Python 测试 | 734 passed，13 PostgreSQL integration skipped，5 subtests passed |
 | Vitest | 12 files / 93 tests passed |
 | Playwright test:ui | 14/14 passed（Market→Adopt→Studio→Preflight→Run→Evidence，CI 阻塞门禁） |
 | Web production build | passed（static bundle 已与源码同步，CI 含 drift 检查） |
 | Compose contracts | base/competition/CPU-RC/slurm-host/app-node passed |
-| Source acceptance (be9bb93, seal mode) | 12/12 PASS：uv_sync、npm_ci、ruff、mypy、pytest、typecheck、vitest、playwright、build、static_drift、compose_config、sync_drift |
-| Runtime acceptance (be9bb93, seal mode) | 10/10 PASS：manifest_validate、import_images、start_stack、compose_readiness、check_cpu_rc、auto_capsule、rule_remediation、restart_recovery、image_binding、report |
-| Local seal acceptance (be9bb93) | be9bb93 验收证据已全绿（source 12/12 + runtime 10/10，同一 SHA，seal mode）；round-4 P1（output baseline + verified_success 语义）+ round-5 P1（API stores 注入 + 同 SHA 报告）+ round-6 P1（verification dependency fail-closed / baseline bounds / seal-mode JSON）+ round-7 P1（baseline 硬时间预算 / seal JSON 异常状态 / image-binding fail-closed）已闭环 |
-| GitHub CI | 当前可用 connector 未返回 `be9bb93` 的 workflow run；本地 seal 验收已全绿，GitHub Actions 独立验证待 workflow run ID/check URL 补录 |
+| Source acceptance (29af845, seal mode) | 12/12 PASS：uv_sync、npm_ci、ruff、mypy、pytest、typecheck、vitest、playwright、build、static_drift、compose_config、sync_drift |
+| Runtime acceptance (29af845, seal mode) | 10/10 PASS：manifest_validate、import_images、start_stack、compose_readiness、check_cpu_rc、auto_capsule、rule_remediation、restart_recovery、image_binding、report |
+| Local seal acceptance (29af845) | 29af845 验收证据已全绿（source 12/12 + runtime 10/10，同一 SHA，seal mode）；round-4 P1（output baseline + verified_success 语义）+ round-5 P1（API stores 注入 + 同 SHA 报告）+ round-6 P1（verification dependency fail-closed / baseline bounds / seal-mode JSON）+ round-7 P1（baseline 硬时间预算 / seal JSON 异常状态 / image-binding fail-closed）+ round-8 P1（baseline attribution fail-closed / lease-aware baseline 预算）已闭环，模拟 Slurm 阶段封版为无条件 GO |
+| GitHub CI | 当前可用 connector 未返回 `29af845` 的 workflow run；本地 seal 验收已全绿，GitHub Actions 独立验证待 workflow run ID/check URL 补录 |
 
 完整测试已在允许本机回环 socket 的执行环境通过；受限沙箱内同一套代码仅有 7 个回环 HTTP 测试因 `PermissionError` 不能绑定端口，不是代码失败。项目已在 `pyproject.toml` 固定 `src` import path，不依赖隐式 `PYTHONPATH`。
 
@@ -64,5 +64,5 @@ Docker、fake/replay LLM 和本地 command gateway 的结果不得表述为真�
 
 1. Run、Remediation、Template 等业务 Store 仍以 SQLite 为主，尚未完成全领域 PostgreSQL parity/接线；
 2. Prometheus 长期 retention/firing 与在线供应链扫描仍需目标运维/CI 环境验证；
-3. CPU-RC 早期 revision 已在 S1 (8C/16G VM) 部署并通过 G3 功能链；发布 revision `be9bb93933a0cb827876f4042edee0d600176f75` 的 source acceptance (12/12) + runtime acceptance (10/10) 已在同一 SHA 全绿（seal mode）；round-4 P1（output baseline + verified_success 语义）+ round-5 P1（API stores 注入 + 同 SHA 报告）+ round-6 P1（verification dependency fail-closed / baseline bounds / seal-mode JSON）+ round-7 P1（baseline 硬时间预算 / seal JSON 异常状态 / image-binding fail-closed）已闭环；
+3. CPU-RC 早期 revision 已在 S1 (8C/16G VM) 部署并通过 G3 功能链；发布 revision `29af8451c8d9bcb12f0afd5b3d80481f5214bc24` 的 source acceptance (12/12) + runtime acceptance (10/10) 已在同一 SHA 全绿（seal mode）；round-4 P1（output baseline + verified_success 语义）+ round-5 P1（API stores 注入 + 同 SHA 报告）+ round-6 P1（verification dependency fail-closed / baseline bounds / seal-mode JSON）+ round-7 P1（baseline 硬时间预算 / seal JSON 异常状态 / image-binding fail-closed）+ round-8 P1（baseline attribution fail-closed / lease-aware baseline 预算）已闭环，模拟 Slurm 阶段封版为无条件 GO；
 4. 真实身份和真实 107 均不在当前已验证能力内，亦不属于本阶段验收范围。
