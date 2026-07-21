@@ -36,6 +36,16 @@ if command -v munged >/dev/null 2>&1; then
   done
 fi
 
+# JWT HS256 signing key: generated on first container start (NOT baked into
+# the image, so the image is deterministic). Shared by slurmctld (signs
+# scontrol tokens) and slurmrestd (verifies). 32 random bytes, owner
+# slurm:slurm, mode 0400. Must exist before slurmctld starts.
+if [ ! -f /etc/slurm/jwt_hs256.key ]; then
+  dd if=/dev/urandom of=/etc/slurm/jwt_hs256.key bs=32 count=1 2>/dev/null
+  chown slurm:slurm /etc/slurm/jwt_hs256.key
+  chmod 0400 /etc/slurm/jwt_hs256.key
+fi
+
 start_mariadb() {
   if [ ! -d /var/lib/mysql/mysql ]; then
     mariadb-install-db --user=mysql --datadir=/var/lib/mysql >/dev/null

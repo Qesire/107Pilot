@@ -36,6 +36,19 @@ FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebff
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# APT reproducibility: the base ubuntu:24.04 digest is pinned above (round 10),
+# but apt package versions drift as the 24.04 repo is updated. The slurm-wlm
+# family is the highest-risk drift (it is the core of the simulator and the
+# plugin ABI must match). Pin all slurm-* packages to the exact version
+# available in the pinned base snapshot (23.11.4-1.2ubuntu5 as of 2026-07-21).
+# Other packages (gosu, mariadb, munge, tini, etc.) are left unpinned — their
+# versions don't affect simulator behavioural fidelity and pinning them would
+# require maintaining a much larger version manifest. The base digest pin +
+# slurm-wlm version pin together give practical (not mathematical)
+# reproducibility for the simulator image. A full apt snapshot
+# (snapshot.ubuntu.com) would give mathematical reproducibility but risks
+# breaking the build if the snapshot URL format changes, so we accept the
+# practical level here.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -45,10 +58,10 @@ RUN apt-get update \
         munge \
         python3 \
         python-is-python3 \
-        slurm-client \
-        slurm-wlm \
-        slurmdbd \
-        slurmrestd \
+        slurm-client=23.11.4-1.2ubuntu5 \
+        slurm-wlm=23.11.4-1.2ubuntu5 \
+        slurmdbd=23.11.4-1.2ubuntu5 \
+        slurmrestd=23.11.4-1.2ubuntu5 \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
@@ -95,13 +108,12 @@ RUN chown slurm:slurm /etc/slurm/slurmdbd.conf \
     && chmod 0600 /etc/slurm/slurmdbd.conf \
     && rm -f /etc/slurm/cgroup.conf
 
-# JWT HS256 signing key shared by slurmctld (signs scontrol token) and
-# slurmrestd (verifies). Baked into the image so every container that uses
-# this image shares the same key (no host bind-mount / permission issues).
-# 32 random bytes, owner slurm:slurm, mode 0400.
-RUN dd if=/dev/urandom of=/etc/slurm/jwt_hs256.key bs=32 count=1 \
-    && chown slurm:slurm /etc/slurm/jwt_hs256.key \
-    && chmod 0400 /etc/slurm/jwt_hs256.key
+# JWT HS256 signing key: NOT baked into the image (that would make every clean
+# build produce a different image digest due to /dev/urandom). Instead, the
+# entrypoint generates /etc/slurm/jwt_hs256.key on first container start (see
+# docker-entrypoint.sh). Every CONTAINER gets its own key, but the IMAGE is
+# deterministic. The key must exist before slurmctld starts (it signs scontrol
+# tokens) — the entrypoint generates it before dispatching to any slurm daemon.
 
 COPY munge.key.base64 /tmp/munge.key.base64
 RUN base64 -d /tmp/munge.key.base64 > /etc/munge/munge.key \

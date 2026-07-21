@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pilot107.adapters.slurm import InMemorySlurmBackend, SlurmSubmissionRejected, SubmitIntent
 from pilot107.core.contracts import ContractStore
@@ -851,12 +852,55 @@ class BaselineCaptureTests(unittest.TestCase):
         self.assertEqual(payload["baseline_status"], "unavailable")
         self.assertEqual(payload["error_code"], "baseline_insufficient_lease")
 
-    def test_baseline_budget_unparseable_lease_falls_back(self) -> None:
-        # Round-8 P1-2: unparseable lease_expires_at → fall back to configured.
+    def test_baseline_budget_unparseable_lease_fails_closed(self) -> None:
+        # Round-11 P1-2: unparseable lease_expires_at → FAIL-CLOSED (not the
+        # round-8 fail-open configured-lease fallback). The real remaining
+        # lease is unknown; returning insufficient_lease=True makes
+        # _capture_baseline skip baseline with error_code=
+        # baseline_lease_unparseable, so remediation gets baseline_unavailable
+        # for expected outputs → UNVERIFIED, never a false green.
         service = self._service()
         budget, insufficient = service._baseline_budget("not-a-timestamp")
-        self.assertFalse(insufficient)
-        self.assertEqual(budget, 30.0)  # default 60s lease → min(30, 45) = 30
+        self.assertTrue(insufficient)
+        self.assertEqual(budget, 0.0)
+
+    def test_baseline_skipped_with_unparseable_lease_error_code(self) -> None:
+        # Round-11 P1-2: unparseable lease_expires_at at _capture_baseline →
+        # baseline_status=unavailable + error_code=baseline_lease_unparseable.
+        contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {
+                    "command": "true",
+                    "expected_outputs": ["result.txt"],
+                },
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+        run = self.run_store.create_run(
+            run_id="run_test_unparseable_lease",
+            owner="alice",
+            workdir=str(self.workdir),
+            script="true",
+            contract_id=contract.contract_id,
+        )
+        service = self._service()
+        service._capture_baseline(run, lease_expires_at="not-a-timestamp")
+        payload = json.loads(
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(payload["baseline_status"], "unavailable")
+        self.assertEqual(payload["error_code"], "baseline_lease_unparseable")
 
     def test_baseline_failed_writes_payload_with_error_code(self) -> None:
         # Round-7 P2-1: an exception during capture writes baseline.json with
@@ -910,6 +954,381 @@ class BaselineCaptureTests(unittest.TestCase):
         payload = json.loads(baseline_path.read_text(encoding="utf-8"))
         self.assertEqual(payload["baseline_status"], "failed")
         self.assertEqual(payload["error_code"], "baseline_exception")
+
+
+class BaselineStatClassificationTests(unittest.TestCase):
+    """Round-11 P1-1: a non-ENOENT stat/OSError must NOT become exists=false.
+
+    Only confirmed FileNotFoundError / ENOENT produces a trusted
+    ``_baseline_missing`` entry. Permission denied, I/O error, and other
+    failures carry ``status="error"`` (or ``"timeout"``) so evidence.py's
+    ``_baseline_entry_unavailable`` rejects them as ``baseline_unavailable``
+    instead of letting a pre-existing file appear as ``created`` (false
+    verified_success).
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self._tmp.name) / "pilot107.db"
+        self.evidence_root = Path(self._tmp.name) / "evidence"
+        self.run_store = RunStore(self.db_path)
+        self.contract_store = ContractStore(self.db_path)
+        self.evidence_store = EvidenceStore(self.evidence_root)
+        self.workdir = Path(self._tmp.name) / "workdir"
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        self.contract = self.contract_store.create_contract(
+            owner="alice",
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            payload={
+                "project": {"workdir": str(self.workdir)},
+                "entry": {"command": "true", "expected_outputs": ["result.txt"]},
+                "resources": {
+                    "partition": "debug",
+                    "qos": "normal",
+                    "nodes": 1,
+                    "ntasks": 1,
+                    "cpus_per_task": 1,
+                    "time_limit": "00:05:00",
+                },
+            },
+        )
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _make_run(self, run_id: str):
+        return self.run_store.create_run(
+            run_id=run_id,
+            owner="alice",
+            workdir=str(self.workdir),
+            script="true",
+            contract_id=self.contract.contract_id,
+        )
+
+    def _service(self, **kwargs) -> RunService:
+        return RunService(
+            store=self.run_store,
+            backend=InMemorySlurmBackend(),
+            contract_store=self.contract_store,
+            evidence_store=self.evidence_store,
+            **kwargs,
+        )
+
+    def _capture(self, service: RunService, run, **kwargs) -> dict:
+        service._capture_baseline(run, **kwargs)
+        return json.loads(
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
+            .read_text(encoding="utf-8")
+        )
+
+    def test_local_stat_permission_error_is_status_error(self) -> None:
+        # Pre-existing file: os.stat raises PermissionError (EACCES). Must NOT
+        # be treated as missing (exists=false) — that would let the final file
+        # appear as "created". Entry carries status=error + errno_13.
+        run = self._make_run("run_stat_eacces")
+        service = self._service()
+        with patch("pilot107.core.run_service.os.stat", side_effect=PermissionError(13, "denied")):
+            payload = self._capture(service, run)
+        entry = payload["entries"][0]
+        self.assertEqual(entry["status"], "error")
+        self.assertEqual(entry["error_code"], "errno_13")
+        self.assertNotIn("exists", entry)
+
+    def test_local_stat_io_error_is_status_error(self) -> None:
+        # os.stat raises OSError(EIO). status=error + errno_5.
+        run = self._make_run("run_stat_eio")
+        service = self._service()
+        with patch(
+            "pilot107.core.run_service.os.stat",
+            side_effect=OSError(5, "I/O error"),
+        ):
+            payload = self._capture(service, run)
+        entry = payload["entries"][0]
+        self.assertEqual(entry["status"], "error")
+        self.assertEqual(entry["error_code"], "errno_5")
+
+    def test_local_stat_filenotfound_is_baseline_missing(self) -> None:
+        # Genuine FileNotFoundError → _baseline_missing (no status, exists=false).
+        # This is the ONLY path to a trusted exists=false entry.
+        run = self._make_run("run_stat_enoent")
+        service = self._service()
+        with patch(
+            "pilot107.core.run_service.os.stat",
+            side_effect=FileNotFoundError(2, "no such file"),
+        ):
+            payload = self._capture(service, run)
+        entry = payload["entries"][0]
+        self.assertNotIn("status", entry)
+        self.assertFalse(entry["exists"])
+        self.assertIsNone(entry["sha256"])
+
+    def test_simulator_stat_enoent_is_baseline_missing(self) -> None:
+        from pilot107.adapters.slurm import CommandResult
+
+        class FakeExecutor:
+            def run(self, argv, *, cwd=None, user=None, stdin=None, timeout_seconds=10.0):
+                return CommandResult(
+                    returncode=1,
+                    stdout="",
+                    stderr="stat: cannot statx 'result.txt': No such file or directory",
+                )
+
+            def realpath(self, path, *, timeout_seconds=10.0):
+                return path
+
+            def write_text(self, *, path, content, owner, timeout_seconds=10.0):
+                return None
+
+        run = self._make_run("run_sim_enoent")
+        service = self._service(baseline_executor=FakeExecutor())
+        payload = self._capture(service, run)
+        entry = payload["entries"][0]
+        self.assertNotIn("status", entry)
+        self.assertFalse(entry["exists"])
+
+    def test_simulator_stat_permission_denied_is_status_error(self) -> None:
+        from pilot107.adapters.slurm import CommandResult
+
+        class FakeExecutor:
+            def run(self, argv, *, cwd=None, user=None, stdin=None, timeout_seconds=10.0):
+                return CommandResult(
+                    returncode=1, stdout="", stderr="stat: cannot stat: Permission denied",
+                )
+
+            def realpath(self, path, *, timeout_seconds=10.0):
+                return path
+
+            def write_text(self, *, path, content, owner, timeout_seconds=10.0):
+                return None
+
+        run = self._make_run("run_sim_eacces")
+        service = self._service(baseline_executor=FakeExecutor())
+        payload = self._capture(service, run)
+        entry = payload["entries"][0]
+        self.assertEqual(entry["status"], "error")
+        self.assertEqual(entry["error_code"], "stat_permission_denied")
+
+    def test_simulator_stat_timeout_is_status_timeout(self) -> None:
+        from pilot107.adapters.slurm import CommandResult
+
+        class FakeExecutor:
+            def run(self, argv, *, cwd=None, user=None, stdin=None, timeout_seconds=10.0):
+                return CommandResult(
+                    returncode=124, stdout="", stderr="command timed out",
+                )
+
+            def realpath(self, path, *, timeout_seconds=10.0):
+                return path
+
+            def write_text(self, *, path, content, owner, timeout_seconds=10.0):
+                return None
+
+        run = self._make_run("run_sim_timeout")
+        service = self._service(baseline_executor=FakeExecutor())
+        payload = self._capture(service, run)
+        entry = payload["entries"][0]
+        self.assertEqual(entry["status"], "timeout")
+        self.assertEqual(entry["error_code"], "stat_timeout")
+
+    def test_simulator_stat_unclassified_is_status_error(self) -> None:
+        from pilot107.adapters.slurm import CommandResult
+
+        class FakeExecutor:
+            def run(self, argv, *, cwd=None, user=None, stdin=None, timeout_seconds=10.0):
+                # Non-zero, no recognizable marker → fail-closed as error.
+                return CommandResult(returncode=2, stdout="", stderr="weird gateway hiccup")
+
+            def realpath(self, path, *, timeout_seconds=10.0):
+                return path
+
+            def write_text(self, *, path, content, owner, timeout_seconds=10.0):
+                return None
+
+        run = self._make_run("run_sim_unclassified")
+        service = self._service(baseline_executor=FakeExecutor())
+        payload = self._capture(service, run)
+        entry = payload["entries"][0]
+        self.assertEqual(entry["status"], "error")
+        self.assertEqual(entry["error_code"], "stat_unclassified")
+
+
+class SubmissionLeaseEnforcementTests(unittest.TestCase):
+    """Round-11 P1-2: renew-before-submit + receipt lease check (fake clock).
+
+    Uses the real ControlRepository (sqlite) with an outbox message and a
+    stub backend to prove the lease is renewed before submit and the receipt
+    is refused when the lease expired during submit.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db_path = Path(self._tmp.name) / "pilot107.db"
+        self.run_store = RunStore(self.db_path)
+        self.contract_store = ContractStore(self.db_path)
+        self.evidence_store = EvidenceStore(Path(self._tmp.name) / "evidence")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_renew_before_submit_proceeds_with_fresh_lease(self) -> None:
+        from pilot107.core.control_repository import SQLiteControlRepository
+        from pilot107.core.run_service import _SUBMIT_LEASE_RESERVE_SECONDS
+
+        repo = SQLiteControlRepository(self.db_path)
+        # Enqueue + claim a submission outbox message.
+        message, _ = repo.enqueue(
+            message_id="msg_renew_ok",
+            topic="run.submit",
+            aggregate_id="run_renew_ok",
+            payload={"run_id": "run_renew_ok"},
+        )
+        claimed = repo.claim_outbox_message(
+            message_id=message.message_id,
+            owner="dispatcher-a",
+            lease_seconds=60,
+        )
+        assert claimed is not None
+        renew_calls: list[int] = []
+
+        class RecordingRepo(SQLiteControlRepository):
+            def renew_outbox(self, *, message_id, owner, fencing_token, lease_seconds):
+                renew_calls.append(fencing_token)
+                return super().renew_outbox(
+                    message_id=message_id,
+                    owner=owner,
+                    fencing_token=fencing_token,
+                    lease_seconds=lease_seconds,
+                )
+
+        recording_repo = RecordingRepo(self.db_path)
+        service = RunService(
+            store=self.run_store,
+            backend=InMemorySlurmBackend(),
+            control_repository=recording_repo,
+            submission_lease_seconds=60,
+        )
+        renewed = service._renew_lease_for_submit(claimed)
+        self.assertEqual(renew_calls, [claimed.fencing_token])
+        # Renewed lease must have at least the reserve remaining.
+        remaining = service._lease_remaining_seconds(renewed.lease_expires_at)
+        self.assertIsNotNone(remaining)
+        self.assertGreaterEqual(remaining or 0.0, _SUBMIT_LEASE_RESERVE_SECONDS)
+        # Sanity: the not-expired path does NOT raise.
+        service._assert_lease_valid_for_receipt(renewed)
+
+    def test_renew_returns_expired_lease_aborts_submit(self) -> None:
+        # When the renewed lease's remaining time is below the submit reserve,
+        # _renew_lease_for_submit raises SubmissionLeaseExpiredError (no submit).
+        from datetime import UTC, datetime, timedelta
+
+        from pilot107.core.control_repository import OutboxMessage
+        from pilot107.core.run_service import (
+            RunService,
+            SubmissionLeaseExpiredError,
+        )
+
+        # A message whose renewed expiry is already in the past.
+        expired = OutboxMessage(
+            message_id="m1",
+            topic="run.submit",
+            aggregate_id="run1",
+            payload={"run_id": "run1"},
+            state="running",
+            available_at=datetime.now(UTC).isoformat(),
+            lease_owner="dispatcher-a",
+            lease_expires_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+            fencing_token=1,
+            attempts=0,
+            last_error=None,
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
+        )
+
+        class _StubRepo:
+            def renew_outbox(self, *, message_id, owner, fencing_token, lease_seconds):
+                return expired
+
+        service = RunService(
+            store=self.run_store,
+            backend=InMemorySlurmBackend(),
+            control_repository=_StubRepo(),  # type: ignore[arg-type]
+            submission_lease_seconds=60,
+        )
+        with self.assertRaises(SubmissionLeaseExpiredError):
+            service._renew_lease_for_submit(expired)
+
+    def test_receipt_refused_when_lease_expired_during_submit(self) -> None:
+        # After submit returns, the lease check refuses to persist the receipt
+        # if the lease expired mid-submit.
+        from datetime import UTC, datetime, timedelta
+
+        from pilot107.core.control_repository import OutboxMessage
+        from pilot107.core.run_service import (
+            RunService,
+            SubmissionLeaseExpiredError,
+        )
+
+        service = RunService(
+            store=self.run_store,
+            backend=InMemorySlurmBackend(),
+            submission_lease_seconds=60,
+        )
+        expired = OutboxMessage(
+            message_id="m2",
+            topic="run.submit",
+            aggregate_id="run2",
+            payload={"run_id": "run2"},
+            state="running",
+            available_at=datetime.now(UTC).isoformat(),
+            lease_owner="dispatcher-a",
+            lease_expires_at=(datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+            fencing_token=1,
+            attempts=0,
+            last_error=None,
+            created_at=datetime.now(UTC).isoformat(),
+            updated_at=datetime.now(UTC).isoformat(),
+        )
+        with self.assertRaises(SubmissionLeaseExpiredError):
+            service._assert_lease_valid_for_receipt(expired)
+
+    def test_multi_dispatcher_renew_raises_fence_for_lower_token(self) -> None:
+        # Dispatcher A holds the fence; dispatcher B cannot renew A's message
+        # (renew checks lease_owner + fencing_token). A's renew succeeds and
+        # keeps its token; B's renew on A's message raises ControlRepositoryConflict.
+        from pilot107.core.control_repository import (
+            ControlRepositoryConflict,
+            SQLiteControlRepository,
+        )
+
+        repo = SQLiteControlRepository(self.db_path)
+        message, _ = repo.enqueue(
+            message_id="msg_fence",
+            topic="run.submit",
+            aggregate_id="run_fence",
+            payload={"run_id": "run_fence"},
+        )
+        claimed = repo.claim_outbox_message(
+            message_id=message.message_id,
+            owner="dispatcher-a",
+            lease_seconds=60,
+        )
+        assert claimed is not None
+        # A renews — succeeds, same token.
+        renewed = repo.renew_outbox(
+            message_id=message.message_id,
+            owner="dispatcher-a",
+            fencing_token=claimed.fencing_token,
+            lease_seconds=60,
+        )
+        self.assertEqual(renewed.fencing_token, claimed.fencing_token)
+        # B tries to renew A's message with a DIFFERENT token → conflict.
+        with self.assertRaises(ControlRepositoryConflict):
+            repo.renew_outbox(
+                message_id=message.message_id,
+                owner="dispatcher-b",
+                fencing_token=claimed.fencing_token + 1,
+                lease_seconds=60,
+            )
 
 
 if __name__ == "__main__":

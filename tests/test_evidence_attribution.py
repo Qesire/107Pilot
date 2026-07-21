@@ -307,6 +307,76 @@ class ComputeFileAttributionTests(unittest.TestCase):
         )
         self.assertEqual(result["attribution"], "created")
 
+    # Round-11 P1-1: the new stat-classification error codes (errno_13,
+    # errno_5, stat_permission_denied, stat_timeout, stat_unclassified,
+    # sha256_read_failed) all carry a truthy ``status`` key, so
+    # _baseline_entry_unavailable rejects them → baseline_unavailable. These
+    # prove the round-11 fix closes the false-green where a non-ENOENT stat
+    # error became exists=false → created.
+
+    def test_baseline_errno_13_with_final_is_baseline_unavailable(self) -> None:
+        # PermissionError on os.stat → status=error, error_code=errno_13.
+        result = compute_file_attribution(
+            mtime_epoch=1000.0,
+            started_at_epoch=500.0,
+            relative_path="r",
+            expected_outputs=["r"],
+            baseline_entry={"path": "r", "status": "error", "error_code": "errno_13"},
+            is_expected=True,
+            final_sha256="abc",
+        )
+        self.assertEqual(result["attribution"], "baseline_unavailable")
+
+    def test_baseline_errno_5_with_final_is_baseline_unavailable(self) -> None:
+        # OSError(EIO) on os.stat → status=error, error_code=errno_5.
+        result = compute_file_attribution(
+            mtime_epoch=1000.0,
+            started_at_epoch=500.0,
+            relative_path="r",
+            expected_outputs=["r"],
+            baseline_entry={"path": "r", "status": "error", "error_code": "errno_5"},
+            is_expected=True,
+            final_sha256="abc",
+        )
+        self.assertEqual(result["attribution"], "baseline_unavailable")
+
+    def test_baseline_stat_unclassified_with_final_is_baseline_unavailable(self) -> None:
+        # Simulator non-zero stat with no recognizable marker →
+        # status=error, error_code=stat_unclassified (fail-closed default).
+        result = compute_file_attribution(
+            mtime_epoch=1000.0,
+            started_at_epoch=500.0,
+            relative_path="r",
+            expected_outputs=["r"],
+            baseline_entry={
+                "path": "r",
+                "status": "error",
+                "error_code": "stat_unclassified",
+            },
+            is_expected=True,
+            final_sha256="abc",
+        )
+        self.assertEqual(result["attribution"], "baseline_unavailable")
+
+    def test_baseline_sha256_read_failed_with_final_is_baseline_unavailable(self) -> None:
+        # stat succeeded but sha256sum/open failed → status=error,
+        # error_code=sha256_read_failed. Previously returned exists=True,
+        # sha=None → false ``unchanged``; now baseline_unavailable.
+        result = compute_file_attribution(
+            mtime_epoch=1000.0,
+            started_at_epoch=500.0,
+            relative_path="r",
+            expected_outputs=["r"],
+            baseline_entry={
+                "path": "r",
+                "status": "error",
+                "error_code": "sha256_read_failed",
+            },
+            is_expected=True,
+            final_sha256="abc",
+        )
+        self.assertEqual(result["attribution"], "baseline_unavailable")
+
 
 if __name__ == "__main__":
     unittest.main()

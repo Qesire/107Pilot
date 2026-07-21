@@ -169,6 +169,17 @@ class SubmissionRecoveryRequiredError(SlurmBackendError):
     pass
 
 
+class SubmissionLeaseExpiredError(SlurmBackendError):
+    """Round-11 P1-2: the outbox submission lease expired (or is too close to
+    expiry) before/during submit. Raised by the renew-before-submit and the
+    receipt-persistence lease checks so the run is NOT persisted with a stale
+    fencing token; the outbox message is retried / re-claimed with a fresh
+    token. Subclasses :class:`SlurmBackendError` so existing handlers apply.
+    """
+
+    pass
+
+
 class BaselineEvidenceSink(Protocol):
     """Minimal evidence-store interface needed for baseline capture.
 
@@ -225,6 +236,7 @@ class RunService:
         contract_store: ContractStore | None = None,
         evidence_store: BaselineEvidenceSink | None = None,
         baseline_executor: SimulatorExecutor | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.store = store
         self.backend = backend
@@ -256,6 +268,21 @@ class RunService:
         self.contract_store = contract_store
         self.evidence_store = evidence_store
         self.baseline_executor = baseline_executor
+        # Round-11 P1-2: the lease-renew + remaining-time checks MUST use the
+        # SAME clock the control_repository uses to compute lease expiries.
+        # If they used real wall-clock time while the repository uses a frozen
+        # /injected clock (as tests do), the renewed expiry would always look
+        # expired. Derive the clock from the explicit arg, then from the
+        # repository's injected clock (when it exposes one), then real time.
+        if clock is not None:
+            self._clock = clock
+        elif control_repository is not None and hasattr(control_repository, "_clock"):
+            # hasattr guards the runtime access; ruff B009 forbids constant-attr
+            # getattr, but direct access needs a type:ignore for mypy. Use getattr
+            # with a noqa to satisfy ruff without widening the callable type.
+            self._clock = getattr(control_repository, "_clock")  # noqa: B009
+        else:
+            self._clock = lambda: datetime.now(UTC)
 
     def submit(self, request: RunSubmitRequest) -> RunRecord:
         run = self.prepare(request)
@@ -427,6 +454,81 @@ class RunService:
             raise
         return self.store.apply_submit_receipt(run_id, receipt)
 
+    def _renew_lease_for_submit(self, message: OutboxMessage) -> OutboxMessage:
+        """Round-11 P1-2: renew the outbox lease right before ``backend.submit``.
+
+        Baseline capture can consume most of the original lease; without a
+        renew, a second dispatcher may claim a higher fencing token while this
+        dispatcher's submit is in flight, and the receipt write is then
+        rejected (or worse, persists with a stale token). Renewing here obtains
+        a fresh ``lease_expires_at`` (the renew SQL raises the fence only if
+        the current owner still holds it — a fenced renew raises
+        ``ControlRepositoryConflict``). We then verify the renewed lease has
+        enough remaining time to cover submit + receipt; if not, we fail-closed
+        (raise ``SubmissionLeaseExpiredError``) so the message is retried /
+        re-claimed instead of submitting under an expiring fence.
+
+        Returns the renewed ``OutboxMessage`` (with the fresh
+        ``lease_expires_at``). The caller MUST use this renewed message's
+        lease_owner / fencing_token for the receipt write.
+        """
+        assert message.lease_owner is not None
+        if self.control_repository is None:
+            return message
+        renewed = self.control_repository.renew_outbox(
+            message_id=message.message_id,
+            owner=message.lease_owner,
+            fencing_token=message.fencing_token,
+            lease_seconds=self.submission_lease_seconds,
+        )
+        remaining = self._lease_remaining_seconds(renewed.lease_expires_at)
+        if remaining is None or remaining < _SUBMIT_LEASE_RESERVE_SECONDS:
+            # Renew succeeded but the new expiry is still too close (clock
+            # skew, or a tiny configured lease). Do NOT submit — fail-closed.
+            raise SubmissionLeaseExpiredError(
+                "outbox lease remaining after renew is below submit reserve "
+                f"({remaining} < {_SUBMIT_LEASE_RESERVE_SECONDS})"
+            )
+        return renewed
+
+    def _lease_remaining_seconds(self, lease_expires_at: str | None) -> float | None:
+        """Return remaining lease seconds, or None if unparseable / missing.
+
+        Round-11 P1-2: uses ``self._clock`` (derived from the control
+        repository's clock) so the remaining-time check is consistent with the
+        expiry the repository wrote under the same clock.
+        """
+        if lease_expires_at is None:
+            return None
+        try:
+            expires_at = datetime.fromisoformat(lease_expires_at)
+        except (ValueError, TypeError):
+            return None
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        now = self._clock()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        return (expires_at - now).total_seconds()
+
+    def _assert_lease_valid_for_receipt(self, message: OutboxMessage) -> None:
+        """Round-11 P1-2: refuse to persist a receipt with a stale lease.
+
+        After ``backend.submit`` returns, the lease may have expired during
+        the submit call. Persisting the receipt with the original fencing
+        token would be fail-OPEN (a higher token may already own the fence).
+        We re-check ``lease_expires_at > now``; if not, the run is left in
+        SUBMITTING and ``SubmissionLeaseExpiredError`` is raised so the outbox
+        retry / re-claim path takes over with a fresh token. (The renew before
+        submit makes this path rare; it is the last-resort guard.)
+        """
+        remaining = self._lease_remaining_seconds(message.lease_expires_at)
+        if remaining is None or remaining <= 0.0:
+            raise SubmissionLeaseExpiredError(
+                "outbox lease expired before receipt persistence; refusing to "
+                "persist with a stale fencing token"
+            )
+
     def _execute_submission_message(self, message: OutboxMessage) -> RunRecord:
         if self.control_repository is None:
             raise RuntimeError("control repository is unavailable")
@@ -465,6 +567,22 @@ class RunService:
                 return recovered
 
         self._capture_baseline(run, lease_expires_at=message.lease_expires_at)
+        # Round-11 P1-2: renew the outbox lease right before submit. Baseline
+        # may have consumed most of the original lease; renewing obtains a
+        # fresh expiry (and raises the fence) so a concurrent dispatcher can't
+        # claim a higher token while our submit is in flight. If the renewed
+        # lease is still too close to expiry, fail-closed (no submit). On
+        # renew conflict the fence was already taken — fail the submission.
+        try:
+            message = self._renew_lease_for_submit(message)
+        except ControlRepositoryConflict as exc:
+            self._fail_fenced_submission(
+                message,
+                run_id=run_id,
+                state=RunState.SUBMIT_FAILED,
+                event_type="run.submit_failed",
+            )
+            raise SubmissionInProgressError(str(exc)) from exc
         submitted_after = time.time()
         try:
             receipt = self.backend.submit(intent)
@@ -476,6 +594,20 @@ class RunService:
                 submitted_after,
             )
         except SlurmBackendError:
+            self._fail_fenced_submission(
+                message,
+                run_id=run_id,
+                state=RunState.SUBMIT_FAILED,
+                event_type="run.submit_failed",
+            )
+            raise
+        # Round-11 P1-2: refuse to persist the receipt if the lease expired
+        # during submit. Persisting with a stale fencing token would be
+        # fail-OPEN; leave the run in SUBMITTING and let the outbox retry /
+        # re-claim path take over with a fresh token.
+        try:
+            self._assert_lease_valid_for_receipt(message)
+        except SubmissionLeaseExpiredError:
             self._fail_fenced_submission(
                 message,
                 run_id=run_id,
@@ -755,7 +887,21 @@ class RunService:
         budget, insufficient_lease = self._baseline_budget(lease_expires_at)
         if insufficient_lease or budget <= _BASELINE_MIN_POSITIVE_BUDGET:
             # Insufficient remaining lease — record unavailable rather than
-            # risk expiring the submission fence.
+            # risk expiring the submission fence. Round-11 P1-2 distinguishes
+            # an unparseable lease (unknown remaining → fail-closed) from a
+            # genuinely-too-small remaining lease.
+            if insufficient_lease and lease_expires_at is not None:
+                try:
+                    datetime.fromisoformat(lease_expires_at)
+                    lease_error_code = "baseline_insufficient_lease"
+                except (ValueError, TypeError):
+                    lease_error_code = "baseline_lease_unparseable"
+            else:
+                lease_error_code = (
+                    "baseline_insufficient_lease"
+                    if insufficient_lease
+                    else "baseline_insufficient_budget"
+                )
             self._write_baseline_payload(
                 run,
                 captured_at_epoch,
@@ -765,11 +911,7 @@ class RunService:
                 timeout=False,
                 baseline_status="unavailable",
                 entries=[],
-                error_code=(
-                    "baseline_insufficient_lease"
-                    if insufficient_lease
-                    else "baseline_insufficient_budget"
-                ),
+                error_code=lease_error_code,
             )
             return
         deadline = time.monotonic() + budget
@@ -870,13 +1012,17 @@ class RunService:
             try:
                 expires_at = datetime.fromisoformat(lease_expires_at)
             except (ValueError, TypeError):
-                # Unparseable expiry → cannot compute remaining lease; fall back
-                # to the configured-lease budget (safe default).
-                lease_budget = (
-                    self.submission_lease_seconds - _BASELINE_LEASE_RESERVE_SECONDS
-                )
-                return min(_BASELINE_TIME_BUDGET_SECONDS, lease_budget), False
-            now = datetime.now(UTC)
+                # Round-11 P1-2: unparseable lease → FAIL-CLOSED. The real
+                # remaining lease is unknown; falling back to the configured
+                # lease budget (the round-8 behavior) is fail-OPEN because
+                # baseline could consume time we don't have, expiring the
+                # submission fence. Return (0.0, insufficient_lease=True) so
+                # _capture_baseline skips baseline and records
+                # error_code="baseline_lease_unparseable". Remediation then
+                # gets baseline_unavailable for expected outputs → UNVERIFIED,
+                # never a false green.
+                return 0.0, True
+            now = self._clock()
             if expires_at.tzinfo is None:
                 # Naive ISO timestamp — assume UTC (the control repository
                 # stores UTC timestamps).
@@ -947,7 +1093,15 @@ class RunService:
                 timeout_seconds=stat_timeout,
             )
             if stat.returncode != 0:
-                return _baseline_missing(relative_path)
+                # Round-11 P1-1: classify the failure instead of blanket-treating
+                # any non-zero stat as missing. Only ENOENT → _baseline_missing
+                # (trusted exists=false); permission/timeout/other → status-bearing
+                # entry that evidence.py rejects as baseline_unavailable.
+                return _classify_stat_failure(
+                    relative_path,
+                    returncode=stat.returncode,
+                    stderr=stat.stderr,
+                )
             size_str, mtime_str = stat.stdout.strip().split("|", 1)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -955,6 +1109,17 @@ class RunService:
             sha = _baseline_sha256(executor, run, absolute, deadline)
             if sha == "timeout":
                 return {"path": relative_path, "status": "timeout"}
+            if sha is None:
+                # Round-11 P1-1: stat proved the file exists but sha256sum failed
+                # (permission denied reading content, I/O error). Returning
+                # exists=True + sha=None would let attribution classify a
+                # matching final as ``unchanged`` (false green). Carry
+                # status="error" so the entry is rejected as baseline_unavailable.
+                return {
+                    "path": relative_path,
+                    "status": "error",
+                    "error_code": "sha256_read_failed",
+                }
             return {
                 "path": relative_path,
                 "exists": True,
@@ -971,13 +1136,25 @@ class RunService:
             return {"path": relative_path, "status": "timeout"}
         try:
             st = os.stat(absolute)
-        except OSError:
+        except FileNotFoundError:
+            # Round-11 P1-1: ONLY confirmed ENOENT produces a trusted
+            # exists=false baseline entry. Other OSErrors (permission denied,
+            # I/O error, transient FS fault) carry status="error" so evidence.py
+            # rejects them as baseline_unavailable instead of letting a
+            # pre-existing file appear as "created" (false verified_success).
             return _baseline_missing(relative_path)
+        except OSError as exc:
+            return {
+                "path": relative_path,
+                "status": "error",
+                "error_code": f"errno_{exc.errno}",
+            }
         # Round-7 P1-1: chunked SHA256 streaming with a per-chunk deadline
         # check, so a large pre-existing file cannot block past the budget or
         # load the whole file into memory.
         local_sha: str | None
         timed_out = False
+        sha_read_error: OSError | None = None
         try:
             digest = hashlib.sha256()
             with open(absolute, "rb") as handle:  # noqa: PTH123
@@ -990,10 +1167,22 @@ class RunService:
                         break
                     digest.update(chunk)
             local_sha = None if timed_out else digest.hexdigest()
-        except OSError:
+        except OSError as exc:
+            sha_read_error = exc
             local_sha = None
         if timed_out:
             return {"path": relative_path, "status": "timeout"}
+        if sha_read_error is not None:
+            # Round-11 P1-1: stat said the file exists but we could not read it
+            # (permission denied, I/O error). Returning exists=True + sha=None
+            # would let attribution classify a matching final as ``unchanged``
+            # (false green). Carry status="error" so the entry is rejected as
+            # baseline_unavailable.
+            return {
+                "path": relative_path,
+                "status": "error",
+                "error_code": f"errno_{sha_read_error.errno}",
+            }
         return {
             "path": relative_path,
             "exists": True,
@@ -1254,6 +1443,15 @@ _BASELINE_SHA256_TIMEOUT_CAP = 20.0
 # Round-7 P1-1: chunk size for local-fs SHA256 streaming (64 KiB). Keeps
 # memory bounded and lets us check the deadline between chunks.
 _BASELINE_SHA256_CHUNK_BYTES = 64 * 1024
+# Round-11 P1-2: reserve time for the real submit + receipt persistence. The
+# outbox submission path renews the lease right before ``backend.submit`` and
+# refuses to submit (and refuses to persist the receipt) when the renewed
+# lease's remaining time is below this floor. This makes the 15s reserve a
+# HARD enforced deadline instead of the round-8 fixed guess: if the lease is
+# already expired or too close to expiry after baseline, we fail-closed
+# (the outbox message is retried / re-claimed with a fresh fencing token)
+# rather than submitting with a soon-to-be-superseded fence.
+_SUBMIT_LEASE_RESERVE_SECONDS = 15.0
 
 
 def _validate_baseline_path(path: str) -> tuple[str, str] | None:
@@ -1287,6 +1485,62 @@ def _baseline_missing(relative_path: str) -> dict[str, Any]:
         "size_bytes": None,
         "mtime_epoch": None,
         "sha256": None,
+    }
+
+
+# Round-11 P1-1: substrings used to classify a non-zero ``stat`` exit. Order
+# matters — ``ENOENT``/``No such file`` is checked first so a missing file is
+# the ONLY path that reaches ``_baseline_missing`` (trusted ``exists=false``).
+# Permission-denied / timeout / other errors produce ``status="error"`` (or
+# ``status="timeout"``) so ``_baseline_entry_unavailable`` in evidence.py
+# rejects them → ``baseline_unavailable`` → EXECUTION_SUCCESS_UNVERIFIED, NOT
+# a false ``created``.
+_STAT_ENOENT_MARKERS = ("no such file or directory", "no such file", "not found")
+_STAT_PERMISSION_MARKERS = ("permission denied", "eacces", "operation not permitted")
+_STAT_TIMEOUT_MARKERS = ("timed out", "timeout", "deadline exceeded", "timed out waiting")
+
+
+def _classify_stat_failure(
+    relative_path: str,
+    *,
+    returncode: int,
+    stderr: str,
+) -> dict[str, Any]:
+    """Classify a non-zero ``stat`` exit into a baseline entry.
+
+    Only confirmed-missing (ENOENT-like) returns ``_baseline_missing`` (no
+    ``status`` field → trusted as ``exists=false``). Every other failure
+    returns an entry carrying a truthy ``status`` so the evidence collector's
+    ``_baseline_entry_unavailable`` rejects it and emits ``baseline_unavailable``.
+    When classification is uncertain, default to ``status="error"`` +
+    ``error_code="stat_unclassified"`` (fail-closed, NOT missing).
+    """
+    text = f"{stderr or ''}".lower()
+    if any(marker in text for marker in _STAT_ENOENT_MARKERS):
+        return _baseline_missing(relative_path)
+    if any(marker in text for marker in _STAT_PERMISSION_MARKERS):
+        return {
+            "path": relative_path,
+            "status": "error",
+            "error_code": "stat_permission_denied",
+        }
+    if any(marker in text for marker in _STAT_TIMEOUT_MARKERS):
+        return {
+            "path": relative_path,
+            "status": "timeout",
+            "error_code": "stat_timeout",
+        }
+    # ``returncode == 124`` is the conventional GNU ``timeout`` exit code.
+    if returncode == 124:
+        return {
+            "path": relative_path,
+            "status": "timeout",
+            "error_code": "stat_timeout",
+        }
+    return {
+        "path": relative_path,
+        "status": "error",
+        "error_code": "stat_unclassified",
     }
 
 
