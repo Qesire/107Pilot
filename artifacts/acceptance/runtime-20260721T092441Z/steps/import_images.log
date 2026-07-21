@@ -1,0 +1,4 @@
+ok   pilot107/slurm-sim:cpu-rc-d3ceb4cd43b7 (sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7)
+ok   pilot107/api:cpu-rc-d3ceb4cd43b7 (sha256:a971cabc86174a77af39ef89f201947f9d8ad5e94f947a3e423f4dd6de143afc)
+ok   pilot107/worker:cpu-rc-d3ceb4cd43b7 (sha256:a971cabc86174a77af39ef89f201947f9d8ad5e94f947a3e423f4dd6de143afc)
+ok   pilot107/web:cpu-rc-d3ceb4cd43b7 (sha256:a971cabc86174a77af39ef89f201947f9d8ad5e94f947a3e423f4dd6de143afc)

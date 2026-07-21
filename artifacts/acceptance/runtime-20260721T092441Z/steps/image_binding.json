@@ -1,0 +1,106 @@
+{
+  "manifest_path": "/home/knowingthesea/107pilot/artifacts/deployment/107pilot-cpu-rc-d3ceb4cd43b7-20260721T091358Z/RELEASE_MANIFEST.json",
+  "release_revision_full": "d3ceb4cd43b77c7cee9d10768db7ada324b02ed0",
+  "release_revision_short": "d3ceb4cd43b7",
+  "running_images": [
+    {
+      "container": "pilot107-cpu-rc-accept-d3ceb4cd43b7-1784625881-1243375-mariadb-1",
+      "service": "mariadb",
+      "config_image": "pilot107/slurm-sim:cpu-rc-d3ceb4cd43b7",
+      "image_id": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "manifest_content_digest": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-d3ceb4cd43b7-1784625881-1243375-slurmdbd-1",
+      "service": "slurmdbd",
+      "config_image": "pilot107/slurm-sim:cpu-rc-d3ceb4cd43b7",
+      "image_id": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "manifest_content_digest": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-d3ceb4cd43b7-1784625881-1243375-slurmctld-1",
+      "service": "slurmctld",
+      "config_image": "pilot107/slurm-sim:cpu-rc-d3ceb4cd43b7",
+      "image_id": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "manifest_content_digest": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-d3ceb4cd43b7-1784625881-1243375-worker-1-1",
+      "service": "worker-1",
+      "config_image": "pilot107/slurm-sim:cpu-rc-d3ceb4cd43b7",
+      "image_id": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "manifest_content_digest": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-d3ceb4cd43b7-1784625881-1243375-slurmrestd-1",
+      "service": "slurmrestd",
+      "config_image": "pilot107/slurm-sim:cpu-rc-d3ceb4cd43b7",
+      "image_id": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "manifest_content_digest": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-d3ceb4cd43b7-1784625881-1243375-pilot107-command-gateway-1",
+      "service": "pilot107-command-gateway",
+      "config_image": "pilot107/slurm-sim:cpu-rc-d3ceb4cd43b7",
+      "image_id": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "manifest_content_digest": "sha256:411e99acb87279c8fb2ef544bb000e09e31cb652463cfe34e15507e15d5c42c7",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-d3ceb4cd43b7-1784625881-1243375-pilot107-api-1",
+      "service": "pilot107-api",
+      "config_image": "pilot107/api:cpu-rc-d3ceb4cd43b7",
+      "image_id": "sha256:a971cabc86174a77af39ef89f201947f9d8ad5e94f947a3e423f4dd6de143afc",
+      "manifest_content_digest": "sha256:a971cabc86174a77af39ef89f201947f9d8ad5e94f947a3e423f4dd6de143afc",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-d3ceb4cd43b7-1784625881-1243375-pilot107-worker-1",
+      "service": "pilot107-worker",
+      "config_image": "pilot107/worker:cpu-rc-d3ceb4cd43b7",
+      "image_id": "sha256:a971cabc86174a77af39ef89f201947f9d8ad5e94f947a3e423f4dd6de143afc",
+      "manifest_content_digest": "sha256:a971cabc86174a77af39ef89f201947f9d8ad5e94f947a3e423f4dd6de143afc",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-d3ceb4cd43b7-1784625881-1243375-pilot107-web-1",
+      "service": "pilot107-web",
+      "config_image": "pilot107/web:cpu-rc-d3ceb4cd43b7",
+      "image_id": "sha256:a971cabc86174a77af39ef89f201947f9d8ad5e94f947a3e423f4dd6de143afc",
+      "manifest_content_digest": "sha256:a971cabc86174a77af39ef89f201947f9d8ad5e94f947a3e423f4dd6de143afc",
+      "matches_manifest": true
+    },
+    {
+      "container": "pilot107-cpu-rc-accept-d3ceb4cd43b7-1784625881-1243375-pilot107-reverse-proxy-1",
+      "service": "pilot107-reverse-proxy",
+      "config_image": "pilot107/web:cpu-rc-d3ceb4cd43b7",
+      "image_id": "sha256:a971cabc86174a77af39ef89f201947f9d8ad5e94f947a3e423f4dd6de143afc",
+      "manifest_content_digest": "sha256:a971cabc86174a77af39ef89f201947f9d8ad5e94f947a3e423f4dd6de143afc",
+      "matches_manifest": true
+    }
+  ],
+  "all_match": true,
+  "skipped": false,
+  "skip_reason": null,
+  "error": null,
+  "missing_services": [],
+  "parse_errors": [],
+  "service_instance_counts": {
+    "mariadb": 1,
+    "pilot107-api": 1,
+    "pilot107-command-gateway": 1,
+    "pilot107-reverse-proxy": 1,
+    "pilot107-web": 1,
+    "pilot107-worker": 1,
+    "slurmctld": 1,
+    "slurmdbd": 1,
+    "slurmrestd": 1,
+    "worker-1": 1
+  },
+  "duplicate_services": []
+}

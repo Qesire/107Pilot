@@ -1,0 +1,121 @@
+{
+  "profile": "source",
+  "release_revision": "d3ceb4cd43b77c7cee9d10768db7ada324b02ed0",
+  "started_at": "2026-07-21T09:12:10Z",
+  "ended_at": "2026-07-21T09:13:37Z",
+  "seal_mode": true,
+  "overall_status": "PASS",
+  "process_exit_code": 0,
+  "any_fail": false,
+  "untracked_files_status": "",
+  "steps": [
+    {
+      "name": "uv_sync",
+      "status": "PASS",
+      "start": "2026-07-21T09:12:10Z",
+      "end": "2026-07-21T09:12:10Z",
+      "rc": null,
+      "log_path": "steps/uv_sync.log",
+      "log_sha256": "87b572a1ed9238a7fc8310dafd743663c44289dd4bc71581844193b5c912f669"
+    },
+    {
+      "name": "npm_ci",
+      "status": "PASS",
+      "start": "2026-07-21T09:12:10Z",
+      "end": "2026-07-21T09:12:11Z",
+      "rc": null,
+      "log_path": "steps/npm_ci.log",
+      "log_sha256": "af1ea63dd94f06c68905c097af8262aa890de47da58e64514b0c8c264eb6dd05"
+    },
+    {
+      "name": "ruff",
+      "status": "PASS",
+      "start": "2026-07-21T09:12:11Z",
+      "end": "2026-07-21T09:12:11Z",
+      "rc": null,
+      "log_path": "steps/ruff.log",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "name": "mypy",
+      "status": "PASS",
+      "start": "2026-07-21T09:12:11Z",
+      "end": "2026-07-21T09:12:12Z",
+      "rc": null,
+      "log_path": "steps/mypy.log",
+      "log_sha256": "b1d14a638cdcd6b7a7d5368e3cc2ca927b3e1f1b4e26cbe9b1844d7698aabdf2"
+    },
+    {
+      "name": "pytest",
+      "status": "PASS",
+      "start": "2026-07-21T09:12:12Z",
+      "end": "2026-07-21T09:13:18Z",
+      "rc": null,
+      "log_path": "steps/pytest.log",
+      "log_sha256": "dcfc640f0ed0e3e252c4373c4b6586441842bc99610e54544f8d31e02a3c6d3e"
+    },
+    {
+      "name": "typecheck",
+      "status": "PASS",
+      "start": "2026-07-21T09:13:18Z",
+      "end": "2026-07-21T09:13:21Z",
+      "rc": null,
+      "log_path": "steps/typecheck.log",
+      "log_sha256": "85104a574d4725c649c40191b47fb730cf3c93b9134231b6b5634787721519c6"
+    },
+    {
+      "name": "vitest",
+      "status": "PASS",
+      "start": "2026-07-21T09:13:21Z",
+      "end": "2026-07-21T09:13:23Z",
+      "rc": null,
+      "log_path": "steps/vitest.log",
+      "log_sha256": "c7a3046d885779695d8c1f5450cd423e5fd05dfbec47e1fad2691b3b4402593d"
+    },
+    {
+      "name": "playwright",
+      "status": "PASS",
+      "start": "2026-07-21T09:13:23Z",
+      "end": "2026-07-21T09:13:33Z",
+      "rc": null,
+      "log_path": "steps/playwright.log",
+      "log_sha256": "eaed7f272c77d41c1cae87116adbe7c70147b8dbab7b92d8f0fce235a7e53086"
+    },
+    {
+      "name": "build",
+      "status": "PASS",
+      "start": "2026-07-21T09:13:33Z",
+      "end": "2026-07-21T09:13:36Z",
+      "rc": null,
+      "log_path": "steps/build.log",
+      "log_sha256": "d328e49d8c470bab1f82de598ecc71659bd242027604110ebf37c0c13694d701"
+    },
+    {
+      "name": "static_drift",
+      "status": "PASS",
+      "start": "2026-07-21T09:13:36Z",
+      "end": "2026-07-21T09:13:36Z",
+      "rc": null,
+      "log_path": "steps/static_drift.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "compose_config",
+      "status": "PASS",
+      "start": "2026-07-21T09:13:36Z",
+      "end": "2026-07-21T09:13:37Z",
+      "rc": null,
+      "log_path": "steps/compose_config.log",
+      "log_sha256": "d0c4d5d2a4add660c878be0f2df95013589f6c8f1f91f4c5bd52285a3573fed4"
+    },
+    {
+      "name": "sync_drift",
+      "status": "PASS",
+      "start": "2026-07-21T09:13:37Z",
+      "end": "2026-07-21T09:13:37Z",
+      "rc": null,
+      "log_path": "steps/sync_drift.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

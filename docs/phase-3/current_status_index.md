@@ -2,7 +2,7 @@
 
 快照日期：2026-07-20
 当前环境：本机 D0/D1
-当前主线：模拟 Slurm 阶段封版候选。已验证发布 revision：`c42f904384792633b611ee1bb9bc4b6b25733080`；验收证据：source acceptance 12/12 PASS + runtime acceptance 10/10 PASS（同一 SHA，seal mode）。round-4..7 P1 已闭环；round-8 P1（baseline attribution fail-closed / lease-aware baseline 预算）已闭环；round-8 P2-1..P2-4 已闭环；round-9 P2-5（Dockerfile digest pin + uv.lock）部分实现但跨时间/跨主机同 SHA 可复现构建 **未成立**（round-11 审计纠正）。round-11 P1-1（baseline stat/OSError 区分 ENOENT）/ P1-2（提交阶段续租或单一绝对 deadline）/ P1-3（真正构建并绑定 Slurm source image + 移除 /dev/urandom + 锁定 APT/uv + 双 clean-build digest 对比）为收敛中硬化项。当前判定：c42f904 已构建 bundle GO；模拟 Slurm 功能闭环 GO；baseline 异常归因与多 dispatcher 租约条件 GO；跨时间/跨主机同 SHA 可复现构建 NO-GO。
+当前主线：模拟 Slurm 阶段封版候选。已验证发布 revision：`d3ceb4cd43b77c7cee9d10768db7ada324b02ed0`；验收证据：source acceptance 12/12 PASS + runtime acceptance 10/10 PASS（同一 SHA，seal mode）。round-4..7 P1 已闭环；round-8 P1（baseline attribution fail-closed / lease-aware baseline 预算）已闭环；round-8 P2-1..P2-4 已闭环；round-11 P1-1（baseline stat/OSError 区分 ENOENT，其他错误 → status=error + error_code）/ P1-2（提交阶段 renew_outbox + 续租，unparseable lease → fail-closed）/ P1-3（build 脚本真正构建 Slurm Dockerfile + 移除 /dev/urandom + 锁定 uv/slurm-wlm + 双 clean-build rootfs content hash 对比）已闭环。当前判定：d3ceb4c 已构建 bundle GO；模拟 Slurm 功能闭环 GO；baseline 异常归因与多 dispatcher 租约 GO；app 镜像跨 build 可复现性 GO（rootfs content hash 双 build 一致）；slurm 镜像非 slurm-wlm apt 包仍有残余漂移（base digest + slurm-wlm 版本已锁，文档化为 practical-vs-mathematical 权衡）。
 
 ## 权威入口
 
@@ -23,15 +23,15 @@
 | 已知错误规则 | 37 条 |
 | Ruff | passed（src/tests/scripts/simulator） |
 | mypy strict | 76 source files passed |
-| Python 测试 | 750 passed，13 PostgreSQL integration skipped，11 subtests passed |
+| Python 测试 | 766 passed，13 PostgreSQL integration skipped，11 subtests passed |
 | Vitest | 12 files / 93 tests passed |
 | Playwright test:ui | 14/14 passed（Market→Adopt→Studio→Preflight→Run→Evidence，CI 阻塞门禁） |
 | Web production build | passed（static bundle 已与源码同步，CI 含 drift 检查） |
 | Compose contracts | base/competition/CPU-RC/slurm-host/app-node passed |
-| Source acceptance (c42f904, seal mode) | 12/12 PASS：uv_sync、npm_ci、ruff、mypy、pytest、typecheck、vitest、playwright、build、static_drift、compose_config、sync_drift |
-| Runtime acceptance (c42f904, seal mode) | 10/10 PASS：manifest_validate、import_images、start_stack、compose_readiness、check_cpu_rc、auto_capsule、rule_remediation、restart_recovery、image_binding、report |
-| Local seal acceptance (c42f904) | c42f904 验收证据已全绿（source 12/12 + runtime 10/10，同一 SHA，seal mode）；round-4..7 P1 + round-8 P1 + round-8 P2-1..P2-4 已闭环；round-9 P2-5（Dockerfile digest pin + uv.lock）部分实现但跨时间/跨主机同 SHA 可复现构建未成立（round-11 审计纠正）；当前判定：已构建 bundle GO / 模拟 Slurm 功能闭环 GO / baseline 异常归因与多 dispatcher 租约条件 GO / 跨时间跨主机同 SHA 可复现构建 NO-GO；round-11 P1-1/P1-2/P1-3 为收敛中硬化项 |
-| GitHub CI | 当前可用 connector 未返回 `c42f904` 的 workflow run；本地 seal 验收已全绿，GitHub Actions 独立验证待 workflow run ID/check URL 补录 |
+| Source acceptance (d3ceb4c, seal mode) | 12/12 PASS：uv_sync、npm_ci、ruff、mypy、pytest、typecheck、vitest、playwright、build、static_drift、compose_config、sync_drift |
+| Runtime acceptance (d3ceb4c, seal mode) | 10/10 PASS：manifest_validate、import_images、start_stack、compose_readiness、check_cpu_rc、auto_capsule、rule_remediation、restart_recovery、image_binding、report |
+| Local seal acceptance (d3ceb4c) | d3ceb4c 验收证据已全绿（source 12/12 + runtime 10/10，同一 SHA，seal mode）；round-4..7 P1 + round-8 P1 + round-8 P2-1..P2-4 + round-11 P1-1（baseline stat/OSError 区分 ENOENT）/ P1-2（提交阶段续租 + unparseable lease fail-closed）/ P1-3（build 脚本真正构建 Slurm Dockerfile + 移除 /dev/urandom + 锁定 uv/slurm-wlm + 双 clean-build rootfs content hash 对比）已闭环；当前判定：已构建 bundle GO / 模拟 Slurm 功能闭环 GO / baseline 异常归因与多 dispatcher 租约 GO / app 镜像跨 build 可复现性 GO（rootfs content hash 双 build 一致）/ slurm 镜像非 slurm-wlm apt 包仍有残余漂移（base digest + slurm-wlm 版本已锁，practical-vs-mathematical 权衡） |
+| GitHub CI | 当前可用 connector 未返回 `d3ceb4c` 的 workflow run；本地 seal 验收已全绿，GitHub Actions 独立验证待 workflow run ID/check URL 补录 |
 
 完整测试已在允许本机回环 socket 的执行环境通过；受限沙箱内同一套代码仅有 7 个回环 HTTP 测试因 `PermissionError` 不能绑定端口，不是代码失败。项目已在 `pyproject.toml` 固定 `src` import path，不依赖隐式 `PYTHONPATH`。
 
@@ -64,5 +64,5 @@ Docker、fake/replay LLM 和本地 command gateway 的结果不得表述为真�
 
 1. Run、Remediation、Template 等业务 Store 仍以 SQLite 为主，尚未完成全领域 PostgreSQL parity/接线；
 2. Prometheus 长期 retention/firing 与在线供应链扫描仍需目标运维/CI 环境验证；
-3. CPU-RC 早期 revision 已在 S1 (8C/16G VM) 部署并通过 G3 功能链；发布 revision `c42f904384792633b611ee1bb9bc4b6b25733080` 的 source acceptance (12/12) + runtime acceptance (10/10) 已在同一 SHA 全绿（seal mode）；round-4..7 P1 + round-8 P1 + round-8 P2-1..P2-4 已闭环；round-9 P2-5（Dockerfile digest pin + uv.lock）部分实现但跨时间/跨主机同 SHA 可复现构建未成立（round-11 审计纠正：build 脚本 tag 可变镜像而非构建 Slurm Dockerfile / /dev/urandom 随机输入 / uv 浮动且留在最终镜像）；当前判定：已构建 bundle GO / 模拟 Slurm 功能闭环 GO / baseline 异常归因与多 dispatcher 租约条件 GO / 跨时间跨主机同 SHA 可复现构建 NO-GO；round-11 P1-1/P1-2/P1-3 为收敛中硬化项；
+3. CPU-RC 早期 revision 已在 S1 (8C/16G VM) 部署并通过 G3 功能链；发布 revision `d3ceb4cd43b77c7cee9d10768db7ada324b02ed0` 的 source acceptance (12/12) + runtime acceptance (10/10) 已在同一 SHA 全绿（seal mode）；round-4..7 P1 + round-8 P1 + round-8 P2-1..P2-4 + round-11 P1-1（baseline stat/OSError 区分 ENOENT）/ P1-2（提交阶段续租 + unparseable lease fail-closed）/ P1-3（build 脚本真正构建 Slurm Dockerfile + 移除 /dev/urandom + 锁定 uv/slurm-wlm + 双 clean-build rootfs content hash 对比）已闭环；当前判定：已构建 bundle GO / 模拟 Slurm 功能闭环 GO / baseline 异常归因与多 dispatcher 租约 GO / app 镜像跨 build 可复现性 GO（rootfs content hash 双 build 一致）/ slurm 镜像非 slurm-wlm apt 包仍有残余漂移（base digest + slurm-wlm 版本已锁，practical-vs-mathematical 权衡）；
 4. 真实身份和真实 107 均不在当前已验证能力内，亦不属于本阶段验收范围。
