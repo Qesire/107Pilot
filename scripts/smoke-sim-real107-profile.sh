@@ -85,6 +85,7 @@ fi
 expect_submit_rejected alice /public/home/alice --partition Students --qos definitely_not_allowed
 expect_submit_rejected bob /public/home/bob --partition Students --qos qos_stu_medium_2gpu
 expect_submit_rejected alice /public/home/alice --partition P107-A100 --qos qos_p107-a100
+expect_submit_rejected alice /home/scc/alice --partition Students --qos qos_stu_large --gres gpu:A100:5
 
 bob_job_id="$(
   submit_and_expect_completed \
@@ -107,4 +108,15 @@ alice_job_id="$(
     --time 00:05:00
 )"
 
-echo "sim real107 profile smoke alice=${alice_job_id} bob=${bob_job_id} ok"
+alice_large_job_id="$(
+  submit_and_expect_completed \
+    alice \
+    /home/scc/alice \
+    Students \
+    qos_stu_large \
+    --gres gpu:A100:4 \
+    --cpus-per-task 1 \
+    --time 00:05:00
+)"
+
+echo "sim real107 profile smoke alice=${alice_job_id} alice_large=${alice_large_job_id} bob=${bob_job_id} oversized_gpu=rejected ok"

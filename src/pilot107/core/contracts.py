@@ -29,7 +29,6 @@ from pilot107.core.platform_preflight import (
 from pilot107.core.platform_snapshot import PlatformSnapshotScope
 from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.resources import (
-    REAL107_SIM_PARTITION_QOS,
     ArraySpec,
     PreflightFinding,
     PreflightSeverity,
@@ -121,22 +120,43 @@ class RecipeCatalog:
         template_dir: Path | None = None,
         allow_gpu: bool = True,
         partition_qos: dict[str, tuple[str, ...]] | None = None,
+        default_partition: str | None = None,
+        default_qos: str | None = None,
     ) -> None:
         packaged = recipes
         if packaged is None:
             directory = template_dir or _default_template_dir()
             packaged = [_python_cpu_recipe(), *_load_packaged_recipes(directory)]
         packaged = [_with_content_digest(recipe) for recipe in packaged]
+        if store is not None:
+            for recipe in packaged:
+                try:
+                    store.upsert_recipe_version(recipe)
+                except ContractError as exc:
+                    # Older releases incorrectly persisted the active cluster
+                    # partition/QoS overlay inside an immutable recipe version.
+                    # A profile refresh must not make that deployment unable
+                    # to start.  Preserve that historical row only when all
+                    # immutable recipe content agrees after removing the two
+                    # formerly-volatile fields; any real recipe mutation still
+                    # raises RECIPE.VERSION_IMMUTABLE as before.
+                    if exc.code != "RECIPE.VERSION_IMMUTABLE":
+                        raise
+                    existing = store.get_recipe_version(recipe.recipe_version_id)
+                    if not _differs_only_in_capability_overlay(existing, recipe):
+                        raise
+            packaged = store.list_recipe_versions()
         if partition_qos is not None:
             packaged = [
-                _with_partition_qos(recipe, partition_qos)
+                _with_partition_qos(
+                    recipe,
+                    partition_qos,
+                    default_partition=default_partition,
+                    default_qos=default_qos,
+                )
                 for recipe in packaged
                 if allow_gpu or not _recipe_requires_gpu(recipe)
             ]
-        if store is not None:
-            for recipe in packaged:
-                store.upsert_recipe_version(recipe)
-            packaged = store.list_recipe_versions()
         if not allow_gpu:
             packaged = [recipe for recipe in packaged if not _recipe_requires_gpu(recipe)]
         self._recipes = {recipe.recipe_version_id: recipe for recipe in packaged}
@@ -758,6 +778,7 @@ class ContractService:
             workdir=_workdir(contract.payload),
             script=_required_materialized_script(result),
             resource_plan=_resource_plan_from_contract(contract.payload),
+            job_name=_project_name(contract.payload),
             contract_id=contract.contract_id,
             parent_run_id=parent_run_id,
             lineage_reason=lineage_reason,
@@ -867,25 +888,50 @@ def _recipe_requires_gpu(recipe: RecipeVersion) -> bool:
 def _with_partition_qos(
     recipe: RecipeVersion,
     partition_qos: dict[str, tuple[str, ...]],
+    *,
+    default_partition: str | None = None,
+    default_qos: str | None = None,
 ) -> RecipeVersion:
     compatibility = json.loads(json.dumps(recipe.compatibility))
     partitions = list(partition_qos)
     allowed_by_partition = {
         partition: list(qos_values) for partition, qos_values in partition_qos.items()
     }
-    first_qos = next(
-        (qos for values in partition_qos.values() for qos in values),
-        None,
+    selected_partition = (
+        default_partition if default_partition in partition_qos else next(iter(partition_qos), None)
+    )
+    selected_qos = (
+        default_qos
+        if default_qos in partition_qos.get(selected_partition or "", ())
+        else next(iter(partition_qos.get(selected_partition or "", ())), None)
     )
     compatibility["partitions"] = {
-        "default": partitions[0] if partitions else None,
+        "default": selected_partition,
         "allowed": partitions,
     }
     compatibility["qos"] = {
-        "default": first_qos,
+        "default": selected_qos,
         "allowed_by_partition": allowed_by_partition,
     }
     return _with_content_digest(replace(recipe, compatibility=compatibility))
+
+
+def _differs_only_in_capability_overlay(
+    existing: RecipeVersion,
+    incoming: RecipeVersion,
+) -> bool:
+    """Identify the pre-profile migration shape without weakening immutability."""
+
+    return _recipe_without_capability_overlay(existing) == _recipe_without_capability_overlay(
+        incoming
+    )
+
+
+def _recipe_without_capability_overlay(recipe: RecipeVersion) -> RecipeVersion:
+    compatibility = json.loads(json.dumps(recipe.compatibility))
+    compatibility.pop("partitions", None)
+    compatibility.pop("qos", None)
+    return replace(recipe, compatibility=compatibility, content_sha256="")
 
 
 def _required_materialized_script(result: ContractValidationResult) -> str:
@@ -933,14 +979,12 @@ def _python_cpu_recipe() -> RecipeVersion:
         compatibility={
             "slurm": {"min_version": "23.0"},
             "platform": {"docker_l2": True, "school_l3": False, "requires_gpu": False},
-            "partitions": {
-                "default": "Students",
-                "allowed": ["Students", "P107-A100", "P107-RTX5090", "debug"],
-            },
-            "qos": {
-                "default": "qos_stu_medium_2gpu",
-                "allowed_by_partition": REAL107_SIM_PARTITION_QOS,
-            },
+            # Partition and QoS authorization is deployment state, not an
+            # immutable property of a portable CPU recipe.  Service builders
+            # overlay the active CapabilityProfile when one is configured;
+            # generic/offline catalog use intentionally leaves this empty.
+            "partitions": {"default": None, "allowed": []},
+            "qos": {"default": None, "allowed_by_partition": {}},
         },
         risk_declaration={
             "blocks": ["empty command", "missing workdir", "invalid resource plan"],
@@ -1325,6 +1369,19 @@ def _workdir(payload: dict[str, Any]) -> Path:
     if not isinstance(workdir, str) or not workdir.strip():
         raise ContractError("project.workdir is required", code="CONTRACT.WORKDIR_REQUIRED")
     return Path(workdir)
+
+
+def _project_name(payload: dict[str, Any]) -> str:
+    project = payload.get("project")
+    if isinstance(project, dict):
+        name = project.get("name")
+        if isinstance(name, str) and name.strip():
+            # Keep the original text for the Run record. RunService will
+            # normalize it only when it constructs the Slurm-safe marker.
+            return name.strip()
+    # The project name is optional in the editor. A recipe version is still a
+    # stable, human-recognisable title, and avoids creating a nameless job.
+    return _recipe_version_id(payload)
 
 
 def _command(payload: dict[str, Any]) -> str:

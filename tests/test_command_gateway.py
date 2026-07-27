@@ -58,11 +58,42 @@ class CommandGatewayTests(unittest.TestCase):
         with self.assertRaisesRegex(gateway.GatewayError, "arguments not allowed"):
             gateway._run({"argv": ["python", "-c", "print('unsafe')"]}, config)
 
+    def test_allows_only_the_readonly_terminal_sinfo_projection(self) -> None:
+        config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
+
+        with mock.patch.object(gateway.subprocess, "run") as fake_run:
+            fake_run.return_value = SimpleNamespace(
+                returncode=0,
+                stdout="debug|8|16000|(null)|idle\n",
+                stderr="",
+            )
+            result = gateway._run(
+                {"argv": ["sinfo", "-h", "-o", "%P|%c|%m|%G|%T"]},
+                config,
+            )
+
+        self.assertEqual(result["returncode"], 0)
+        with self.assertRaisesRegex(gateway.GatewayError, "arguments not allowed"):
+            gateway._run({"argv": ["sinfo", "-R"]}, config)
+
     def test_path_probe_rejects_path_outside_allowed_roots(self) -> None:
         config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
 
         with self.assertRaisesRegex(gateway.GatewayError, "outside allowed roots"):
             gateway._run({"argv": ["test", "-r", "/etc/shadow"]}, config)
+
+    def test_owner_root_template_is_scoped_to_the_supplied_user(self) -> None:
+        config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/{user}"])
+
+        with self.assertRaisesRegex(gateway.GatewayError, "outside allowed roots"):
+            gateway._authorize_path("/public/home/bob/result.txt", config, user="alice")
+
+        self.assertEqual(
+            gateway._authorize_path("/public/home/bob/result.txt", config, user="bob"),
+            "/public/home/bob/result.txt",
+        )
+        with self.assertRaisesRegex(gateway.GatewayError, "requires a user"):
+            gateway._authorize_path("/public/home/bob/result.txt", config)
 
     def test_realpath_rejects_relative_and_nul_paths(self) -> None:
         with self.assertRaises(gateway.GatewayError):

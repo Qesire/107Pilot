@@ -5,9 +5,8 @@ import { json as jsonLanguage } from "@codemirror/lang-json";
 import { yaml as yamlLanguage } from "@codemirror/lang-yaml";
 import { linter, type Diagnostic } from "@codemirror/lint";
 import type { Extension } from "@codemirror/state";
-import Ajv2020 from "ajv/dist/2020";
-import type { ValidateFunction } from "ajv";
 import { parseContractSource, type SourceFormat } from "./contract-state";
+import { compileClientSchemaValidator, type ClientSchemaValidator } from "./schema-validation";
 import type { JsonObject } from "./types";
 
 export default function ContractSourceEditor({
@@ -43,13 +42,8 @@ function contractEditorExtensions(format: SourceFormat, schema: JsonObject): Ext
   ];
 }
 
-export function compileEditorValidator(schema: JsonObject): ValidateFunction | null {
-  if (!Object.keys(schema).length) return null;
-  try {
-    return new Ajv2020({ allErrors: true, strict: false }).compile(schema);
-  } catch {
-    return null;
-  }
+export function compileEditorValidator(schema: JsonObject): ClientSchemaValidator | null {
+  return compileClientSchemaValidator(schema);
 }
 
 export function collectSchemaCompletions(schema: JsonObject): Completion[] {
@@ -80,7 +74,7 @@ function completeContractField(context: CompletionContext, options: Completion[]
   };
 }
 
-export function sourceDiagnostics(source: string, format: SourceFormat, validate: ValidateFunction | null): Diagnostic[] {
+export function sourceDiagnostics(source: string, format: SourceFormat, validate: ClientSchemaValidator | null): Diagnostic[] {
   let contract: JsonObject;
   try {
     contract = parseContractSource(source, format);
@@ -88,8 +82,9 @@ export function sourceDiagnostics(source: string, format: SourceFormat, validate
     const position = sourceErrorPosition(error, source);
     return [{ from: position, to: Math.min(position + 1, source.length), severity: "error", message: error instanceof Error ? error.message : "源码解析失败" }];
   }
-  if (!validate || validate(contract)) return [];
-  return (validate.errors ?? []).slice(0, 20).map((error) => {
+  const errors = validate?.(contract) ?? [];
+  if (!errors.length) return [];
+  return errors.slice(0, 20).map((error) => {
     const key = error.instancePath.split("/").filter(Boolean).at(-1);
     const position = key ? findSourceKey(source, key, format) : 0;
     return {

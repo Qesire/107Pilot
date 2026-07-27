@@ -3,6 +3,7 @@ import unittest
 from pilot107.core.platform import (
     SourceAuthority,
     capability_profile_from_real107_probe,
+    capability_profile_from_simulator_behavior,
     docker_sim_capability_profile,
     docker_sim_configuration_snapshot,
 )
@@ -16,9 +17,10 @@ class PlatformProfileTests(unittest.TestCase):
         self.assertEqual(payload["cluster"]["api_version"], "v0.0.41")
         self.assertEqual(
             payload["cluster"]["source_authority"],
-            SourceAuthority.STATIC_COMPETITION_PROFILE.value,
+            SourceAuthority.SIMULATOR_PROBE.value,
         )
         self.assertIn("/public", payload["cluster"]["shared_roots"])
+        self.assertIn("/home", payload["cluster"]["shared_roots"])
         self.assertIn("Students", payload["cluster"]["partitions"])
         self.assertIn("qos_stu_medium_2gpu", payload["cluster"]["qos"])
         self.assertEqual(payload["auth_strategy"], "trusted_header_simulated_users")
@@ -43,8 +45,49 @@ class PlatformProfileTests(unittest.TestCase):
         self.assertEqual(payload["default_qos"], "qos_stu_medium_2gpu")
         self.assertEqual(qos["qos_stu_default"]["max_cpus"], 4)
         self.assertEqual(qos["qos_stu_medium_2gpu"]["max_gpus"], 2)
+        self.assertEqual(qos["qos_stu_medium_2gpu"]["max_wall_hours"], 24)
+        self.assertEqual(qos["qos_stu_large"]["max_gpus"], 4)
         self.assertTrue(payload["rest"]["partial_payload_with_errors"])
         self.assertIn("Students", profile.partition_qos())
+
+    def test_simulator_behavior_profile_is_loaded_from_declarative_source(self) -> None:
+        profile = capability_profile_from_simulator_behavior(
+            {
+                "schema": "pilot107.simulator_real107_behavior.v1",
+                "profile_id": "fixture",
+                "slurm": {"api_version": "v0.0.41", "auth": {}},
+                "users": [
+                    {
+                        "name": "alice",
+                        "default_partition": "Students",
+                        "default_qos": "qos_stu_default",
+                    }
+                ],
+                "nodes": [{"name": "anode16"}],
+                "partitions": [
+                    {"name": "Students", "nodes": "anode16", "allow_qos": ["qos_stu_default"]}
+                ],
+                "qos": [
+                    {
+                        "name": "qos_stu_default",
+                        "max_cpus": 4,
+                        "max_gpus": 1,
+                        "max_memory": "16G",
+                        "max_wall": "04:00:00",
+                    }
+                ],
+                "storage": {
+                    "shared_paths": [{"path": "/public", "semantics": "shared"}],
+                    "local_paths": [{"path": "/tmp"}],
+                },
+            }
+        )
+
+        self.assertEqual(profile.default_partition, "Students")
+        self.assertEqual(profile.default_qos, "qos_stu_default")
+        self.assertEqual(profile.partitions[0].total_nodes, 1)
+        self.assertEqual(profile.qos[0].max_memory_gb, 16)
+        self.assertEqual(profile.qos[0].max_wall_hours, 4)
 
     def test_real107_probe_ingest_preserves_partial_partition_payload(self) -> None:
         profile = capability_profile_from_real107_probe(

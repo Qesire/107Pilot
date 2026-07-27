@@ -33,12 +33,13 @@ class ApiServiceTests(unittest.TestCase):
         self.assertEqual(config.db_path, self.root / "data" / "phase0" / "pilot107.db")
         self.assertEqual(config.evidence_root, self.root / "data" / "phase0" / "evidence")
         self.assertIsNone(config.control_postgres_dsn)
+        self.assertIsNone(config.postgres_dsn)
         self.assertEqual(config.backend, "none")
         self.assertEqual(
             config.worker_metrics_root,
             self.root / "data" / "phase0" / "worker-metrics",
         )
-        self.assertEqual(config.allowed_roots, ("/public/home/alice",))
+        self.assertEqual(config.allowed_roots, ())
         self.assertFalse(config.auth_required)
 
     def test_config_from_env_accepts_backend_and_auth_overrides(self) -> None:
@@ -120,6 +121,13 @@ class ApiServiceTests(unittest.TestCase):
         )
         self.assertEqual(config.template_verification_environment, "docker")
 
+    def test_postgres_domain_dsn_also_selects_the_control_plane_database(self) -> None:
+        dsn = "postgresql://pilot107.example/pilot107"
+        config = config_from_env({"PILOT107_POSTGRES_DSN": dsn}, project_root=self.root)
+
+        self.assertEqual(config.postgres_dsn, dsn)
+        self.assertEqual(config.control_postgres_dsn, dsn)
+
     def test_template_verification_environment_is_server_controlled(self) -> None:
         api = build_api_service(
             config_from_env(
@@ -149,7 +157,7 @@ class ApiServiceTests(unittest.TestCase):
         response = api.handle_get("/api/v1/platform/capabilities")
 
         self.assertEqual(response.status, 200)
-        self.assertEqual(response.payload["profile_id"], "docker-real107-sim")
+        self.assertEqual(response.payload["profile_id"], "simulator-real107-behavior")
         self.assertEqual(response.payload["default_partition"], "Students")
 
     def test_build_api_service_none_backend_is_read_only(self) -> None:
@@ -169,6 +177,7 @@ class ApiServiceTests(unittest.TestCase):
                 {
                     "PILOT107_API_BACKEND": "in-memory",
                     "PILOT107_AUTH_REQUIRED": "1",
+                    "PILOT107_ALLOWED_ROOTS": "/public/home/{user}",
                 },
                 project_root=self.root,
             )
@@ -236,6 +245,7 @@ class ApiServiceTests(unittest.TestCase):
                 {
                     "PILOT107_API_BACKEND": "demo",
                     "PILOT107_AUTH_REQUIRED": "1",
+                    "PILOT107_ALLOWED_ROOTS": "/public/home/{user}",
                 },
                 project_root=self.root,
             )

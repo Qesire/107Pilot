@@ -43,6 +43,24 @@ class RunStoreTests(unittest.TestCase):
         self.assertNotIn("db-secret", encoded)
         self.assertIn("<redacted>", encoded)
 
+    def test_run_page_search_matches_persisted_job_name(self) -> None:
+        self.store.create_run(
+            run_id="run_named",
+            owner="alice",
+            workdir="/public/home/alice",
+            script="echo named",
+            job_name="July preprocessing",
+        )
+
+        items, next_position = self.store.list_runs_page(
+            owner="alice",
+            query="preprocessing",
+            limit=20,
+        )
+
+        self.assertEqual([item.run_id for item in items], ["run_named"])
+        self.assertIsNone(next_position)
+
     def test_run_lineage_tracks_attempts_and_children(self) -> None:
         root = self.store.create_run(
             run_id="run_root",

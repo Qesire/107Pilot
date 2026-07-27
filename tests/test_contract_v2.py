@@ -2,6 +2,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from pilot107.core.contract_v2 import (
@@ -180,6 +181,32 @@ class ContractV2Tests(unittest.TestCase):
                 store=store,
             )
         self.assertEqual(raised.exception.code, "RECIPE.VERSION_IMMUTABLE")
+
+    def test_legacy_capability_overlay_does_not_block_catalog_startup(self) -> None:
+        store = ContractStore(self.db_path)
+        legacy = replace(
+            _recipe("recipe_profiled", "1.0.0", "profiled"),
+            compatibility={
+                "partitions": {"default": "Students", "allowed": ["Students"]},
+                "qos": {
+                    "default": "qos_stu_default",
+                    "allowed_by_partition": {"Students": ["qos_stu_default"]},
+                },
+            },
+        )
+        RecipeCatalog(recipes=[legacy], store=store)
+
+        catalog = RecipeCatalog(
+            recipes=[_recipe("recipe_profiled", "1.0.0", "profiled")],
+            store=store,
+            partition_qos={"CPU-RC": ("qos_cpu_rc",)},
+            default_partition="CPU-RC",
+            default_qos="qos_cpu_rc",
+        )
+
+        recipe = catalog.get("recipe_profiled", "1.0.0")
+        self.assertEqual(recipe.compatibility["partitions"]["default"], "CPU-RC")
+        self.assertEqual(recipe.compatibility["qos"]["default"], "qos_cpu_rc")
 
     def test_recipe_latest_obeys_semver_prerelease_precedence(self) -> None:
         catalog = RecipeCatalog(

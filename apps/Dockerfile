@@ -13,10 +13,12 @@ WORKDIR /opt/pilot107
 COPY pyproject.toml uv.lock ./
 # --frozen: use uv.lock as-is, no resolver drift.
 # --no-dev: exclude dev/test extras.
+# --extra postgres: production API and Worker must be able to honor
+# PILOT107_POSTGRES_DSN; this remains inert when the DSN is unset.
 # --no-emit-project: exclude the project itself (COPY'd as src/ afterward).
 # touch -d @0 normalizes the output file mtime so the COPY --from layer in the
 # final stage is deterministic.
-RUN uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /tmp/requirements.txt \
+RUN uv export --frozen --no-dev --extra postgres --no-emit-project --format requirements-txt -o /tmp/requirements.txt \
     && touch -d @0 /tmp/requirements.txt
 
 # Final stage: install locked requirements into system Python. No uv here.
@@ -45,6 +47,14 @@ COPY --from=deps-exporter /tmp/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt \
     && find /usr/local/lib/python3.12 /usr/local/bin -exec touch -h -d @0 {} + 2>/dev/null || true
+
+# The API uses the client only for an already-authenticated ControlMaster when
+# the opt-in SSH code-context transport is configured.  No server, key, or
+# credential is baked into this image.  git is required by the local
+# code-context transport (LocalWorkspaceReader) to inspect workspace revisions.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-client git \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY src ./src
 COPY data/known_errors ./data/known_errors

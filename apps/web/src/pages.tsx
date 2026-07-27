@@ -1,6 +1,7 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import {
+  Archive,
   ArrowRight,
   Blocks,
   Bot,
@@ -17,7 +18,8 @@ import {
   TerminalSquare,
   Users,
 } from "lucide-react";
-import { ApiRequestError } from "./api";
+import { api, ApiRequestError } from "./api";
+import type { TerminalCommandResult } from "./types";
 import {
   FactState,
   formatTimestamp,
@@ -26,7 +28,9 @@ import {
   SectionHeading,
   StatusBadge,
 } from "./components";
+import { ConnectionPanel } from "./ConnectionStatus";
 import { useCapabilities, useLatestEntitlement, useLatestPlatform, useRun, useRunPages, useRuns } from "./query";
+import { RunList } from "./RunList";
 import { RunTable } from "./RunTable";
 import { RunPicker } from "./RunPicker";
 import { nativeRunCommands, RunEvidencePanel } from "./RunEvidencePanel";
@@ -233,7 +237,7 @@ export function RunsPage({ user, location, navigate }: PageProps) {
       </section>
 
       <div className={`runs-layout ${selectedRunId ? "has-detail" : ""}`}>
-        <section className="panel" aria-labelledby="runs-table-heading">
+        <section className="panel runs-panel" aria-labelledby="runs-table-heading">
           <div className="panel-heading">
             <div><p className="panel-kicker">Live read model</p><h2 id="runs-table-heading">已加载 {items.length} 个结果</h2></div>
             {runs.isFetching ? <StatusBadge label="同步中" tone="info" /> : <StatusBadge label="已同步" tone="success" />}
@@ -245,8 +249,9 @@ export function RunsPage({ user, location, navigate }: PageProps) {
             emptyTitle="没有匹配的 Run"
             emptyDetail="调整状态或搜索词；筛选不会改变服务器数据。"
           >
-            <RunTable
+            <RunList
               runs={items}
+              selectedRunId={selectedRunId}
               onSelect={(runId) => navigate(withSearch(`/runs/${runId}`, location.search, { tab: "overview", object: null }))}
             />
             {runs.hasNextPage ? (
@@ -266,8 +271,35 @@ export function RunsPage({ user, location, navigate }: PageProps) {
             <QueryBoundary pending={selectedRun.isPending} error={selectedRun.error}>
               {selectedRun.data ? (
                 <div className="run-detail">
-                  <StatusBadge label={runStateLabel(selectedRun.data.state)} tone={runTone(selectedRun.data.state)} />
-                  <p className="mono detail-id">{selectedRun.data.run_id}</p>
+                  <header className="run-detail-summary">
+                    <div className="run-detail-identity">
+                      <div className="run-detail-status-line">
+                        <StatusBadge label={runStateLabel(selectedRun.data.state)} tone={runTone(selectedRun.data.state)} />
+                        <span className="run-detail-job-name" title={selectedRun.data.job_name ?? selectedRun.data.run_id}>
+                          <strong>{selectedRun.data.job_name ?? "历史作业"}</strong>
+                          <span>· sacct Job <b className="mono">{selectedRun.data.job_id ?? "尚未提交"}</b></span>
+                        </span>
+                      </div>
+                      {selectedRun.data.capsule_state === "ready" ? (
+                        <button
+                          className="run-capsule-link"
+                          type="button"
+                          onClick={() => navigate(withSearch(location.pathname, location.search, { tab: "capsule", object: null }))}
+                        >
+                          <Archive aria-hidden="true" size={15} />
+                          查看自动归档
+                        </button>
+                      ) : (
+                        <p className="run-capsule-status">Capsule：{selectedRun.data.capsule_state}</p>
+                      )}
+                      <p className="mono detail-id" title={selectedRun.data.run_id}>{selectedRun.data.run_id}</p>
+                    </div>
+                    <dl className="run-detail-sacct">
+                      <div><dt>sacct 状态</dt><dd>{selectedRun.data.terminal_state ?? "等待回收"}</dd></div>
+                      <div><dt>ExitCode</dt><dd className="mono">{selectedRun.data.exit_code ?? "—"}</dd></div>
+                      <div><dt>证据状态</dt><dd>{selectedRun.data.collection_state}</dd></div>
+                    </dl>
+                  </header>
                   <RunEvidencePanel user={user} run={selectedRun.data} location={location} navigate={navigate} />
                 </div>
               ) : null}
@@ -284,6 +316,12 @@ export function TerminalCollaborationPage({ user, location, navigate, terminalDe
   const run = useRun(user, runId);
   const runs = useRuns(user);
   const [copied, setCopied] = useState<string | null>(null);
+  const [terminalResult, setTerminalResult] = useState<TerminalCommandResult | null>(null);
+  const terminalCommand = useMutation({
+    mutationFn: (command: "identity" | "cluster" | "my_jobs" | "run_status") =>
+      api.terminalCommand(user, command, command === "run_status" ? run.data?.run_id : null),
+    onSuccess: setTerminalResult,
+  });
   const commands = run.data?.job_id
     ? nativeRunCommands(run.data.job_id, run.data.workdir ?? null)
     : [];
@@ -291,8 +329,8 @@ export function TerminalCollaborationPage({ user, location, navigate, terminalDe
     <>
       <SectionHeading
         eyebrow="Terminal / safe collaboration"
-        title="与平台终端协同，不在浏览器内执行 shell"
-        detail="这里只显示服务器事实和可复制的受限命令；107Pilot 不提供生产 PTY，也不会向浏览器下发长期凭据。"
+        title="与平台终端协同，并执行受审计的只读诊断"
+        detail="模拟器可运行固定的 Slurm 诊断命令；107Pilot 不提供生产 PTY，也不会向浏览器下发长期凭据。"
       />
       <div className="terminal-collaboration-grid">
         <section className="panel">
@@ -309,7 +347,7 @@ export function TerminalCollaborationPage({ user, location, navigate, terminalDe
                   onSelect={(selectedId) => navigate(withSearch("/terminal", location.search, { run: selectedId }))}
                 />
                 <p className="terminal-safety-note">
-                  选择 Run 后，命令将绑定该 Run 的 Job ID 和工作目录；浏览器不会执行 shell。
+                  选择 Run 后，Run 状态诊断将绑定其 Job ID；浏览器不会执行任意 shell。
                 </p>
               </>
             }
@@ -329,9 +367,21 @@ export function TerminalCollaborationPage({ user, location, navigate, terminalDe
           <header><h2>可复制命令</h2><p>复制不会执行命令；`Cancel` 仍需在目标终端中由已授权用户主动运行。</p></header>
           {commands.length ? commands.map((item) => <div key={item.label}><span><strong>{item.label}</strong>{item.dangerous ? <small>会修改作业状态</small> : null}</span><code>{item.command}</code><button type="button" onClick={() => void navigator.clipboard.writeText(item.command).then(() => setCopied(item.label))}>{copied === item.label ? "已复制" : "复制"}</button></div>) : <p className="no-findings">当前 Run 尚无 Job ID，因此不会生成命令。</p>}
         </section>
+        <section className="panel terminal-command-panel">
+          <div className="panel-heading"><div><p className="panel-kicker">Audited simulator diagnostics</p><h2>受限 Shell</h2></div></div>
+          <p className="side-detail">命令由服务端固定、以当前身份在命令网关执行，并写入网关审计日志；不接受任意命令或脚本。</p>
+          <div className="agent-action-row">
+            <button className="button secondary" type="button" disabled={terminalCommand.isPending} onClick={() => terminalCommand.mutate("identity")}>身份</button>
+            <button className="button secondary" type="button" disabled={terminalCommand.isPending} onClick={() => terminalCommand.mutate("cluster")}>集群</button>
+            <button className="button secondary" type="button" disabled={terminalCommand.isPending} onClick={() => terminalCommand.mutate("my_jobs")}>我的作业</button>
+            <button className="button primary" type="button" disabled={terminalCommand.isPending || !run.data?.job_id} onClick={() => terminalCommand.mutate("run_status")}>所选 Run 状态</button>
+          </div>
+          {terminalCommand.isError ? <p className="limitation" role="alert">诊断命令失败：{terminalCommand.error.message}</p> : null}
+          {terminalResult ? <div className="terminal-result"><p className="mono">$ {terminalResult.argv.join(" ")} · exit {terminalResult.returncode}</p><pre><code>{terminalResult.stdout || terminalResult.stderr || "(no output)"}</code></pre></div> : null}
+        </section>
         <section className="panel">
           <div className="panel-heading"><div><p className="panel-kicker">Platform terminal</p><h2>配置化 deep link</h2></div></div>
-          {terminalDeepLink ? <a className="button primary" href={terminalDeepLink} target="_blank" rel="noreferrer">打开平台终端</a> : <p className="limitation">部署未配置平台终端 URL；不会猜测地址或生成伪链接。</p>}
+          {terminalDeepLink ? <a className="button primary" href={terminalDeepLink} target="_blank" rel="noreferrer">打开平台终端</a> : <p className="limitation">部署未配置生产 PTY URL；上方的受限 Shell 仍可用于模拟器诊断。</p>}
         </section>
       </div>
     </>
@@ -360,6 +410,15 @@ export function ClusterPage({ user }: PageProps) {
         </section>
 
         <div className="cluster-grid">
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <p className="panel-kicker">Real platform relay</p>
+                <h2>真实 107 连接</h2>
+              </div>
+            </div>
+            <ConnectionPanel user={user} />
+          </section>
           <section className="panel span-2">
             <div className="panel-heading"><div><p className="panel-kicker">Partitions</p><h2>可调度分区</h2></div><FactState status={platform.data?.freshness} /></div>
             <div className="partition-grid">

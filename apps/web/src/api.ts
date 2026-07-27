@@ -1,4 +1,5 @@
 import type {
+  ArtifactManifest,
   CapabilityProfile,
   ContractRecordPayload,
   ContractSuggestion,
@@ -6,7 +7,10 @@ import type {
   EntitlementSnapshot,
   HealthReady,
   PagePayload,
+  PlatformConnection,
+  PlatformConnections,
   PlatformSnapshot,
+  RepairTicket,
   RunEvent,
   RunLineage,
   RunSummary,
@@ -22,6 +26,12 @@ import type {
   TemplateMarketItem,
   TemplateRelease,
   TemplateReleaseDiff,
+  MarketItem,
+  MarketItemAdoption,
+  SuccessfulRunAdoption,
+  SuccessfulRunMarketItem,
+  SuccessfulRunPublicationInput,
+  TerminalCommandResult,
   WebSession,
 } from "./types";
 
@@ -41,6 +51,23 @@ interface ErrorPayload {
   error?: { code?: string; message?: string };
 }
 
+const genericHttpMessages = new Set(["", "OK", "Forbidden", "Unauthorized", "Bad Request", "请求失败"]);
+
+export function describeApiError(code: string, message?: string): string {
+  const supplied = message?.trim() ?? "";
+  if (supplied && !genericHttpMessages.has(supplied)) return supplied;
+  const guidance: Record<string, string> = {
+    "AUTH.FORBIDDEN": "当前登录身份无权访问该资源。请确认正在使用正确的账号，且该作业或 Contract 属于此账号。",
+    "AUTH.MISSING": "未识别到登录身份。请重新登录后再试。",
+    "AUTH.PROXY_SIGNATURE_INVALID": "身份代理校验未通过。请联系部署管理员检查 Web 与 API 的受信代理配置。",
+    "TEMPLATE.FORBIDDEN": "当前账号没有采用此模板 release 的权限。请返回模板市场选择可见的 release，或申请课程/发布权限。",
+    "CSRF.ORIGIN_DENIED": "当前访问来源未获写入授权。请从配置的 107Pilot 地址重新打开页面后再试。",
+    "CSRF.COOKIE_AUTH_UNSUPPORTED": "此部署不接受浏览器 Cookie 代签写操作。请联系部署管理员完成身份代理配置。",
+    "CSRF.CROSS_SITE_DENIED": "跨站写操作已被安全策略拒绝。请从 107Pilot 页面内重新发起操作。",
+  };
+  return guidance[code] ?? (supplied || "请求失败");
+}
+
 async function getJson<T>(
   path: string,
   user: string,
@@ -58,7 +85,7 @@ async function getJson<T>(
   const payload = (await response.json().catch(() => ({}))) as T & ErrorPayload;
   if (!response.ok) {
     const code = payload.error?.code ?? `HTTP.${response.status}`;
-    const message = payload.error?.message ?? response.statusText ?? "请求失败";
+    const message = describeApiError(code, payload.error?.message ?? response.statusText);
     throw new ApiRequestError(response.status, code, message);
   }
   return payload;
@@ -67,7 +94,7 @@ async function getJson<T>(
 async function sendJson<T>(
   path: string,
   user: string,
-  body: JsonObject,
+  body: object,
   signal?: AbortSignal,
 ): Promise<T> {
   const request: RequestInit = {
@@ -84,7 +111,7 @@ async function sendJson<T>(
   const payload = (await response.json().catch(() => ({}))) as T & ErrorPayload;
   if (!response.ok) {
     const code = payload.error?.code ?? `HTTP.${response.status}`;
-    const message = payload.error?.message ?? response.statusText ?? "请求失败";
+    const message = describeApiError(code, payload.error?.message ?? response.statusText);
     throw new ApiRequestError(response.status, code, message);
   }
   return payload;
@@ -104,6 +131,19 @@ export const api = {
     getJson<WebSession>("/api/v1/web/session", requestedUser, signal),
   health: (user: string, signal?: AbortSignal) =>
     getJson<HealthReady>("/api/v1/health/ready", user, signal),
+  platformConnections: (user: string, signal?: AbortSignal) =>
+    getJson<PlatformConnections>("/api/v1/platform/connections", user, signal),
+  checkPlatformConnection: (
+    user: string,
+    connectionId: string,
+    signal?: AbortSignal,
+  ) =>
+    sendJson<PlatformConnection>(
+      `/api/v1/platform/connections/${encodeURIComponent(connectionId)}/check`,
+      user,
+      {},
+      signal,
+    ),
   capabilities: (user: string, signal?: AbortSignal) =>
     getJson<CapabilityProfile>(
       queryPath("/api/v1/platform/capabilities", { owner: user }),
@@ -284,6 +324,90 @@ export const api = {
     { request_key: requestKey },
     signal,
   ),
+  marketItems: (
+    user: string,
+    filters: {
+      q?: string | undefined;
+      kind?: string | undefined;
+      visibility?: string | undefined;
+      tag?: string | undefined;
+      limit?: string | undefined;
+      cursor?: string | undefined;
+    },
+    signal?: AbortSignal,
+  ) => getJson<PagePayload<MarketItem>>(
+    queryPath("/api/v1/market/items", { ...filters, limit: filters.limit ?? "20" }),
+    user,
+    signal,
+  ),
+  marketItem: (
+    user: string,
+    itemId: string,
+    signal?: AbortSignal,
+  ) => getJson<MarketItem>(
+    `/api/v1/market/items/${encodeURIComponent(itemId)}`,
+    user,
+    signal,
+  ),
+  adoptMarketItem: (
+    user: string,
+    itemId: string,
+    requestKey: string,
+    signal?: AbortSignal,
+  ) => sendJson<MarketItemAdoption>(
+    `/api/v1/market/items/${encodeURIComponent(itemId)}/adopt`,
+    user,
+    { request_key: requestKey },
+    signal,
+  ),
+  withdrawMarketItem: (
+    user: string,
+    itemId: string,
+    reason: string,
+    signal?: AbortSignal,
+  ) => sendJson<{ publication_id?: string; release_id?: string; withdrawn: boolean }>(
+    `/api/v1/market/items/${encodeURIComponent(itemId)}/withdraw`,
+    user,
+    { reason },
+    signal,
+  ),
+  successfulRunMarket: (
+    user: string,
+    filters: {
+      q?: string | undefined;
+      visibility?: string | undefined;
+      tag?: string | undefined;
+      limit?: string | undefined;
+      cursor?: string | undefined;
+    },
+    signal?: AbortSignal,
+  ) => getJson<PagePayload<SuccessfulRunMarketItem>>(
+    queryPath("/api/v1/market", { ...filters, limit: filters.limit ?? "20" }),
+    user,
+    signal,
+  ),
+  publishSuccessfulRun: (
+    user: string,
+    runId: string,
+    payload: SuccessfulRunPublicationInput,
+    signal?: AbortSignal,
+  ) => sendJson<SuccessfulRunMarketItem>(
+    `/api/v1/runs/${encodeURIComponent(runId)}/publish`,
+    user,
+    payload,
+    signal,
+  ),
+  adoptSuccessfulRun: (
+    user: string,
+    publicationId: string,
+    requestKey: string,
+    signal?: AbortSignal,
+  ) => sendJson<SuccessfulRunAdoption>(
+    `/api/v1/market/${encodeURIComponent(publicationId)}/adopt`,
+    user,
+    { request_key: requestKey },
+    signal,
+  ),
   preflightContract: (user: string, contractId: string, signal?: AbortSignal) =>
     sendJson<ContractValidation>(
       `/api/v1/contracts/${encodeURIComponent(contractId)}/preflight`,
@@ -337,13 +461,14 @@ export const api = {
   createRemediationSession: (
     user: string,
     runId: string,
+    requestKey: string,
     provider: "local" | "none" = "local",
     signal?: AbortSignal,
   ) =>
     sendJson<RemediationSession>(
       `/api/v1/runs/${encodeURIComponent(runId)}/remediation-sessions`,
       user,
-      { request_key: `ui:${runId}`, automation_policy: "manual_approval", provider },
+      { request_key: requestKey, automation_policy: "manual_approval", provider },
       signal,
     ),
   advanceRemediationSession: (
@@ -417,4 +542,76 @@ export const api = {
     { proposal_id: proposalId, expected_version: expectedVersion, submit: true },
     signal,
   ),
+  terminalCommand: (
+    user: string,
+    command: "identity" | "cluster" | "my_jobs" | "run_status",
+    runId?: string | null,
+    signal?: AbortSignal,
+  ) => sendJson<TerminalCommandResult>(
+    "/api/v1/terminal/commands",
+    user,
+    { command, ...(runId ? { run_id: runId } : {}) },
+    signal,
+  ),
+  // -------------------------------------------------------------------------
+  // M2: Repair Tickets & Artifact Manifests
+  // -------------------------------------------------------------------------
+  repairTickets: (user: string, state?: string, sessionId?: string, signal?: AbortSignal) =>
+    getJson<{ items: RepairTicket[]; page: { limit: number; has_more: boolean; next_cursor: string | null } }>(
+      queryPath("/api/v1/repair-tickets", { state, session_id: sessionId }),
+      user,
+      signal,
+    ),
+  repairTicket: (user: string, ticketId: string, signal?: AbortSignal) =>
+    getJson<RepairTicket>(
+      `/api/v1/repair-tickets/${encodeURIComponent(ticketId)}`,
+      user,
+      signal,
+    ),
+  createRepairTicket: (
+    user: string,
+    input: { session_id?: string; source_run_id?: string; request_key: string; requested_change?: string },
+    signal?: AbortSignal,
+  ) => sendJson<RepairTicket>("/api/v1/repair-tickets", user, input, signal),
+  resolveRepairTicket: (
+    user: string,
+    ticketId: string,
+    input: { manifest_id: string; derived_run_id: string },
+    signal?: AbortSignal,
+  ) => sendJson<RepairTicket>(
+    `/api/v1/repair-tickets/${encodeURIComponent(ticketId)}/resolve`,
+    user,
+    input,
+    signal,
+  ),
+  abandonRepairTicket: (
+    user: string,
+    ticketId: string,
+    reason?: string,
+    signal?: AbortSignal,
+  ) => sendJson<RepairTicket>(
+    `/api/v1/repair-tickets/${encodeURIComponent(ticketId)}/abandon`,
+    user,
+    { reason: reason ?? null },
+    signal,
+  ),
+  createArtifactManifest: (
+    user: string,
+    input: {
+      revision: string;
+      run_id?: string;
+      dirty_diff_digest?: string;
+      bundle_digest?: string;
+      remote_workdir?: string;
+      local_test_summary?: string;
+      disclosure?: string;
+    },
+    signal?: AbortSignal,
+  ) => sendJson<ArtifactManifest>("/api/v1/artifact-manifests", user, input, signal),
+  runArtifactManifests: (user: string, runId: string, signal?: AbortSignal) =>
+    getJson<{ items: ArtifactManifest[] }>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/artifact-manifests`,
+      user,
+      signal,
+    ),
 };

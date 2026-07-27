@@ -8,10 +8,12 @@ import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from pilot107.core.path_policy import OwnerRootPolicyError, resolve_owner_roots
 from pilot107.core.paths import authorize_path
 from pilot107.core.resources import PreflightSeverity, ResourcePlan, validate_resource_plan
 from pilot107.core.rest_semantics import RestSemanticLevel, check_slurm_rest_semantics
@@ -47,6 +49,15 @@ class SlurmSubmissionRejected(SlurmBackendError):
 
 class SlurmTransportError(SlurmBackendError):
     """Raised when the backend transport cannot complete a request."""
+
+
+class SlurmBackendOwnershipError(SlurmTransportError):
+    """Raised when a persisted job belongs to a different backend boundary.
+
+    This is not a transient transport failure.  Retrying it forever leaves a
+    worker unhealthy after a safe backend migration (for example from the
+    in-memory test backend to the persistent demo backend).
+    """
 
 
 @dataclass(frozen=True)
@@ -529,6 +540,12 @@ def _sbatch_options(plan: ResourcePlan) -> list[str]:
         str(plan.cpus_per_task),
         "--time",
         str(plan.time_limit),
+        # Separate stdout/stderr into distinct files so the evidence
+        # collector can read slurm-{job_id}.err for traceback analysis.
+        "--output",
+        "slurm-%j.out",
+        "--error",
+        "slurm-%j.err",
     ]
     if plan.qos:
         options.extend(["--qos", plan.qos])
@@ -695,7 +712,7 @@ class DemoSlurmBackend:
     def get_job(self, *, user: str, job_id: str) -> JobSnapshot:
         _require_job_id(job_id)
         if not job_id.startswith("demo-"):
-            raise SlurmTransportError(f"demo backend does not own job_id: {job_id}")
+            raise SlurmBackendOwnershipError(f"demo backend does not own job_id: {job_id}")
         return JobSnapshot(
             job_id=job_id,
             owner=user,
@@ -709,7 +726,7 @@ class DemoSlurmBackend:
     def cancel(self, *, user: str, job_id: str) -> JobSnapshot:
         _require_job_id(job_id)
         if not job_id.startswith("demo-"):
-            raise SlurmTransportError(f"demo backend does not own job_id: {job_id}")
+            raise SlurmBackendOwnershipError(f"demo backend does not own job_id: {job_id}")
         return JobSnapshot(
             job_id=job_id,
             owner=user,
@@ -822,7 +839,11 @@ class CommandSubmitBackend:
 
     def submit(self, intent: SubmitIntent) -> SubmitReceipt:
         _validate_submit_intent(intent)
-        safe_workdir = authorize_path(str(intent.workdir), self.allowed_roots)
+        try:
+            allowed_roots = resolve_owner_roots(self.allowed_roots, user=intent.user)
+        except OwnerRootPolicyError as exc:
+            raise SlurmSubmissionRejected(str(exc)) from exc
+        safe_workdir = authorize_path(str(intent.workdir), list(allowed_roots))
         script_path = safe_workdir.resolved / _submission_script_name(intent)
         script_path.write_text(intent.script, encoding="utf-8")
         argv = [
@@ -931,10 +952,14 @@ class DockerSimulatorCommandBackend:
 
     def submit(self, intent: SubmitIntent) -> SubmitReceipt:
         _validate_submit_intent(intent)
+        try:
+            allowed_roots = resolve_owner_roots(self.allowed_roots, user=intent.user)
+        except OwnerRootPolicyError as exc:
+            raise SlurmSubmissionRejected(str(exc)) from exc
         workdir = _authorize_container_path(
             executor=self.executor,
             path=str(intent.workdir),
-            allowed_roots=self.allowed_roots,
+            allowed_roots=list(allowed_roots),
             timeout_seconds=self.timeout_seconds,
         )
         script_path = posixpath.join(workdir, _submission_script_name(intent))
@@ -1045,6 +1070,185 @@ class DockerSimulatorCommandBackend:
         )
 
 
+class SshSlurmBackend(DockerSimulatorCommandBackend):
+    """Slurm command adapter carried by the typed, owner-bound SSH relay.
+
+    This backend intentionally reuses the simulator command backend's state
+    normalization and ownership checks, while changing materialization and
+    reconciliation to match the real-platform contract.
+    """
+
+    submission_strategy = SubmissionStrategy.COMMAND
+    backend_kind = "real107-ssh"
+
+    def __init__(
+        self,
+        *,
+        executor: SimulatorExecutor,
+        allowed_roots: list[str],
+        timeout_seconds: float = 10.0,
+        target_id: str | None = None,
+    ) -> None:
+        super().__init__(
+            executor=executor,
+            allowed_roots=allowed_roots,
+            timeout_seconds=timeout_seconds,
+        )
+        self.target_id = target_id
+
+    def submit(self, intent: SubmitIntent) -> SubmitReceipt:
+        _validate_submit_intent(intent)
+        try:
+            allowed_roots = resolve_owner_roots(self.allowed_roots, user=intent.user)
+        except OwnerRootPolicyError as exc:
+            raise SlurmSubmissionRejected(str(exc)) from exc
+        workdir = _authorize_container_path(
+            executor=self.executor,
+            path=str(intent.workdir),
+            allowed_roots=list(allowed_roots),
+            timeout_seconds=self.timeout_seconds,
+        )
+        run_directory = posixpath.join(
+            workdir,
+            ".107pilot",
+            "runs",
+            _ssh_run_directory_name(intent),
+        )
+        mkdir_result = self.executor.run(
+            ["mkdir", "-p", "--", run_directory],
+            user=intent.user,
+            timeout_seconds=self.timeout_seconds,
+        )
+        if mkdir_result.returncode != 0:
+            raise SlurmTransportError(mkdir_result.stderr.strip() or "prepare run directory failed")
+        script_path = posixpath.join(run_directory, "submission.sbatch")
+        marker_path = posixpath.join(run_directory, "intent.json")
+        self.executor.write_text(
+            path=script_path,
+            content=intent.script,
+            owner=intent.user,
+            timeout_seconds=self.timeout_seconds,
+        )
+        self.executor.write_text(
+            path=marker_path,
+            content=json.dumps(
+                {
+                    "schema": "pilot107.ssh_submission_intent.v1",
+                    "owner": intent.user,
+                    "job_name": intent.job_name,
+                    "idempotency_key": intent.idempotency_key,
+                    "script_sha256": hashlib.sha256(intent.script.encode("utf-8")).hexdigest(),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            + "\n",
+            owner=intent.user,
+            timeout_seconds=self.timeout_seconds,
+        )
+        argv = [
+            "sbatch",
+            "--parsable",
+            "--job-name",
+            intent.job_name or "pilot107-run",
+            "--chdir",
+            workdir,
+            *_sbatch_options(intent.resource_plan),
+            *_dependency_options(intent),
+            script_path,
+        ]
+        result = self.executor.run(
+            argv,
+            cwd=workdir,
+            user=intent.user,
+            timeout_seconds=self.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmSubmissionRejected(result.stderr.strip() or "sbatch failed")
+        job_id = result.stdout.strip().splitlines()[0].split(";")[0].strip()
+        _require_job_id(job_id)
+        return SubmitReceipt(
+            job_id=job_id,
+            run_state=RunState.SUBMITTED,
+            strategy=SubmissionStrategy.COMMAND,
+            raw_response={
+                "backend_kind": "real107-ssh",
+                "target_id": self.target_id,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "argv": argv,
+                "run_directory": run_directory,
+                "marker_path": marker_path,
+            },
+        )
+
+    def find_jobs_by_marker(
+        self,
+        *,
+        user: str,
+        job_name_marker: str,
+        since_timestamp: float,
+    ) -> list[str]:
+        """Find one logical job per matching marker for timeout recovery."""
+
+        if not _SAFE_SLURM_VALUE.fullmatch(job_name_marker):
+            raise SlurmSubmissionRejected("unsafe reconciliation marker")
+        since = datetime.fromtimestamp(since_timestamp, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S")
+        result = self.executor.run(
+            [
+                "sacct",
+                "-nP",
+                "-X",
+                "-u",
+                user,
+                "-S",
+                since,
+                "-o",
+                "JobIDRaw,User,JobName",
+            ],
+            user=user,
+            timeout_seconds=self.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError(result.stderr.strip() or "sacct reconciliation failed")
+        matches: list[str] = []
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+            job_id, owner, job_name = _split_command_row(line, expected_fields=3)
+            if owner != user or job_name != job_name_marker:
+                continue
+            _require_job_id(job_id)
+            if job_id not in matches:
+                matches.append(job_id)
+        return matches
+
+    def _get_finished_job(self, *, user: str, job_id: str) -> JobSnapshot:
+        result = self.executor.run(
+            ["sacct", "-nP", "-j", job_id, "-X", "-o", "JobIDRaw,User,State,ExitCode"],
+            user=user,
+            timeout_seconds=self.timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError(result.stderr.strip() or "sacct failed")
+        line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+        if not line:
+            raise SlurmTransportError(f"job not found: {job_id}")
+        found_job_id, owner, raw_state, exit_code = _split_command_row(line, expected_fields=4)
+        if found_job_id != job_id:
+            raise SlurmTransportError("sacct returned mismatched job_id")
+        _require_accounting_owner(owner=owner, user=user)
+        run_state, flags = normalize_slurm_state(raw_state)
+        return JobSnapshot(
+            job_id=job_id,
+            owner=owner,
+            run_state=run_state,
+            raw_state_flags=flags,
+            exit_code=exit_code,
+            raw_response={"stdout": result.stdout},
+        )
+
+
 def _extract_job_id(payload: dict[str, Any]) -> str | None:
     result = payload.get("result")
     if isinstance(result, dict):
@@ -1108,3 +1312,11 @@ def _submission_script_name(intent: SubmitIntent) -> str:
     if not safe:
         safe = hashlib.sha256(intent.script.encode("utf-8")).hexdigest()[:16]
     return f"pilot107-submit-{safe[:80]}.sbatch"
+
+
+def _ssh_run_directory_name(intent: SubmitIntent) -> str:
+    raw = (intent.idempotency_key or "").removesuffix(":submit")
+    safe = re.sub(r"[^A-Za-z0-9_.:-]+", "_", raw).strip("._:-")
+    if not safe:
+        safe = hashlib.sha256(intent.script.encode("utf-8")).hexdigest()[:32]
+    return safe[:96]

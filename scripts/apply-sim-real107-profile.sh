@@ -30,17 +30,20 @@ set_qos_limit() {
   local mem="$4"
   local gpu="$5"
 
-  # SlurmDBD field support varies across Slurm versions and package builds.
-  # Keep this idempotent and best-effort: walltime/CPU/memory limits are live
-  # Slurm enforcement when accepted; 107Pilot preflight remains the source of
-  # truth for any field this simulator cannot express.
+  # The real platform publishes these as MaxTRESPerUser values. Keep a matching
+  # per-job limit in the simulator so an oversized one-off request is rejected
+  # at submission under DenyOnLimit. GrpTRES is deliberately high: a simulator
+  # group limit would otherwise model a different policy and can mask the
+  # per-user behavior we want to exercise.
   run_sacctmgr modify qos "$qos" set MaxWall="$max_wall" || true
   run_sacctmgr modify qos "$qos" set MaxTRESPerJob=cpu="$cpu",mem="$mem" || true
-  run_sacctmgr modify qos "$qos" set GrpTRES=cpu="$cpu",mem="$mem" || true
+  run_sacctmgr modify qos "$qos" set MaxTRESPerUser=cpu="$cpu",mem="$mem" || true
+  run_sacctmgr modify qos "$qos" set GrpTRES=cpu=99999,mem=99999G || true
   if [[ "$gpu" != "0" ]]; then
     if has_gpu_tres; then
       run_sacctmgr modify qos "$qos" set MaxTRESPerJob=cpu="$cpu",mem="$mem",gres/gpu="$gpu" || true
-      run_sacctmgr modify qos "$qos" set GrpTRES=cpu="$cpu",mem="$mem",gres/gpu="$gpu" || true
+      run_sacctmgr modify qos "$qos" set MaxTRESPerUser=cpu="$cpu",mem="$mem",gres/gpu="$gpu" || true
+      run_sacctmgr modify qos "$qos" set GrpTRES=cpu=99999,mem=99999G,gres/gpu=99999 || true
     fi
   fi
 }
@@ -107,6 +110,7 @@ qos_names=(
   qos_stu_small
   qos_stu_medium
   qos_stu_medium_2gpu
+  qos_stu_large
   qos_stu_long
   qos_stu_cpu_long
 )
@@ -117,24 +121,43 @@ done
 
 set_qos_limit qos_stu_default 04:00:00 4 16G 1
 set_qos_limit qos_stu_small 08:00:00 8 32G 1
-set_qos_limit qos_stu_medium 12:00:00 16 64G 1
-set_qos_limit qos_stu_medium_2gpu 12:00:00 24 128G 2
+set_qos_limit qos_stu_medium 1-00:00:00 16 64G 1
+set_qos_limit qos_stu_medium_2gpu 1-00:00:00 24 128G 2
+set_qos_limit qos_stu_large 12:00:00 48 240G 4
 set_qos_limit qos_stu_long 3-00:00:00 16 64G 1
 set_qos_limit qos_stu_cpu_long 3-00:00:00 32 128G 0
+set_qos_limit qos_p107-rtx5090 4-00:00:00 16 64G 4
+set_qos_limit qos_p107-a100 4-00:00:00 16 64G 4
+
+# The observed student QoS rows use DenyOnLimit, so oversized requests fail at
+# submission rather than silently queuing forever. The simulator intentionally
+# leaves competition QoS without that flag because the real rows do too.
+for qos in \
+  qos_stu_default \
+  qos_stu_small \
+  qos_stu_medium \
+  qos_stu_medium_2gpu \
+  qos_stu_large \
+  qos_stu_long \
+  qos_stu_cpu_long; do
+  run_sacctmgr modify qos "$qos" set Flags=DenyOnLimit || true
+done
 
 if has_gpu_tres; then
-  run_sacctmgr modify qos qos_stu_medium_2gpu set MaxJobs=4 GrpTRES=cpu=16,gres/gpu=2 || true
-  run_sacctmgr modify qos qos_p107-rtx5090 set MaxJobs=4 GrpTRES=cpu=16,gres/gpu=4 || true
-  run_sacctmgr modify qos qos_p107-a100 set MaxJobs=4 GrpTRES=cpu=16,gres/gpu=2 || true
+  run_sacctmgr modify qos qos_stu_medium_2gpu set MaxJobsPU=4 MaxSubmitJobsPU=10 || true
+  run_sacctmgr modify qos qos_stu_large set MaxJobsPU=4 MaxSubmitJobsPU=10 || true
+  run_sacctmgr modify qos qos_p107-rtx5090 set MaxJobsPU=4 MaxSubmitJobsPU=10 || true
+  run_sacctmgr modify qos qos_p107-a100 set MaxJobsPU=4 MaxSubmitJobsPU=10 || true
 else
-  run_sacctmgr modify qos qos_stu_medium_2gpu set MaxJobs=4 || true
-  run_sacctmgr modify qos qos_p107-rtx5090 set MaxJobs=4 || true
-  run_sacctmgr modify qos qos_p107-a100 set MaxJobs=4 || true
+  run_sacctmgr modify qos qos_stu_medium_2gpu set MaxJobsPU=4 MaxSubmitJobsPU=10 || true
+  run_sacctmgr modify qos qos_stu_large set MaxJobsPU=4 MaxSubmitJobsPU=10 || true
+  run_sacctmgr modify qos qos_p107-rtx5090 set MaxJobsPU=4 MaxSubmitJobsPU=10 || true
+  run_sacctmgr modify qos qos_p107-a100 set MaxJobsPU=4 MaxSubmitJobsPU=10 || true
 fi
 
 run_sacctmgr add user alice Account=students Cluster="$cluster_name" || true
 run_sacctmgr modify user alice set DefaultAccount=students || true
-run_sacctmgr modify user where user=alice account=students cluster="$cluster_name" set QOS=normal,qos_stu001,qos_stu_default,qos_stu_small,qos_stu_medium,qos_stu_medium_2gpu,qos_stu_long,qos_stu_cpu_long || true
+run_sacctmgr modify user where user=alice account=students cluster="$cluster_name" set QOS=normal,qos_stu001,qos_stu_default,qos_stu_small,qos_stu_medium,qos_stu_medium_2gpu,qos_stu_large,qos_stu_long,qos_stu_cpu_long || true
 run_sacctmgr modify user where user=alice account=students cluster="$cluster_name" set DefaultQOS=qos_stu_medium_2gpu || true
 
 run_sacctmgr add user bob Account=students Cluster="$cluster_name" || true

@@ -16,6 +16,7 @@ from pilot107.adapters.slurm import CommandResult, SimulatorExecutor, SlurmTrans
 from pilot107.core.contract_v2 import parse_expected_output
 from pilot107.core.contracts import ContractStore
 from pilot107.core.identity import UserIdentity
+from pilot107.core.path_policy import OwnerRootPolicyError, resolve_owner_roots
 from pilot107.core.paths import PathPolicyError, SafePath, authorize_path, reject_special_file
 from pilot107.core.run_store import RunRecord, RunStore, utc_now_iso
 
@@ -1076,7 +1077,7 @@ class DockerSlurmEvidenceCollector:
             "stdout": _slurm_log_path(run, job_id, "out"),
             "stderr": _slurm_log_path(run, job_id, "err"),
         }.items():
-            authorized = self._authorize_source_path(container_path)
+            authorized = self._authorize_source_path(container_path, user=run.owner)
             metadata = self._file_metadata(run, authorized)
             tail = self._tail_file(run, authorized)
             sha = self._sha256_file(run, authorized)
@@ -1121,7 +1122,7 @@ class DockerSlurmEvidenceCollector:
             "stdout": _slurm_log_path(run, job_id, "out"),
             "stderr": _slurm_log_path(run, job_id, "err"),
         }.items():
-            safe_path = self._safe_source_path(source_path)
+            safe_path = self._safe_source_path(source_path, user=run.owner)
             metadata, tail, sha = self._transport_log_payload(identity, safe_path)
             payload = {
                 "collector": "logs_finalize",
@@ -1229,7 +1230,7 @@ class DockerSlurmEvidenceCollector:
         if self.evidence_transport is not None:
             return self._collect_outputs_inventory_via_transport(run)
 
-        workdir = self._authorize_source_path(run.workdir)
+        workdir = self._authorize_source_path(run.workdir, user=run.owner)
         find = self._run_user(
             run,
             [
@@ -1289,7 +1290,7 @@ class DockerSlurmEvidenceCollector:
         )
 
     def _collect_outputs_inventory_via_transport(self, run: RunRecord) -> EvidenceCollectionResult:
-        workdir = self._safe_source_path(run.workdir)
+        workdir = self._safe_source_path(run.workdir, user=run.owner)
         identity = UserIdentity(username=run.owner)
         transport = self._require_evidence_transport()
         policy = EvidencePolicy(
@@ -1643,25 +1644,34 @@ class DockerSlurmEvidenceCollector:
             )
         return artifacts
 
-    def _authorize_source_path(self, path: str) -> str:
+    def _authorize_source_path(self, path: str, *, user: str) -> str:
         resolved = self.executor.realpath(path, timeout_seconds=self.timeout_seconds)
-        roots = [
-            self.executor.realpath(root, timeout_seconds=self.timeout_seconds).rstrip("/")
-            for root in self.allowed_roots
-        ]
+        roots = self._resolved_allowed_roots(user)
         for root in roots:
             if resolved == root or resolved.startswith(f"{root}/"):
                 return resolved
         raise SlurmTransportError(f"evidence source path outside allowed roots: {path}")
 
-    def _safe_source_path(self, path: str) -> SafePath:
+    def _safe_source_path(self, path: str, *, user: str) -> SafePath:
+        resolved = self.executor.realpath(path, timeout_seconds=self.timeout_seconds)
+        for root in self._resolved_allowed_roots(user):
+            if resolved == root or resolved.startswith(f"{root}/"):
+                return SafePath(
+                    original=path,
+                    resolved=Path(resolved),
+                    root=Path(root),
+                )
+        raise SlurmTransportError(f"evidence source path outside allowed roots: {path}")
+
+    def _resolved_allowed_roots(self, user: str) -> list[str]:
         try:
-            roots: list[str | Path] = list(self.allowed_roots)
-            return authorize_path(path, roots)
-        except PathPolicyError as exc:
-            raise SlurmTransportError(
-                f"evidence source path outside allowed roots: {path}"
-            ) from exc
+            roots = resolve_owner_roots(self.allowed_roots, user=user)
+        except OwnerRootPolicyError as exc:
+            raise SlurmTransportError("evidence owner-root policy is invalid") from exc
+        return [
+            self.executor.realpath(root, timeout_seconds=self.timeout_seconds).rstrip("/")
+            for root in roots
+        ]
 
     def _require_evidence_transport(self) -> EvidenceTransport:
         if self.evidence_transport is None:
@@ -1723,7 +1733,10 @@ class DockerSlurmEvidenceCollector:
         )
 
     def _file_metadata(self, run: RunRecord, path: str) -> dict[str, Any]:
-        result = self._run_user(run, ["stat", "-c", "%F|%s|%Y|%U|%G", path]).result
+        result = self._run_user(
+            run,
+            ["stat", "-c", "%F|%s|%Y|%U|%G", "--", path],
+        ).result
         if result.returncode != 0:
             return {"status": "missing", "stderr": result.stderr}
         kind, size, mtime_epoch, owner, group = _split_stat(result.stdout.strip())
@@ -1737,13 +1750,16 @@ class DockerSlurmEvidenceCollector:
         }
 
     def _tail_file(self, run: RunRecord, path: str) -> str | None:
-        result = self._run_user(run, ["tail", "-c", str(self.log_tail_bytes), path]).result
+        result = self._run_user(
+            run,
+            ["tail", "-c", str(self.log_tail_bytes), "--", path],
+        ).result
         if result.returncode != 0:
             return None
         return result.stdout
 
     def _sha256_file(self, run: RunRecord, path: str) -> str | None:
-        result = self._run_user(run, ["sha256sum", path]).result
+        result = self._run_user(run, ["sha256sum", "--", path]).result
         if result.returncode != 0:
             return None
         return result.stdout.strip().split()[0]
@@ -1771,7 +1787,7 @@ class DockerSlurmEvidenceCollector:
                 continue
             path, size, mtime_epoch, owner, group = parts
             try:
-                authorized = self._authorize_source_path(path)
+                authorized = self._authorize_source_path(path, user=run.owner)
             except SlurmTransportError as exc:
                 warnings.append(str(exc))
                 continue

@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from pilot107.adapters.slurm import JobSnapshot, SubmissionStrategy, SubmitReceipt
 from pilot107.api.evidence_query import EvidenceQueryService
@@ -12,6 +13,7 @@ from pilot107.core.states import RunState
 from pilot107.core.template_market import (
     TemplateMarketError,
     TemplateMarketStore,
+    TemplateReleaseRecord,
     TemplateVisibility,
 )
 from pilot107.core.template_policy import (
@@ -156,12 +158,7 @@ class TemplateVerificationTests(unittest.TestCase):
             run_id="run_tampered_capsule",
         )
         tampered_path = (
-            self.capsule_root
-            / "runs"
-            / tampered_run
-            / "raw"
-            / "slurm"
-            / "accounting.json"
+            self.capsule_root / "runs" / tampered_run / "raw" / "slurm" / "accounting.json"
         )
         tampered_path.write_text("tampered", encoding="utf-8")
         with self.assertRaises(TemplateMarketError) as tampered:
@@ -198,6 +195,27 @@ class TemplateVerificationTests(unittest.TestCase):
             "TEMPLATE.VERIFICATION_ENVIRONMENT_MISMATCH",
         )
 
+    def test_verification_requires_declared_expected_output_evidence(self) -> None:
+        release = self._release(expected_output="results/required.txt")
+        adoption = self.template_store.adopt_release(
+            release.release_id,
+            adopter="bob",
+            request_key="bob-expected-output-adoption",
+        )
+        run_id = self._terminal_run(
+            contract_id=str(adoption.target_contract_id),
+            run_id="run_missing_expected_output",
+        )
+
+        with self.assertRaises(TemplateMarketError) as raised:
+            self.verification_service.verify_from_run(
+                release_id=release.release_id,
+                run_id=run_id,
+                actor="bob",
+                request_key="missing-expected-output",
+            )
+        self.assertEqual(raised.exception.code, "TEMPLATE.VERIFICATION_EVIDENCE_INCOMPLETE")
+
     def test_api_rejects_client_asserted_verification_facts(self) -> None:
         release = self._release()
         adoption = self.template_store.adopt_release(
@@ -206,10 +224,7 @@ class TemplateVerificationTests(unittest.TestCase):
             request_key="bob-api-adoption",
         )
         run_id = self._terminal_run(contract_id=str(adoption.target_contract_id))
-        path = (
-            f"/api/v1/templates/{release.template_id}/releases/"
-            f"{release.release_version}/verify"
-        )
+        path = f"/api/v1/templates/{release.template_id}/releases/{release.release_version}/verify"
 
         forged = self.api.handle_post(
             path,
@@ -243,25 +258,31 @@ class TemplateVerificationTests(unittest.TestCase):
             verified.payload["verification_id"],
         )
 
-    def _release(self):
+    def _release(self, *, expected_output: str | None = None) -> TemplateReleaseRecord:
+        payload: dict[str, Any] = {
+            "recipe_version_id": "recipe_python_cpu@1.0.0",
+            "project": {"workdir": "/public/home/alice"},
+            "entry": {"command": "echo ok"},
+            "resources": {
+                "partition": "debug",
+                "qos": "normal",
+                "nodes": 1,
+                "ntasks": 1,
+                "cpus_per_task": 1,
+                "time_limit": "00:05:00",
+            },
+        }
+        if expected_output is not None:
+            payload["outputs"] = {
+                "expected": [expected_output],
+                "success_conditions": ["slurm_exit_code_zero"],
+            }
         draft = self.template_store.create_draft(
             owner="alice",
             title="Verification template",
             description="A controlled verification workload",
             visibility=TemplateVisibility.PUBLIC,
-            payload={
-                "recipe_version_id": "recipe_python_cpu@1.0.0",
-                "project": {"workdir": "/public/home/alice"},
-                "entry": {"command": "echo ok"},
-                "resources": {
-                    "partition": "debug",
-                    "qos": "normal",
-                    "nodes": 1,
-                    "ntasks": 1,
-                    "cpus_per_task": 1,
-                    "time_limit": "00:05:00",
-                },
-            },
+            payload=payload,
             compatibility={"partitions": ["debug"], "gpu": False},
             publication={
                 "license": "MIT",
@@ -377,7 +398,7 @@ class TemplateVerificationTests(unittest.TestCase):
         return run.run_id
 
 
-def _json(payload: dict) -> bytes:
+def _json(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload).encode()
 
 

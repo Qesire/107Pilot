@@ -27,6 +27,7 @@ _SEED_PUBLICATION: dict[str, str] = {
     "dataset_access": "No external dataset is required",
     "risk_statement": "Seed preset recipe validated through the publication gate",
 }
+_SEED_WORKDIR = "/public/CHANGE-ME-project-root"
 
 
 @dataclass
@@ -83,7 +84,10 @@ def _draft_payload_from_recipe(recipe: RecipeVersion) -> dict[str, Any]:
     qos = _choose_qos(recipe)
     return {
         "recipe_version_id": recipe.recipe_version_id,
-        "project": {"workdir": "/public/home/alice"},
+        # A public release cannot safely inherit a simulator user's private
+        # home.  This is deliberately an editable placeholder, never a claim
+        # that the directory exists on the target cluster.
+        "project": {"workdir": _SEED_WORKDIR},
         "entry": {"command": "echo ok"},
         "runtime": {"environment": _seed_environment()},
         "resources": {

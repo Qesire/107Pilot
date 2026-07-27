@@ -3,7 +3,11 @@ import unittest
 from pathlib import Path
 from typing import NoReturn
 
-from pilot107.adapters.slurm import InMemorySlurmBackend, SlurmTransportError
+from pilot107.adapters.slurm import (
+    InMemorySlurmBackend,
+    SlurmBackendOwnershipError,
+    SlurmTransportError,
+)
 from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.resources import ResourcePlan
 from pilot107.core.run_service import RunService, RunSubmitRequest
@@ -36,6 +40,11 @@ class FailingGetJobBackend(InMemorySlurmBackend):
 class ExpiredTokenBackend(InMemorySlurmBackend):
     def get_job(self, *, user: str, job_id: str) -> NoReturn:
         raise SlurmTransportError("401 token expired")
+
+
+class ForeignBackendJob(InMemorySlurmBackend):
+    def get_job(self, *, user: str, job_id: str) -> NoReturn:
+        raise SlurmBackendOwnershipError("demo backend does not own job_id: 1000")
 
 
 class FakeTaskHandler:
@@ -176,6 +185,27 @@ class RuntimeReconcileWorkerTests(unittest.TestCase):
         self.assertTrue(result.errors[0].retryable)
         self.assertFalse(result.errors[0].auth_required)
         self.assertEqual(self.store.get_run(run.run_id).state, RunState.SUBMITTED)
+
+    def test_backend_ownership_loss_is_quarantined_without_unhealthy_retry_loop(self) -> None:
+        service = RunService(store=self.store, backend=ForeignBackendJob())
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=Path("/public/home/alice"),
+                script="#!/bin/bash\nhostname\n",
+                resource_plan=_plan(),
+            )
+        )
+
+        result = RuntimeReconcileWorker(service=service).tick()
+
+        self.assertEqual(result.checked, 1)
+        self.assertEqual(result.terminal, 1)
+        self.assertEqual(result.errors, [])
+        quarantined = self.store.get_run(run.run_id)
+        self.assertEqual(quarantined.state, RunState.ORPHANED)
+        self.assertEqual(quarantined.terminal_state, "BACKEND_OWNERSHIP_LOST")
+        self.assertEqual(self.store.list_active_job_runs(), [])
 
     def test_expired_auth_backend_error_records_auth_required_event(self) -> None:
         service = RunService(store=self.store, backend=ExpiredTokenBackend())

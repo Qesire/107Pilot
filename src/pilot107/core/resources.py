@@ -72,6 +72,9 @@ class ResourcePlan:
         return self.ntasks
 
 
+# Compatibility fixture for unit tests and importers predating CapabilityProfile.
+# Product service builders must obtain partition/QoS policy from the active
+# CapabilityProfile (or a fresh owner entitlement), never from this mapping.
 REAL107_SIM_PARTITION_QOS: dict[str, tuple[str, ...]] = {
     "CPU-6530": ("qos_cpu-6530",),
     "CPU-8358P": ("qos_cpu-8358p",),
@@ -85,6 +88,7 @@ REAL107_SIM_PARTITION_QOS: dict[str, tuple[str, ...]] = {
         "qos_stu_small",
         "qos_stu_medium",
         "qos_stu_medium_2gpu",
+        "qos_stu_large",
         "qos_stu_long",
         "qos_stu_cpu_long",
     ),

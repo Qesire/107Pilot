@@ -124,6 +124,17 @@ faithfully exercise Slurm permission and scheduling semantics that affect
 - pending/running/terminal state transitions;
 - evidence collection permissions.
 
+### Application workspace boundary
+
+The Docker Compose app services explicitly set
+`PILOT107_ALLOWED_ROOTS=/public/home/{user}`. `{user}` is expanded only for
+the authenticated run owner, so the `alice`/`bob` fixture is a real isolation
+check rather than a global two-home allow-list. The same template is passed to
+the simulator command gateway, which powers the audited readonly terminal
+diagnostics. A non-simulator deployment must replace it
+with its actual per-user shared path (for example `/home/scc/{user}`) and set
+`PILOT107_CAPABILITY_PROFILE_PATH` to its own probe/profile source.
+
 CPU, memory, GPU count, walltime, and node-count values are representative
 fixtures. They should avoid contradicting the 107Pilot profile, but they are not
 intended to be exact copies of the live platform. Live deployments must use
@@ -159,3 +170,6 @@ Current limitations:
   real GPU devices or CUDA/NVML runtime evidence.
 - Runtime GPU fidelity is intentionally absent: no real CUDA driver, NVML,
   A100/RTX5090 device, or GPU cgroup binding is provided by default.
+- 当前真实对照证据是一个已分配的 A100-SXM4-80GB（80 GiB、driver 580.159.03）作业；
+  Docker fake GRES 不能假装该运行时，详见
+  `artifacts/probes/real107-compute-ssh-20260726T063524Z/`。

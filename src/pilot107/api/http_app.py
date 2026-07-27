@@ -20,6 +20,7 @@ from pilot107.api.health import ApiHealthService
 from pilot107.api.http_types import ApiResponse as ApiResponse
 from pilot107.api.metrics import ControlPlaneMetrics, normalize_http_route
 from pilot107.api.remediation_routes import RemediationRoutes
+from pilot107.api.repair_ticket_routes import RepairTicketRoutes
 from pilot107.api.security import FixedWindowRateLimiter
 from pilot107.core.advice import (
     AgentAdviceError,
@@ -53,6 +54,11 @@ from pilot107.core.identity import (
     UserIdentity,
     resolve_trusted_header_identity,
 )
+from pilot107.core.market import (
+    MarketItemKind,
+    MarketReadService,
+    MarketVisibility,
+)
 from pilot107.core.pagination import (
     CursorError,
     CursorPosition,
@@ -72,6 +78,7 @@ from pilot107.core.platform_snapshot_store import (
 )
 from pilot107.core.proxy_auth import ProxyRequestAuthenticator
 from pilot107.core.remediation_store import RemediationStore
+from pilot107.core.repair_ticket_store import RepairTicketStore
 from pilot107.core.resources import (
     ArraySpec,
     PreflightFinding,
@@ -79,15 +86,24 @@ from pilot107.core.resources import (
     ResourcePlan,
     validate_resource_plan,
 )
+from pilot107.core.run_publications import (
+    RunPublicationError,
+    RunPublicationStore,
+    RunPublicationVisibility,
+    run_publication_adoption_payload,
+    run_publication_payload,
+)
 from pilot107.core.run_service import (
     RunService,
     RunSubmitRequest,
     SubmissionInProgressError,
+    WorkDirPreflightError,
     WorkflowDependencyError,
     WorkflowPolicy,
     WorkflowRetryNotReadyError,
 )
 from pilot107.core.run_store import AgentAdviceRecord, RunEvent, RunRecord, RunStore
+from pilot107.core.ssh_connections import SshConnectionService
 from pilot107.core.states import RunState
 from pilot107.core.template_market import (
     TemplateMarketError,
@@ -105,8 +121,10 @@ from pilot107.core.template_market import (
 )
 from pilot107.core.template_policy import TemplatePublicationGate, TemplateRoleDirectory
 from pilot107.core.template_verification import TemplateVerificationService
+from pilot107.core.terminal import TerminalCommandError, TerminalCommandService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
 from pilot107.services.remediation_service import RemediationService
+from pilot107.services.repair_ticket_service import RepairTicketService
 from pilot107.worker.capsule import CapsuleError, RawCapsuleService
 from pilot107.worker.evidence import EvidenceStore, generated_execution_wrapper
 
@@ -137,6 +155,7 @@ class Pilot107HttpApi:
         platform_snapshot_store: PlatformSnapshotStore | None = None,
         user_entitlement_store: UserEntitlementStore | None = None,
         template_market_store: TemplateMarketStore | None = None,
+        run_publication_store: RunPublicationStore | None = None,
         template_role_directory: TemplateRoleDirectory | None = None,
         template_verification_service: TemplateVerificationService | None = None,
         health_service: ApiHealthService | None = None,
@@ -144,7 +163,10 @@ class Pilot107HttpApi:
         worker_metrics_root: Path | None = None,
         metrics: ControlPlaneMetrics | None = None,
         contract_store: ContractStore | None = None,
+        remediation_store: RemediationStore | None = None,
         evidence_store: EvidenceStore | None = None,
+        terminal_service: TerminalCommandService | None = None,
+        ssh_connection_service: SshConnectionService | None = None,
         auth_required: bool = False,
         trusted_user_header: str = "X-Pilot107-User",
         proxy_hmac_secret: bytes | None = None,
@@ -164,7 +186,12 @@ class Pilot107HttpApi:
         )
         self.run_service = run_service
         self.contract_service = contract_service
-        self.recipe_catalog = recipe_catalog or RecipeCatalog()
+        self.capability_profile = capability_profile or docker_sim_capability_profile()
+        self.recipe_catalog = recipe_catalog or RecipeCatalog(
+            partition_qos=self.capability_profile.partition_qos(),
+            default_partition=self.capability_profile.default_partition,
+            default_qos=self.capability_profile.default_qos,
+        )
         self.capsule_service = capsule_service
         self.diagnosis_service = diagnosis_service or DiagnosisService(store=store)
         self.agent_explain_service = agent_explain_service or AgentExplainService(
@@ -175,7 +202,6 @@ class Pilot107HttpApi:
                 evidence_root=evidence_query.evidence_store.root,
             ),
         )
-        self.capability_profile = capability_profile or docker_sim_capability_profile()
         self.agent_advice_service = agent_advice_service or AgentAdviceService(
             store=store,
             explain_service=self.agent_explain_service,
@@ -188,15 +214,28 @@ class Pilot107HttpApi:
         )
         self.remediation_service = remediation_service or RemediationService(
             run_store=store,
-            remediation_store=RemediationStore(store.db_path),
+            remediation_store=remediation_store or RemediationStore(store.db_path),
             advice_service=self.agent_advice_service,
             contract_store=contract_store,
             evidence_store=evidence_store,
         )
         self.remediation_routes = RemediationRoutes(self.remediation_service)
+        self.repair_ticket_service = RepairTicketService(
+            run_store=store,
+            repair_ticket_store=RepairTicketStore(store.db_path),
+            remediation_store=self.remediation_service.remediation_store,
+        )
+        self.repair_ticket_routes = RepairTicketRoutes(self.repair_ticket_service)
+        self.terminal_service = terminal_service
+        self.ssh_connection_service = ssh_connection_service
         self.platform_snapshot_store = platform_snapshot_store
         self.user_entitlement_store = user_entitlement_store
         self.template_market_store = template_market_store
+        self.run_publication_store = run_publication_store
+        self.market_read_service = MarketReadService(
+            run_publications=run_publication_store,
+            templates=template_market_store,
+        )
         self.template_role_directory = template_role_directory or TemplateRoleDirectory()
         self.template_verification_service = template_verification_service
         self.health_service = health_service or ApiHealthService(
@@ -293,6 +332,13 @@ class Pilot107HttpApi:
         )
         if remediation_response is not None:
             return remediation_response
+        repair_ticket_response = self.repair_ticket_routes.handle_get(
+            parts,
+            params=params,
+            identity=identity,
+        )
+        if repair_ticket_response is not None:
+            return repair_ticket_response
         if len(parts) == 1 and parts[0] == "recipes":
             return ApiResponse(
                 status=200,
@@ -332,6 +378,17 @@ class Pilot107HttpApi:
             return self._list_template_reviews(params=params, identity=identity)
         if len(parts) == 1 and parts[0] == "templates":
             return self._list_template_market(params=params, identity=identity)
+        if len(parts) == 2 and parts == ["market", "items"]:
+            return self._list_market_items(params=params, identity=identity)
+        if len(parts) == 3 and parts[:2] == ["market", "items"]:
+            return self._get_market_item(item_id=parts[2], identity=identity)
+        if len(parts) == 1 and parts[0] == "market":
+            return self._list_successful_run_market(params=params, identity=identity)
+        if len(parts) == 2 and parts[0] == "market":
+            return self._get_successful_run_market_item(
+                publication_id=parts[1],
+                identity=identity,
+            )
         if len(parts) == 3 and parts[0] == "templates" and parts[2] == "diff":
             return self._diff_template_releases(
                 template_id=parts[1],
@@ -358,6 +415,25 @@ class Pilot107HttpApi:
             )
         if len(parts) == 2 and parts == ["platform", "capabilities"]:
             return self._platform_capabilities(params=params, identity=identity)
+        if len(parts) == 2 and parts == ["platform", "connections"]:
+            if identity is None:
+                return ApiResponse(
+                    status=401,
+                    payload={"error": {"code": "AUTH.MISSING"}},
+                )
+            if self.ssh_connection_service is None:
+                return ApiResponse(status=200, payload={"items": []})
+            return ApiResponse(
+                status=200,
+                payload={
+                    "items": [
+                        record.public_payload()
+                        for record in self.ssh_connection_service.list_for_owner(
+                            identity.username
+                        )
+                    ]
+                },
+            )
         if len(parts) == 2 and parts == ["platform", "snapshots"]:
             return self._list_platform_snapshots(params=params, identity=identity)
         if len(parts) == 3 and parts == ["platform", "snapshots", "latest"]:
@@ -427,7 +503,7 @@ class Pilot107HttpApi:
                 access_error = _assert_run_access(identity, run)
                 if access_error is not None:
                     return access_error
-                return ApiResponse(status=200, payload=_run_summary(run))
+                return ApiResponse(status=200, payload=self._run_payload(run))
             except KeyError:
                 return ApiResponse(
                     status=404,
@@ -575,7 +651,7 @@ class Pilot107HttpApi:
                 )
                 return ApiResponse(
                     status=200,
-                    payload={**_run_summary(run), "capsule": capsule},
+                    payload={**self._run_payload(run), "capsule": capsule},
                 )
             except KeyError:
                 return ApiResponse(
@@ -717,6 +793,46 @@ class Pilot107HttpApi:
         )
         if remediation_response is not None:
             return remediation_response
+        repair_ticket_response = self.repair_ticket_routes.handle_post(
+            parts,
+            body=body,
+            identity=identity,
+        )
+        if repair_ticket_response is not None:
+            return repair_ticket_response
+        if parts == ["terminal", "commands"]:
+            return self._terminal_command(body=body, identity=identity)
+        if (
+            len(parts) == 4
+            and parts[:2] == ["platform", "connections"]
+            and parts[3] == "check"
+        ):
+            if identity is None:
+                return ApiResponse(
+                    status=401,
+                    payload={"error": {"code": "AUTH.MISSING"}},
+                )
+            if self.ssh_connection_service is None:
+                return ApiResponse(
+                    status=404,
+                    payload={"error": {"code": "connection_not_found"}},
+                )
+            try:
+                record = self.ssh_connection_service.check_for_owner(
+                    identity.username,
+                    parts[2],
+                )
+            except KeyError:
+                return ApiResponse(
+                    status=404,
+                    payload={
+                        "error": {
+                            "code": "connection_not_found",
+                            "connection_id": parts[2],
+                        }
+                    },
+                )
+            return ApiResponse(status=200, payload=record.public_payload())
         # CSRF Origin verification probe: a POST target with no business side
         # effects. The BFF's mutating-request Origin check runs in do_POST
         # BEFORE this route is reached, so a misconfigured Origin yields
@@ -752,6 +868,34 @@ class Pilot107HttpApi:
                 template_id=parts[1],
                 release_version=parts[3],
                 action=parts[4],
+                body=body,
+                identity=identity,
+            )
+        if len(parts) == 3 and parts[0] == "runs" and parts[2] == "publish":
+            return self._publish_successful_run(
+                run_id=parts[1],
+                body=body,
+                identity=identity,
+            )
+        if (
+            len(parts) == 4
+            and parts[:2] == ["market", "items"]
+            and parts[3] in {"adopt", "withdraw"}
+        ):
+            return self._mutate_market_item(
+                item_id=parts[2],
+                action=parts[3],
+                body=body,
+                identity=identity,
+            )
+        if (
+            len(parts) == 3
+            and parts[0] == "market"
+            and parts[2] in {"adopt", "withdraw"}
+        ):
+            return self._mutate_successful_run_market_item(
+                publication_id=parts[1],
+                action=parts[2],
                 body=body,
                 identity=identity,
             )
@@ -884,7 +1028,7 @@ class Pilot107HttpApi:
             return ApiResponse(
                 status=201,
                 payload={
-                    **_run_summary(run),
+                    **self._run_payload(run),
                     "script_artifacts": _script_artifacts(run),
                     "preview": {
                         "submitted_script": run.script,
@@ -910,7 +1054,7 @@ class Pilot107HttpApi:
                 return ApiResponse(
                     status=200,
                     payload={
-                        **_run_summary(self.run_service.submit_prepared(run_id)),
+                        **self._run_payload(self.run_service.submit_prepared(run_id)),
                         "submit_state": "submitted",
                     },
                 )
@@ -920,6 +1064,18 @@ class Pilot107HttpApi:
                     payload={"error": {"code": "run_not_found", "run_id": run_id}},
                 )
             except SlurmBackendError as exc:
+                if isinstance(exc, WorkDirPreflightError):
+                    return ApiResponse(
+                        status=422,
+                        payload={
+                            "error": {
+                                "code": "workdir_preflight_blocked",
+                                "message": str(exc),
+                                "run_id": run_id,
+                            },
+                            "preflight": [_finding_payload(finding) for finding in exc.findings],
+                        },
+                    )
                 if isinstance(exc, SubmissionInProgressError):
                     return ApiResponse(
                         status=409,
@@ -967,7 +1123,7 @@ class Pilot107HttpApi:
                     return access_error
                 return ApiResponse(
                     status=200,
-                    payload=_run_summary(self.run_service.cancel(run_id)),
+                    payload=self._run_payload(self.run_service.cancel(run_id)),
                 )
             except KeyError:
                 return ApiResponse(
@@ -1003,7 +1159,7 @@ class Pilot107HttpApi:
                 return ApiResponse(
                     status=200,
                     payload={
-                        **_run_summary(updated_run),
+                        **self._run_payload(updated_run),
                         "capsule": _capsule_payload(capsule),
                     },
                 )
@@ -1220,6 +1376,61 @@ class Pilot107HttpApi:
             status=404,
             payload={"error": {"code": "not_found", "path": parsed.path}},
         )
+
+    def _terminal_command(
+        self,
+        *,
+        body: bytes,
+        identity: UserIdentity | None,
+    ) -> ApiResponse:
+        if self.terminal_service is None:
+            return ApiResponse(status=503, payload={"error": {"code": "TERMINAL.UNAVAILABLE"}})
+        if identity is None:
+            return ApiResponse(status=403, payload={"error": {"code": "AUTH.MISSING"}})
+        payload, error = _json_body(body)
+        if error is not None:
+            return error
+        command = payload.get("command")
+        if not isinstance(command, str):
+            return ApiResponse(
+                status=400,
+                payload={"error": {"code": "TERMINAL.INVALID_COMMAND"}},
+            )
+        run = None
+        run_id = payload.get("run_id")
+        if run_id is not None:
+            if not isinstance(run_id, str) or not run_id:
+                return ApiResponse(
+                    status=400,
+                    payload={"error": {"code": "TERMINAL.INVALID_RUN"}},
+                )
+            try:
+                run = self.store.get_run(run_id)
+            except KeyError:
+                return ApiResponse(
+                    status=404,
+                    payload={"error": {"code": "run_not_found", "run_id": run_id}},
+                )
+            access_error = _assert_run_access(identity, run)
+            if access_error is not None:
+                return access_error
+        try:
+            result = self.terminal_service.execute(
+                command=command,
+                user=identity.username,
+                run=run,
+            )
+        except TerminalCommandError as exc:
+            return ApiResponse(
+                status=400,
+                payload={"error": {"code": "TERMINAL.INVALID_COMMAND", "message": str(exc)}},
+            )
+        except SlurmBackendError as exc:
+            return ApiResponse(
+                status=502,
+                payload={"error": {"code": "TERMINAL.GATEWAY_UNAVAILABLE", "message": str(exc)}},
+            )
+        return ApiResponse(status=200, payload=result.to_payload())
 
     def _platform_capabilities(
         self,
@@ -1576,12 +1787,21 @@ class Pilot107HttpApi:
         except (CursorError, ValueError) as exc:
             return _invalid_query_response(exc)
         return _page_response(
-            items=[_run_summary(item) for item in items],
+            items=[self._run_payload(item) for item in items],
             limit=limit,
             next_position=next_position,
             kind="runs",
             scope=scope,
         )
+
+    def _run_payload(self, run: RunRecord) -> dict[str, Any]:
+        payload = _run_summary(run)
+        if self.run_publication_store is not None:
+            payload["publication"] = self.run_publication_store.eligibility(
+                source_run_id=run.run_id,
+                owner=run.owner,
+            ).as_payload()
+        return payload
 
     def _list_contracts(
         self,
@@ -1894,9 +2114,9 @@ class Pilot107HttpApi:
         return {
             "run_id": run.run_id,
             "root_run_id": lineage[0].run_id,
-            "lineage": [_run_summary(item) for item in lineage],
-            "children": [_run_summary(item) for item in children],
-            "nodes": [_run_summary(item) for item in records.values()],
+            "lineage": [self._run_payload(item) for item in lineage],
+            "children": [self._run_payload(item) for item in children],
+            "nodes": [self._run_payload(item) for item in records.values()],
             "edges": edges,
         }
 
@@ -2043,6 +2263,320 @@ class Pilot107HttpApi:
             )
         except (CursorError, TemplateMarketError, ValueError) as exc:
             return _template_error_response(exc)
+
+    def _list_successful_run_market(
+        self,
+        *,
+        params: dict[str, list[str]],
+        identity: UserIdentity | None,
+    ) -> ApiResponse:
+        """List owner-confirmed successful Runs, separately from curated releases.
+
+        The API shape deliberately uses the same visibility and cursor model as
+        the curated template market.  The web client can merge the two kinds
+        into one market without treating the simulator as a product variant.
+        """
+
+        if self.run_publication_store is None:
+            return _run_publication_service_unavailable()
+        try:
+            _reject_unknown_params(
+                params,
+                {"q", "visibility", "tag", "limit", "cursor"},
+            )
+            actor = "" if identity is None else identity.username
+            course_scopes = self.template_role_directory.visible_course_scopes(actor)
+            query = _optional_query_text(params, "q", max_length=200)
+            visibility = _optional_query_enum(
+                params,
+                "visibility",
+                RunPublicationVisibility,
+            )
+            tag = _optional_query_text(params, "tag", max_length=64)
+            limit = _query_limit(params)
+            filters = {
+                "actor": actor,
+                "course_scopes": sorted(course_scopes),
+                "q": query,
+                "visibility": None if visibility is None else visibility.value,
+                "tag": tag,
+            }
+            scope = cursor_scope("successful_run_market", filters)
+            cursor = _query_cursor(params, kind="successful_run_market", scope=scope)
+            records, next_position = self.run_publication_store.list_market_page(
+                actor=actor,
+                course_scopes=course_scopes,
+                query=query,
+                visibility=visibility,
+                tag=tag,
+                cursor=cursor,
+                limit=limit,
+            )
+            return _page_response(
+                items=[run_publication_payload(record) for record in records],
+                limit=limit,
+                next_position=next_position,
+                kind="successful_run_market",
+                scope=scope,
+            )
+        except (CursorError, RunPublicationError, ValueError) as exc:
+            return _run_publication_error_response(exc)
+
+    def _list_market_items(
+        self,
+        *,
+        params: dict[str, list[str]],
+        identity: UserIdentity | None,
+    ) -> ApiResponse:
+        """Return the stable cross-kind market read model."""
+
+        try:
+            _reject_unknown_params(
+                params,
+                {"q", "kind", "visibility", "tag", "limit", "cursor"},
+            )
+            actor = "" if identity is None else identity.username
+            course_scopes = self.template_role_directory.visible_course_scopes(actor)
+            query = _optional_query_text(params, "q", max_length=200)
+            kind = _optional_query_enum(params, "kind", MarketItemKind)
+            visibility = _optional_query_enum(
+                params,
+                "visibility",
+                MarketVisibility,
+            )
+            tag = _optional_query_text(params, "tag", max_length=64)
+            limit = _query_limit(params)
+            filters = {
+                "actor": actor,
+                "course_scopes": sorted(course_scopes),
+                "q": query,
+                "kind": None if kind is None else kind.value,
+                "visibility": None if visibility is None else visibility.value,
+                "tag": tag,
+            }
+            scope = cursor_scope("market_items", filters)
+            cursor = _query_cursor(params, kind="market_items", scope=scope)
+            page = self.market_read_service.list_page(
+                actor=actor,
+                course_scopes=course_scopes,
+                query=query,
+                kind=kind,
+                visibility=visibility,
+                tag=tag,
+                cursor=cursor,
+                limit=limit,
+            )
+            return _page_response(
+                items=[item.payload for item in page.items],
+                limit=limit,
+                next_position=page.next_position,
+                kind="market_items",
+                scope=scope,
+            )
+        except (
+            CursorError,
+            RunPublicationError,
+            TemplateMarketError,
+            ValueError,
+        ) as exc:
+            return _invalid_query_response(exc)
+
+    def _get_market_item(
+        self,
+        *,
+        item_id: str,
+        identity: UserIdentity | None,
+    ) -> ApiResponse:
+        actor = "" if identity is None else identity.username
+        try:
+            item = self.market_read_service.get(
+                item_id=item_id,
+                actor=actor,
+                course_scopes=self.template_role_directory.visible_course_scopes(actor),
+            )
+            return ApiResponse(status=200, payload=item.payload)
+        except KeyError:
+            return ApiResponse(
+                status=404,
+                payload={"error": {"code": "market_item_not_found", "id": item_id}},
+            )
+        except (RunPublicationError, TemplateMarketError) as exc:
+            if (
+                isinstance(exc, TemplateMarketError)
+                and exc.code == "TEMPLATE.FORBIDDEN"
+            ):
+                return ApiResponse(
+                    status=404,
+                    payload={"error": {"code": "market_item_not_found", "id": item_id}},
+                )
+            return _invalid_query_response(exc)
+
+    def _mutate_market_item(
+        self,
+        *,
+        item_id: str,
+        action: str,
+        body: bytes,
+        identity: UserIdentity | None,
+    ) -> ApiResponse:
+        if identity is None:
+            return ApiResponse(status=401, payload={"error": {"code": "AUTH.MISSING"}})
+        try:
+            item = self.market_read_service.get(
+                item_id=item_id,
+                actor=identity.username,
+                course_scopes=self.template_role_directory.visible_course_scopes(
+                    identity.username
+                ),
+            )
+        except KeyError:
+            return ApiResponse(
+                status=404,
+                payload={"error": {"code": "market_item_not_found", "id": item_id}},
+            )
+        except TemplateMarketError as exc:
+            return _template_error_response(exc)
+        if item.kind == MarketItemKind.RUN_PUBLICATION:
+            return self._mutate_successful_run_market_item(
+                publication_id=item_id,
+                action=action,
+                body=body,
+                identity=identity,
+            )
+        template = item.payload["template"]
+        return self._mutate_template_release(
+            template_id=str(template["template_id"]),
+            release_version=str(template["release_version"]),
+            action=action,
+            body=body,
+            identity=identity,
+        )
+
+    def _get_successful_run_market_item(
+        self,
+        *,
+        publication_id: str,
+        identity: UserIdentity | None,
+    ) -> ApiResponse:
+        if self.run_publication_store is None:
+            return _run_publication_service_unavailable()
+        actor = "" if identity is None else identity.username
+        try:
+            record = self.run_publication_store.get_visible(
+                publication_id=publication_id,
+                actor=actor,
+                course_scopes=self.template_role_directory.visible_course_scopes(actor),
+            )
+            return ApiResponse(status=200, payload=run_publication_payload(record))
+        except KeyError:
+            return _run_publication_not_found(publication_id)
+        except RunPublicationError as exc:
+            return _run_publication_error_response(exc)
+
+    def _publish_successful_run(
+        self,
+        *,
+        run_id: str,
+        body: bytes,
+        identity: UserIdentity | None,
+    ) -> ApiResponse:
+        if self.run_publication_store is None:
+            return _run_publication_service_unavailable()
+        if identity is None:
+            return ApiResponse(status=401, payload={"error": {"code": "AUTH.MISSING"}})
+        payload, error = _json_body(body)
+        if error is not None:
+            return error
+        try:
+            _reject_unknown_body(
+                payload,
+                {
+                    "request_key",
+                    "title",
+                    "description",
+                    "visibility",
+                    "scope_key",
+                    "tags",
+                    "reproduction_note",
+                    "confirm_share",
+                },
+            )
+            visibility = _required_body_enum(
+                payload,
+                "visibility",
+                RunPublicationVisibility,
+            )
+            tags = payload.get("tags", [])
+            if not isinstance(tags, list):
+                raise ValueError("tags must be an array")
+            confirmation = payload.get("confirm_share")
+            if not isinstance(confirmation, bool):
+                raise ValueError("confirm_share must be a boolean")
+            record = self.run_publication_store.publish(
+                source_run_id=run_id,
+                owner=identity.username,
+                title=_required_body_string(payload, "title"),
+                description=_optional_body_string(payload, "description") or "",
+                visibility=visibility,
+                scope_key=_optional_body_string(payload, "scope_key"),
+                tags=tags,
+                reproduction_note=_optional_body_string(payload, "reproduction_note") or "",
+                request_key=_required_body_string(payload, "request_key"),
+                confirmed=confirmation,
+            )
+            return ApiResponse(status=201, payload=run_publication_payload(record))
+        except (RunPublicationError, TypeError, ValueError) as exc:
+            return _run_publication_error_response(exc)
+
+    def _mutate_successful_run_market_item(
+        self,
+        *,
+        publication_id: str,
+        action: str,
+        body: bytes,
+        identity: UserIdentity | None,
+    ) -> ApiResponse:
+        if self.run_publication_store is None:
+            return _run_publication_service_unavailable()
+        if identity is None:
+            return ApiResponse(status=401, payload={"error": {"code": "AUTH.MISSING"}})
+        payload, error = _json_body(body)
+        if error is not None:
+            return error
+        try:
+            _reject_unknown_body(
+                payload,
+                {"request_key"} if action == "adopt" else {"reason"},
+            )
+            if action == "adopt":
+                adoption = self.run_publication_store.adopt(
+                    publication_id=publication_id,
+                    adopter=identity.username,
+                    request_key=_required_body_string(payload, "request_key"),
+                    course_scopes=self.template_role_directory.visible_course_scopes(
+                        identity.username
+                    ),
+                )
+                return ApiResponse(
+                    status=201,
+                    payload=run_publication_adoption_payload(adoption),
+                )
+            record = self.run_publication_store.withdraw(
+                publication_id=publication_id,
+                actor=identity.username,
+                reason=_required_body_string(payload, "reason"),
+            )
+            return ApiResponse(
+                status=200,
+                payload={
+                    "publication_id": record.publication_id,
+                    "withdrawn": not record.active,
+                },
+            )
+        except KeyError:
+            return _run_publication_not_found(publication_id)
+        except (RunPublicationError, TypeError, ValueError) as exc:
+            return _run_publication_error_response(exc)
 
     def _list_template_verifications(
         self,
@@ -2558,12 +3092,21 @@ def build_api(
 ) -> Pilot107HttpApi:
     store = RunStore(db_path)
     contract_store = ContractStore(db_path)
-    catalog = RecipeCatalog(store=contract_store)
+    capability_profile = docker_sim_capability_profile()
+    partition_qos = capability_profile.partition_qos()
+    catalog = RecipeCatalog(
+        store=contract_store,
+        partition_qos=partition_qos,
+        default_partition=capability_profile.default_partition,
+        default_qos=capability_profile.default_qos,
+    )
     platform_snapshot_store = PlatformSnapshotStore(db_path)
     user_entitlement_store = UserEntitlementStore(db_path)
     contract_service = ContractService(
         catalog=catalog,
         store=contract_store,
+        partition_qos=partition_qos,
+        qos_limits=capability_profile.qos_limits(),
         platform_snapshot_store=platform_snapshot_store,
         user_entitlement_store=user_entitlement_store,
     )
@@ -2579,6 +3122,11 @@ def build_api(
             publication_gate=TemplatePublicationGate(contract_service),
             contract_service=contract_service,
         ),
+        run_publication_store=RunPublicationStore(
+            db_path,
+            run_store=store,
+            contract_service=contract_service,
+        ),
         evidence_query=EvidenceQueryService(
             store=store,
             evidence_store=EvidenceStore(evidence_root),
@@ -2591,6 +3139,7 @@ def build_api(
         ),
         platform_snapshot_store=platform_snapshot_store,
         user_entitlement_store=user_entitlement_store,
+        capability_profile=capability_profile,
     )
 
 
@@ -3236,6 +3785,8 @@ def _run_event_payload(event: RunEvent) -> dict[str, Any]:
 
 
 def _run_summary(run: RunRecord) -> dict[str, Any]:
+    backend_kind = run.submit_response.get("backend_kind")
+    target_id = run.submit_response.get("target_id")
     return {
         "run_id": run.run_id,
         "contract_id": run.contract_id,
@@ -3254,8 +3805,13 @@ def _run_summary(run: RunRecord) -> dict[str, Any]:
         "diagnosis_state": run.diagnosis_state.value,
         "capsule_state": run.capsule_state.value,
         "job_id": run.job_id,
+        "job_name": run.job_name,
         "workdir": run.workdir,
         "submit_strategy": run.submit_strategy,
+        "backend": {
+            "kind": backend_kind if isinstance(backend_kind, str) else None,
+            "target_id": target_id if isinstance(target_id, str) else None,
+        },
         "created_at": run.created_at,
         "updated_at": run.updated_at,
     }
@@ -3480,6 +4036,7 @@ def _submit_request_from_payload(
             workdir=Path(str(payload["workdir"])),
             script=str(payload["script"]),
             resource_plan=_resource_plan_from_payload(resource_plan_payload),
+            job_name=_optional_string(payload, "job_name"),
             parent_run_id=_optional_string(payload, "parent_run_id"),
             lineage_reason=_optional_string(payload, "lineage_reason"),
             remediation_plan_id=_optional_string(payload, "remediation_plan_id"),
@@ -3618,6 +4175,19 @@ def _required_body_string(payload: dict[str, Any], key: str) -> str:
     return value.strip()
 
 
+def _required_body_enum[T: StrEnum](
+    payload: dict[str, Any],
+    key: str,
+    enum_type: type[T],
+) -> T:
+    value = _required_body_string(payload, key)
+    try:
+        return enum_type(value)
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in enum_type)
+        raise ValueError(f"{key} must be one of: {allowed}") from exc
+
+
 def _reject_unknown_body(payload: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(payload) - allowed)
     if unknown:
@@ -3651,6 +4221,49 @@ def _template_service_unavailable() -> ApiResponse:
     return ApiResponse(
         status=503,
         payload={"error": {"code": "template_service_unavailable"}},
+    )
+
+
+def _run_publication_service_unavailable() -> ApiResponse:
+    return ApiResponse(
+        status=503,
+        payload={"error": {"code": "market_run_publication_service_unavailable"}},
+    )
+
+
+def _run_publication_not_found(publication_id: str) -> ApiResponse:
+    return ApiResponse(
+        status=404,
+        payload={"error": {"code": "market_item_not_found", "id": publication_id}},
+    )
+
+
+def _run_publication_error_response(exc: Exception) -> ApiResponse:
+    if not isinstance(exc, RunPublicationError):
+        return ApiResponse(
+            status=400,
+            payload={"error": {"code": "MARKET.INVALID_REQUEST", "message": str(exc)}},
+        )
+    if exc.code == "MARKET.FORBIDDEN":
+        status = 403
+    elif exc.code in {
+        "MARKET.RUN_ALREADY_PUBLISHED",
+        "MARKET.IDEMPOTENCY_CONFLICT",
+    }:
+        status = 409
+    elif exc.code in {
+        "MARKET.RUN_NOT_SUCCESSFUL",
+        "MARKET.CONFIRMATION_REQUIRED",
+        "MARKET.ADOPTION_CONTRACT_INVALID",
+    }:
+        status = 422
+    elif exc.code == "MARKET.ADOPTION_UNAVAILABLE":
+        status = 503
+    else:
+        status = 400
+    return ApiResponse(
+        status=status,
+        payload={"error": {"code": exc.code, "message": str(exc)}},
     )
 
 

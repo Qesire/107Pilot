@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import time
 from dataclasses import dataclass
 from enum import StrEnum
@@ -119,13 +118,10 @@ class ApiHealthService:
         started = time.monotonic()
         try:
             with self.store.connect() as conn:
-                conn.execute("SELECT 1").fetchone()
-                row = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'runs'"
-                ).fetchone()
-                if row is None:
-                    raise sqlite3.DatabaseError("required schema is missing")
-        except (OSError, sqlite3.Error):
+                # Selecting from the required table verifies both connectivity
+                # and schema without SQLite-only sqlite_master introspection.
+                conn.execute("SELECT 1 FROM runs LIMIT 1").fetchone()
+        except Exception:  # noqa: BLE001 - readiness must not leak DB driver failures
             return HealthCheck(
                 name="database",
                 status=HealthCheckStatus.UNAVAILABLE,
@@ -160,13 +156,8 @@ class ApiHealthService:
         started = time.monotonic()
         try:
             with self.platform_snapshot_store.connect() as conn:
-                row = conn.execute(
-                    "SELECT 1 FROM sqlite_master "
-                    "WHERE type = 'table' AND name = 'platform_snapshots'"
-                ).fetchone()
-                if row is None:
-                    raise sqlite3.DatabaseError("platform snapshot schema is missing")
-        except (OSError, sqlite3.Error):
+                conn.execute("SELECT 1 FROM platform_snapshots LIMIT 1").fetchone()
+        except Exception:  # noqa: BLE001 - readiness must not leak DB driver failures
             return HealthCheck(
                 name="platform_snapshot_store",
                 status=HealthCheckStatus.UNAVAILABLE,
@@ -186,13 +177,8 @@ class ApiHealthService:
         started = time.monotonic()
         try:
             with self.user_entitlement_store.connect() as conn:
-                row = conn.execute(
-                    "SELECT 1 FROM sqlite_master "
-                    "WHERE type = 'table' AND name = 'user_entitlement_snapshots'"
-                ).fetchone()
-                if row is None:
-                    raise sqlite3.DatabaseError("user entitlement schema is missing")
-        except (OSError, sqlite3.Error):
+                conn.execute("SELECT 1 FROM user_entitlement_snapshots LIMIT 1").fetchone()
+        except Exception:  # noqa: BLE001 - readiness must not leak DB driver failures
             return HealthCheck(
                 name="user_entitlement_store",
                 status=HealthCheckStatus.UNAVAILABLE,

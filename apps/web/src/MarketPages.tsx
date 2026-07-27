@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   CheckCircle2,
@@ -8,14 +8,13 @@ import {
   FileDiff,
   Filter,
   Search,
-  ShieldCheck,
   Users,
 } from "lucide-react";
 import { api } from "./api";
 import { QueryBoundary, SectionHeading, StatusBadge, formatTimestamp } from "./components";
 import { detailVersions } from "./market-state";
-import { useTemplateDiff, useTemplateRelease, useTemplates } from "./query";
-import type { TemplateMarketItem } from "./types";
+import { useMarketItem, useMarketItems, useTemplateDiff, useTemplateRelease, useTemplates } from "./query";
+import type { MarketItem } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
 
@@ -28,17 +27,13 @@ interface MarketPageProps {
 export function MarketPage({ user, location, navigate }: MarketPageProps) {
   const q = location.search.get("q") ?? "";
   const visibility = location.search.get("visibility") ?? "";
-  const gpu = location.search.get("gpu") ?? "";
-  const verified = location.search.get("verified") ?? "";
-  const environment = location.search.get("environment") ?? "";
-  const partition = location.search.get("partition") ?? "";
-  const templates = useTemplates(user, {
+  const kind = location.search.get("kind") ?? "";
+  const tag = location.search.get("tag") ?? "";
+  const market = useMarketItems(user, {
     q: q || undefined,
+    kind: kind || undefined,
     visibility: visibility || undefined,
-    gpu: gpu || undefined,
-    verified: verified || undefined,
-    verification_environment: environment || undefined,
-    partition: partition || undefined,
+    tag: tag || undefined,
   });
   const update = (values: Record<string, string | null>) =>
     navigate(withSearch("/market", location.search, values));
@@ -46,27 +41,30 @@ export function MarketPage({ user, location, navigate }: MarketPageProps) {
   return (
     <>
       <SectionHeading
-        eyebrow="Template Market / live releases"
-        title="从审核过的 release 开始"
-        detail="查询、可见性和验证等级均来自服务器；采用后生成你的 private draft 与 immutable canonical Contract。"
+        eyebrow="Market / templates and successful Runs"
+        title="作业与模板市场"
+        detail="统一市场按发布时间稳定分页。成功 Run 只证明发布者曾运行成功；curated release 才带审核与验证事实。"
       />
-      <section className="market-filter" aria-label="模板筛选">
-        <label className="search-field"><Search aria-hidden="true" size={17} /><span className="sr-only">搜索模板</span><input value={q} placeholder="搜索标题、描述或 Template ID" onChange={(event) => update({ q: event.target.value || null })} /></label>
+      <section className="market-filter" aria-label="市场筛选">
+        <label className="search-field"><Search aria-hidden="true" size={17} /><span className="sr-only">搜索市场</span><input value={q} placeholder="搜索标题、描述或 Template ID" onChange={(event) => update({ q: event.target.value || null })} /></label>
         <label className="select-field"><Eye aria-hidden="true" size={16} /><span className="sr-only">可见性</span><select value={visibility} onChange={(event) => update({ visibility: event.target.value || null })}><option value="">全部可见性</option><option value="public">Public</option><option value="campus">Campus</option><option value="course">Course</option><option value="private">Private</option></select></label>
-        <label className="select-field"><Filter aria-hidden="true" size={16} /><span className="sr-only">GPU</span><select value={gpu} onChange={(event) => update({ gpu: event.target.value || null })}><option value="">CPU / GPU</option><option value="true">需要 GPU</option><option value="false">CPU</option></select></label>
-        <label className="select-field"><ShieldCheck aria-hidden="true" size={16} /><span className="sr-only">验证</span><select value={verified} onChange={(event) => update({ verified: event.target.value || null })}><option value="">全部验证状态</option><option value="true">已有通过验证</option></select></label>
-        <label className="select-field"><span className="sr-only">验证环境</span><select value={environment} onChange={(event) => update({ environment: event.target.value || null })}><option value="">全部环境</option><option value="docker">Docker</option><option value="real107_cpu">real107 CPU</option><option value="real107_gpu">real107 GPU</option></select></label>
+        <label className="select-field"><Filter aria-hidden="true" size={16} /><span className="sr-only">条目类型</span><select value={kind} onChange={(event) => update({ kind: event.target.value || null, tag: event.target.value === "curated_template" ? null : tag || null })}><option value="">全部类型</option><option value="run_publication">成功 Run</option><option value="curated_template">Curated template</option></select></label>
+        <label className="search-field"><span className="sr-only">成功 Run 标签</span><input value={tag} disabled={kind === "curated_template"} placeholder="成功 Run 标签" onChange={(event) => update({ tag: event.target.value || null })} /></label>
       </section>
       <QueryBoundary
-        pending={templates.isPending}
-        error={templates.error}
-        empty={(templates.data?.items.length ?? 0) === 0}
-        emptyTitle="没有匹配的 release"
-        emptyDetail="调整筛选；withdrawn release 和无权访问的 scope 不会出现在结果中。"
+        pending={market.isPending}
+        error={market.error}
+        empty={(market.data?.items.length ?? 0) === 0}
+        emptyTitle="没有匹配的市场条目"
+        emptyDetail="调整类型、可见性或搜索条件；撤回条目和无权访问的 scope 不会显示。"
       >
-        <section className="market-grid" aria-label="模板 release">
-          {(templates.data?.items ?? []).map((item) => (
-            <TemplateCard key={item.release_id} item={item} onOpen={() => navigate(`/templates/${encodeURIComponent(item.template_id)}?user=${encodeURIComponent(user)}&version=${encodeURIComponent(item.release_version)}`)} />
+        <section className="market-grid" aria-label="统一作业与模板市场">
+          {(market.data?.items ?? []).map((item) => (
+            <MarketItemCard
+              key={item.item_id}
+              item={item}
+              onOpen={() => navigate(`/market/${encodeURIComponent(item.item_id)}?user=${encodeURIComponent(user)}`)}
+            />
           ))}
         </section>
       </QueryBoundary>
@@ -74,15 +72,73 @@ export function MarketPage({ user, location, navigate }: MarketPageProps) {
   );
 }
 
-function TemplateCard({ item, onOpen }: { item: TemplateMarketItem; onOpen: () => void }) {
+function MarketItemCard({ item, onOpen }: { item: MarketItem; onOpen: () => void }) {
+  const curated = item.kind === "curated_template";
   return (
     <article className="template-card">
-      <header><div><p className="panel-kicker">{item.template_id}</p><h2>{item.title}</h2></div><StatusBadge label={item.visibility} tone={item.visibility === "public" ? "success" : "neutral"} /></header>
-      <p className="template-description">{item.description}</p>
-      <div className="template-meta"><span>v{item.release_version}</span><span>{formatTimestamp(item.published_at)}</span><span className="mono">{item.content_sha256.slice(0, 10)}</span></div>
-      <dl className="template-metrics"><div><dt>采用</dt><dd><Users aria-hidden="true" />{item.metrics.adoption_count}</dd></div><div><dt>通过验证</dt><dd><CheckCircle2 aria-hidden="true" />{item.metrics.verification_passed}</dd></div><div><dt>成功率</dt><dd>{item.metrics.success_rate === null ? "—" : `${Math.round(item.metrics.success_rate * 100)}%`}</dd></div></dl>
-      <button className="button secondary wide" type="button" onClick={onOpen}>查看 release <ArrowRight aria-hidden="true" size={15} /></button>
+      <header><div><p className="panel-kicker">{curated ? `Curated · ${item.template.template_id}` : `Successful Run · ${item.source.run_id}`}</p><h2>{item.title}</h2></div><StatusBadge label={item.visibility} tone={item.visibility === "public" ? "success" : "neutral"} /></header>
+      <p className="template-description">{item.description || "发布者未填写说明。"}</p>
+      <div className="template-meta"><span>{curated ? `v${item.template.release_version}` : "成功记录"}</span><span>{formatTimestamp(item.published_at)}</span><span>{item.publisher}</span></div>
+      {item.tags.length ? <p className="request-key">标签：{item.tags.join(" · ")}</p> : null}
+      {curated ? <dl className="template-metrics"><div><dt>采用</dt><dd><Users aria-hidden="true" />{item.metrics.adoption_count}</dd></div><div><dt>通过验证</dt><dd><CheckCircle2 aria-hidden="true" />{item.metrics.verification_passed}</dd></div><div><dt>成功率</dt><dd>{item.metrics.success_rate === null ? "—" : `${Math.round(item.metrics.success_rate * 100)}%`}</dd></div></dl> : <p className="side-detail">{item.reproduction_note || "代码与数据由发布者自行说明；采用后请检查路径、依赖与环境。"}</p>}
+      <button className="button secondary wide" type="button" onClick={onOpen}>查看条目 <ArrowRight aria-hidden="true" size={15} /></button>
     </article>
+  );
+}
+
+export function MarketItemDetailPage({ user, location, navigate }: MarketPageProps) {
+  const itemId = decodeURIComponent(location.pathname.slice("/market/".length));
+  const item = useMarketItem(user, itemId);
+  const queryClient = useQueryClient();
+  const [requestKey, setRequestKey] = useState<string | null>(null);
+  const [withdrawReason, setWithdrawReason] = useState("");
+  const adoption = useMutation({
+    mutationFn: (key: string) => api.adoptMarketItem(user, itemId, key),
+    onSuccess: (result) => {
+      if (result.target_contract_id) {
+        navigate(`/studio/${encodeURIComponent(result.target_contract_id)}?user=${encodeURIComponent(user)}&tab=basic&adoption=${encodeURIComponent(result.adoption_id)}`);
+      }
+    },
+  });
+  const withdraw = useMutation({
+    mutationFn: (reason: string) => api.withdrawMarketItem(user, itemId, reason),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["market-items"] });
+      await queryClient.invalidateQueries({ queryKey: ["market-item", user, itemId] });
+      navigate(`/market?user=${encodeURIComponent(user)}`);
+    },
+  });
+  const adopt = () => {
+    const key = requestKey ?? `web-adopt-market-item-${crypto.randomUUID()}`;
+    setRequestKey(key);
+    adoption.mutate(key);
+  };
+  const record = item.data;
+  return (
+    <>
+      <SectionHeading eyebrow="Market item / public read model" title={record?.title ?? itemId} detail={record?.kind === "curated_template" ? "Curated release 带审核与验证事实；采用后仍创建你的私有 Contract。" : "此条目只证明发布者曾成功运行；代码、数据、依赖与可移植性不由市场保证。"} />
+      <QueryBoundary pending={item.isPending} error={item.error}>
+        {record ? <div className="template-detail-grid">
+          <section className="panel template-release-main">
+            <div className="release-heading"><div><StatusBadge label={record.kind === "curated_template" ? "curated template" : "successful Run"} tone={record.kind === "curated_template" ? "success" : "neutral"} /><StatusBadge label={record.visibility} tone="info" /></div><span>{formatTimestamp(record.published_at)}</span></div>
+            <p className="template-description large">{record.description || "发布者未填写说明。"}</p>
+            <dl className="fact-list"><div><dt>Publisher</dt><dd>{record.publisher}</dd></div><div><dt>Scope</dt><dd>{record.scope_key ?? "—"}</dd></div><div><dt>Item ID</dt><dd className="mono wrap-anywhere">{record.item_id}</dd></div><div><dt>Adoption</dt><dd>{record.adoption.available ? "可采用" : record.adoption.reason ?? "不可采用"}</dd></div></dl>
+            {record.kind === "run_publication" ? <>
+              <p className="side-detail">{record.reproduction_note || "采用后请替换自己的工作目录、代码、数据和依赖。"}</p>
+              <p className="request-key mono">source Run: {record.source.run_id}</p>
+            </> : <>
+              <dl className="template-metrics"><div><dt>采用</dt><dd>{record.metrics.adoption_count}</dd></div><div><dt>验证通过</dt><dd>{record.metrics.verification_passed}</dd></div><div><dt>验证失败</dt><dd>{record.metrics.verification_failed}</dd></div></dl>
+              <div className="release-json-grid"><JsonPanel title="Compatibility" value={record.compatibility} /><JsonPanel title="Publication" value={record.publication} /></div>
+              <JsonPanel title="Canonical Contract payload" value={record.contract_payload} tall />
+            </>}
+          </section>
+          <aside className="template-detail-side">
+            <section className="panel"><div className="panel-heading"><div><p className="panel-kicker">Adopt</p><h2>采用为私有 Contract</h2></div><CopyPlus aria-hidden="true" size={19} /></div><p className="side-detail">采用只创建你的私有副本；提交前必须在 Studio 重新检查路径、资源和依赖。</p>{adoption.isError ? <p className="limitation" role="alert">{adoption.error.message}</p> : null}<button className="button primary wide" type="button" disabled={!record.adoption.available || adoption.isPending} onClick={adopt}>{adoption.isPending ? "采用中" : "采用并进入 Studio"}</button>{requestKey ? <p className="request-key mono">request key: {requestKey}</p> : null}</section>
+            {record.kind === "run_publication" && record.publisher === user ? <section className="panel"><div className="panel-heading"><div><p className="panel-kicker">Publisher control</p><h2>撤回条目</h2></div></div><label className="form-field"><span>撤回原因</span><textarea value={withdrawReason} onChange={(event) => setWithdrawReason(event.target.value)} /></label>{withdraw.isError ? <p className="limitation" role="alert">{withdraw.error.message}</p> : null}<button className="button danger wide" type="button" disabled={!withdrawReason.trim() || withdraw.isPending} onClick={() => withdraw.mutate(withdrawReason.trim())}>{withdraw.isPending ? "撤回中" : "确认撤回"}</button></section> : null}
+          </aside>
+        </div> : null}
+      </QueryBoundary>
+    </>
   );
 }
 

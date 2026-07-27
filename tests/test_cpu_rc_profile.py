@@ -13,35 +13,40 @@ PROFILE = ROOT / "config/platform_profiles/cpu-only-8c16g.json"
 
 
 class CpuReleaseCandidateProfileTests(unittest.TestCase):
-    def test_capability_profile_is_cpu_only_and_reserves_host_capacity(self) -> None:
+    def test_capability_profile_is_cpu_only_and_matches_vm_demo_capacity(self) -> None:
         profile = load_capability_profile(PROFILE)
 
-        self.assertEqual(profile.profile_id, "cpu-only-8c16g-rc")
+        self.assertEqual(profile.profile_id, "cpu-only-8c16g-vm-demo")
         self.assertEqual(profile.default_partition, "CPU-RC")
         self.assertEqual(profile.default_qos, "qos_cpu_rc")
         self.assertTrue(all(not partition.gpu_types for partition in profile.partitions))
         self.assertTrue(all(qos.max_gpus == 0 for qos in profile.qos))
-        self.assertLessEqual(max(qos.max_cpus or 0 for qos in profile.qos), 4)
-        self.assertLessEqual(max(qos.max_memory_gb or 0 for qos in profile.qos), 6)
+        self.assertEqual(max(qos.max_cpus or 0 for qos in profile.qos), 8)
+        self.assertEqual(max(qos.max_memory_gb or 0 for qos in profile.qos), 15)
 
     def test_slurm_and_compose_envelopes_do_not_expose_gpu_resources(self) -> None:
         slurm = (ROOT / "simulator/compose/slurm-cpu-rc/slurm.conf").read_text()
         compose = (ROOT / "simulator/compose/compose.cpu-rc.yml").read_text()
 
-        self.assertIn("NodeName=anode16 CPUs=4", slurm)
-        self.assertIn("RealMemory=6144", slurm)
+        self.assertIn("NodeName=anode16 CPUs=8", slurm)
+        self.assertIn("RealMemory=15360", slurm)
         self.assertIn("PartitionName=CPU-RC", slurm)
         self.assertNotIn("GresTypes", slurm)
         self.assertNotIn("GPU", slurm)
-        self.assertIn("TaskPlugin=task/cgroup", slurm)
-        self.assertIn("ProctrackType=proctrack/cgroup", slurm)
+        self.assertIn("TaskPlugin=task/none", slurm)
+        self.assertIn("ProctrackType=proctrack/linuxproc", slurm)
         self.assertIn('PILOT107_ALLOW_GPU_RECIPES: "false"', compose)
-        self.assertIn("cpus: 4.0", compose)
+        self.assertIn(
+            "PILOT107_CAPABILITY_PROFILE_PATH: "
+            "/opt/pilot107/config/platform_profiles/cpu-only-8c16g.json",
+            compose,
+        )
+        self.assertIn("cpus: 8.0", compose)
+        self.assertIn("mem_limit: 15g", compose)
         self.assertNotIn("worker-2:", compose)
         self.assertIn("slurmctld-state:/var/spool/slurm/ctld", compose)
-        self.assertIn("./slurm-cpu-rc/cgroup.conf:/etc/slurm/cgroup.conf:ro", compose)
-        self.assertIn("cgroup: host", compose)
-        self.assertIn("/sys/fs/cgroup:/sys/fs/cgroup:rw", compose)
+        self.assertNotIn("cgroup: host", compose)
+        self.assertNotIn("/sys/fs/cgroup:/sys/fs/cgroup:rw", compose)
 
     def test_cpu_api_hides_gpu_recipes_and_reports_only_cpu_capability(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -79,6 +84,7 @@ class CpuReleaseCandidateProfileTests(unittest.TestCase):
 
         self.assertIn("exec -T slurmdbd sacctmgr", script)
         self.assertLess(script.index("add qos qos_cpu_rc"), script.index("scontrol ping"))
+        self.assertIn("MaxTRESPerJob=cpu=8,mem=15G", script)
         self.assertIn("set QOS=qos_cpu_rc || true", script)
         self.assertIn("set DefaultQOS=qos_cpu_rc || true", script)
 

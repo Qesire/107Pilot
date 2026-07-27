@@ -57,6 +57,10 @@ class RunRecord:
     submit_response: dict[str, Any]
     created_at: str
     updated_at: str
+    # Human-readable name supplied by the originating Contract or direct submit
+    # request. Unlike the submitted Slurm marker it is not normalized, so the
+    # UI can faithfully identify the user's original job.
+    job_name: str | None = None
     resource_plan: dict[str, Any] = field(default_factory=dict)
     contract_id: str | None = None
     parent_run_id: str | None = None
@@ -209,6 +213,7 @@ class RunStore:
                     capsule_state TEXT NOT NULL,
                     result_status TEXT NOT NULL,
                     job_id TEXT,
+                    job_name TEXT,
                     workdir TEXT NOT NULL,
                     script TEXT NOT NULL,
                     exit_code TEXT,
@@ -375,6 +380,12 @@ class RunStore:
             self._ensure_column(
                 conn,
                 table="runs",
+                column="job_name",
+                definition="TEXT",
+            )
+            self._ensure_column(
+                conn,
+                table="runs",
                 column="submit_response_json",
                 definition="TEXT NOT NULL DEFAULT '{}'",
             )
@@ -500,6 +511,7 @@ class RunStore:
         workdir: str,
         script: str,
         resource_plan: dict[str, Any] | None = None,
+        job_name: str | None = None,
         contract_id: str | None = None,
         parent_run_id: str | None = None,
         lineage_reason: str | None = None,
@@ -542,11 +554,11 @@ class RunStore:
                     remediation_plan_id, attempt, workflow_json, retry_not_before,
                     owner, state, collection_state,
                     diagnosis_state, capsule_state,
-                    result_status, job_id, workdir, script, exit_code, terminal_state,
+                    result_status, job_id, job_name, workdir, script, exit_code, terminal_state,
                     submit_strategy, submit_response_json, resource_plan_json,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL,
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL,
                         NULL, '{}', ?, ?, ?)
                 """,
                 (
@@ -564,6 +576,7 @@ class RunStore:
                     DiagnosisState.PENDING.value,
                     CapsuleState.PENDING.value,
                     ResultStatus.UNKNOWN.value,
+                    job_name,
                     workdir,
                     script,
                     json.dumps(resource_plan or {}, sort_keys=True),
@@ -828,6 +841,46 @@ class RunStore:
             )
         return self.get_run(run_id)
 
+    def mark_backend_orphaned(self, run_id: str, *, backend: str, job_id: str) -> RunRecord:
+        """Quarantine a job whose persisted backend no longer owns it.
+
+        The old job is deliberately not reported as failed or cancelled: its
+        terminal outcome is unknown.  Marking it terminal in the control plane
+        stops an infinite reconciliation loop while preserving an auditable
+        record that an operator may import or reconcile manually.
+        """
+
+        now = utc_now_iso()
+        with self.connect() as conn:
+            result = conn.execute(
+                """
+                UPDATE runs
+                SET state = ?, terminal_state = ?, result_status = ?, updated_at = ?
+                WHERE run_id = ?
+                """,
+                (
+                    RunState.ORPHANED.value,
+                    "BACKEND_OWNERSHIP_LOST",
+                    ResultStatus.UNKNOWN.value,
+                    now,
+                    run_id,
+                ),
+            )
+            if result.rowcount != 1:
+                raise KeyError(run_id)
+            self._append_event(
+                conn,
+                run_id=run_id,
+                event_type="run.backend_orphaned",
+                payload={
+                    "backend": backend,
+                    "job_id": job_id,
+                    "state": RunState.ORPHANED.value,
+                    "reason": "backend_ownership_lost",
+                },
+            )
+        return self.get_run(run_id)
+
     def update_capsule_state(
         self,
         run_id: str,
@@ -901,10 +954,11 @@ class RunStore:
             conditions.append(
                 "(runs.run_id LIKE ? ESCAPE '\\' "
                 "OR runs.job_id LIKE ? ESCAPE '\\' "
+                "OR runs.job_name LIKE ? ESCAPE '\\' "
                 "OR runs.contract_id LIKE ? ESCAPE '\\' "
                 "OR runs.workdir LIKE ? ESCAPE '\\')"
             )
-            values.extend([pattern, pattern, pattern, pattern])
+            values.extend([pattern, pattern, pattern, pattern, pattern])
         if cursor is not None:
             conditions.append(
                 "(runs.created_at < ? OR (runs.created_at = ? AND runs.run_id < ?))"
@@ -2345,6 +2399,7 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
         submit_response=json.loads(str(row["submit_response_json"] or "{}")),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        job_name=None if row["job_name"] is None else str(row["job_name"]),
         resource_plan=json.loads(str(row["resource_plan_json"] or "{}")),
     )
 

@@ -96,6 +96,35 @@ This script only runs fixed read-only allowlisted commands such as
 CLI output is redacted before being written. SSH/login-shell access is treated
 as test-only evidence and must not be assumed as a production capability.
 
+## Optional environment inventory
+
+For simulator-fidelity work, the following fixed inventory collects directory
+metadata (not directory contents), filesystem capacity, selected scheduler
+settings, QoS output, program availability and process resource limits:
+
+```bash
+python3 probe_real107_environment.py --out-dir real107-environment-inventory
+```
+
+It never reads a user project, prints an environment variable, or generates a
+REST token. User-home paths are written as `<home>` and only a small allowlist
+of scheduler configuration fields is retained.
+
+## Optional allocated-GPU runtime probe
+
+With explicit authorization for one short GPU job, the SSH wrapper submits a
+fixed `Students/qos_stu_medium_2gpu` probe (one A100, one CPU, two minutes):
+
+```bash
+PILOT107_REAL107_SSH_TARGET=pilot107-slurm \
+PILOT107_REAL107_WORKDIR=/home/<group>/<user>/pilot107-compute-<label> \
+bash scripts/probe-real107-ssh-compute.sh
+```
+
+It reports only `nvidia-smi`, optional PyTorch CUDA availability, selected
+`SLURM_*` resource variables and fixed `/public`, `/home`, `/tmp` filesystem
+metadata. It does not read project files or generate a token.
+
 ## Safety
 
 - The probe only uses HTTP GET.

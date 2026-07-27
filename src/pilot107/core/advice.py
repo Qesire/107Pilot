@@ -82,6 +82,17 @@ class AgentExecutionDispatchBatch:
     errors: list[AgentExecutionDispatchError]
 
 
+# Diagnosis rule_ids that indicate code-level problems where a RepairTicket
+# is the appropriate handoff (as opposed to resource/parameter patches).
+_CODE_REPAIR_RULE_IDS: frozenset[str] = frozenset(
+    {
+        "RUNTIME.NONZERO_EXIT",
+        "RUNTIME.PYTHON_PACKAGE_MISSING",
+        "RUNTIME.COMMAND_NOT_FOUND",
+    }
+)
+
+
 class AgentPolicyEngine:
     """Evaluate rule-authored contract patches without consulting an LLM."""
 
@@ -99,8 +110,33 @@ class AgentPolicyEngine:
         *,
         run: RunRecord,
         diagnoses: tuple[DiagnosisRecord, ...],
+        has_code_context: bool = False,
     ) -> tuple[dict[str, Any], ...]:
-        return tuple(self._action_for(run=run, diagnosis=item) for item in diagnoses)
+        actions: list[dict[str, Any]] = []
+        for item in diagnoses:
+            actions.append(self._action_for(run=run, diagnosis=item))
+            # When a diagnosis points to a code problem and code context is
+            # available, emit an additional create_repair_ticket action so the
+            # remediation session can hand off to a local code tool.
+            if (
+                has_code_context
+                and item.rule_id in _CODE_REPAIR_RULE_IDS
+                and not item.suggested_patch
+            ):
+                actions.append(
+                    {
+                        "action_id": f"action_repair_{item.diagnosis_id}",
+                        "type": "create_repair_ticket",
+                        "source": "diagnosis_rule",
+                        "rule_id": item.rule_id,
+                        "diagnosis_id": item.diagnosis_id,
+                        "approval_required": True,
+                        "risk": "low",
+                        "policy_status": "allowed_preview",
+                        "reasons": ["code_context_available"],
+                    }
+                )
+        return tuple(actions)
 
     def _action_for(
         self,
@@ -233,6 +269,7 @@ class AgentAdviceService:
         actions = self.policy_engine.actions_for(
             run=run,
             diagnoses=explanation.diagnoses,
+            has_code_context=explanation.code_context is not None,
         )
         state = _initial_state(explanation, actions)
         bundle_hash = explanation.evidence_bundle_sha256 or ""
@@ -244,6 +281,11 @@ class AgentAdviceService:
             "citations": [citation.to_payload() for citation in explanation.citations],
             "recommendations": list(explanation.recommendations),
             "warnings": list(explanation.warnings),
+            "code_context": (
+                None
+                if explanation.code_context is None
+                else explanation.code_context.to_payload()
+            ),
             "actions": list(actions),
         }
         advice_id = "advice_" + hashlib.sha256(

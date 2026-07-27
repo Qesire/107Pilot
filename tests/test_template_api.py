@@ -112,8 +112,16 @@ class TemplateApiTests(unittest.TestCase):
             f"/api/v1/templates/{template_id}/releases/1.0.0",
             headers=self._headers("bob"),
         )
+        unified_market = self.api.handle_get(
+            "/api/v1/market/items?kind=curated_template",
+            headers=self._headers("bob"),
+        )
+        unified_detail = self.api.handle_get(
+            f"/api/v1/market/items/{published.payload['release_id']}",
+            headers=self._headers("bob"),
+        )
         adopted = self.api.handle_post(
-            f"/api/v1/templates/{template_id}/releases/1.0.0/adopt",
+            f"/api/v1/market/items/{published.payload['release_id']}/adopt",
             body=_json({"request_key": "bob-adopts-public"}),
             headers=self._headers("bob"),
         )
@@ -158,6 +166,20 @@ class TemplateApiTests(unittest.TestCase):
         self.assertEqual(published.status, 201)
         self.assertEqual(repeated.payload["release_id"], published.payload["release_id"])
         self.assertEqual(fetched.status, 200)
+        self.assertEqual(unified_market.status, 200)
+        self.assertEqual(
+            unified_market.payload["items"][0]["kind"],
+            "curated_template",
+        )
+        self.assertEqual(
+            unified_market.payload["items"][0]["item_id"],
+            published.payload["release_id"],
+        )
+        self.assertEqual(
+            unified_detail.payload["template"]["template_id"],
+            template_id,
+        )
+        self.assertIn("metrics", unified_detail.payload)
         self.assertEqual(adopted_again.payload["adoption_id"], adopted.payload["adoption_id"])
         self.assertTrue(adopted.payload["target_contract_id"].startswith("contract_adopted_"))
         adopted_contract = self.api.handle_get(

@@ -20,6 +20,7 @@ describe("run status presentation", () => {
     ["UNKNOWN", "warning"],
     ["SUBMISSION_UNCERTAIN", "warning"],
     ["EVIDENCE_PARTIAL", "warning"],
+    ["ORPHANED", "warning"],
   ])("maps %s to %s", (state, tone) => {
     expect(runTone(state)).toBe(tone);
   });

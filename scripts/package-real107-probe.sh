@@ -14,11 +14,16 @@ mkdir -p "$package_dir"
 
 cp "$src/probe_real107_snapshot.py" "$package_dir/"
 cp "$src/probe_real107_cli_snapshot.py" "$package_dir/"
+cp "$src/probe_real107_environment.py" "$package_dir/"
+cp "$src/probe_real107_compute_runtime.py" "$package_dir/"
 cp "$src/real107_configuration_snapshot_probe.sbatch" "$package_dir/"
+cp "$src/real107_compute_runtime_probe.sbatch" "$package_dir/"
 cp "$src/README.md" "$package_dir/"
 cp -R "$root/src/pilot107" "$package_dir/pilot107"
 chmod 0755 "$package_dir/probe_real107_snapshot.py"
 chmod 0755 "$package_dir/probe_real107_cli_snapshot.py"
+chmod 0755 "$package_dir/probe_real107_environment.py"
+chmod 0755 "$package_dir/probe_real107_compute_runtime.py"
 
 (
   cd "$out_dir"

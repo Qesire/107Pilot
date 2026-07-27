@@ -64,6 +64,22 @@ class RunServiceTests(unittest.TestCase):
             {"submission_snapshot", "runtime_status"},
         )
 
+    def test_submit_preserves_original_job_name_in_run_record(self) -> None:
+        service = RunService(store=self.store, backend=InMemorySlurmBackend())
+
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=Path("/public/home/alice"),
+                script="#!/bin/bash\nhostname\n",
+                resource_plan=_plan(),
+                job_name="数据预处理 / July batch",
+            )
+        )
+
+        self.assertEqual(run.job_name, "数据预处理 / July batch")
+        self.assertEqual(self.store.get_run(run.run_id).job_name, "数据预处理 / July batch")
+
     def test_reconcile_terminal_run_creates_terminal_tasks(self) -> None:
         backend = InMemorySlurmBackend()
         service = RunService(store=self.store, backend=backend)

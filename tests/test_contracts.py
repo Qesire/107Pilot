@@ -57,6 +57,7 @@ class ContractServiceTests(unittest.TestCase):
         self.assertEqual(loaded.recipe_version_id, "recipe_python_cpu@1.0.0")
         self.assertEqual(request.owner, "alice")
         self.assertEqual(request.workdir, Path("/public/home/alice"))
+        self.assertEqual(request.job_name, "contract-e2e")
         self.assertIn("echo contract-ok", request.script)
         self.assertEqual(request.resource_plan.partition, "debug")
 
@@ -119,6 +120,7 @@ def _contract_payload() -> dict:
     return {
         "recipe_version_id": "recipe_python_cpu@1.0.0",
         "project": {
+            "name": "contract-e2e",
             "workdir": "/public/home/alice",
         },
         "entry": {

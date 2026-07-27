@@ -8,7 +8,12 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from threading import Event, Thread
 
-from pilot107.adapters.slurm import SlurmAuthError, SlurmBackendError, SlurmTransportError
+from pilot107.adapters.slurm import (
+    SlurmAuthError,
+    SlurmBackendError,
+    SlurmBackendOwnershipError,
+    SlurmTransportError,
+)
 from pilot107.core.advice import AgentAdviceService
 from pilot107.core.control_repository import (
     ControlRepository,
@@ -30,6 +35,7 @@ class WorkerErrorCode(StrEnum):
     SLURM_BACKEND_ERROR = "SLURM.BACKEND_ERROR"
     EVIDENCE_COLLECTION_ERROR = "EVIDENCE.COLLECTION_ERROR"
     CAPSULE_AUTO_BUILD_ERROR = "CAPSULE.AUTO_BUILD_ERROR"
+    SLURM_BACKEND_OWNERSHIP_LOST = "SLURM.BACKEND_OWNERSHIP_LOST"
 
 
 @dataclass(frozen=True)
@@ -160,6 +166,14 @@ class RuntimeReconcileWorker:
         for run in runs:
             try:
                 reconciled = self.service.reconcile_once(run.run_id)
+            except SlurmBackendOwnershipError:
+                self.service.store.mark_backend_orphaned(
+                    run.run_id,
+                    backend=type(self.service.backend).__name__,
+                    job_id=run.job_id or "",
+                )
+                terminal += 1
+                continue
             except SlurmBackendError as exc:
                 classification = classify_worker_exception(
                     exc,

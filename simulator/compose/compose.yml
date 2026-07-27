@@ -106,6 +106,47 @@ services:
       - ./slurm/cgroup.conf:/etc/slurm/cgroup.conf:ro
       - ./scripts/init-public.sh:/opt/pilot107/init-public.sh:ro
 
+  pilot107-command-gateway:
+    image: ${SLURM_SIM_IMAGE:-pilot107/slurm-sim:25.11-real107}
+    restart: unless-stopped
+    profiles: ["apps"]
+    networks:
+      - sim
+    environment:
+      PILOT107_COMMAND_GATEWAY_TOKEN: ${PILOT107_COMMAND_GATEWAY_TOKEN:-sim-dev-token}
+      # Formal real107-ssh relay settings. They are inert unless the backend is
+      # explicitly switched to real107-ssh.
+      PILOT107_SSH_CONNECTION_ID: ${PILOT107_SSH_CONNECTION_ID:-real107}
+      PILOT107_SSH_TARGET_ID: ${PILOT107_SSH_TARGET_ID:-real107}
+      PILOT107_SSH_TARGET: ${PILOT107_SSH_TARGET:-}
+      PILOT107_SSH_CONTROL_PATH: ${PILOT107_SSH_CONTROL_PATH:-/var/lib/pilot107/ssh/real107.sock}
+      PILOT107_SSH_KNOWN_HOSTS_FILE: ${PILOT107_SSH_KNOWN_HOSTS_FILE:-/var/lib/pilot107/ssh/known_hosts}
+      PILOT107_SSH_PORT: ${PILOT107_SSH_PORT:-22}
+      PILOT107_SSH_PORTAL_OWNER: ${PILOT107_SSH_PORTAL_OWNER:-}
+      PILOT107_SSH_SLURM_USER: ${PILOT107_SSH_SLURM_USER:-}
+      PILOT107_SSH_OWNER_ROOTS: ${PILOT107_SSH_OWNER_ROOTS:-}
+      PILOT107_GATEWAY_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/{user}}
+      PILOT107_GATEWAY_AUDIT_LOG: ${PILOT107_GATEWAY_AUDIT_LOG:-/var/log/slurm/pilot107-command-gateway-audit.jsonl}
+      PILOT107_GATEWAY_RATE_LIMIT_MAX: ${PILOT107_GATEWAY_RATE_LIMIT_MAX:-1200}
+      PILOT107_GATEWAY_RATE_LIMIT_WINDOW_SECONDS: ${PILOT107_GATEWAY_RATE_LIMIT_WINDOW_SECONDS:-60}
+    volumes:
+      - public:/public
+      - slurm-log:/var/log/slurm
+      - ./slurm/slurm.conf:/etc/slurm/slurm.conf:ro
+      - ./slurm/gres.conf:/etc/slurm/gres.conf:ro
+      - ./slurm/cgroup.conf:/etc/slurm/cgroup.conf:ro
+      - ./scripts/init-public.sh:/opt/pilot107/init-public.sh:ro
+      - ./scripts/command-gateway.py:/opt/pilot107/command-gateway.py:ro
+    command: ["python3", "/opt/pilot107/command-gateway.py", "--host", "0.0.0.0", "--port", "8090"]
+    depends_on:
+      - slurmctld
+      - worker-1
+    healthcheck:
+      test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=2).read()\nPY"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   pilot107-api:
     image: ${PILOT107_API_IMAGE:-pilot107/api:local}
     restart: unless-stopped
@@ -138,13 +179,17 @@ services:
       PILOT107_MODE: docker-sim
       PILOT107_API_BACKEND: ${PILOT107_API_BACKEND:-demo}
       PILOT107_DB_PATH: /var/lib/pilot107/pilot107.db
+      PILOT107_POSTGRES_DSN: ${PILOT107_POSTGRES_DSN:-}
       PILOT107_EVIDENCE_ROOT: /var/lib/pilot107/evidence
       PILOT107_CAPSULE_ROOT: /var/lib/pilot107/capsules
       PILOT107_WORKER_METRICS_ROOT: /var/lib/pilot107/worker-metrics
-      PILOT107_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/alice,/public/home/bob}
+      # ``{user}`` is expanded by the service at submission time.  It keeps
+      # demo users isolated instead of granting Alice access to Bob's home.
+      PILOT107_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/{user}}
       PILOT107_AUTH_REQUIRED: "true"
       PILOT107_PROXY_HMAC_SECRET_FILE: /run/secrets/pilot107-proxy-hmac
       PILOT107_CONTRACT_PROFILE: ${PILOT107_CONTRACT_PROFILE:-real107-sim}
+      PILOT107_CAPABILITY_PROFILE_PATH: ${PILOT107_CAPABILITY_PROFILE_PATH:-/opt/pilot107/config/platform_profiles/simulator-real107-behavior.yaml}
       PILOT107_SLURMRESTD_URL: http://slurmrestd:6820
       PILOT107_REST_AUTH_STYLE: ${PILOT107_REST_AUTH_STYLE:-bearer}
       PILOT107_SLURM_USER_NAME: ${PILOT107_SLURM_USER_NAME:-alice}
@@ -156,6 +201,36 @@ services:
       PILOT107_LLM_MAX_TOKENS: ${PILOT107_LLM_MAX_TOKENS:-700}
       PILOT107_LLM_STRUCTURED_OUTPUT_MODE: ${PILOT107_LLM_STRUCTURED_OUTPUT_MODE:-prompt_json}
       PILOT107_LLM_MAX_ATTEMPTS: ${PILOT107_LLM_MAX_ATTEMPTS:-2}
+      # Disabled by default.  When enabled, the API reads only source windows
+      # selected from evidence through an existing user-authenticated SSH
+      # ControlMaster; it never stores a password or MFA code.
+      PILOT107_CODE_CONTEXT_TRANSPORT: ${PILOT107_CODE_CONTEXT_TRANSPORT:-none}
+      PILOT107_CODE_CONTEXT_ALLOWED_ROOTS: ${PILOT107_CODE_CONTEXT_ALLOWED_ROOTS:-}
+      PILOT107_CODE_CONTEXT_SSH_TARGET: ${PILOT107_CODE_CONTEXT_SSH_TARGET:-}
+      PILOT107_CODE_CONTEXT_SSH_CONTROL_PATH: ${PILOT107_CODE_CONTEXT_SSH_CONTROL_PATH:-}
+      PILOT107_CODE_CONTEXT_SSH_PORT: ${PILOT107_CODE_CONTEXT_SSH_PORT:-}
+      PILOT107_CODE_CONTEXT_MAX_CHUNKS: ${PILOT107_CODE_CONTEXT_MAX_CHUNKS:-3}
+      PILOT107_CODE_CONTEXT_BEFORE_LINES: ${PILOT107_CODE_CONTEXT_BEFORE_LINES:-60}
+      PILOT107_CODE_CONTEXT_AFTER_LINES: ${PILOT107_CODE_CONTEXT_AFTER_LINES:-60}
+      PILOT107_CODE_CONTEXT_MAX_FILE_BYTES: ${PILOT107_CODE_CONTEXT_MAX_FILE_BYTES:-65536}
+      # Allow the local code-context transport to run git projections on
+      # workspaces owned by other UIDs (e.g. alice's home).  Without this,
+      # git refuses to operate on repos with "dubious ownership".
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: "safe.directory"
+      GIT_CONFIG_VALUE_0: "*"
+      PILOT107_TERMINAL_ENABLED: "true"
+      PILOT107_COMMAND_GATEWAY_URL: http://pilot107-command-gateway:8090
+      PILOT107_COMMAND_GATEWAY_TOKEN: ${PILOT107_COMMAND_GATEWAY_TOKEN:-sim-dev-token}
+      PILOT107_SSH_CONNECTION_ID: ${PILOT107_SSH_CONNECTION_ID:-real107}
+      PILOT107_SSH_TARGET_ID: ${PILOT107_SSH_TARGET_ID:-real107}
+      PILOT107_SSH_TARGET: ${PILOT107_SSH_TARGET:-}
+      PILOT107_SSH_CONTROL_PATH: ${PILOT107_SSH_CONTROL_PATH:-/var/lib/pilot107/ssh/real107.sock}
+      PILOT107_SSH_KNOWN_HOSTS_FILE: ${PILOT107_SSH_KNOWN_HOSTS_FILE:-/var/lib/pilot107/ssh/known_hosts}
+      PILOT107_SSH_PORT: ${PILOT107_SSH_PORT:-22}
+      PILOT107_SSH_PORTAL_OWNER: ${PILOT107_SSH_PORTAL_OWNER:-}
+      PILOT107_SSH_SLURM_USER: ${PILOT107_SSH_SLURM_USER:-}
+      PILOT107_SSH_OWNER_ROOTS: ${PILOT107_SSH_OWNER_ROOTS:-}
       PILOT107_TEMPLATE_REVIEWERS: ${PILOT107_TEMPLATE_REVIEWERS:-reviewer}
       PILOT107_TEMPLATE_VERIFICATION_ENVIRONMENT: ${PILOT107_TEMPLATE_VERIFICATION_ENVIRONMENT:-docker}
     volumes:
@@ -165,6 +240,7 @@ services:
       - pilot107-proxy-hmac
     depends_on:
       - slurmrestd
+      - pilot107-command-gateway
     healthcheck:
       test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=2).read()\nPY"]
       interval: 10s
@@ -186,13 +262,21 @@ services:
     environment:
       PILOT107_MODE: docker-sim
       PILOT107_DB_PATH: /var/lib/pilot107/pilot107.db
+      PILOT107_POSTGRES_DSN: ${PILOT107_POSTGRES_DSN:-}
       PILOT107_EVIDENCE_ROOT: /var/lib/pilot107/evidence
       PILOT107_WORKER_BACKEND: ${PILOT107_WORKER_BACKEND:-demo}
+      PILOT107_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/{user}}
+      PILOT107_CAPABILITY_PROFILE_PATH: ${PILOT107_CAPABILITY_PROFILE_PATH:-/opt/pilot107/config/platform_profiles/simulator-real107-behavior.yaml}
       PILOT107_WORKER_ID: runtime-worker-primary
       PILOT107_WORKER_HEALTH_PATH: /var/lib/pilot107/worker-health.json
       PILOT107_WORKER_METRICS_ROOT: /var/lib/pilot107/worker-metrics
       PILOT107_CAPSULE_ROOT: /var/lib/pilot107/capsules
       PILOT107_SLURMRESTD_URL: http://slurmrestd:6820
+      # Keep these identical to the API settings whenever command-gateway is
+      # selected: the Worker owns reconciliation and Evidence collection for
+      # jobs submitted by the API.
+      PILOT107_COMMAND_GATEWAY_URL: http://pilot107-command-gateway:8090
+      PILOT107_COMMAND_GATEWAY_TOKEN: ${PILOT107_COMMAND_GATEWAY_TOKEN:-sim-dev-token}
       PILOT107_REST_AUTH_STYLE: ${PILOT107_REST_AUTH_STYLE:-bearer}
       PILOT107_SLURM_USER_NAME: ${PILOT107_SLURM_USER_NAME:-alice}
       PILOT107_SLURM_TOKEN: ${PILOT107_SLURM_TOKEN:-}
@@ -208,6 +292,7 @@ services:
       - pilot107-data:/var/lib/pilot107
     depends_on:
       - slurmrestd
+      - pilot107-command-gateway
     healthcheck:
       test:
         - CMD-SHELL

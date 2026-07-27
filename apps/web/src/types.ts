@@ -14,13 +14,37 @@ export type RunState =
   | "COLLECTION_FAILED"
   | "AUTH_REQUIRED"
   | "SUBMISSION_UNCERTAIN"
-  | "EVIDENCE_PARTIAL";
+  | "EVIDENCE_PARTIAL"
+  | "ORPHANED";
 
 export interface WebSession {
   identity_mode: "demo" | "fixed_user" | string;
   user: string;
   switchable: boolean;
   terminal_deep_link: string | null;
+}
+
+export type PlatformConnectionState =
+  | "active"
+  | "auth_required"
+  | "unavailable"
+  | "expired"
+  | "revoked";
+
+export interface PlatformConnection {
+  connection_id: string;
+  target_id: string;
+  state: PlatformConnectionState;
+  owner: "current-user-only";
+  checked_at: string | null;
+  expires_at: string | null;
+  message: string;
+  status_code: string;
+  revision: number;
+}
+
+export interface PlatformConnections {
+  items: PlatformConnection[];
 }
 
 export interface RunSummary {
@@ -33,15 +57,26 @@ export interface RunSummary {
   capsule_state: string;
   result_status: string;
   job_id: string | null;
+  job_name?: string | null;
   exit_code: string | null;
   terminal_state?: string | null;
   parent_run_id?: string | null;
   lineage_reason?: string | null;
   attempt?: number;
   workdir?: string | null;
+  submit_strategy?: string | null;
+  backend?: {
+    kind: string | null;
+    target_id: string | null;
+  };
   recipe_version_id?: string | null;
   created_at: string;
   updated_at: string;
+  publication?: {
+    status: "eligible" | "published" | "ineligible";
+    reason: "run_not_succeeded" | "exit_nonzero" | "not_owner" | "already_published" | null;
+    publication_id: string | null;
+  };
 }
 
 export interface RunEvent {
@@ -50,6 +85,14 @@ export interface RunEvent {
   event_type: string;
   payload: JsonObject;
   created_at: string;
+}
+
+export interface TerminalCommandResult {
+  command: string;
+  argv: string[];
+  returncode: number;
+  stdout: string;
+  stderr: string;
 }
 
 export interface RunLineageEdge {
@@ -234,7 +277,18 @@ export interface EntitlementSnapshot {
 
 export interface HealthReady {
   status: string;
-  checks?: Record<string, { status?: string; detail?: string }>;
+  // The current readiness endpoint emits an ordered array. Keep the map
+  // shape as a compatibility union for older deployments.
+  checks?: HealthCheck[] | Record<string, HealthCheck>;
+}
+
+export interface HealthCheck {
+  name?: string;
+  status?: string;
+  detail?: string;
+  reason?: string;
+  required?: boolean;
+  latency_ms?: number;
 }
 
 export type JsonObject = Record<string, unknown>;
@@ -423,6 +477,101 @@ export interface TemplateAdoption {
   created_at: string;
 }
 
+export type MarketVisibility = "private" | "course" | "campus" | "public";
+
+/**
+ * An owner-confirmed successful Run, not a curated/reproduced template.
+ * The API intentionally does not include the submitted script, workdir, or
+ * source Contract payload in this market read model.
+ */
+export interface SuccessfulRunMarketItem {
+  kind: "successful_run";
+  publication_id: string;
+  source_run_id: string;
+  owner: string;
+  title: string;
+  description: string;
+  visibility: MarketVisibility;
+  scope_key: string | null;
+  tags: string[];
+  reproduction_note: string;
+  adoptable: boolean;
+  published_at: string;
+  updated_at: string;
+}
+
+export interface SuccessfulRunPublicationInput {
+  request_key: string;
+  title: string;
+  description: string;
+  visibility: MarketVisibility;
+  scope_key?: string | null;
+  tags: string[];
+  reproduction_note: string;
+  confirm_share: boolean;
+}
+
+export interface SuccessfulRunAdoption {
+  adoption_id: string;
+  publication_id: string;
+  target_contract_id: string | null;
+  created_at: string;
+}
+
+export type MarketItemKind = "run_publication" | "curated_template";
+
+interface MarketItemBase {
+  kind: MarketItemKind;
+  item_id: string;
+  title: string;
+  description: string;
+  visibility: MarketVisibility;
+  scope_key: string | null;
+  publisher: string;
+  published_at: string;
+  updated_at: string;
+  tags: string[];
+  adoption: {
+    available: boolean;
+    reason: string | null;
+  };
+  withdrawn_at: string | null;
+}
+
+export interface RunPublicationMarketItem extends MarketItemBase {
+  kind: "run_publication";
+  source: {
+    type: "successful_run";
+    run_id: string;
+  };
+  reproduction_note: string;
+}
+
+export interface CuratedTemplateMarketItem extends MarketItemBase {
+  kind: "curated_template";
+  template: {
+    template_id: string;
+    release_version: string;
+    content_sha256: string;
+  };
+  contract_payload: JsonObject;
+  compatibility: JsonObject;
+  publication: JsonObject;
+  metrics: TemplateMarketItem["metrics"];
+}
+
+export type MarketItem = RunPublicationMarketItem | CuratedTemplateMarketItem;
+
+export interface MarketItemAdoption {
+  adoption_id: string;
+  target_contract_id: string | null;
+  created_at: string;
+  publication_id?: string;
+  release_id?: string;
+  target_template_id?: string;
+  target_draft_id?: string;
+}
+
 export interface PreparedRun extends RunSummary {
   preview?: { submitted_script?: string; execution_wrapper?: string };
   risk_lint?: Array<Record<string, unknown>>;
@@ -466,4 +615,57 @@ export interface RecipeSummaryPayload {
   title: string;
   trust_level: string;
   executable: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// M2: Repair Ticket & Artifact Manifest
+// ---------------------------------------------------------------------------
+
+export type RepairTicketState = "open" | "resolved" | "abandoned";
+
+export interface ArtifactManifest {
+  manifest_id: string;
+  owner: string;
+  run_id: string | null;
+  revision: string;
+  dirty_diff_digest: string | null;
+  bundle_digest: string | null;
+  remote_workdir: string | null;
+  local_test_summary: string | null;
+  disclosure: string;
+  created_at: string;
+}
+
+export interface RepairTicketComparison {
+  source_run_id: string;
+  derived_run_id: string;
+  source_state?: string;
+  source_exit_code?: string | null;
+  derived_state?: string;
+  derived_exit_code?: string | null;
+  source_diagnosis_count?: number;
+  derived_diagnosis_count?: number;
+  source_diagnosis_rules?: string[];
+  derived_diagnosis_rules?: string[];
+  improved?: boolean;
+}
+
+export interface RepairTicket {
+  ticket_id: string;
+  owner: string;
+  state: RepairTicketState;
+  source_run_id: string;
+  source_contract_id: string | null;
+  session_id: string | null;
+  diagnosis_ids: string[];
+  cited_facts: Array<Record<string, unknown>>;
+  code_context: JsonObject | null;
+  requested_change: string | null;
+  no_go_constraints: string[];
+  resolution_manifest_id: string | null;
+  resolution_run_id: string | null;
+  resolution_comparison: RepairTicketComparison | null;
+  abandon_reason: string | null;
+  created_at: string;
+  updated_at: string;
 }

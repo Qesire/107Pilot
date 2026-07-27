@@ -78,6 +78,14 @@ describe("llmConfiguredFromHealth", () => {
     expect(llmConfiguredFromHealth(health)).toBe(true);
   });
 
+  it("accepts the array shape emitted by the current readiness endpoint", () => {
+    const health: HealthReady = {
+      status: "ready",
+      checks: [{ name: "local_llm", status: "configured", required: false }],
+    };
+    expect(llmConfiguredFromHealth(health)).toBe(true);
+  });
+
   it("returns false when the local_llm check is disabled", () => {
     const health: HealthReady = {
       status: "ready",

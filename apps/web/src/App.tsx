@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   Blocks,
   Bot,
@@ -9,22 +9,24 @@ import {
   FolderKanban,
   LifeBuoy,
   ListTree,
+  MoreHorizontal,
   Server,
   Settings,
   SquareTerminal,
 } from "lucide-react";
 import { StatusBadge } from "./components";
+import { ConnectionActionBanner, ConnectionBadge } from "./ConnectionStatus";
 import { AgentPage } from "./AgentPage";
 import { EnvBoundaryBanner } from "./EnvBoundaryBanner";
 import { useHealth, useWebSession } from "./query";
 import { ClusterPage, NotFoundPage, RunsPage, TerminalCollaborationPage, WorkspacePage } from "./pages";
-import { MarketPage, TemplateDetailPage } from "./MarketPages";
+import { MarketItemDetailPage, MarketPage, TemplateDetailPage } from "./MarketPages";
 import { globalNavigationPath, useLocationState, withSearch } from "./url";
 
 const navigation = [
   { path: "/projects", label: "工作台", icon: FolderKanban },
   { path: "/runs", label: "作业", icon: ListTree },
-  { path: "/market", label: "模板市场", icon: Blocks },
+  { path: "/market", label: "作业市场", icon: Blocks },
   { path: "/studio/new", label: "Contract Studio", icon: Braces },
   { path: "/agent", label: "Agent", icon: Bot },
   { path: "/cluster", label: "集群", icon: Server },
@@ -37,6 +39,7 @@ const StudioPage = lazy(() =>
 
 export default function App() {
   const [location, navigate] = useLocationState();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const requestedUser = location.search.get("user") || "alice";
   const normalizedRequestedUser = requestedUser === "bob" ? "bob" : "alice";
   const session = useWebSession(normalizedRequestedUser);
@@ -51,7 +54,10 @@ export default function App() {
   const setUser = (nextUser: string) => {
     navigate(withSearch(location.pathname, location.search, { user: nextUser }), { replace: true });
   };
-  const go = (path: string) => navigate(globalNavigationPath(path, user));
+  const go = (path: string) => {
+    setMobileNavOpen(false);
+    navigate(globalNavigationPath(path, user));
+  };
   const activePath = navigation.find((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`))?.path;
 
   return (
@@ -72,6 +78,7 @@ export default function App() {
                 key={item.path}
                 href={globalNavigationPath(item.path, user)}
                 className={active ? "active" : undefined}
+                aria-label={item.label}
                 aria-current={active ? "page" : undefined}
                 onClick={(event) => { event.preventDefault(); go(item.path); }}
               >
@@ -81,6 +88,31 @@ export default function App() {
               </a>
             );
           })}
+          <div className="mobile-more">
+            <button
+              type="button"
+              className={`mobile-more-trigger${mobileNavOpen || navigation.slice(4).some((item) => item.path === activePath) ? " is-active" : ""}`}
+              aria-expanded={mobileNavOpen}
+              aria-controls="mobile-more-menu"
+              onClick={() => setMobileNavOpen((open) => !open)}
+            >
+              <MoreHorizontal aria-hidden="true" />
+              <span>更多</span>
+            </button>
+            {mobileNavOpen ? <div id="mobile-more-menu" className="mobile-more-menu">
+              {navigation.slice(4).map((item) => {
+                const Icon = item.icon;
+                const active = item.path === activePath;
+                return <a
+                  key={item.path}
+                  href={globalNavigationPath(item.path, user)}
+                  className={active ? "active" : undefined}
+                  aria-current={active ? "page" : undefined}
+                  onClick={(event) => { event.preventDefault(); go(item.path); }}
+                ><Icon aria-hidden="true" /><span>{item.label}</span></a>;
+              })}
+            </div> : null}
+          </div>
         </nav>
         <div className="sidebar-bottom">
           <button type="button" disabled title="帮助中心将在后续切片接入"><LifeBuoy aria-hidden="true" /><span>帮助与文档</span></button>
@@ -95,6 +127,7 @@ export default function App() {
             <span>107</span><span>/</span><strong>{navigation.find((item) => item.path === activePath)?.label ?? "页面"}</strong>
           </div>
           <div className="topbar-actions">
+            <ConnectionBadge user={user} />
             <StatusBadge
               label={health.isPending ? "API 检查中" : health.isError ? "API 不可用" : "API ready"}
               tone={health.isPending ? "neutral" : health.isError ? "danger" : "success"}
@@ -117,7 +150,8 @@ export default function App() {
             </label>
           </div>
         </header>
-        <main id="main-content" tabIndex={-1}>
+        <main id="main-content" className="page-transition" key={location.pathname} tabIndex={-1}>
+          {session.isSuccess ? <ConnectionActionBanner user={user} /> : null}
           {session.isPending ? <div className="query-state" role="status"><span>正在确认当前身份…</span></div> : null}
           {session.isError ? <div className="query-state error" role="alert"><strong>身份不可用</strong><span>{session.error.message}</span></div> : null}
           {session.isSuccess ? <>
@@ -125,6 +159,7 @@ export default function App() {
             {location.pathname === "/runs" || location.pathname.startsWith("/runs/") ? <RunsPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname === "/cluster" ? <ClusterPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname === "/market" ? <MarketPage user={user} location={location} navigate={navigate} /> : null}
+            {location.pathname.startsWith("/market/") ? <MarketItemDetailPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname.startsWith("/templates/") ? <TemplateDetailPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname.startsWith("/studio/") ? (
               <Suspense fallback={<div className="query-state" role="status"><span>正在加载 Contract Studio…</span></div>}>

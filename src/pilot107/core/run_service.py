@@ -31,6 +31,7 @@ from pilot107.core.control_repository import (
     ControlRepositoryConflict,
     OutboxMessage,
 )
+from pilot107.core.path_policy import OwnerRootPolicyError, resolve_owner_roots
 from pilot107.core.preflight import PathChecker, preflight_workdir_fs, preflight_workdir_paths
 from pilot107.core.resources import (
     ArraySpec,
@@ -57,6 +58,7 @@ class RunSubmitRequest:
     workdir: Path
     script: str
     resource_plan: ResourcePlan
+    job_name: str | None = None
     contract_id: str | None = None
     parent_run_id: str | None = None
     lineage_reason: str | None = None
@@ -303,6 +305,7 @@ class RunService:
                 workdir=str(request.workdir),
                 script=request.script,
                 resource_plan=_resource_plan_to_dict(request.resource_plan),
+                job_name=request.job_name,
                 contract_id=request.contract_id,
                 parent_run_id=request.parent_run_id,
                 lineage_reason=request.lineage_reason,
@@ -321,6 +324,7 @@ class RunService:
             or created.remediation_plan_id != request.remediation_plan_id
             or created.workdir != str(request.workdir)
             or created.script != request.script
+            or created.job_name != request.job_name
             or created.resource_plan != _resource_plan_to_dict(request.resource_plan)
             or created.workflow != request.workflow.to_payload()
         ):
@@ -648,7 +652,7 @@ class RunService:
             resource_plan=_resource_plan_from_dict(run.resource_plan),
             idempotency_key=f"{run.run_id}:submit",
             dependency_job_ids=dependency_job_ids,
-            job_name=_submission_job_name(self.job_name_marker, run.run_id),
+            job_name=_submission_job_name(self.job_name_marker, run.run_id, run.job_name),
         )
 
     def _recover_submission_before_replay(
@@ -704,11 +708,21 @@ class RunService:
             time_window_seconds=self.reconcile_time_window_seconds,
         )
         if result.state == "bound" and result.job_id is not None:
+            reconcile_strategy = getattr(
+                self.reconcile_backend,
+                "submission_strategy",
+                SubmissionStrategy.REST_NATIVE,
+            )
+            if not isinstance(reconcile_strategy, SubmissionStrategy):
+                reconcile_strategy = SubmissionStrategy(str(reconcile_strategy))
             receipt = SubmitReceipt(
                 job_id=result.job_id,
                 run_state=RunState.SUBMITTED,
-                strategy=SubmissionStrategy.REST_NATIVE,
-                raw_response={"reconciled": True, "job_id": result.job_id},
+                strategy=reconcile_strategy,
+                raw_response=_reconciled_receipt_payload(
+                    self.reconcile_backend,
+                    result.job_id,
+                ),
             )
             assert message.lease_owner is not None
             submitted = self.store.apply_submit_receipt(
@@ -1087,7 +1101,7 @@ class RunService:
                 return {"path": relative_path, "status": "timeout"}
             stat_timeout = min(_BASELINE_STAT_TIMEOUT_CAP, remaining)
             stat = executor.run(
-                ["stat", "-c", "%s|%Y", absolute],
+                ["stat", "-c", "%s|%Y", "--", absolute],
                 cwd=run.workdir,
                 user=run.owner,
                 timeout_seconds=stat_timeout,
@@ -1284,6 +1298,7 @@ class RunService:
                 workdir=run.workdir,
                 script=run.script,
                 resource_plan=run.resource_plan,
+                job_name=run.job_name,
                 parent_run_id=run.run_id,
                 lineage_reason="workflow_retry",
                 workflow=run.workflow,
@@ -1312,13 +1327,27 @@ class RunService:
             )
 
     def _workdir_findings(self, run: RunRecord) -> list[PreflightFinding]:
+        try:
+            allowed_roots = resolve_owner_roots(
+                self.preflight_allowed_roots,
+                user=run.owner,
+            )
+        except OwnerRootPolicyError as exc:
+            return [
+                PreflightFinding(
+                    severity=PreflightSeverity.BLOCK,
+                    code="WORKDIR_OWNER_ROOT_POLICY_INVALID",
+                    message=str(exc),
+                    source_authority="deployment_allowed_roots",
+                )
+            ]
         path_checker = self.preflight_path_checker
         if self.preflight_path_checker_factory is not None:
             path_checker = self.preflight_path_checker_factory(run.owner)
         if path_checker is not None:
             return preflight_workdir_fs(
                 workdir=run.workdir,
-                allowed_roots=self.preflight_allowed_roots,
+                allowed_roots=allowed_roots,
                 shared_roots=self.preflight_shared_roots,
                 local_roots=self.preflight_local_roots,
                 path_checker=path_checker,
@@ -1326,7 +1355,7 @@ class RunService:
             )
         return preflight_workdir_paths(
             workdir=run.workdir,
-            allowed_roots=self.preflight_allowed_roots,
+            allowed_roots=allowed_roots,
             shared_roots=self.preflight_shared_roots,
             local_roots=self.preflight_local_roots,
             user=run.owner,
@@ -1348,11 +1377,21 @@ class RunService:
             time_window_seconds=self.reconcile_time_window_seconds,
         )
         if result.state == "bound" and result.job_id is not None:
+            reconcile_strategy = getattr(
+                self.reconcile_backend,
+                "submission_strategy",
+                SubmissionStrategy.REST_NATIVE,
+            )
+            if not isinstance(reconcile_strategy, SubmissionStrategy):
+                reconcile_strategy = SubmissionStrategy(str(reconcile_strategy))
             receipt = SubmitReceipt(
                 job_id=result.job_id,
                 run_state=RunState.SUBMITTED,
-                strategy=SubmissionStrategy.REST_NATIVE,
-                raw_response={"reconciled": True, "job_id": result.job_id},
+                strategy=reconcile_strategy,
+                raw_response=_reconciled_receipt_payload(
+                    self.reconcile_backend,
+                    result.job_id,
+                ),
             )
             return self.store.apply_submit_receipt(run_id, receipt)
         if result.state == "not_found":
@@ -1402,11 +1441,17 @@ def _resource_plan_to_dict(plan: ResourcePlan) -> dict[str, Any]:
     return payload
 
 
-def _submission_job_name(prefix: str, run_id: str) -> str:
+def _submission_job_name(prefix: str, run_id: str, original_name: str | None = None) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", prefix):
         raise ValueError("job_name_marker must use safe Slurm name characters")
     digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:20]
-    return f"{prefix}-{digest}"
+    if not original_name:
+        return f"{prefix}-{digest}"
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", original_name).strip(".-")
+    suffix = f"-p107-{digest}"
+    # Slurm accepts at most 128 characters. Keep a stable unique suffix for
+    # reconciliation while retaining as much of the user-visible name as fits.
+    return f"{(normalized or prefix)[:128 - len(suffix)]}{suffix}"
 
 
 def _resolve_expected_outputs(contract_store: ContractStore, contract_id: str) -> list[str]:
@@ -1555,7 +1600,7 @@ def _baseline_sha256(
         return "timeout"
     timeout_seconds = min(_BASELINE_SHA256_TIMEOUT_CAP, remaining)
     result = executor.run(
-        ["sha256sum", absolute],
+        ["sha256sum", "--", absolute],
         cwd=run.workdir,
         user=run.owner,
         timeout_seconds=timeout_seconds,
@@ -1568,6 +1613,20 @@ def _baseline_sha256(
 def _submission_message_id(run_id: str) -> str:
     digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
     return f"run-submit:{digest}"
+
+
+def _reconciled_receipt_payload(
+    backend: ReconcileBackend,
+    job_id: str,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"reconciled": True, "job_id": job_id}
+    backend_kind = getattr(backend, "backend_kind", None)
+    if isinstance(backend_kind, str) and backend_kind:
+        payload["backend_kind"] = backend_kind
+    target_id = getattr(backend, "target_id", None)
+    if isinstance(target_id, str) and target_id:
+        payload["target_id"] = target_id
+    return payload
 
 
 def _message_run_id(message: OutboxMessage) -> str:

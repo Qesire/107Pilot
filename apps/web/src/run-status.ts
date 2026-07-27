@@ -7,7 +7,7 @@ export function runTone(state: RunState): RunTone {
   if (["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED", "AUTH_REQUIRED"].includes(state)) {
     return "danger";
   }
-  if (["CANCELLED", "UNKNOWN", "SUBMISSION_UNCERTAIN", "EVIDENCE_PARTIAL"].includes(state)) {
+  if (["CANCELLED", "UNKNOWN", "SUBMISSION_UNCERTAIN", "EVIDENCE_PARTIAL", "ORPHANED"].includes(state)) {
     return "warning";
   }
   if (["SUBMITTING", "SUBMITTED", "PENDING", "RUNNING", "COMPLETING"].includes(state)) {
@@ -33,6 +33,7 @@ export function runStateLabel(state: RunState): string {
     AUTH_REQUIRED: "需要认证",
     SUBMISSION_UNCERTAIN: "提交待确认",
     EVIDENCE_PARTIAL: "证据不完整",
+    ORPHANED: "后端作业待接管",
   };
   return labels[state] ?? state;
 }

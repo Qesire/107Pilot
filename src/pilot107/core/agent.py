@@ -7,9 +7,10 @@ import os
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
+from pilot107.core.code_context import CodeContextBundle, CodeContextService
 from pilot107.core.evidence_binding import BoundEvidence, EvidenceBinder, EvidenceBundle
 from pilot107.core.run_store import DiagnosisRecord, RunRecord, RunStore, utc_now_iso
 
@@ -154,6 +155,7 @@ class AgentExplanation:
     warnings: tuple[str, ...] = ()
     evidence_bundle_sha256: str | None = None
     bound_evidence: tuple[BoundEvidence, ...] = field(default=(), repr=False)
+    code_context: CodeContextBundle | None = field(default=None, repr=False)
     created_at: str = field(default_factory=utc_now_iso)
 
     def to_payload(self) -> dict[str, Any]:
@@ -170,6 +172,9 @@ class AgentExplanation:
             "citations": [citation.to_payload() for citation in self.citations],
             "warnings": list(self.warnings),
             "evidence_bundle_sha256": self.evidence_bundle_sha256,
+            "code_context": (
+                None if self.code_context is None else self.code_context.to_payload()
+            ),
             "created_at": self.created_at,
         }
 
@@ -513,10 +518,12 @@ class AgentExplainService:
         store: RunStore,
         llm_provider: AgentLLMProvider | None = None,
         evidence_binder: EvidenceBinder | None = None,
+        code_context_service: CodeContextService | None = None,
     ) -> None:
         self.store = store
         self.llm_provider = llm_provider
         self.evidence_binder = evidence_binder
+        self.code_context_service = code_context_service
         if llm_provider is not None and evidence_binder is None:
             raise ValueError("evidence_binder is required when llm_provider is configured")
 
@@ -527,7 +534,15 @@ class AgentExplainService:
         run = self.store.get_run(run_id)
         diagnoses = tuple(self.store.list_diagnoses(run_id))
         evidence_bundle = self._bind_evidence(run_id, diagnoses)
-        explanation = explain_without_llm(run, diagnoses, evidence_bundle=evidence_bundle)
+        code_context = self._capture_code_context(run, evidence_bundle=evidence_bundle)
+        explanation = explain_without_llm(
+            run,
+            diagnoses,
+            evidence_bundle=evidence_bundle,
+            code_context=code_context,
+        )
+        if code_context is not None:
+            explanation = _with_code_context_facts(explanation, code_context)
         if normalized_provider == "none":
             return explanation
         if self.llm_provider is None:
@@ -547,6 +562,7 @@ class AgentExplainService:
                 ),
                 evidence_bundle_sha256=explanation.evidence_bundle_sha256,
                 bound_evidence=explanation.bound_evidence,
+                code_context=explanation.code_context,
             )
         try:
             llm = self.llm_provider.explain(explanation)
@@ -563,6 +579,7 @@ class AgentExplainService:
                 warnings=(*explanation.warnings, f"local_llm_fallback:{exc.code}"),
                 evidence_bundle_sha256=explanation.evidence_bundle_sha256,
                 bound_evidence=explanation.bound_evidence,
+                code_context=explanation.code_context,
             )
         return AgentExplanation(
             run_id=explanation.run_id,
@@ -578,6 +595,7 @@ class AgentExplainService:
             warnings=(*explanation.warnings, *llm.warnings),
             evidence_bundle_sha256=explanation.evidence_bundle_sha256,
             bound_evidence=explanation.bound_evidence,
+            code_context=explanation.code_context,
         )
 
     def _bind_evidence(
@@ -595,6 +613,19 @@ class AgentExplainService:
         )
         return self.evidence_binder.bind(run_id, refs)
 
+    def _capture_code_context(
+        self,
+        run: RunRecord,
+        *,
+        evidence_bundle: EvidenceBundle | None,
+    ) -> CodeContextBundle | None:
+        if self.code_context_service is None or evidence_bundle is None:
+            return None
+        return self.code_context_service.capture(
+            run,
+            evidence_texts=tuple(item.snippet for item in evidence_bundle.objects),
+        )
+
 
 class AgentProviderError(ValueError):
     """Raised when a requested agent provider is not enabled."""
@@ -609,6 +640,7 @@ def explain_without_llm(
     diagnoses: tuple[DiagnosisRecord, ...] | list[DiagnosisRecord],
     *,
     evidence_bundle: EvidenceBundle | None = None,
+    code_context: CodeContextBundle | None = None,
 ) -> AgentExplanation:
     """Build a deterministic, evidence-bound explanation from stored diagnoses."""
 
@@ -661,6 +693,43 @@ def explain_without_llm(
         warnings=tuple(warnings),
         evidence_bundle_sha256=None if evidence_bundle is None else evidence_bundle.sha256,
         bound_evidence=() if evidence_bundle is None else evidence_bundle.objects,
+        code_context=code_context,
+    )
+
+
+def _with_code_context_facts(
+    explanation: AgentExplanation,
+    code_context: CodeContextBundle,
+) -> AgentExplanation:
+    """Expose selected code windows as separately citable facts.
+
+    A model receives the chunk text in ``code_context`` and may only cite the
+    stable chunk id attached to the corresponding fact.  This keeps code
+    claims tied to a snapshot instead of treating arbitrary repository text as
+    an uncited instruction.
+    """
+
+    facts = list(explanation.facts)
+    for chunk in code_context.chunks:
+        facts.append(
+            AgentFact(
+                fact_id=f"fact_{chunk.chunk_id}",
+                statement=(
+                    f"Code snapshot {code_context.snapshot_id} contains the error-site window "
+                    f"{chunk.path}:{chunk.start_line}-{chunk.end_line}."
+                ),
+                evidence_refs=(chunk.source_ref,),
+                confidence="high",
+                evidence_object_ids=(chunk.chunk_id,),
+            )
+        )
+    warnings = list(explanation.warnings)
+    warnings.extend(f"code_context:{warning}" for warning in code_context.warnings)
+    return replace(
+        explanation,
+        facts=tuple(facts),
+        warnings=tuple(dict.fromkeys(warnings)),
+        code_context=code_context,
     )
 
 
@@ -723,6 +792,9 @@ def _prompt_payload(explanation: AgentExplanation) -> dict[str, Any]:
         "deterministic_summary": explanation.summary,
         "facts": [fact.to_payload() for fact in explanation.facts],
         "bound_evidence": [item.to_payload() for item in explanation.bound_evidence],
+        "code_context": (
+            None if explanation.code_context is None else explanation.code_context.to_payload()
+        ),
         "diagnoses": [
             _diagnosis_payload(diagnosis)
             for diagnosis in explanation.diagnoses

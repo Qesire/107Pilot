@@ -44,6 +44,8 @@ import type {
   EvidenceObjectPreview,
   JsonObject,
   RunSummary,
+  SuccessfulRunMarketItem,
+  SuccessfulRunPublicationInput,
 } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
@@ -97,6 +99,7 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
     tab === "results" ? resultSummary?.object_id ?? null : null,
   );
   const queryClient = useQueryClient();
+  const [remediationRequestKey, setRemediationRequestKey] = useState<string | null>(null);
   // The evidence-panel "进入 Agent" entry point has no provider picker, so it
   // uses the runtime-aware default: "local" when the LLM gateway is
   // configured, "none" otherwise. Without this, unconfigured-LLM users would
@@ -119,11 +122,18 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
     },
   });
   const startRemediation = useMutation({
-    mutationFn: () => api.createRemediationSession(user, run.run_id, remediationProvider),
-    onSuccess: (session) => navigate(
-      `/agent?user=${encodeURIComponent(user)}&session=${encodeURIComponent(session.session_id)}`,
-    ),
+    mutationFn: (requestKey: string) =>
+      api.createRemediationSession(user, run.run_id, requestKey, remediationProvider),
+    onSuccess: (session) => {
+      setRemediationRequestKey(null);
+      navigate(`/agent?user=${encodeURIComponent(user)}&session=${encodeURIComponent(session.session_id)}`);
+    },
   });
+  const beginRemediation = () => {
+    const requestKey = remediationRequestKey ?? `ui:${run.run_id}:${crypto.randomUUID()}`;
+    setRemediationRequestKey(requestKey);
+    startRemediation.mutate(requestKey);
+  };
   const cancelRun = useMutation({
     mutationFn: () => api.cancelRun(user, run.run_id),
     onSuccess: (updated) => {
@@ -144,6 +154,16 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
       void queryClient.invalidateQueries({ queryKey: ["runs", user] });
     },
   });
+  const publishSuccessfulRun = useMutation({
+    mutationFn: (payload: SuccessfulRunPublicationInput) =>
+      api.publishSuccessfulRun(user, run.run_id, payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["successful-run-market"] });
+      void queryClient.invalidateQueries({ queryKey: ["market-items"] });
+      void queryClient.invalidateQueries({ queryKey: ["run", user, run.run_id] });
+      void queryClient.invalidateQueries({ queryKey: ["runs", user] });
+    },
+  });
   const setView = (nextTab: EvidenceTab, objectId: string | null = null) =>
     navigate(withSearch(location.pathname, location.search, { tab: nextTab, object: objectId }));
 
@@ -155,6 +175,7 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
         retry={retryRun}
         submit={submitPrepared}
       />
+      <RunPublicationControl run={run} publish={publishSuccessfulRun} />
       <nav className="evidence-tabs" aria-label="Run Evidence 视图">
         {tabs.map((item) => {
           const Icon = item.icon;
@@ -163,7 +184,7 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
       </nav>
 
       <QueryBoundary pending={evidence.isPending} error={evidence.error}>
-        {tab === "overview" ? <Overview user={user} run={run} objects={objects} tasks={evidence.data?.tasks ?? []} remediation={startRemediation} /> : null}
+        {tab === "overview" ? <Overview user={user} run={run} objects={objects} tasks={evidence.data?.tasks ?? []} remediation={startRemediation} onBeginRemediation={beginRemediation} /> : null}
         {tab === "timeline" ? (
           <TimelineView
             events={events}
@@ -259,6 +280,14 @@ interface RunMutationView {
   mutate: () => void;
 }
 
+interface RunPublicationMutationView {
+  isPending: boolean;
+  isError: boolean;
+  error: Error | null;
+  data: SuccessfulRunMarketItem | undefined;
+  mutate: (payload: SuccessfulRunPublicationInput) => void;
+}
+
 function RunControls({ run, cancel, retry, submit }: {
   run: RunSummary;
   cancel: RunMutationView;
@@ -295,6 +324,56 @@ function RunControls({ run, cancel, retry, submit }: {
         {prepared ? <button className="button primary" type="button" disabled={submit.isPending} onClick={() => perform("submit", submit)}><Upload aria-hidden="true" size={15} />{armed === "submit" ? "确认提交此 Run" : "提交 Run"}</button> : null}
       </div>
       {error ? <p role="alert">{error.message}</p> : null}
+    </section>
+  );
+}
+
+function RunPublicationControl({ run, publish }: {
+  run: RunSummary;
+  publish: RunPublicationMutationView;
+}) {
+  const eligible = run.publication
+    ? run.publication.status === "eligible"
+    : run.state === "SUCCEEDED" && (run.exit_code ?? "").startsWith("0:");
+  const [title, setTitle] = useState(run.job_name ?? "成功作业分享");
+  const [description, setDescription] = useState("");
+  const [tags, setTags] = useState("");
+  const [visibility, setVisibility] = useState<"campus" | "course" | "public">("campus");
+  const [scopeKey, setScopeKey] = useState("");
+  const [reproductionNote, setReproductionNote] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  if (run.publication?.status === "published") {
+    return <section className="run-controls" aria-label="成功 Run 分享"><div><strong>已发布到作业市场</strong><span className="mono">{run.publication.publication_id}</span></div></section>;
+  }
+  if (!eligible) return null;
+  const submit = () => publish.mutate({
+    request_key: `web-publish-run-${crypto.randomUUID()}`,
+    title: title.trim(),
+    description: description.trim(),
+    visibility,
+    ...(visibility === "course" ? { scope_key: scopeKey.trim() } : {}),
+    tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+    reproduction_note: reproductionNote.trim(),
+    confirm_share: confirmed,
+  });
+  return (
+    <section className="run-controls" aria-label="成功 Run 分享">
+      <div>
+        <strong>发布到作业市场</strong>
+        <span>仅记录本次成功 Run；不会上传代码、数据、脚本或服务器路径。</span>
+      </div>
+      <div className="agent-action-row">
+        <label className="form-field"><span>标题</span><input value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} /></label>
+        <label className="form-field"><span>可见性</span><select value={visibility} onChange={(event) => setVisibility(event.target.value as typeof visibility)}><option value="campus">Campus</option><option value="course">Course</option><option value="public">Public</option></select></label>
+        {visibility === "course" ? <label className="form-field"><span>课程 scope</span><input value={scopeKey} placeholder="course-107" onChange={(event) => setScopeKey(event.target.value)} /></label> : null}
+      </div>
+      <label className="form-field"><span>说明</span><textarea value={description} maxLength={4000} onChange={(event) => setDescription(event.target.value)} /></label>
+      <label className="form-field"><span>标签（逗号分隔）</span><input value={tags} placeholder="ml, preprocessing" onChange={(event) => setTags(event.target.value)} /></label>
+      <label className="form-field"><span>采用提示</span><textarea value={reproductionNote} maxLength={4000} placeholder="需要由采用者检查代码、路径、数据与环境。" onChange={(event) => setReproductionNote(event.target.value)} /></label>
+      <label className="checkbox-field"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>我确认主动分享此成功 Run 的标题、说明和采用提示，并理解它不等同于可复现模板。</span></label>
+      {publish.isError ? <p role="alert">{publish.error?.message}</p> : null}
+      {publish.data ? <p>已发布为市场条目 <span className="mono">{publish.data.publication_id}</span>。</p> : null}
+      <button className="button secondary" type="button" disabled={!confirmed || !title.trim() || publish.isPending || (visibility === "course" && !scopeKey.trim())} onClick={submit}><Upload aria-hidden="true" size={15} />{publish.isPending ? "发布中" : "确认发布成功 Run"}</button>
     </section>
   );
 }
@@ -382,7 +461,7 @@ export function runComparisonRows(
   }));
 }
 
-function Overview({ user, run, objects, tasks, remediation }: { user: string; run: RunSummary; objects: EvidenceObject[]; tasks: Array<{ task_id: number; task_type: string; state: string; attempts: number; updated_at: string }>; remediation: { isPending: boolean; isError: boolean; error: Error | null; mutate: () => void } }) {
+function Overview({ user, run, objects, tasks, remediation, onBeginRemediation }: { user: string; run: RunSummary; objects: EvidenceObject[]; tasks: Array<{ task_id: number; task_type: string; state: string; attempts: number; updated_at: string }>; remediation: { isPending: boolean; isError: boolean; error: Error | null }; onBeginRemediation: () => void }) {
   const categories = [...new Set(objects.map((item) => item.category))];
   return (
     <div className="evidence-section">
@@ -393,6 +472,10 @@ function Overview({ user, run, objects, tasks, remediation }: { user: string; ru
       </div>
       <dl className="fact-list evidence-facts">
         <div><dt>Job ID</dt><dd className="mono">{run.job_id ?? "—"}</dd></div>
+        <div>
+          <dt>Backend</dt>
+          <dd>{run.backend?.kind ?? run.submit_strategy ?? "尚未提交"}</dd>
+        </div>
         <div><dt>Contract</dt><dd className="mono wrap-anywhere">{run.contract_id ?? "—"}</dd></div>
         <div><dt>Workdir</dt><dd className="mono wrap-anywhere">{run.workdir ?? "服务器 read model 未公开"}</dd></div>
         <div><dt>Terminal</dt><dd>{run.terminal_state ?? run.state}</dd></div>
@@ -402,10 +485,10 @@ function Overview({ user, run, objects, tasks, remediation }: { user: string; ru
       </dl>
       {run.job_id ? <NativeCommands user={user} run={run} /> : null}
       <section className="collection-tasks"><h3>Collection tasks</h3><ul>{tasks.map((task) => <li key={task.task_id}><FactState status={task.state} /><span>{task.task_type}</span><small>attempt {task.attempts}</small></li>)}</ul></section>
-      {["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED"].includes(run.state) ? (
+      {["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED", "ORPHANED"].includes(run.state) ? (
         <section className="run-agent-entry">
           <div><Bot aria-hidden="true" /><span><strong>启动受控修复</strong><small>基于当前 Diagnosis 和 Evidence 创建 owner-scoped 会话。</small></span></div>
-          <button className="button secondary" type="button" disabled={remediation.isPending} onClick={() => remediation.mutate()}>{remediation.isPending ? "创建中" : "进入 Agent"}</button>
+          <button className="button secondary" type="button" disabled={remediation.isPending} onClick={onBeginRemediation}>{remediation.isPending ? "创建中" : "进入 Agent"}</button>
           {remediation.isError ? <p role="alert">{remediation.error?.message ?? "创建修复会话失败"}</p> : null}
         </section>
       ) : null}

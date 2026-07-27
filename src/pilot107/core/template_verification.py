@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from pilot107.core.contract_v2 import ContractV2Error, parse_expected_output
 from pilot107.core.run_store import EvidenceObjectRecord, RunStore
 from pilot107.core.states import CapsuleState, CollectionState, ResultStatus, RunState
 from pilot107.core.template_market import (
@@ -99,6 +100,10 @@ class TemplateVerificationService:
         evidence = self.run_store.list_evidence_objects(run_id)
         evidence_by_path = {item.logical_path: item for item in evidence}
         required_paths = set(_REQUIRED_EVIDENCE)
+        expected_outputs = _expected_output_paths(release.payload)
+        if expected_outputs:
+            _require_expected_outputs_in_inventory(evidence_by_path, expected_outputs)
+            required_paths.add("outputs/inventory.json")
         if self.environment == "real107_gpu":
             requested_gpus = max(
                 int(run.resource_plan.get("gpus_total") or 0),
@@ -137,6 +142,7 @@ class TemplateVerificationService:
                 "capsule_id": capsule_check.capsule_id,
                 "capsule_manifest_sha256": capsule_manifest_sha256,
                 "evidence_paths": sorted(required_paths),
+                "expected_outputs": sorted(expected_outputs),
             },
         )
 
@@ -174,3 +180,64 @@ def _require_final_evidence(
             )
         selected.append(item)
     return selected
+
+
+def _expected_output_paths(payload: dict[str, object]) -> set[str]:
+    outputs = payload.get("outputs")
+    if not isinstance(outputs, dict):
+        return set()
+    raw_expected = outputs.get("expected")
+    if not isinstance(raw_expected, list):
+        return set()
+    try:
+        return {parse_expected_output(item) for item in raw_expected}
+    except ContractV2Error as exc:
+        raise TemplateMarketError(
+            "release has invalid expected output declarations",
+            code="TEMPLATE.VERIFICATION_LINEAGE_INVALID",
+        ) from exc
+
+
+def _require_expected_outputs_in_inventory(
+    evidence_by_path: dict[str, EvidenceObjectRecord],
+    expected_outputs: set[str],
+) -> None:
+    inventory = evidence_by_path.get("outputs/inventory.json")
+    if (
+        inventory is None
+        or inventory.collection_status != "collected"
+        or inventory.sha256 is None
+        or inventory.finalized_at is None
+    ):
+        raise TemplateMarketError(
+            "expected-output inventory is not finalized",
+            code="TEMPLATE.VERIFICATION_EVIDENCE_INCOMPLETE",
+        )
+    try:
+        payload = json.loads(Path(inventory.store_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise TemplateMarketError(
+            "expected-output inventory cannot be read",
+            code="TEMPLATE.VERIFICATION_EVIDENCE_INCOMPLETE",
+        ) from exc
+    files = payload.get("files") if isinstance(payload, dict) else None
+    if not isinstance(files, list):
+        raise TemplateMarketError(
+            "expected-output inventory is invalid",
+            code="TEMPLATE.VERIFICATION_EVIDENCE_INCOMPLETE",
+        )
+    by_path = {
+        str(item.get("relative_path")): item
+        for item in files
+        if isinstance(item, dict) and item.get("relative_path") is not None
+    }
+    for expected_path in expected_outputs:
+        item = by_path.get(expected_path)
+        status = "missing" if item is None else str(item.get("attribution") or "unknown")
+        final_sha = None if item is None else item.get("final_sha256")
+        if status not in {"created", "modified"} or not isinstance(final_sha, str):
+            raise TemplateMarketError(
+                "declared expected output is not newly verified: "
+                f"{expected_path} (status={status}, final_sha256={final_sha})",
+                code="TEMPLATE.VERIFICATION_EVIDENCE_INCOMPLETE",
+            )

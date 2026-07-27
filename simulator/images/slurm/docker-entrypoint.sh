@@ -11,6 +11,7 @@ mkdir -p \
   /var/spool/slurm/d \
   /public/home/alice \
   /public/home/bob \
+  /home/scc \
   /public/app \
   /pilot107/evidence-derived
 
@@ -21,6 +22,8 @@ chown alice:alice /public/home/alice || true
 chown bob:bob /public/home/bob || true
 chmod 0700 /public/home/alice /public/home/bob
 chmod 0755 /public/app
+ln -sfn /public/home/alice /home/scc/alice
+ln -sfn /public/home/bob /home/scc/bob
 
 if command -v munged >/dev/null 2>&1; then
   rm -f /run/munge/munge.socket.2
@@ -94,7 +97,11 @@ case "$1" in
     exec gosu pilot107 "$@"
     ;;
   slurmd)
-    touch /tmp/pilot107-a100-gpu0 /tmp/pilot107-a100-gpu1
+    touch \
+      /tmp/pilot107-a100-gpu0 /tmp/pilot107-a100-gpu1 \
+      /tmp/pilot107-a100-gpu2 /tmp/pilot107-a100-gpu3 \
+      /tmp/pilot107-a100-gpu4 /tmp/pilot107-a100-gpu5 \
+      /tmp/pilot107-a100-gpu6 /tmp/pilot107-a100-gpu7
     exec "$@"
     ;;
   *)

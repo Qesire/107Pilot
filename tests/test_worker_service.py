@@ -34,8 +34,9 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(config.db_path, self.root / "data" / "phase0" / "pilot107.db")
         self.assertEqual(config.evidence_root, self.root / "data" / "phase0" / "evidence")
         self.assertIsNone(config.control_postgres_dsn)
+        self.assertIsNone(config.postgres_dsn)
         self.assertEqual(config.backend, "docker-compose-command")
-        self.assertEqual(config.allowed_roots, ("/public/home/alice",))
+        self.assertEqual(config.allowed_roots, ())
         self.assertEqual(config.compose_file, self.root / "simulator" / "compose" / "compose.yml")
         self.assertEqual(config.health_path, self.root / "data" / "phase0" / "worker-health.json")
         self.assertEqual(
@@ -89,6 +90,13 @@ class WorkerServiceTests(unittest.TestCase):
         )
         self.assertFalse(config.enable_docker_volume_evidence_transport)
 
+    def test_postgres_domain_dsn_also_selects_the_control_plane_database(self) -> None:
+        dsn = "postgresql://pilot107.example/pilot107"
+        config = config_from_env({"PILOT107_POSTGRES_DSN": dsn}, project_root=self.root)
+
+        self.assertEqual(config.postgres_dsn, dsn)
+        self.assertEqual(config.control_postgres_dsn, dsn)
+
     def test_config_from_env_accepts_explicit_volume_evidence_transport_flag(self) -> None:
         config = config_from_env(
             {
@@ -105,6 +113,7 @@ class WorkerServiceTests(unittest.TestCase):
                 {
                     "PILOT107_WORKER_BACKEND": "command-gateway",
                     "PILOT107_COMMAND_GATEWAY_URL": "http://gateway.invalid:8090",
+                    "PILOT107_COMMAND_GATEWAY_TOKEN": "gateway-token-test",
                 },
                 project_root=self.root,
             )
@@ -117,6 +126,7 @@ class WorkerServiceTests(unittest.TestCase):
         checker = factory("bob")
         self.assertIsInstance(checker, SimulatorPathChecker)
         self.assertEqual(checker.user, "bob")
+        self.assertEqual(worker.config.command_gateway_token, "gateway-token-test")
 
     def test_demo_worker_uses_pure_path_preflight_for_simulated_user_home(self) -> None:
         service = build_worker_service(

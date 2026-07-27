@@ -18,6 +18,15 @@ export function useHealth(user: string) {
   });
 }
 
+export function usePlatformConnections(user: string) {
+  return useQuery({
+    queryKey: ["platform-connections", user],
+    queryFn: ({ signal }) => api.platformConnections(user, signal),
+    retry: false,
+    refetchInterval: 30_000,
+  });
+}
+
 export function useCapabilities(user: string) {
   return useQuery({
     queryKey: ["capabilities", user],
@@ -179,6 +188,48 @@ export function useTemplates(
   });
 }
 
+export function useSuccessfulRunMarket(
+  user: string,
+  filters: {
+    q?: string | undefined;
+    visibility?: string | undefined;
+    tag?: string | undefined;
+    limit?: string | undefined;
+  },
+) {
+  return useQuery({
+    queryKey: ["successful-run-market", user, filters],
+    queryFn: ({ signal }) => api.successfulRunMarket(user, filters, signal),
+    staleTime: 15_000,
+  });
+}
+
+export function useMarketItems(
+  user: string,
+  filters: {
+    q?: string | undefined;
+    kind?: string | undefined;
+    visibility?: string | undefined;
+    tag?: string | undefined;
+    limit?: string | undefined;
+  },
+) {
+  return useQuery({
+    queryKey: ["market-items", user, filters],
+    queryFn: ({ signal }) => api.marketItems(user, filters, signal),
+    staleTime: 15_000,
+  });
+}
+
+export function useMarketItem(user: string, itemId: string | null) {
+  return useQuery({
+    queryKey: ["market-item", user, itemId],
+    queryFn: ({ signal }) => api.marketItem(user, itemId ?? "", signal),
+    enabled: Boolean(itemId),
+    staleTime: 15_000,
+  });
+}
+
 export function useTemplateRelease(
   user: string,
   templateId: string | null,
@@ -227,5 +278,26 @@ export function useRemediationSession(user: string, sessionId: string | null) {
       "executing",
       "evaluating",
     ].includes(query.state.data?.state ?? "") ? 3_000 : false,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// M2: Repair Tickets
+// ---------------------------------------------------------------------------
+
+export function useRepairTickets(user: string, state?: string, sessionId?: string) {
+  return useQuery({
+    queryKey: ["repair-tickets", user, state ?? "", sessionId ?? ""],
+    queryFn: ({ signal }) => api.repairTickets(user, state, sessionId, signal),
+    refetchInterval: 15_000,
+  });
+}
+
+export function useRepairTicket(user: string, ticketId: string | null) {
+  return useQuery({
+    queryKey: ["repair-ticket", user, ticketId],
+    queryFn: ({ signal }) => api.repairTicket(user, ticketId ?? "", signal),
+    enabled: Boolean(ticketId),
+    refetchInterval: 15_000,
   });
 }

@@ -9,7 +9,15 @@ compose=(
   -f "$compose_dir/compose.yml"
 )
 
-"${compose[@]}" up -d pilot107-api pilot107-worker pilot107-web
+# This smoke must exercise the Docker Slurm command gateway, not the
+# deterministic DemoSlurmBackend.  Product behavior remains backend-neutral;
+# the explicit backend selection is test provenance only.
+# A Run is submitted by the API but reconciled and evidenced by the Worker.
+# They therefore need the same transport to the same Slurm instance; changing
+# only one would manufacture an API/Worker split-brain and invalidate the
+# result of this live simulator smoke.
+PILOT107_API_BACKEND=command-gateway PILOT107_WORKER_BACKEND=command-gateway "${compose[@]}" up -d \
+  pilot107-api pilot107-worker pilot107-web
 
 wait_healthy() {
   service="$1"

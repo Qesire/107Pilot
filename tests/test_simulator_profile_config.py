@@ -158,6 +158,12 @@ class SimulatorProfileConfigTests(unittest.TestCase):
 
         enforce = ",".join(profile["slurm"]["accounting_storage_enforce"])
         self.assertIn(f"AccountingStorageEnforce={enforce}", slurm_conf)
+        self.assertIn("AccountingStorageTRES=gres/gpu", slurm_conf)
+        self.assertIn("SelectTypeParameters=CR_CPU,CR_CORE_DEFAULT_DIST_BLOCK", slurm_conf)
+        self.assertIn("SchedulerType=sched/backfill", slurm_conf)
+        self.assertIn("SchedulerParameters=enable_user_top", slurm_conf)
+        self.assertIn("PriorityType=priority/multifactor", slurm_conf)
+        self.assertIn("SlurmdParameters=config_overrides", slurm_conf)
 
         for partition in profile["partitions"]:
             fields = partitions[partition["name"]]
@@ -168,7 +174,12 @@ class SimulatorProfileConfigTests(unittest.TestCase):
             self.assertEqual(fields["AllowQos"].split(","), partition["allow_qos"])
 
         students = partitions["Students"]
+        profile_students = _items_by_name(profile["partitions"])["Students"]
         self.assertNotIn("MaxTime=01:00:00", " ".join(students.values()))
+        self.assertEqual(
+            students["DefMemPerCPU"],
+            str(profile_students["default_memory_per_cpu_mb"]),
+        )
 
     def test_worker_spool_is_not_shared_between_simulated_nodes(self) -> None:
         compose = (ROOT / "simulator/compose/compose.yml").read_text(encoding="utf-8")

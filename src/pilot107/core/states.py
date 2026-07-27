@@ -26,6 +26,7 @@ class RunState(StrEnum):
     AUTH_REQUIRED = "AUTH_REQUIRED"
     SUBMISSION_UNCERTAIN = "SUBMISSION_UNCERTAIN"
     EVIDENCE_PARTIAL = "EVIDENCE_PARTIAL"
+    ORPHANED = "ORPHANED"
 
 
 class CollectionState(StrEnum):
@@ -77,6 +78,7 @@ TERMINAL_RUN_STATES = frozenset(
         RunState.SUBMIT_FAILED,
         RunState.COLLECTION_FAILED,
         RunState.AUTH_REQUIRED,
+        RunState.ORPHANED,
     }
 )
 

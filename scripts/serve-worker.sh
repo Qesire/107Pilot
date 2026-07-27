@@ -10,7 +10,7 @@ export PILOT107_COMPOSE_FILE="${PILOT107_COMPOSE_FILE:-$root/simulator/compose/c
 export PILOT107_COMPOSE_ENV_FILE="${PILOT107_COMPOSE_ENV_FILE:-$root/simulator/compose/.env.example}"
 export PILOT107_COMPOSE_WORKDIR="${PILOT107_COMPOSE_WORKDIR:-$root/simulator/compose}"
 export PILOT107_COMPOSE_SERVICE="${PILOT107_COMPOSE_SERVICE:-login-node-sim}"
-export PILOT107_ALLOWED_ROOTS="${PILOT107_ALLOWED_ROOTS:-/public/home/alice}"
+export PILOT107_ALLOWED_ROOTS="${PILOT107_ALLOWED_ROOTS:-}"
 export PILOT107_WORKER_HEALTH_PATH="${PILOT107_WORKER_HEALTH_PATH:-$root/data/phase0/worker-health.json}"
 
 PYTHONPATH="$root/src" python3 -m pilot107.worker.service "$@"

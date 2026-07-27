@@ -297,7 +297,9 @@ class AgentExecutionOutboxTests(unittest.TestCase):
         self.assertEqual([process.exitcode for process in processes], [0, 0])
         effects = side_effect_path.read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(effects), 1)
-        self.assertRegex(effects[0], r"^pilot107-run-[0-9a-f]{20}$")
+        # Agent-derived jobs preserve the materialized recipe name while
+        # retaining the stable suffix used by reconciliation.
+        self.assertRegex(effects[0], r"^recipe_python_cpu-1\.0\.0-p107-[0-9a-f]{20}$")
 
     def test_execution_write_then_ack_crash_recovers_without_resubmit(self) -> None:
         crashing = CrashBeforeAgentAcknowledgeRepository(self.db_path, clock=self.clock)

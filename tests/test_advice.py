@@ -247,7 +247,7 @@ class AgentAdviceTests(unittest.TestCase):
         self.assertEqual(action_part["policy_status"], "allowed_preview")
         self.assertEqual(action_part["proposed_patch"]["resources.partition"], "CPU-RC")
 
-        # OOM -> max_memory_gb=6 -> "6G".
+        # OOM -> max_memory_gb=15 -> "15G" on the current VM demo profile.
         run_oom = self._ready_run_profiled(
             run_id="run_oom_resolve",
             patch={"resources.memory": None},
@@ -255,7 +255,7 @@ class AgentAdviceTests(unittest.TestCase):
         )
         action_oom = service.advise(run_oom.run_id).record.payload["actions"][0]
         self.assertEqual(action_oom["policy_status"], "allowed_preview")
-        self.assertEqual(action_oom["proposed_patch"]["resources.memory"], "6G")
+        self.assertEqual(action_oom["proposed_patch"]["resources.memory"], "15G")
 
         # TIMEOUT -> max_wall_hours=4 -> "04:00:00".
         run_to = self._ready_run_profiled(

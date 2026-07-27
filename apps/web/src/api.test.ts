@@ -6,6 +6,37 @@ afterEach(() => {
 });
 
 describe("API transport", () => {
+  it("reads and checks the current user's SSH platform connection", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ items: [] }))
+      .mockResolvedValueOnce(jsonResponse({
+        connection_id: "real107",
+        state: "active",
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.platformConnections("alice");
+    await api.checkPlatformConnection("alice", "real107");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/platform/connections",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/platform/connections/real107/check",
+      expect.objectContaining({
+        method: "POST",
+        body: "{}",
+        headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+      }),
+    );
+  });
+
   it("encodes identifiers, filters, and trusted identity headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [], page: {} }));
     vi.stubGlobal("fetch", fetchMock);
@@ -61,13 +92,82 @@ describe("API transport", () => {
     );
   });
 
+  it("uses the successful-Run market contract without sending private source fields", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [], page: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.successfulRunMarket("bob", { q: "训练", visibility: "campus", tag: "ml" });
+    await api.publishSuccessfulRun("alice", "run/a", {
+      request_key: "publish-a",
+      title: "训练作业",
+      description: "仅供参考",
+      visibility: "campus",
+      tags: ["ml"],
+      reproduction_note: "采用后替换自己的目录",
+      confirm_share: true,
+    });
+    await api.adoptSuccessfulRun("bob", "runpub/a", "adopt-a");
+    await api.marketItems("bob", { kind: "run_publication", q: "训练" });
+    await api.marketItem("bob", "runpub/a");
+    await api.adoptMarketItem("bob", "runpub/a", "adopt-unified-a");
+    await api.withdrawMarketItem("alice", "runpub/a", "superseded");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/market?q=%E8%AE%AD%E7%BB%83&visibility=campus&tag=ml&limit=20",
+      expect.objectContaining({ method: "GET", headers: expect.objectContaining({ "X-Pilot107-User": "bob" }) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/runs/run%2Fa/publish",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          request_key: "publish-a",
+          title: "训练作业",
+          description: "仅供参考",
+          visibility: "campus",
+          tags: ["ml"],
+          reproduction_note: "采用后替换自己的目录",
+          confirm_share: true,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/market/runpub%2Fa/adopt",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ request_key: "adopt-a" }) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/v1/market/items?kind=run_publication&q=%E8%AE%AD%E7%BB%83&limit=20",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/v1/market/items/runpub%2Fa",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      "/api/v1/market/items/runpub%2Fa/adopt",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ request_key: "adopt-unified-a" }) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      7,
+      "/api/v1/market/items/runpub%2Fa/withdraw",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ reason: "superseded" }) }),
+    );
+  });
+
   it("surfaces stable API error codes and fallback HTTP codes", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
         jsonResponse({ error: { code: "AUTH.FORBIDDEN", message: "not yours" } }, 403),
       )
-      .mockResolvedValueOnce(jsonResponse({}, 503, "Unavailable"));
+      .mockResolvedValueOnce(jsonResponse({}, 503, "Unavailable"))
+      .mockResolvedValueOnce(jsonResponse({ error: { code: "TEMPLATE.FORBIDDEN" } }, 403));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(api.run("bob", "run_alice")).rejects.toMatchObject({
@@ -80,6 +180,11 @@ describe("API transport", () => {
       status: 503,
       code: "HTTP.503",
       message: "Unavailable",
+    });
+    await expect(api.adoptTemplate("alice", "template_1", "1.0.0", "key_1")).rejects.toMatchObject({
+      status: 403,
+      code: "TEMPLATE.FORBIDDEN",
+      message: "当前账号没有采用此模板 release 的权限。请返回模板市场选择可见的 release，或申请课程/发布权限。",
     });
   });
 
@@ -100,7 +205,7 @@ describe("API transport", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ session_id: "session_1" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.createRemediationSession("alice", "run/a");
+    await api.createRemediationSession("alice", "run/a", "ui:run/a:request-1");
     await api.approveRemediationAction("alice", "session/1", "proposal 1", 7);
     await api.takeoverRemediationSession("alice", "session/1", 8, "manual handoff");
 
@@ -109,7 +214,7 @@ describe("API transport", () => {
       "/api/v1/runs/run%2Fa/remediation-sessions",
       expect.objectContaining({
         body: JSON.stringify({
-          request_key: "ui:run/a",
+          request_key: "ui:run/a:request-1",
           automation_policy: "manual_approval",
           provider: "local",
         }),

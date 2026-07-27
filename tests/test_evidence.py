@@ -376,6 +376,20 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaises(SlurmTransportError):
             collector.collect(run=_run(), task_type="logs_finalize")
 
+    def test_docker_collector_expands_owner_scoped_roots_for_evidence_reads(self) -> None:
+        collector = DockerSlurmEvidenceCollector(
+            store=self.store,
+            executor=FakeDockerExecutor(),  # type: ignore[arg-type]
+            allowed_roots=["/public/home/{user}"],
+        )
+
+        self.assertEqual(
+            collector._authorize_source_path("/public/home/alice/result.txt", user="alice"),
+            "/public/home/alice/result.txt",
+        )
+        with self.assertRaises(SlurmTransportError):
+            collector._authorize_source_path("/public/home/bob/result.txt", user="alice")
+
 
 class FileCommandsForbiddenExecutor(FakeDockerExecutor):
     def __init__(self) -> None:

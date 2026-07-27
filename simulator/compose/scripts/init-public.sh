@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-mkdir -p /public/home/alice /public/home/bob /public/app /pilot107/evidence-derived
+mkdir -p /public/home/alice /public/home/bob /public/app /pilot107/evidence-derived /home/scc
 
 if id alice >/dev/null 2>&1; then
   chown alice:alice /public/home/alice
@@ -13,3 +13,5 @@ fi
 
 chmod 0700 /public/home/alice /public/home/bob
 chmod 0755 /public/app
+ln -sfn /public/home/alice /home/scc/alice
+ln -sfn /public/home/bob /home/scc/bob

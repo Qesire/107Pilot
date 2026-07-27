@@ -460,6 +460,7 @@ class HttpApiTests(unittest.TestCase):
             owner="alice",
             workdir="/public/home/alice",
             script="#!/bin/bash\nhostname\n",
+            job_name="summary-smoke",
         )
         self.run_store.apply_submit_receipt(
             run.run_id,
@@ -477,6 +478,7 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(response.payload["run_id"], run.run_id)
         self.assertEqual(response.payload["state"], "SUBMITTED")
         self.assertEqual(response.payload["job_id"], "456")
+        self.assertEqual(response.payload["job_name"], "summary-smoke")
         self.assertEqual(response.payload["workdir"], "/public/home/alice")
         self.assertEqual(response.payload["collection_state"], "pending")
         self.assertIn("created_at", response.payload)
@@ -833,6 +835,31 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(response.payload["state"], "SUBMITTED")
         self.assertEqual(response.payload["submit_state"], "submitted")
         self.assertIsNotNone(response.payload["job_id"])
+
+    def test_post_submit_returns_structured_422_for_owner_root_violation(self) -> None:
+        self.api.run_service = RunService(
+            store=self.run_store,
+            backend=self.backend,
+            workdir_preflight_enabled=True,
+            preflight_allowed_roots=("/public/home/{user}",),
+            preflight_shared_roots=("/public",),
+            preflight_local_roots=("/tmp",),
+        )
+        payload = _submit_payload()
+        payload["workdir"] = "/public/home/bob"
+        prepared = self.api.handle_post("/api/v1/runs/prepare", body=_json(payload))
+
+        response = self.api.handle_post(
+            f"/api/v1/runs/{prepared.payload['run_id']}/submit",
+            body=b"{}",
+        )
+
+        self.assertEqual(response.status, 422)
+        self.assertEqual(response.payload["error"]["code"], "workdir_preflight_blocked")
+        self.assertIn(
+            "WORKDIR_NOT_ALLOWED",
+            {finding["code"] for finding in response.payload["preflight"]},
+        )
 
     def test_post_submit_prepared_run_returns_404_for_missing_run(self) -> None:
         response = self.api.handle_post("/api/v1/runs/run_missing/submit", body=b"{}")

@@ -41,6 +41,7 @@ users:
       - qos_stu_small
       - qos_stu_medium
       - qos_stu_medium_2gpu
+      - qos_stu_large
       - qos_stu_long
       - qos_stu_cpu_long
     denied_qos:
@@ -102,16 +103,16 @@ qos:
     max_gpus: 2
   - name: qos_p107-rtx5090
     policy_class: competition-gpu
-    max_wall: "3-00:00:00"
+    max_wall: "4-00:00:00"
     max_cpus: 16
     max_memory: "64G"
     max_gpus: 4
   - name: qos_p107-a100
     policy_class: competition-gpu
-    max_wall: "3-00:00:00"
+    max_wall: "4-00:00:00"
     max_cpus: 16
     max_memory: "64G"
-    max_gpus: 2
+    max_gpus: 4
   - name: qos_stu001
     policy_class: student-observed
     max_wall: "04:00:00"
@@ -132,16 +133,22 @@ qos:
     max_gpus: 1
   - name: qos_stu_medium
     policy_class: student-observed
-    max_wall: "12:00:00"
+    max_wall: "1-00:00:00"
     max_cpus: 16
     max_memory: "64G"
     max_gpus: 1
   - name: qos_stu_medium_2gpu
     policy_class: student-gpu-carrier
-    max_wall: "12:00:00"
+    max_wall: "1-00:00:00"
     max_cpus: 24
     max_memory: "128G"
     max_gpus: 2
+  - name: qos_stu_large
+    policy_class: student-large-observed
+    max_wall: "12:00:00"
+    max_cpus: 48
+    max_memory: "240G"
+    max_gpus: 4
   - name: qos_stu_long
     policy_class: student-long
     max_wall: "3-00:00:00"
@@ -158,70 +165,71 @@ qos:
 nodes:
   - name: anode05
     live: false
-    cpus: 32
-    memory_mb: 4096
+    cpus: 128
+    memory_mb: 512000
     gres:
       - name: gpu
         type: RTX5090
-        count: 4
+        count: 8
   - name: anode16
     live: true
-    cpus: 32
-    memory_mb: 8192
+    cpus: 128
+    memory_mb: 1024000
     gres:
       - name: gpu
         type: A100
-        count: 2
+        count: 8
   - name: anode17
     live: true
-    cpus: 32
-    memory_mb: 8192
+    cpus: 128
+    memory_mb: 1024000
     gres:
       - name: gpu
         type: A100
-        count: 2
+        count: 8
 
 partitions:
   - name: CPU-6530
     nodes: "anode05"
     default: false
-    max_time: "3-00:00:00"
+    max_time: "UNLIMITED"
     allow_accounts: ["students"]
     allow_qos: ["qos_cpu-6530"]
   - name: CPU-8358P
     nodes: "anode[16-17]"
     default: false
-    max_time: "3-00:00:00"
+    max_time: "UNLIMITED"
     allow_accounts: ["students"]
     allow_qos: ["qos_cpu-8358p"]
   - name: GPU-RTX5090
     nodes: "anode05"
     default: false
-    max_time: "3-00:00:00"
+    max_time: "UNLIMITED"
     allow_accounts: ["students"]
     allow_qos: ["qos_gpu-rtx5090"]
   - name: GPU-A100
     nodes: "anode[16-17]"
     default: false
-    max_time: "3-00:00:00"
+    max_time: "UNLIMITED"
     allow_accounts: ["students"]
     allow_qos: ["qos_gpu-a100"]
   - name: P107-RTX5090
     nodes: "anode05"
     default: false
-    max_time: "3-00:00:00"
+    max_time: "UNLIMITED"
     allow_accounts: ["competition"]
     allow_qos: ["qos_p107-rtx5090"]
   - name: P107-A100
     nodes: "anode[16-17]"
     default: false
-    max_time: "3-00:00:00"
+    max_time: "UNLIMITED"
     allow_accounts: ["competition"]
     allow_qos: ["qos_p107-a100"]
   - name: Students
     nodes: "anode[16-17]"
     default: true
-    max_time: "3-00:00:00"
+    max_time: "UNLIMITED"
+    default_memory_per_cpu_mb: 4096
     allow_accounts: ["students"]
     allow_qos:
       - qos_stu001
@@ -229,6 +237,7 @@ partitions:
       - qos_stu_small
       - qos_stu_medium
       - qos_stu_medium_2gpu
+      - qos_stu_large
       - qos_stu_long
       - qos_stu_cpu_long
   - name: debug
@@ -241,6 +250,8 @@ partitions:
 storage:
   shared_paths:
     - path: "/public"
+      semantics: shared_across_login_and_compute
+    - path: "/home"
       semantics: shared_across_login_and_compute
     - path: "/public/home/alice"
       owner: alice
@@ -259,6 +270,7 @@ runtime_limitations:
   - "Fake GPU GRES exists for scheduler behavior only."
   - "The retained Ubuntu 23.11 fallback must not be used for final parity claims."
   - "REST API and JWT behavior are validated on the source-built Slurm 25.11.2 target image."
+  - "The real `/home` mount is shared but its per-user path is not a `/public/home/<user>` alias."
 
 behavior_matrix:
   legal_student_gpu:

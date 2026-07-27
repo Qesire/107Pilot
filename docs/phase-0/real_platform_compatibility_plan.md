@@ -38,6 +38,20 @@
 - 查询单个 Job；
 - 查询 accounting。
 
+当用户提供测试专用 SSH alias 时，先使用已校验的探针包完成 CLI 快照，而不是直接运行
+任意远程命令：
+
+```bash
+PILOT107_REAL107_SSH_TARGET=real107-login \
+PILOT107_REAL107_PROBE_ARCHIVE=artifacts/probes/pilot107-real107-probe-<timestamp>.tar.gz \
+bash scripts/probe-real107-ssh-cli.sh
+```
+
+该入口要求相邻的 SHA-256 文件匹配；远端只会在 `/tmp` 创建私有临时目录、解包探针并运行
+固定的只读 CLI collector，随后拉回已脱敏的 `PlatformSnapshot`。它不会调用 `sbatch`、
+`scancel` 或读取项目目录。默认会删除远端临时目录；仅当需要人工诊断时才设置
+`PILOT107_REAL107_KEEP_REMOTE=1`。
+
 ## 4. 可选人工确认动作
 
 需要用户显式确认：
@@ -47,10 +61,35 @@
 - 文件读取；
 - Capsule 自动收集。
 
+当用户明确授权最小成功、失败与取消三类作业时，使用固定范围的 SSH 入口，而不是接受任意
+远程脚本或命令：
+
+```bash
+PILOT107_REAL107_SSH_TARGET=pilot107-slurm \
+PILOT107_REAL107_WORKDIR=<private-home>/pilot107-smoke-<label> \
+bash scripts/smoke-real107-ssh-jobs.sh
+```
+
+该入口只会在提供的私有目录创建三份固定 sbatch 文件和它们的输出，使用
+`stu/Students/qos_stu_default`、1 CPU、2 分钟时限。它验证 `COMPLETED/0:0`、
+`FAILED/42:0`，并且只取消由自己记录的 sleep job；保留远端证据目录并复制到本地 artifact。
+
+## 4.1 模拟器保真度环境清单
+
+在用户明确授权 SSH 只读信息采集时，可运行固定环境清单：
+
+```bash
+PILOT107_REAL107_SSH_TARGET=pilot107-slurm \
+bash scripts/probe-real107-ssh-environment.sh
+```
+
+它仅采集目录元数据与容量、挂载层级、选定的调度策略字段、QoS、程序可用性和进程资源
+上限；不枚举目录、不读取项目文件、不读取环境变量，也不生成 JWT。采集结果用于更新
+Docker 模拟器的资源几何、QoS、路径语义和调度器行为，SSH 仍不构成产品运行依赖。
+
 ## 5. 禁止
 
 - 不做无人值守 SSH command proxy；
 - 不自动长期持有 JWT；
 - 不假设应用节点挂载真实 `/public`；
 - 不把真实 107 探测失败视为比赛系统失败。
-

@@ -1,7 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import Ajv2020 from "ajv/dist/2020";
-import type { ErrorObject, ValidateFunction } from "ajv";
 import {
   AlertTriangle,
   Braces,
@@ -29,6 +27,7 @@ import {
 } from "./contract-state";
 import { QueryBoundary, SectionHeading, StatusBadge } from "./components";
 import { useContract, useContractSchema, useRecipes } from "./query";
+import { compileClientSchemaValidator } from "./schema-validation";
 import type { JsonObject } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
@@ -121,18 +120,13 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
     if (!sourceDirty) setSource(serializeContract(canonical, format));
   }, [format]); // canonical changes are synchronized through commitCanonical.
 
-  const validator = useMemo<ValidateFunction | null>(() => {
-    if (!schemaQuery.data) return null;
-    try {
-      return new Ajv2020({ allErrors: true, strict: false }).compile(schemaQuery.data);
-    } catch {
-      return null;
-    }
-  }, [schemaQuery.data]);
-  const clientErrors = useMemo<ErrorObject[]>(() => {
-    if (!validator) return [];
-    return validator(canonical) ? [] : [...(validator.errors ?? [])];
-  }, [canonical, validator]);
+  const clientValidator = useMemo(
+    () => compileClientSchemaValidator(schemaQuery.data ?? {}),
+    [schemaQuery.data],
+  );
+  const clientErrors = useMemo(() => {
+    return clientValidator?.(canonical) ?? [];
+  }, [canonical, clientValidator]);
 
   const commitCanonical = (next: JsonObject) => {
     setCanonical(next);
@@ -299,7 +293,7 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
                 />
               </summary>
               <div className="studio-collapsible-body validation-side">
-                <p className="side-detail">Ajv 即时检查 schema；提交动作仍调用服务器 materializer 和 preflight。</p>
+                <p className="side-detail">浏览器按服务器下发 schema 做即时结构检查；提交动作仍调用服务器 materializer 和 preflight。</p>
                 {clientErrors.length ? (
                   <ul className="finding-list client">
                     {clientErrors.slice(0, 8).map((error, index) => (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -14,6 +15,16 @@ from pilot107.adapters.slurm import (
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.http_app import ApiResponse, Pilot107HttpApi
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
+from pilot107.core.control_repository import SQLiteControlRepository
+from pilot107.core.postgres_control_repository import PostgresControlRepository
+from pilot107.core.postgres_domain_schema import persisted_table_names
+from pilot107.core.postgres_domain_stores import (
+    PostgresContractStore,
+    PostgresRemediationStore,
+    PostgresRunStore,
+    PostgresTemplateMarketStore,
+)
+from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
 from pilot107.core.states import CapsuleState, CollectionState, RunState
@@ -48,27 +59,61 @@ def main() -> int:
         runtime_root = Path(temp_dir)
         db_path = runtime_root / "pilot107.db"
         evidence_store = EvidenceStore(runtime_root / "evidence")
-        run_store = RunStore(db_path)
-        contract_store = ContractStore(db_path)
+        postgres_dsn = _test_postgres_dsn()
+        if postgres_dsn is None:
+            run_store = RunStore(db_path)
+            contract_store = ContractStore(db_path)
+            remediation_store = RemediationStore(db_path)
+            control_repository = SQLiteControlRepository(db_path)
+            storage_label = "sqlite"
+        else:
+            # This smoke intentionally uses an explicitly disposable database.
+            # It must never silently clear an operator's production PostgreSQL.
+            run_store = PostgresRunStore(postgres_dsn, compatibility_path=db_path)
+            contract_store = PostgresContractStore(postgres_dsn, compatibility_path=db_path)
+            remediation_store = PostgresRemediationStore(
+                postgres_dsn,
+                compatibility_path=db_path,
+            )
+            control_repository = PostgresControlRepository(postgres_dsn)
+            _reset_test_postgres(run_store)
+            storage_label = "postgres"
         catalog = RecipeCatalog(store=contract_store)
         contract_service = ContractService(catalog=catalog, store=contract_store)
-        template_store = TemplateMarketStore(
-            db_path,
-            publication_gate=TemplatePublicationGate(contract_service),
-            contract_service=contract_service,
-        )
+        publication_gate = TemplatePublicationGate(contract_service)
+        if postgres_dsn is None:
+            template_store = TemplateMarketStore(
+                db_path,
+                publication_gate=publication_gate,
+                contract_service=contract_service,
+            )
+        else:
+            template_store = PostgresTemplateMarketStore(
+                postgres_dsn,
+                compatibility_path=db_path,
+                publication_gate=publication_gate,
+                contract_service=contract_service,
+            )
         backend = DockerSimulatorCommandBackend(
             executor=executor,
             allowed_roots=["/public/home/alice", "/public/home/bob"],
             timeout_seconds=20.0,
         )
-        run_service = RunService(store=run_store, backend=backend)
+        run_service = RunService(
+            store=run_store,
+            backend=backend,
+            control_repository=control_repository,
+            dispatcher_id="smoke-phase3c-dispatcher",
+            contract_store=contract_store,
+            evidence_store=evidence_store,
+        )
         collector = DockerSlurmEvidenceCollector(
             store=evidence_store,
             executor=executor,
             allowed_roots=["/public/home/alice", "/public/home/bob"],
             run_store=run_store,
             timeout_seconds=20.0,
+            contract_store=contract_store,
         )
         worker = RuntimeReconcileWorker(
             service=run_service,
@@ -83,6 +128,7 @@ def main() -> int:
         )
         api = Pilot107HttpApi(
             store=run_store,
+            control_repository=control_repository,
             evidence_query=EvidenceQueryService(
                 store=run_store,
                 evidence_store=evidence_store,
@@ -90,11 +136,12 @@ def main() -> int:
             run_service=run_service,
             recipe_catalog=catalog,
             contract_service=contract_service,
+            contract_store=contract_store,
+            remediation_store=remediation_store,
+            evidence_store=evidence_store,
             capsule_service=capsule_service,
             template_market_store=template_store,
-            template_role_directory=TemplateRoleDirectory(
-                reviewers=frozenset({"reviewer"})
-            ),
+            template_role_directory=TemplateRoleDirectory(reviewers=frozenset({"reviewer"})),
             template_verification_service=TemplateVerificationService(
                 template_store=template_store,
                 run_store=run_store,
@@ -231,12 +278,37 @@ def main() -> int:
             raise RuntimeError(f"market metrics are incorrect: {metrics!r}")
 
     print(
-        "phase3c template smoke passed "
+        f"phase3c template smoke passed storage={storage_label} "
         f"template={template_id} contract={adopted_contract_id} run={run_id} "
         f"capsule={capsule.payload['capsule']['capsule_id']} verification="
         f"{verification.payload['verification_id']}"
     )
     return 0
+
+
+def _test_postgres_dsn() -> str | None:
+    """Return only an explicitly resettable, dedicated PostgreSQL smoke DSN."""
+
+    dsn = os.environ.get("PILOT107_TEST_POSTGRES_DSN")
+    if dsn is None:
+        return None
+    if os.environ.get("PILOT107_TEST_POSTGRES_ALLOW_RESET") != "1":
+        raise RuntimeError(
+            "PILOT107_TEST_POSTGRES_ALLOW_RESET=1 is required before the "
+            "Phase 3C smoke may truncate its dedicated PostgreSQL database"
+        )
+    return dsn
+
+
+def _reset_test_postgres(store: PostgresRunStore) -> None:
+    """Clear the test-only PG database after native migrations are present."""
+
+    with store.connect() as conn:
+        conn.execute(
+            "TRUNCATE "
+            + ", ".join(reversed(persisted_table_names()))
+            + " RESTART IDENTITY CASCADE"
+        )
 
 
 def _wait_for_evidence(
@@ -318,7 +390,7 @@ def _template_payload(workdir: str) -> dict[str, Any]:
             },
             "outputs": {
                 "expected": ["phase3c-output/result.txt"],
-                "success_conditions": ["phase3c-output/result.txt exists"],
+                "success_conditions": ["slurm_exit_code_zero"],
             },
             "extensions": {"advanced": {"raw_sbatch": "#SBATCH --exclusive"}},
         },

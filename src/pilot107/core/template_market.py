@@ -893,7 +893,12 @@ class TemplateMarketStore:
                 LEFT JOIN template_verifications AS verifications USING (release_id)
                 WHERE """
             + " AND ".join(conditions)
-            + " GROUP BY releases.release_id) SELECT * FROM market"
+            # SQLite accepts ungrouped columns from the one-to-one withdrawal
+            # join, but PostgreSQL correctly requires them to be explicit.
+            # Keeping these columns in the group also preserves the existing
+            # market-row shape across both storage engines.
+            + " GROUP BY releases.release_id, withdrawals.withdrawn_at, "
+            "withdrawals.actor, withdrawals.reason) SELECT * FROM market"
         )
         outer_conditions: list[str] = []
         outer_values: list[object] = []
@@ -972,6 +977,136 @@ class TemplateMarketStore:
                 secondary=str(last["release_id"]),
             )
         return records, next_position
+
+    def list_market_chronological_page(
+        self,
+        *,
+        actor: str,
+        course_scopes: frozenset[str] = frozenset(),
+        query: str | None = None,
+        visibility: TemplateVisibility | None = None,
+        cursor: CursorPosition | None = None,
+        limit: int = 50,
+    ) -> tuple[tuple[TemplateMarketItemRecord, ...], CursorPosition | None]:
+        """List visible releases by publication time for the unified market.
+
+        The template-only market keeps its verification/adoption ranking.  A
+        cross-kind feed cannot reuse that cursor because successful Run
+        publications do not have those ranking fields, so the unified read
+        model deliberately uses the common ``published_at + item_id`` order.
+        """
+
+        if actor:
+            _validate_actor(actor)
+        if limit <= 0 or limit > 100:
+            raise TemplateMarketError(
+                "limit must be between 1 and 100",
+                code="TEMPLATE.LIMIT_INVALID",
+            )
+        visibility_conditions = [
+            "releases.visibility IN ('campus', 'public')",
+            "releases.publisher = ?",
+        ]
+        values: list[object] = [actor]
+        if course_scopes:
+            placeholders = ", ".join("?" for _ in course_scopes)
+            visibility_conditions.append(
+                f"(releases.visibility = 'course' AND releases.scope_key IN ({placeholders}))"
+            )
+            values.extend(sorted(course_scopes))
+        conditions = [
+            "withdrawals.release_id IS NULL",
+            "(" + " OR ".join(visibility_conditions) + ")",
+        ]
+        if visibility is not None:
+            conditions.append("releases.visibility = ?")
+            values.append(visibility.value)
+        if query is not None and query.strip():
+            pattern = f"%{_escape_like(query.strip())}%"
+            conditions.append(
+                "(releases.title LIKE ? ESCAPE '\\' "
+                "OR releases.description LIKE ? ESCAPE '\\' "
+                "OR releases.template_id LIKE ? ESCAPE '\\')"
+            )
+            values.extend([pattern, pattern, pattern])
+        if cursor is not None:
+            conditions.append(
+                "(releases.published_at < ? "
+                "OR (releases.published_at = ? AND releases.release_id < ?))"
+            )
+            values.extend([cursor.primary, cursor.primary, cursor.secondary])
+        query_sql = (
+            """
+            SELECT releases.*, withdrawals.withdrawn_at,
+                   withdrawals.actor AS withdrawal_actor,
+                   withdrawals.reason AS withdrawal_reason,
+                   COUNT(DISTINCT adoptions.adoption_id) AS adoption_count,
+                   COUNT(DISTINCT CASE WHEN verifications.status = 'passed'
+                                      THEN verifications.verification_id END)
+                       AS verification_passed,
+                   COUNT(DISTINCT CASE WHEN verifications.status = 'failed'
+                                      THEN verifications.verification_id END)
+                       AS verification_failed,
+                   COUNT(DISTINCT CASE WHEN verifications.status = 'expired'
+                                      THEN verifications.verification_id END)
+                       AS verification_expired
+            FROM template_releases AS releases
+            LEFT JOIN template_release_withdrawals AS withdrawals USING (release_id)
+            LEFT JOIN template_adoptions AS adoptions USING (release_id)
+            LEFT JOIN template_verifications AS verifications USING (release_id)
+            WHERE """
+            + " AND ".join(conditions)
+            + " GROUP BY releases.release_id, withdrawals.withdrawn_at, "
+            "withdrawals.actor, withdrawals.reason "
+            "ORDER BY releases.published_at DESC, releases.release_id DESC LIMIT ?"
+        )
+        with self.connect() as conn:
+            rows = conn.execute(query_sql, (*values, limit + 1)).fetchall()
+            selected = rows[:limit]
+            records = tuple(_row_to_market_item(conn, row) for row in selected)
+        next_position = (
+            CursorPosition(
+                primary=str(selected[-1]["published_at"]),
+                secondary=str(selected[-1]["release_id"]),
+            )
+            if len(rows) > limit and selected
+            else None
+        )
+        return records, next_position
+
+    def get_market_item(self, release_id: str) -> TemplateMarketItemRecord:
+        """Return one release with the metrics used by both market read models."""
+
+        _validate_id(release_id, field="release_id")
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT releases.*, withdrawals.withdrawn_at,
+                       withdrawals.actor AS withdrawal_actor,
+                       withdrawals.reason AS withdrawal_reason,
+                       COUNT(DISTINCT adoptions.adoption_id) AS adoption_count,
+                       COUNT(DISTINCT CASE WHEN verifications.status = 'passed'
+                                          THEN verifications.verification_id END)
+                           AS verification_passed,
+                       COUNT(DISTINCT CASE WHEN verifications.status = 'failed'
+                                          THEN verifications.verification_id END)
+                           AS verification_failed,
+                       COUNT(DISTINCT CASE WHEN verifications.status = 'expired'
+                                          THEN verifications.verification_id END)
+                           AS verification_expired
+                FROM template_releases AS releases
+                LEFT JOIN template_release_withdrawals AS withdrawals USING (release_id)
+                LEFT JOIN template_adoptions AS adoptions USING (release_id)
+                LEFT JOIN template_verifications AS verifications USING (release_id)
+                WHERE releases.release_id = ?
+                GROUP BY releases.release_id, withdrawals.withdrawn_at,
+                         withdrawals.actor, withdrawals.reason
+                """,
+                (release_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(release_id)
+            return _row_to_market_item(conn, row)
 
     def withdraw_release(self, release_id: str, *, actor: str, reason: str) -> None:
         _validate_actor(actor)
@@ -1722,3 +1857,19 @@ def _latest_verification(
         (release_id,),
     ).fetchone()
     return None if row is None else _row_to_verification(row)
+
+
+def _row_to_market_item(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> TemplateMarketItemRecord:
+    return TemplateMarketItemRecord(
+        release=_row_to_release(row),
+        metrics=TemplateMetricsRecord(
+            adoption_count=int(row["adoption_count"]),
+            verification_passed=int(row["verification_passed"]),
+            verification_failed=int(row["verification_failed"]),
+            verification_expired=int(row["verification_expired"]),
+            latest_verification=_latest_verification(conn, str(row["release_id"])),
+        ),
+    )

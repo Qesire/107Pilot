@@ -30,6 +30,7 @@ ALLOWED_COMMANDS = {
     "scancel",
     "scontrol",
     "sha256sum",
+    "sinfo",
     "squeue",
     "stat",
     "tail",
@@ -316,19 +317,19 @@ def _run(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
         raise GatewayError("argv must be a non-empty string array")
     if argv[0] not in ALLOWED_COMMANDS:
         raise GatewayError(f"command not allowed: {argv[0]}")
-    _validate_command(argv, config)
-
-    cwd = payload.get("cwd")
-    safe_cwd = None
-    if cwd is not None:
-        safe_cwd = _authorize_path(str(cwd), config)
-
     user = payload.get("user")
     command = list(argv)
+    username: str | None = None
     if user is not None:
         username = _safe_user(str(user))
         pwd.getpwnam(username)
         command = ["gosu", username, *command]
+    _validate_command(argv, config, user=username)
+
+    cwd = payload.get("cwd")
+    safe_cwd = None
+    if cwd is not None:
+        safe_cwd = _authorize_path(str(cwd), config, user=username)
 
     timeout = _timeout(payload)
     completed = subprocess.run(
@@ -347,7 +348,12 @@ def _run(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
     }
 
 
-def _validate_command(argv: list[str], config: GatewayConfig) -> None:
+def _validate_command(
+    argv: list[str],
+    config: GatewayConfig,
+    *,
+    user: str | None,
+) -> None:
     exact_commands = {
         "date": ["date", "-Is"],
         "env": ["env"],
@@ -355,6 +361,7 @@ def _validate_command(argv: list[str], config: GatewayConfig) -> None:
         "python": ["python", "-V"],
         "which": ["which", "python"],
         "whoami": ["whoami"],
+        "sinfo": ["sinfo", "-h", "-o", "%P|%c|%m|%G|%T"],
     }
     expected = exact_commands.get(argv[0])
     if expected is not None and argv != expected:
@@ -362,13 +369,13 @@ def _validate_command(argv: list[str], config: GatewayConfig) -> None:
     if argv[0] == "test":
         if len(argv) != 3 or argv[1] not in {"-e", "-d", "-r", "-x", "-w"}:
             raise GatewayError("command arguments not allowed: test")
-        _authorize_path(argv[2], config)
+        _authorize_path(argv[2], config, user=user)
 
 
 def _write_text(payload: dict[str, Any], config: GatewayConfig) -> None:
-    path = _authorize_path(str(payload.get("path", "")), config)
-    content = str(payload.get("content", ""))
     owner = _safe_user(str(payload.get("owner", "")))
+    path = _authorize_path(str(payload.get("path", "")), config, user=owner)
+    content = str(payload.get("content", ""))
     user_info = pwd.getpwnam(owner)
     target = Path(path)
     if not target.parent.exists():
@@ -377,13 +384,21 @@ def _write_text(payload: dict[str, Any], config: GatewayConfig) -> None:
     os.chown(target, user_info.pw_uid, user_info.pw_gid)
 
 
-def _authorize_path(path: str, config: GatewayConfig) -> str:
+def _authorize_path(path: str, config: GatewayConfig, *, user: str | None = None) -> str:
     resolved = _realpath(path)
     for root in config.allowed_roots:
-        resolved_root = _realpath(root).rstrip("/")
+        resolved_root = _realpath(_root_for_user(root, user)).rstrip("/")
         if resolved == resolved_root or resolved.startswith(f"{resolved_root}/"):
             return resolved
     raise GatewayError(f"path outside allowed roots: {path}")
+
+
+def _root_for_user(root: str, user: str | None) -> str:
+    if "{user}" not in root:
+        return root
+    if user is None:
+        raise GatewayError("owner-scoped root requires a user")
+    return root.replace("{user}", user)
 
 
 def _realpath(path: str) -> str:
@@ -421,7 +436,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8090)
     args = parser.parse_args()
 
-    raw_allowed_roots = os.environ.get("PILOT107_GATEWAY_ALLOWED_ROOTS", "/public/home/alice")
+    raw_allowed_roots = os.environ.get("PILOT107_GATEWAY_ALLOWED_ROOTS", "")
     allowed_roots = [
         item.strip()
         for item in raw_allowed_roots.split(",")

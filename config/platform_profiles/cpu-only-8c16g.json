@@ -1,6 +1,6 @@
 {
   "schema": "pilot107.capability_profile.v1",
-  "profile_id": "cpu-only-8c16g-rc",
+  "profile_id": "cpu-only-8c16g-vm-demo",
   "source_authority": "static_release_candidate_profile",
   "captured_at": "2026-07-18T00:00:00+00:00",
   "freshness_seconds": 31536000,
@@ -21,12 +21,12 @@
   "qos": [
     {
       "name": "qos_cpu_rc",
-      "max_cpus": 4,
+      "max_cpus": 8,
       "max_gpus": 0,
-      "max_memory_gb": 6,
+      "max_memory_gb": 15,
       "max_wall_hours": 4,
-      "source_authority": "cpu-only-8c16g-rc",
-      "notes": ["Host reserve: at least 1 CPU and 6 GiB remain outside schedulable Slurm memory."]
+      "source_authority": "vm-measured-8c15g-demo",
+      "notes": ["The VM has 8 vCPU and about 15.6 GiB Linux-visible memory; the Slurm demo group advertises 8 CPU and 15 GiB after rounding."]
     }
   ],
   "rest": {
@@ -40,10 +40,11 @@
     "partial_payload_with_errors": false
   },
   "dynamic_facts": [
-    "The target host envelope is 8 vCPU and 16 GiB; the Slurm worker exposes only 4 CPU and 6 GiB to preserve control-plane headroom."
+    "The target VM envelope is 8 vCPU and about 15.6 GiB Linux-visible memory; its single Slurm demo node exposes 8 CPU and 15 GiB."
   ],
   "limitations": [
     "This is a local/VM release-candidate profile, not a real 107 capability claim.",
+    "Per-job Slurm cgroup enforcement is unavailable on this VM; Docker limits the aggregate demo node instead.",
     "GPU partitions, GPU QoS and GPU templates are disabled."
   ]
 }

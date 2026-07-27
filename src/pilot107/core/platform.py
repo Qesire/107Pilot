@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from pilot107.adapters.slurm import HttpTransport, SlurmTransportError
-from pilot107.core.resources import REAL107_SIM_PARTITION_QOS, QosResourceLimit
+from pilot107.core.resources import QosResourceLimit
 
 
 class SourceAuthority(StrEnum):
@@ -218,38 +221,18 @@ def docker_sim_capability_profile(
     captured_at: str | None = None,
     slurm_rest_url: str = "http://slurmrestd:6820",
 ) -> CapabilityProfile:
-    return CapabilityProfile(
-        profile_id="docker-real107-sim",
-        source_authority="static_competition_profile+docs-main",
+    """Load the simulator's declared behavior rather than duplicating it in Python.
+
+    ``simulator-real107-behavior.yaml`` is also consumed by the profile-apply
+    and smoke scripts.  Keeping this adapter on the same source prevents an
+    application-level capability drift when the scheduler fixture changes.
+    """
+
+    profile = load_capability_profile(_simulator_behavior_profile_path())
+    return replace(
+        profile,
         captured_at=captured_at or datetime.now(UTC).isoformat(),
-        freshness_seconds=300,
-        shared_roots=("/public",),
-        local_roots=("/tmp", "/usr", "/var", "/opt"),
-        default_partition="Students",
-        default_qos="qos_stu_medium_2gpu",
-        partitions=_static_partitions(SourceAuthority.STATIC_COMPETITION_PROFILE),
-        qos=_docs_main_qos_capabilities(),
-        rest=RestCapability(
-            base_url=slurm_rest_url,
-            api_version="v0.0.41",
-            auth_strategy="trusted_header_simulated_users",
-            supports_query=True,
-            supports_submit=False,
-            supports_cancel=False,
-            supports_accounting=True,
-            partial_payload_with_errors=True,
-        ),
-        dynamic_facts=(
-            "docs-main marks GPU models, nodes, partition/QOS and quotas as dynamic facts",
-            "docs-main default flow uses Students/qos_stu_default; competition smoke uses "
-            "Students/qos_stu_medium_2gpu based on the real107 probe carrier job",
-        ),
-        limitations=(
-            "Docker simulator is scaled down to anode16/anode17 live workers",
-            "Docker simulator exposes fake GPU GRES for scheduler behavior only",
-            "Runtime GPU devices, CUDA driver, NVML and GPU cgroup binding are "
-            "unavailable by default",
-        ),
+        rest=replace(profile.rest, base_url=slurm_rest_url),
     )
 
 
@@ -260,68 +243,30 @@ def docker_sim_configuration_snapshot(
     evidence_transport_url: str | None = None,
     captured_at: str | None = None,
 ) -> ConfigurationSnapshot:
-    source = SourceAuthority.STATIC_COMPETITION_PROFILE
+    profile = docker_sim_capability_profile(
+        captured_at=captured_at,
+        slurm_rest_url=slurm_rest_url,
+    )
     return ConfigurationSnapshot(
         cluster=ClusterProfile(
             name="docker-slurm-sim",
-            slurm_version="25.11-compatible",
-            api_version="v0.0.41",
-            shared_roots=("/public",),
-            local_roots=("/tmp", "/usr", "/var", "/opt"),
-            partitions=(
-                "CPU-6530",
-                "CPU-8358P",
-                "GPU-A100",
-                "GPU-RTX5090",
-                "P107-A100",
-                "P107-RTX5090",
-                "Students",
-                "debug",
-            ),
-            qos=(
-                "normal",
-                "qos_cpu-6530",
-                "qos_cpu-8358p",
-                "qos_gpu-a100",
-                "qos_gpu-rtx5090",
-                "qos_p107-a100",
-                "qos_p107-rtx5090",
-                "qos_stu001",
-                "qos_stu_default",
-                "qos_stu_small",
-                "qos_stu_medium",
-                "qos_stu_medium_2gpu",
-                "qos_stu_long",
-                "qos_stu_cpu_long",
-            ),
-            source_authority=source,
+            slurm_version=_simulator_slurm_version(),
+            api_version=profile.rest.api_version,
+            shared_roots=profile.shared_roots,
+            local_roots=profile.local_roots,
+            partitions=tuple(partition.name for partition in profile.partitions),
+            qos=tuple(qos.name for qos in profile.qos),
+            source_authority=SourceAuthority.SIMULATOR_PROBE,
         ),
-        users=(
-            UserEntitlementProfile(
-                username="alice",
-                home="/public/home/alice",
-                allowed_roots=("/public/home/alice",),
-                default_partition="Students",
-                default_qos="qos_stu_medium_2gpu",
-                source_authority=source,
-            ),
-            UserEntitlementProfile(
-                username="bob",
-                home="/public/home/bob",
-                allowed_roots=("/public/home/bob",),
-                default_partition="Students",
-                default_qos="qos_stu_medium_2gpu",
-                source_authority=source,
-            ),
-        ),
+        users=_simulator_user_profiles(),
         endpoints=EndpointSet(
             slurm_rest_url=slurm_rest_url,
             command_gateway_url=command_gateway_url,
             evidence_transport_url=evidence_transport_url,
         ),
-        auth_strategy="trusted_header_simulated_users",
-        captured_at=captured_at or datetime.now(UTC).isoformat(),
-        freshness_seconds=300,
+        auth_strategy=profile.rest.auth_strategy,
+        captured_at=profile.captured_at,
+        freshness_seconds=profile.freshness_seconds,
     )
 
 
@@ -337,6 +282,9 @@ def capability_profile_from_real107_probe(
     partitions = _partitions_from_probe_report(probe_report)
     if not partitions:
         partitions = _partitions_from_snapshot(cluster)
+    default_partition = str(first_user.get("default_partition") or "")
+    if not default_partition and partitions:
+        default_partition = partitions[0].name
     return CapabilityProfile(
         profile_id="real107-probe",
         source_authority="real_cluster_probe+docs-main",
@@ -346,7 +294,7 @@ def capability_profile_from_real107_probe(
         freshness_seconds=int(configuration_snapshot.get("freshness_seconds") or 300),
         shared_roots=tuple(str(item) for item in cluster.get("shared_roots", [])),
         local_roots=tuple(str(item) for item in cluster.get("local_roots", [])),
-        default_partition=str(first_user.get("default_partition") or "Students"),
+        default_partition=default_partition,
         default_qos=(
             None if first_user.get("default_qos") is None else str(first_user.get("default_qos"))
         ),
@@ -384,15 +332,101 @@ def load_capability_profile(path: Path) -> CapabilityProfile:
             configuration_snapshot=_read_json(path / "configuration_snapshot.json"),
             probe_report=_read_json(path / "probe_report.json"),
         )
-    payload = _read_json(path)
+    payload = _read_profile_document(path)
     if payload.get("schema") == "pilot107.capability_profile.v1":
         return _capability_profile_from_payload(payload)
+    if payload.get("schema") == "pilot107.simulator_real107_behavior.v1":
+        return capability_profile_from_simulator_behavior(payload)
     if "configuration_snapshot" in payload and "probe_report" in payload:
         return capability_profile_from_real107_probe(
             configuration_snapshot=_as_dict(payload["configuration_snapshot"]),
             probe_report=_as_dict(payload["probe_report"]),
         )
     raise ValueError(f"unsupported capability profile source: {path}")
+
+
+def capability_profile_from_simulator_behavior(payload: dict[str, Any]) -> CapabilityProfile:
+    """Translate the simulator's declarative behavior file into API policy.
+
+    This profile describes the Docker fixture, not a permanent claim about
+    the 107Pilot cluster.  The real-cluster probe and per-user entitlement
+    snapshots remain authoritative for a live deployment.
+    """
+
+    users = [_as_dict(item) for item in payload.get("users", [])]
+    default_user = next(
+        (item for item in users if item.get("default_partition")),
+        {},
+    )
+    partitions_payload = [_as_dict(item) for item in payload.get("partitions", [])]
+    partitions = tuple(
+        PartitionCapability(
+            name=str(item["name"]),
+            nodes=None if item.get("nodes") is None else str(item["nodes"]),
+            total_nodes=_simulator_partition_node_count(item, payload),
+            allow_qos=tuple(str(value) for value in item.get("allow_qos", [])),
+            state=("UP",),
+            gpu_types=_gpu_types_from_partition_name(str(item.get("name") or "")),
+            source_authority=SourceAuthority.SIMULATOR_PROBE,
+        )
+        for item in partitions_payload
+        if item.get("name")
+    )
+    qos = tuple(
+        QosCapability(
+            name=str(item["name"]),
+            max_cpus=_optional_positive_int(item.get("max_cpus")),
+            max_gpus=_optional_nonnegative_int(item.get("max_gpus")),
+            max_memory_gb=_memory_gib(item.get("max_memory")),
+            max_wall_hours=_wall_hours(item.get("max_wall")),
+            source_authority="simulator-real107-behavior.yaml",
+        )
+        for item in (_as_dict(raw) for raw in payload.get("qos", []))
+        if item.get("name")
+    )
+    storage = _as_dict(payload.get("storage"))
+    shared_roots = tuple(
+        str(item["path"])
+        for item in (_as_dict(raw) for raw in storage.get("shared_paths", []))
+        if item.get("path") and item.get("semantics")
+    )
+    local_roots = tuple(
+        str(item["path"])
+        for item in (_as_dict(raw) for raw in storage.get("local_paths", []))
+        if item.get("path")
+    )
+    slurm = _as_dict(payload.get("slurm"))
+    auth = _as_dict(slurm.get("auth"))
+    return CapabilityProfile(
+        profile_id=str(payload.get("profile_id") or "simulator-real107-behavior"),
+        source_authority="simulator-real107-behavior.yaml",
+        captured_at=datetime.now(UTC).isoformat(),
+        freshness_seconds=300,
+        shared_roots=shared_roots,
+        local_roots=local_roots,
+        default_partition=str(default_user.get("default_partition") or ""),
+        default_qos=(
+            None if default_user.get("default_qos") is None else str(default_user["default_qos"])
+        ),
+        partitions=partitions,
+        qos=qos,
+        rest=RestCapability(
+            base_url="http://slurmrestd:6820",
+            api_version=str(slurm.get("api_version") or "v0.0.41"),
+            auth_strategy=str(auth.get("simulator_fallback") or "trusted_header_simulated_users"),
+            supports_query=True,
+            supports_submit=False,
+            supports_cancel=False,
+            supports_accounting=True,
+            partial_payload_with_errors=True,
+        ),
+        dynamic_facts=(
+            "simulator behavior is loaded from simulator-real107-behavior.yaml",
+            "the real cluster's partitions, QoS, account authorization and GPU inventory "
+            "must be refreshed from probes and user entitlements",
+        ),
+        limitations=tuple(str(item) for item in payload.get("runtime_limitations", [])),
+    )
 
 
 def _capability_profile_from_payload(payload: dict[str, Any]) -> CapabilityProfile:
@@ -454,52 +488,21 @@ def _capability_profile_from_payload(payload: dict[str, Any]) -> CapabilityProfi
     )
 
 
-def _static_partitions(source: SourceAuthority) -> tuple[PartitionCapability, ...]:
-    gpu_by_partition = {
-        "GPU-A100": ("A100",),
-        "P107-A100": ("A100",),
-        "Students": ("A100", "RTX5090"),
-        "GPU-RTX5090": ("RTX5090",),
-        "P107-RTX5090": ("RTX5090",),
-    }
-    nodes_by_partition = {
-        "CPU-6530": "anode05",
-        "CPU-8358P": "anode[16-17]",
-        "GPU-RTX5090": "anode05",
-        "GPU-A100": "anode[16-17]",
-        "P107-RTX5090": "anode05",
-        "P107-A100": "anode[16-17]",
-        "Students": "anode[16-17]",
-        "debug": "anode[16-17]",
-    }
-    return tuple(
-        PartitionCapability(
-            name=name,
-            nodes=nodes_by_partition.get(name),
-            total_nodes=2
-            if name in {"CPU-8358P", "GPU-A100", "P107-A100", "Students", "debug"}
-            else 1,
-            allow_qos=REAL107_SIM_PARTITION_QOS[name],
-            state=("UP",),
-            gpu_types=gpu_by_partition.get(name, ()),
-            source_authority=source,
-        )
-        for name in REAL107_SIM_PARTITION_QOS
-    )
-
-
 def _docs_main_qos_capabilities() -> tuple[QosCapability, ...]:
     dynamic_note = "docs-main: platform page/current authorization is authoritative"
     return (
         QosCapability("qos_stu001", source_authority="real107_probe", notes=(dynamic_note,)),
         QosCapability("qos_stu_default", 4, 1, 16, 4, notes=(dynamic_note,)),
         QosCapability("qos_stu_small", 8, 1, 32, 8, notes=(dynamic_note,)),
-        QosCapability("qos_stu_medium", source_authority="real107_probe", notes=(dynamic_note,)),
-        QosCapability("qos_stu_medium_2gpu", 24, 2, 128, 12, notes=(dynamic_note,)),
+        QosCapability("qos_stu_medium", 16, 1, 64, 24, "real107_ssh_environment", (dynamic_note,)),
+        QosCapability(
+            "qos_stu_medium_2gpu", 24, 2, 128, 24, "real107_ssh_environment", (dynamic_note,)
+        ),
+        QosCapability("qos_stu_large", 48, 4, 240, 12, "real107_ssh_environment", (dynamic_note,)),
         QosCapability("qos_stu_long", 16, 1, 64, 72, notes=(dynamic_note,)),
         QosCapability("qos_stu_cpu_long", 32, 0, 128, 72, notes=(dynamic_note,)),
-        QosCapability("qos_p107-rtx5090", 16, 4, None, None, "training-material"),
-        QosCapability("qos_p107-a100", 16, 2, None, None, "training-material"),
+        QosCapability("qos_p107-rtx5090", 16, 4, None, 96, "real107_ssh_environment"),
+        QosCapability("qos_p107-a100", 16, 4, None, 96, "real107_ssh_environment"),
         QosCapability("normal", source_authority="simulator-legacy"),
     )
 
@@ -542,7 +545,11 @@ def _partitions_from_snapshot(cluster: dict[str, Any]) -> tuple[PartitionCapabil
             name=str(name),
             nodes=None,
             total_nodes=None,
-            allow_qos=REAL107_SIM_PARTITION_QOS.get(str(name), ()),
+            # A configuration snapshot that names a partition but does not
+            # carry AllowQos has not observed its QoS policy.  Do not fill the
+            # gap from the Docker simulator, or a real cluster could be
+            # incorrectly authorized with fixture-only values.
+            allow_qos=(),
             source_authority=SourceAuthority.REAL_CLUSTER_PROBE,
         )
         for name in cluster.get("partitions", [])
@@ -575,6 +582,113 @@ def _split_qos(value: Any) -> tuple[str, ...]:
     if not value:
         return ()
     return tuple(item.strip() for item in str(value).replace(" ", ",").split(",") if item.strip())
+
+
+def _simulator_behavior_profile_path() -> Path:
+    return (
+        Path(__file__).resolve().parents[3]
+        / "config"
+        / "platform_profiles"
+        / "simulator-real107-behavior.yaml"
+    )
+
+
+def _simulator_behavior_document() -> dict[str, Any]:
+    return _read_profile_document(_simulator_behavior_profile_path())
+
+
+def _simulator_slurm_version() -> str:
+    slurm = _as_dict(_simulator_behavior_document().get("slurm"))
+    return str(slurm.get("target_version") or "25.11-compatible")
+
+
+def _simulator_user_profiles() -> tuple[UserEntitlementProfile, ...]:
+    users = [_as_dict(item) for item in _simulator_behavior_document().get("users", [])]
+    return tuple(
+        UserEntitlementProfile(
+            username=str(item["name"]),
+            home=str(item["home"]),
+            allowed_roots=(str(item["home"]),),
+            default_partition=str(item.get("default_partition") or ""),
+            default_qos=(
+                None if item.get("default_qos") is None else str(item.get("default_qos"))
+            ),
+            source_authority=SourceAuthority.SIMULATOR_PROBE,
+        )
+        for item in users
+        if item.get("name") and item.get("home")
+    )
+
+
+def _read_profile_document(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        return _as_dict(yaml.safe_load(text))
+    return _as_dict(json.loads(text))
+
+
+def _simulator_partition_node_count(
+    partition: dict[str, Any],
+    payload: dict[str, Any],
+) -> int | None:
+    expression = str(partition.get("nodes") or "")
+    if not expression:
+        return None
+    nodes = [_as_dict(item) for item in payload.get("nodes", [])]
+    matched = [str(node.get("name")) for node in nodes if node.get("name")]
+    count = sum(_node_expression_contains(expression, name) for name in matched)
+    return count or None
+
+
+def _node_expression_contains(expression: str, node_name: str) -> bool:
+    if node_name in {item.strip() for item in expression.split(",")}:
+        return True
+    match = re.fullmatch(r"(?P<prefix>.*)\[(?P<start>\d+)-(?P<end>\d+)\]", expression)
+    if match is None or not node_name.startswith(match.group("prefix")):
+        return False
+    suffix = node_name.removeprefix(match.group("prefix"))
+    if not suffix.isdigit():
+        return False
+    return int(match.group("start")) <= int(suffix) <= int(match.group("end"))
+
+
+def _optional_positive_int(value: Any) -> int | None:
+    parsed = _optional_nonnegative_int(value)
+    return parsed if parsed and parsed > 0 else None
+
+
+def _optional_nonnegative_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _memory_gib(value: Any) -> int | None:
+    if value is None:
+        return None
+    match = re.fullmatch(r"\s*(\d+)\s*([KMGTP]?)(?:i?B)?\s*", str(value), re.IGNORECASE)
+    if match is None:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2).upper()
+    divisors = {"": 1024**3, "K": 1024**2, "M": 1024, "G": 1, "T": 1 / 1024}
+    gib = amount / divisors[unit]
+    return int(gib) if gib.is_integer() else int(gib) + 1
+
+
+def _wall_hours(value: Any) -> int | None:
+    if value is None:
+        return None
+    match = re.fullmatch(r"(?:(\d+)-)?(\d{1,2}):(\d{2}):(\d{2})", str(value))
+    if match is None:
+        return None
+    days, hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    total_seconds = (((days * 24) + hours) * 60 + minutes) * 60 + seconds
+    return (total_seconds + 3599) // 3600
 
 
 def _read_json(path: Path) -> dict[str, Any]:

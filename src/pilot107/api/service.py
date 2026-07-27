@@ -31,13 +31,27 @@ from pilot107.adapters.slurm import (
     RestNativeSlurmBackend,
     SimulatorPathChecker,
     SlurmBackend,
+    SshSlurmBackend,
     UrllibHttpTransport,
 )
 from pilot107.adapters.slurmrest_snapshot import SlurmrestSnapshotCollector
+from pilot107.adapters.ssh_relay import (
+    SshRelayClient,
+    SshRelayConfig,
+    SshRelayExecutor,
+    SubprocessSshRelayClient,
+)
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.api.metrics import ControlPlaneMetrics
 from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
+from pilot107.core.code_context import (
+    CodeContextPolicy,
+    CodeContextService,
+    LocalWorkspaceReader,
+    SshWorkspaceConfig,
+    SshWorkspaceReader,
+)
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
 from pilot107.core.control_repository import ControlRepository
 from pilot107.core.control_repository_factory import build_control_repository
@@ -50,10 +64,22 @@ from pilot107.core.platform import (
 )
 from pilot107.core.platform_snapshot import ObservationSourceType
 from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
+from pilot107.core.postgres_domain_stores import (
+    PostgresContractStore,
+    PostgresPlatformSnapshotStore,
+    PostgresRemediationStore,
+    PostgresRunPublicationStore,
+    PostgresRunStore,
+    PostgresTemplateMarketStore,
+    PostgresUserEntitlementStore,
+)
 from pilot107.core.preflight import LocalPathChecker
 from pilot107.core.proxy_auth import load_proxy_hmac_secret
+from pilot107.core.remediation_store import RemediationStore
+from pilot107.core.run_publications import RunPublicationStore
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
+from pilot107.core.ssh_connections import SshConnectionService, SshConnectionStore
 from pilot107.core.template_market import TemplateMarketStore
 from pilot107.core.template_market_seed import seed_preset_recipes
 from pilot107.core.template_policy import (
@@ -61,6 +87,7 @@ from pilot107.core.template_policy import (
     TemplateRoleDirectory,
 )
 from pilot107.core.template_verification import TemplateVerificationService
+from pilot107.core.terminal import TerminalCommandService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
 from pilot107.services.platform_snapshot_freshness import SnapshotCollectionMonitor
 from pilot107.worker.capsule import RawCapsuleService
@@ -75,8 +102,11 @@ class ApiServiceConfig:
     evidence_root: Path
     capsule_root: Path
     control_postgres_dsn: str | None = field(default=None, repr=False)
+    postgres_dsn: str | None = field(default=None, repr=False)
     backend: str = "none"
-    allowed_roots: tuple[str, ...] = ("/public/home/alice",)
+    # Empty is fail-closed for a standalone deployment.  The Docker simulator
+    # supplies its explicit ``/public/home/{user}`` template in Compose.
+    allowed_roots: tuple[str, ...] = ()
     command_timeout_seconds: float = 20.0
     compose_file: Path | None = None
     compose_env_file: Path | None = None
@@ -84,6 +114,16 @@ class ApiServiceConfig:
     compose_service: str = "login-node-sim"
     command_gateway_url: str = "http://pilot107-command-gateway:8090"
     command_gateway_token: str | None = None
+    ssh_connection_id: str = "real107"
+    ssh_target_id: str = "real107"
+    ssh_target: str | None = None
+    ssh_control_path: Path | None = None
+    ssh_known_hosts_file: Path | None = None
+    ssh_port: int | None = None
+    ssh_portal_owner: str | None = None
+    ssh_slurm_user: str | None = None
+    ssh_owner_roots: tuple[str, ...] = ()
+    terminal_enabled: bool = False
     slurmrestd_url: str = "http://slurmrestd:6820"
     slurm_api_version: str = "v0.0.41"
     slurm_token: str | None = None
@@ -101,7 +141,7 @@ class ApiServiceConfig:
     max_response_body_bytes: int = 8 * 1024 * 1024
     rate_limit_requests: int = 600
     rate_limit_window_seconds: int = 60
-    contract_profile: str = "generic"
+    contract_profile: str = "capability"
     capability_profile_path: Path | None = None
     allow_gpu_recipes: bool = True
     llm_base_url: str | None = None
@@ -111,6 +151,18 @@ class ApiServiceConfig:
     llm_max_tokens: int = 700
     llm_structured_output_mode: str = "prompt_json"
     llm_max_attempts: int = 2
+    # Code context is fail-closed.  A deployment must explicitly select a
+    # transport and exact read roots; ``workdir`` alone never grants source
+    # access to the Agent.
+    code_context_transport: str = "none"
+    code_context_allowed_roots: tuple[str, ...] = ()
+    code_context_ssh_target: str | None = None
+    code_context_ssh_control_path: Path | None = None
+    code_context_ssh_port: int | None = None
+    code_context_max_chunks: int = 3
+    code_context_before_lines: int = 60
+    code_context_after_lines: int = 60
+    code_context_max_file_bytes: int = 64 * 1024
     worker_metrics_root: Path | None = None
     template_reviewers: frozenset[str] = frozenset()
     template_admins: frozenset[str] = frozenset()
@@ -134,9 +186,15 @@ def config_from_env(
         db_path=_path(values, "PILOT107_DB_PATH", runtime_dir / "pilot107.db"),
         evidence_root=_path(values, "PILOT107_EVIDENCE_ROOT", runtime_dir / "evidence"),
         capsule_root=_path(values, "PILOT107_CAPSULE_ROOT", runtime_dir / "capsules"),
-        control_postgres_dsn=values.get("PILOT107_CONTROL_POSTGRES_DSN") or None,
-        backend=values.get("PILOT107_API_BACKEND", "none"),
-        allowed_roots=tuple(_split_csv(values.get("PILOT107_ALLOWED_ROOTS", "/public/home/alice"))),
+        control_postgres_dsn=(
+            values.get("PILOT107_CONTROL_POSTGRES_DSN")
+            or values.get("PILOT107_POSTGRES_DSN")
+            or None
+        ),
+        postgres_dsn=values.get("PILOT107_POSTGRES_DSN") or None,
+        backend=values.get("PILOT107_API_BACKEND")
+        or values.get("PILOT107_BACKEND", "none"),
+        allowed_roots=tuple(_split_csv(values.get("PILOT107_ALLOWED_ROOTS", ""))),
         command_timeout_seconds=_float(values, "PILOT107_COMMAND_TIMEOUT_SECONDS", 20.0),
         compose_file=_path(values, "PILOT107_COMPOSE_FILE", compose_workdir / "compose.yml"),
         compose_env_file=_path(
@@ -151,6 +209,29 @@ def config_from_env(
             "http://pilot107-command-gateway:8090",
         ),
         command_gateway_token=values.get("PILOT107_COMMAND_GATEWAY_TOKEN"),
+        ssh_connection_id=values.get("PILOT107_SSH_CONNECTION_ID", "real107"),
+        ssh_target_id=values.get("PILOT107_SSH_TARGET_ID", "real107"),
+        ssh_target=values.get("PILOT107_SSH_TARGET") or None,
+        ssh_control_path=_optional_path(values, "PILOT107_SSH_CONTROL_PATH"),
+        ssh_known_hosts_file=_optional_path(values, "PILOT107_SSH_KNOWN_HOSTS_FILE"),
+        ssh_port=(
+            None
+            if not values.get("PILOT107_SSH_PORT")
+            else _int(values, "PILOT107_SSH_PORT", 22)
+        ),
+        ssh_portal_owner=values.get("PILOT107_SSH_PORTAL_OWNER") or None,
+        ssh_slurm_user=(
+            values.get("PILOT107_SSH_SLURM_USER")
+            or values.get("PILOT107_SLURM_USER_NAME")
+            or None
+        ),
+        ssh_owner_roots=tuple(
+            _split_csv(
+                values.get("PILOT107_SSH_OWNER_ROOTS")
+                or values.get("PILOT107_ALLOWED_ROOTS", "")
+            )
+        ),
+        terminal_enabled=_bool(values, "PILOT107_TERMINAL_ENABLED", False),
         slurmrestd_url=values.get("PILOT107_SLURMRESTD_URL", "http://slurmrestd:6820"),
         slurm_api_version=values.get("PILOT107_SLURM_API_VERSION", "v0.0.41"),
         slurm_token=values.get("PILOT107_SLURM_TOKEN"),
@@ -177,7 +258,7 @@ def config_from_env(
         max_response_body_bytes=_int(values, "PILOT107_MAX_RESPONSE_BODY_BYTES", 8 * 1024 * 1024),
         rate_limit_requests=_int(values, "PILOT107_RATE_LIMIT_REQUESTS", 600),
         rate_limit_window_seconds=_int(values, "PILOT107_RATE_LIMIT_WINDOW_SECONDS", 60),
-        contract_profile=values.get("PILOT107_CONTRACT_PROFILE", "generic"),
+        contract_profile=values.get("PILOT107_CONTRACT_PROFILE", "capability"),
         capability_profile_path=_optional_path(values, "PILOT107_CAPABILITY_PROFILE_PATH"),
         allow_gpu_recipes=_bool(values, "PILOT107_ALLOW_GPU_RECIPES", True),
         llm_base_url=values.get("PILOT107_LLM_BASE_URL") or None,
@@ -187,6 +268,25 @@ def config_from_env(
         llm_max_tokens=_int(values, "PILOT107_LLM_MAX_TOKENS", 700),
         llm_structured_output_mode=values.get("PILOT107_LLM_STRUCTURED_OUTPUT_MODE", "prompt_json"),
         llm_max_attempts=_int(values, "PILOT107_LLM_MAX_ATTEMPTS", 2),
+        code_context_transport=values.get("PILOT107_CODE_CONTEXT_TRANSPORT", "none"),
+        code_context_allowed_roots=tuple(
+            _split_csv(values.get("PILOT107_CODE_CONTEXT_ALLOWED_ROOTS", ""))
+        ),
+        code_context_ssh_target=values.get("PILOT107_CODE_CONTEXT_SSH_TARGET") or None,
+        code_context_ssh_control_path=_optional_path(
+            values, "PILOT107_CODE_CONTEXT_SSH_CONTROL_PATH"
+        ),
+        code_context_ssh_port=(
+            None
+            if not values.get("PILOT107_CODE_CONTEXT_SSH_PORT")
+            else _int(values, "PILOT107_CODE_CONTEXT_SSH_PORT", 22)
+        ),
+        code_context_max_chunks=_int(values, "PILOT107_CODE_CONTEXT_MAX_CHUNKS", 3),
+        code_context_before_lines=_int(values, "PILOT107_CODE_CONTEXT_BEFORE_LINES", 60),
+        code_context_after_lines=_int(values, "PILOT107_CODE_CONTEXT_AFTER_LINES", 60),
+        code_context_max_file_bytes=_int(
+            values, "PILOT107_CODE_CONTEXT_MAX_FILE_BYTES", 64 * 1024
+        ),
         worker_metrics_root=_optional_path(
             values,
             "PILOT107_WORKER_METRICS_ROOT",
@@ -215,7 +315,30 @@ def config_from_env(
 
 
 def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
-    store = RunStore(config.db_path)
+    if config.postgres_dsn is None:
+        store = RunStore(config.db_path)
+        contract_store = ContractStore(config.db_path)
+        platform_snapshot_store = PlatformSnapshotStore(config.db_path)
+        user_entitlement_store = UserEntitlementStore(config.db_path)
+        remediation_store = RemediationStore(config.db_path)
+    else:
+        store = PostgresRunStore(config.postgres_dsn, compatibility_path=config.db_path)
+        contract_store = PostgresContractStore(
+            config.postgres_dsn,
+            compatibility_path=config.db_path,
+        )
+        platform_snapshot_store = PostgresPlatformSnapshotStore(
+            config.postgres_dsn,
+            compatibility_path=config.db_path,
+        )
+        user_entitlement_store = PostgresUserEntitlementStore(
+            config.postgres_dsn,
+            compatibility_path=config.db_path,
+        )
+        remediation_store = PostgresRemediationStore(
+            config.postgres_dsn,
+            compatibility_path=config.db_path,
+        )
     control_repository = build_control_repository(
         sqlite_path=config.db_path,
         postgres_dsn=config.control_postgres_dsn,
@@ -224,19 +347,26 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         control_repository=control_repository,
         worker_metrics_root=config.worker_metrics_root or config.db_path.parent / "worker-metrics",
     )
-    contract_store = ContractStore(config.db_path)
     capability_profile = _build_capability_profile(config)
     partition_qos = _contract_partition_qos(config.contract_profile, capability_profile)
     catalog = RecipeCatalog(
         store=contract_store,
         allow_gpu=config.allow_gpu_recipes,
         partition_qos=partition_qos,
+        default_partition=capability_profile.default_partition,
+        default_qos=capability_profile.default_qos,
+    )
+    ssh_relay_client = (
+        _build_ssh_relay_client(config) if config.backend == "real107-ssh" else None
     )
     run_service, token_validity_probe = _build_run_service_and_probe(
-        config, store, control_repository, contract_store, config.evidence_root
+        config,
+        store,
+        control_repository,
+        contract_store,
+        config.evidence_root,
+        ssh_relay_client=ssh_relay_client,
     )
-    platform_snapshot_store = PlatformSnapshotStore(config.db_path)
-    user_entitlement_store = UserEntitlementStore(config.db_path)
     contract_service = ContractService(
         catalog=catalog,
         store=contract_store,
@@ -245,14 +375,36 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         platform_snapshot_store=platform_snapshot_store,
         user_entitlement_store=user_entitlement_store,
     )
-    template_market_store = TemplateMarketStore(
-        config.db_path,
-        publication_gate=TemplatePublicationGate(
-            contract_service,
-            verified_container_digests=config.template_verified_container_digests,
-        ),
-        contract_service=contract_service,
+    publication_gate = TemplatePublicationGate(
+        contract_service,
+        verified_container_digests=config.template_verified_container_digests,
     )
+    if config.postgres_dsn is None:
+        template_market_store = TemplateMarketStore(
+            config.db_path,
+            publication_gate=publication_gate,
+            contract_service=contract_service,
+        )
+    else:
+        template_market_store = PostgresTemplateMarketStore(
+            config.postgres_dsn,
+            compatibility_path=config.db_path,
+            publication_gate=publication_gate,
+            contract_service=contract_service,
+        )
+    if config.postgres_dsn is None:
+        run_publication_store = RunPublicationStore(
+            config.db_path,
+            run_store=store,
+            contract_service=contract_service,
+        )
+    else:
+        run_publication_store = PostgresRunPublicationStore(
+            config.postgres_dsn,
+            compatibility_path=config.db_path,
+            run_store=store,
+            contract_service=contract_service,
+        )
     template_role_directory = TemplateRoleDirectory(
         reviewers=config.template_reviewers,
         admins=config.template_admins,
@@ -366,6 +518,18 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     # EvidenceStore instance for evidence_query, capsule_service, and the
     # remediation path to avoid divergent roots.
     shared_evidence_store = EvidenceStore(config.evidence_root)
+    terminal_service = (
+        TerminalCommandService(
+            executor=HttpCommandGatewayExecutor(
+                base_url=config.command_gateway_url,
+                token=config.command_gateway_token,
+                timeout_seconds=config.command_timeout_seconds,
+            ),
+            timeout_seconds=config.command_timeout_seconds,
+        )
+        if config.terminal_enabled
+        else None
+    )
 
     return Pilot107HttpApi(
         store=store,
@@ -386,8 +550,20 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         recipe_catalog=catalog,
         contract_service=contract_service,
         contract_store=contract_store,
+        remediation_store=remediation_store,
         evidence_store=shared_evidence_store,
+        terminal_service=terminal_service,
+        ssh_connection_service=(
+            None
+            if ssh_relay_client is None
+            else SshConnectionService(
+                config=ssh_relay_client.config,
+                client=ssh_relay_client,
+                store=SshConnectionStore(config.db_path),
+            )
+        ),
         template_market_store=template_market_store,
+        run_publication_store=run_publication_store,
         template_role_directory=template_role_directory,
         template_verification_service=template_verification_service,
         capability_profile=capability_profile,
@@ -400,6 +576,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 store=store,
                 evidence_root=config.evidence_root,
             ),
+            code_context_service=_build_code_context_service(config),
         ),
         auth_required=config.auth_required,
         trusted_user_header=config.trusted_user_header,
@@ -412,6 +589,47 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     )
 
 
+def _build_code_context_service(config: ApiServiceConfig) -> CodeContextService | None:
+    transport = config.code_context_transport.strip().lower()
+    if transport in {"", "none"}:
+        return None
+    if transport not in {"local", "ssh"}:
+        raise ValueError("PILOT107_CODE_CONTEXT_TRANSPORT must be none, local, or ssh")
+    if not config.code_context_allowed_roots:
+        raise ValueError("code context requires PILOT107_CODE_CONTEXT_ALLOWED_ROOTS")
+    policy = CodeContextPolicy(
+        max_chunks=config.code_context_max_chunks,
+        context_before_lines=config.code_context_before_lines,
+        context_after_lines=config.code_context_after_lines,
+        max_file_bytes=config.code_context_max_file_bytes,
+    )
+    if transport == "local":
+        return CodeContextService(
+            reader=LocalWorkspaceReader(
+                allowed_roots=config.code_context_allowed_roots,
+                timeout_seconds=config.command_timeout_seconds,
+            ),
+            policy=policy,
+        )
+    if config.code_context_ssh_target is None or config.code_context_ssh_control_path is None:
+        raise ValueError(
+            "ssh code context requires PILOT107_CODE_CONTEXT_SSH_TARGET and "
+            "PILOT107_CODE_CONTEXT_SSH_CONTROL_PATH"
+        )
+    return CodeContextService(
+        reader=SshWorkspaceReader(
+            config=SshWorkspaceConfig(
+                target=config.code_context_ssh_target,
+                control_path=config.code_context_ssh_control_path,
+                port=config.code_context_ssh_port,
+                timeout_seconds=config.command_timeout_seconds,
+            ),
+            allowed_roots=config.code_context_allowed_roots,
+        ),
+        policy=policy,
+    )
+
+
 def _build_run_service(
     config: ApiServiceConfig,
     store: RunStore,
@@ -420,6 +638,7 @@ def _build_run_service(
     evidence_root: Path | None = None,
     *,
     rest_token_provider: SimulatorRestTokenProvider | None = None,
+    ssh_relay_client: SshRelayClient | None = None,
 ) -> RunService | None:
     evidence_store: EvidenceStore | None = (
         EvidenceStore(evidence_root) if evidence_root is not None else None
@@ -513,6 +732,40 @@ def _build_run_service(
                 gateway_executor=gateway_executor,
             ),
         )
+    if config.backend == "real107-ssh":
+        client = ssh_relay_client or _build_ssh_relay_client(config)
+        ssh_executor = SshRelayExecutor(client)
+        backend = SshSlurmBackend(
+            executor=ssh_executor,
+            allowed_roots=list(client.config.expanded_owner_roots()),
+            timeout_seconds=config.command_timeout_seconds,
+            target_id=client.config.target_id,
+        )
+        return RunService(
+            store=store,
+            control_repository=control_repository,
+            backend=backend,
+            baseline_executor=ssh_executor,
+            workdir_preflight_enabled=config.workdir_preflight_enabled,
+            preflight_allowed_roots=client.config.expanded_owner_roots(),
+            preflight_shared_roots=client.config.expanded_owner_roots(),
+            preflight_local_roots=(),
+            preflight_path_checker_factory=(
+                (
+                    lambda user: SimulatorPathChecker(
+                        executor=ssh_executor,
+                        user=user,
+                        timeout_seconds=config.command_timeout_seconds,
+                    )
+                )
+                if config.workdir_preflight_enabled
+                else None
+            ),
+            idempotency_reconcile_enabled=config.idempotency_reconcile_enabled,
+            reconcile_backend=backend,
+            job_name_marker=DEFAULT_JOB_NAME_MARKER,
+            **baseline_kwargs,
+        )
     raise ValueError(f"unsupported API backend: {config.backend}")
 
 
@@ -522,6 +775,8 @@ def _build_run_service_and_probe(
     control_repository: ControlRepository,
     contract_store: ContractStore | None = None,
     evidence_root: Path | None = None,
+    *,
+    ssh_relay_client: SshRelayClient | None = None,
 ) -> tuple[RunService | None, TokenValidityProbe | None]:
     """Build the RunService and the token-validity probe together.
 
@@ -535,7 +790,12 @@ def _build_run_service_and_probe(
     if config.backend != "rest-native" or not config.rest_token_provider_enabled:
         return (
             _build_run_service(
-                config, store, control_repository, contract_store, evidence_root
+                config,
+                store,
+                control_repository,
+                contract_store,
+                evidence_root,
+                ssh_relay_client=ssh_relay_client,
             ),
             None,
         )
@@ -550,8 +810,36 @@ def _build_run_service_and_probe(
         contract_store,
         evidence_root,
         rest_token_provider=provider,  # type: ignore[arg-type]
+        ssh_relay_client=ssh_relay_client,
     )
     return run_service, provider
+
+
+def _build_ssh_relay_client(config: ApiServiceConfig) -> SshRelayClient:
+    if (
+        config.ssh_target is None
+        or config.ssh_control_path is None
+        or config.ssh_portal_owner is None
+        or config.ssh_slurm_user is None
+        or not config.ssh_owner_roots
+    ):
+        raise ValueError(
+            "real107-ssh requires SSH target, control path, portal owner, "
+            "Slurm user, and owner roots"
+        )
+    relay_config = SshRelayConfig(
+        connection_id=config.ssh_connection_id,
+        target_id=config.ssh_target_id,
+        target=config.ssh_target,
+        control_path=config.ssh_control_path,
+        known_hosts_file=config.ssh_known_hosts_file,
+        port=config.ssh_port,
+        portal_owner=config.ssh_portal_owner,
+        slurm_user=config.ssh_slurm_user,
+        owner_roots=config.ssh_owner_roots,
+        timeout_seconds=config.command_timeout_seconds,
+    )
+    return SubprocessSshRelayClient(relay_config)
 
 
 def _run_flags(
@@ -688,7 +976,7 @@ def _contract_partition_qos(
 ) -> dict[str, tuple[str, ...]] | None:
     if profile == "generic":
         return None
-    if profile in {"real107-sim", "cpu-only"}:
+    if profile in {"capability", "real107-sim", "cpu-only"}:
         return capability_profile.partition_qos()
     raise ValueError(f"unknown contract profile: {profile}")
 

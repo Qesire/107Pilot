@@ -190,6 +190,33 @@ class DockerSimulatorCommandBackendTests(unittest.TestCase):
                 )
             )
 
+    def test_owner_scoped_root_template_rejects_another_users_home(self) -> None:
+        executor = FakeDockerExecutor()
+        backend = DockerSimulatorCommandBackend(
+            executor=executor,  # type: ignore[arg-type]
+            allowed_roots=["/public/home/{user}"],
+        )
+
+        with self.assertRaises(SlurmSubmissionRejected):
+            backend.submit(
+                SubmitIntent(
+                    user="alice",
+                    workdir=Path("/public/home/bob"),
+                    script="#!/bin/bash\nhostname\n",
+                    resource_plan=_plan(),
+                )
+            )
+
+        backend.submit(
+            SubmitIntent(
+                user="bob",
+                workdir=Path("/public/home/bob"),
+                script="#!/bin/bash\nhostname\n",
+                resource_plan=_plan(),
+            )
+        )
+        self.assertEqual(executor.writes[-1][2], "bob")
+
     def test_get_finished_job_uses_accounting(self) -> None:
         executor = FakeDockerExecutor()
         backend = DockerSimulatorCommandBackend(

@@ -1,9 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ArrowRight, Ban, Bot, CheckCircle2, Play, Plus, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
-import { api } from "./api";
+import { api, ApiRequestError } from "./api";
 import { QueryBoundary, SectionHeading, StatusBadge, formatTimestamp } from "./components";
-import { RunPicker } from "./RunPicker";
+import { RepairTicketPanel } from "./RepairTicketPanel";
+import { RunPicker, type RunPickerRun } from "./RunPicker";
 import { useHealth, useRemediationSession, useRemediationSessions, useRuns } from "./query";
 import type { HealthReady, RemediationProposal, RemediationSession, RemediationState } from "./types";
 import type { LocationState } from "./url";
@@ -32,12 +33,14 @@ const terminalStates = new Set<RemediationState>([
   "cancelled",
 ]);
 
+const remediationCandidateStates = ["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED", "ORPHANED"] as const;
+
 export function AgentPage({ user, location, navigate }: AgentPageProps) {
   const queryClient = useQueryClient();
   const state = location.search.get("state") ?? "";
   const requestedSession = location.search.get("session");
   const sessions = useRemediationSessions(user, state || undefined);
-  const runs = useRuns(user, "FAILED");
+  const runs = useRuns(user, undefined, undefined, "100");
   const health = useHealth(user);
   const llmConfigured = llmConfiguredFromHealth(health.data);
   const selectedId = requestedSession ?? sessions.data?.items[0]?.session_id ?? null;
@@ -57,14 +60,34 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
   // relevant when at least one session already exists — the empty state has
   // its own create controls and never sets this.
   const [showCreate, setShowCreate] = useState(false);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  // A key survives a retry, but is never permanently tied to a Run. Otherwise
+  // a cancelled/blocked historical session prevents any new session forever.
+  const [createRequestKey, setCreateRequestKey] = useState<string | null>(null);
+  const candidateRuns = filterRemediationRuns(runs.data?.items ?? []);
+  const selectedRun = candidateRuns.find((run) => run.run_id === selectedRunId) ?? null;
   const createRemediationSession = useMutation({
-    mutationFn: (runId: string) => api.createRemediationSession(user, runId, createProvider),
+    mutationFn: ({ runId, requestKey }: { runId: string; requestKey: string }) =>
+      api.createRemediationSession(user, runId, requestKey, createProvider),
     onSuccess: (session) => {
       setShowCreate(false);
+      setSelectedRunId(null);
+      setCreateRequestKey(null);
       void queryClient.invalidateQueries({ queryKey: ["remediation-sessions", user] });
       selectSession(session.session_id);
     },
   });
+  const selectRun = (runId: string) => {
+    if (runId !== selectedRunId) setCreateRequestKey(null);
+    setSelectedRunId(runId);
+    createRemediationSession.reset();
+  };
+  const createSelectedSession = () => {
+    if (!selectedRunId) return;
+    const requestKey = createRequestKey ?? newRemediationRequestKey(selectedRunId);
+    setCreateRequestKey(requestKey);
+    createRemediationSession.mutate({ runId: selectedRunId, requestKey });
+  };
 
   return (
     <>
@@ -138,18 +161,14 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
                     选择 Run 后会以当前 LLM 设置创建修复会话；Worker 将用该 provider 解释诊断。
                   </p>
                 </div>
-                <RunPicker
-                  runs={runs.data?.items ?? []}
-                  filter={{ state: "FAILED" }}
-                  onSelect={(runId) => createRemediationSession.mutate(runId)}
+                <RemediationRunSelection
+                  runs={candidateRuns}
+                  selectedRun={selectedRun}
+                  pending={createRemediationSession.isPending}
+                  error={createRemediationSession.error}
+                  onSelect={selectRun}
+                  onConfirm={createSelectedSession}
                 />
-                {createRemediationSession.error ? (
-                  <p className="agent-safety-note" role="alert">
-                    {createRemediationSession.error instanceof Error
-                      ? createRemediationSession.error.message
-                      : "创建会话失败"}
-                  </p>
-                ) : null}
                 <p className="agent-safety-note">
                   选择 Run 后，Agent 只处理该 Run 的 Evidence，不会扫描或修改其他作业。
                 </p>
@@ -176,18 +195,14 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
                     选择 Run 后会以当前 LLM 设置创建修复会话；Worker 将用该 provider 解释诊断。
                   </p>
                 </div>
-                <RunPicker
-                  runs={runs.data?.items ?? []}
-                  filter={{ state: "FAILED" }}
-                  onSelect={(runId) => createRemediationSession.mutate(runId)}
+                <RemediationRunSelection
+                  runs={candidateRuns}
+                  selectedRun={selectedRun}
+                  pending={createRemediationSession.isPending}
+                  error={createRemediationSession.error}
+                  onSelect={selectRun}
+                  onConfirm={createSelectedSession}
                 />
-                {createRemediationSession.error ? (
-                  <p className="agent-safety-note" role="alert">
-                    {createRemediationSession.error instanceof Error
-                      ? createRemediationSession.error.message
-                      : "创建会话失败"}
-                  </p>
-                ) : null}
               </section>
             ) : null}
             <div className="agent-session-list">
@@ -220,6 +235,67 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
         </section>
       </div>
     </>
+  );
+}
+
+function RemediationRunSelection({
+  runs,
+  selectedRun,
+  pending,
+  error,
+  onSelect,
+  onConfirm,
+}: {
+  runs: RunPickerRun[];
+  selectedRun: RunPickerRun | null;
+  pending: boolean;
+  error: Error | null;
+  onSelect: (runId: string) => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="agent-run-selection">
+      <RunPicker
+        runs={runs}
+        filter={{ states: remediationCandidateStates }}
+        selectedRunId={selectedRun?.run_id ?? null}
+        onSelect={onSelect}
+      />
+      <div className="agent-run-selection-footer" aria-live="polite">
+        {selectedRun ? (
+          <div className="agent-selected-run">
+            <span>已选择</span>
+            <strong title={selectedRun.job_name ?? selectedRun.run_id}>{selectedRun.job_name ?? "历史作业"}</strong>
+            <small className="mono">sacct Job {selectedRun.job_id ?? "未提交"} · {selectedRun.run_id}</small>
+          </div>
+        ) : <p>先选择一个失败、提交失败或采集失败的 Run。</p>}
+        <button
+          className="button primary"
+          type="button"
+          disabled={!selectedRun || pending}
+          onClick={onConfirm}
+        >
+          <Play aria-hidden="true" size={15} />
+          {pending ? "正在创建会话" : "创建修复会话"}
+        </button>
+      </div>
+      {error ? <MutationError error={error} /> : null}
+    </div>
+  );
+}
+
+function filterRemediationRuns<T extends { state: string }>(runs: T[]) {
+  return runs.filter((run) => remediationCandidateStates.includes(run.state as (typeof remediationCandidateStates)[number]));
+}
+
+function MutationError({ error }: { error: Error }) {
+  const apiError = error instanceof ApiRequestError ? error : null;
+  return (
+    <div className="agent-mutation-error" role="alert">
+      <strong>无法完成此操作</strong>
+      <p>{error.message}</p>
+      {apiError ? <small className="mono">{apiError.code}</small> : null}
+    </div>
   );
 }
 
@@ -396,6 +472,7 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
       </section>
       {session.executions.length ? <AuditSection title="执行记录" values={session.executions} /> : null}
       {session.evaluations.length ? <AuditSection title="评价结果" values={session.evaluations} /> : null}
+      <RepairTicketPanel user={user} sessionId={session.session_id} />
       {session.executions.some((item) => item.derived_run_id) ? (
         <a className="button secondary" href={`/runs/${session.executions.at(-1)?.derived_run_id}?user=${encodeURIComponent(user)}&tab=compare&compare=${encodeURIComponent(session.source_run_id)}`}>对比派生 Run <ArrowRight aria-hidden="true" size={15} /></a>
       ) : null}
@@ -425,7 +502,16 @@ export function defaultProvider(opts: { llmConfigured: boolean }): LlmProvider {
 // `_configured_check`). Treat anything other than "configured" as
 // unconfigured so a missing/unknown check degrades to the safe "none" default.
 export function llmConfiguredFromHealth(health: HealthReady | undefined): boolean {
-  return health?.checks?.["local_llm"]?.status === "configured";
+  const checks = health?.checks;
+  if (!checks) return false;
+  if (Array.isArray(checks)) {
+    return checks.some((check) => check.name === "local_llm" && check.status === "configured");
+  }
+  return checks.local_llm?.status === "configured";
+}
+
+export function newRemediationRequestKey(runId: string): string {
+  return `ui:${runId}:${crypto.randomUUID()}`;
 }
 
 // Coerces the session's persisted provider string into the dropdown's union
