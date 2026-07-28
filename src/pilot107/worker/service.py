@@ -43,6 +43,13 @@ from pilot107.adapters.ssh_relay import (
 )
 from pilot107.core.advice import AgentAdviceService, AgentPolicyEngine
 from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
+from pilot107.core.code_context import (
+    CodeContextPolicy,
+    CodeContextService,
+    LocalWorkspaceReader,
+    SshWorkspaceConfig,
+    SshWorkspaceReader,
+)
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
 from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.diagnosis import DiagnosisService
@@ -130,6 +137,19 @@ class WorkerServiceConfig:
     auto_capsule_enabled: bool = True
     capsule_root: Path | None = None
     capability_profile_path: Path | None = None
+    # Code context mirrors the API container's configuration so remediation
+    # planning (which runs in the Worker) can emit create_repair_ticket actions
+    # for code-level diagnoses. Without this the Worker's explain service has
+    # no code_context and the policy engine never sees ``has_code_context``.
+    code_context_transport: str = "none"
+    code_context_allowed_roots: tuple[str, ...] = ()
+    code_context_ssh_target: str | None = None
+    code_context_ssh_control_path: Path | None = None
+    code_context_ssh_port: int | None = None
+    code_context_max_chunks: int = 3
+    code_context_before_lines: int = 60
+    code_context_after_lines: int = 60
+    code_context_max_file_bytes: int = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -411,6 +431,29 @@ def config_from_env(
             "PILOT107_CAPABILITY_PROFILE_PATH",
             None,
         ),
+        code_context_transport=values.get("PILOT107_CODE_CONTEXT_TRANSPORT", "none"),
+        code_context_allowed_roots=tuple(
+            _split_csv(values.get("PILOT107_CODE_CONTEXT_ALLOWED_ROOTS", ""))
+        ),
+        code_context_ssh_target=values.get("PILOT107_CODE_CONTEXT_SSH_TARGET") or None,
+        code_context_ssh_control_path=_optional_path(
+            values,
+            "PILOT107_CODE_CONTEXT_SSH_CONTROL_PATH",
+            None,
+        ),
+        code_context_ssh_port=(
+            None
+            if not values.get("PILOT107_CODE_CONTEXT_SSH_PORT")
+            else _int(values, "PILOT107_CODE_CONTEXT_SSH_PORT", 22)
+        ),
+        code_context_max_chunks=_int(values, "PILOT107_CODE_CONTEXT_MAX_CHUNKS", 3),
+        code_context_before_lines=_int(values, "PILOT107_CODE_CONTEXT_BEFORE_LINES", 60),
+        code_context_after_lines=_int(values, "PILOT107_CODE_CONTEXT_AFTER_LINES", 60),
+        code_context_max_file_bytes=_int(
+            values,
+            "PILOT107_CODE_CONTEXT_MAX_FILE_BYTES",
+            64 * 1024,
+        ),
     )
 
 
@@ -480,6 +523,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             store=store,
             evidence_root=config.evidence_root,
         ),
+        code_context_service=_worker_code_context_service(config),
     )
     advice_service = AgentAdviceService(
         store=store,
@@ -806,6 +850,56 @@ def _worker_capability_profile(config: WorkerServiceConfig) -> CapabilityProfile
     if config.capability_profile_path is not None:
         return load_capability_profile(config.capability_profile_path)
     return docker_sim_capability_profile(slurm_rest_url=config.slurmrestd_url)
+
+
+def _worker_code_context_service(config: WorkerServiceConfig) -> CodeContextService | None:
+    """Build the worker's code-context service, mirroring the API container.
+
+    Remediation planning runs in the worker and re-explains the source Run via
+    ``AgentExplainService``. For the policy engine to emit
+    ``create_repair_ticket`` actions (``has_code_context``), the worker must
+    capture code context exactly like the API does. Returns ``None`` when the
+    transport is unset so deployments without a readable worktree keep the
+    previous deterministic behaviour.
+    """
+    transport = config.code_context_transport.strip().lower()
+    if transport in {"", "none"}:
+        return None
+    if transport not in {"local", "ssh"}:
+        raise ValueError("PILOT107_CODE_CONTEXT_TRANSPORT must be none, local, or ssh")
+    if not config.code_context_allowed_roots:
+        raise ValueError("code context requires PILOT107_CODE_CONTEXT_ALLOWED_ROOTS")
+    policy = CodeContextPolicy(
+        max_chunks=config.code_context_max_chunks,
+        context_before_lines=config.code_context_before_lines,
+        context_after_lines=config.code_context_after_lines,
+        max_file_bytes=config.code_context_max_file_bytes,
+    )
+    if transport == "local":
+        return CodeContextService(
+            reader=LocalWorkspaceReader(
+                allowed_roots=config.code_context_allowed_roots,
+                timeout_seconds=config.command_timeout_seconds,
+            ),
+            policy=policy,
+        )
+    if config.code_context_ssh_target is None or config.code_context_ssh_control_path is None:
+        raise ValueError(
+            "ssh code context requires PILOT107_CODE_CONTEXT_SSH_TARGET and "
+            "PILOT107_CODE_CONTEXT_SSH_CONTROL_PATH"
+        )
+    return CodeContextService(
+        reader=SshWorkspaceReader(
+            config=SshWorkspaceConfig(
+                target=config.code_context_ssh_target,
+                control_path=config.code_context_ssh_control_path,
+                port=config.code_context_ssh_port,
+                timeout_seconds=config.command_timeout_seconds,
+            ),
+            allowed_roots=config.code_context_allowed_roots,
+        ),
+        policy=policy,
+    )
 
 
 def _build_evidence_transport(config: WorkerServiceConfig) -> EvidenceTransport | None:

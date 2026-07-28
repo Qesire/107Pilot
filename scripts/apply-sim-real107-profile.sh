@@ -4,7 +4,21 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root/simulator/compose"
 
-compose=(docker compose --env-file .env.example -f compose.yml)
+# The compose invocation is parameterizable so the same accounting profile can
+# be applied to the base simulator stack (defaults) or to the competition
+# overlay (set PILOT107_PROFILE_* before invoking).
+profile_env_file="${PILOT107_PROFILE_ENV_FILE:-.env.example}"
+profile_compose_files="${PILOT107_PROFILE_COMPOSE_FILES:-compose.yml}"
+profile_compose_profile="${PILOT107_PROFILE_COMPOSE_PROFILE:-}"
+
+compose=(docker compose --env-file "$profile_env_file")
+for _f in $profile_compose_files; do
+  compose+=(-f "$_f")
+done
+if [[ -n "$profile_compose_profile" ]]; then
+  compose+=(--profile "$profile_compose_profile")
+fi
+
 profile_file="$root/config/platform_profiles/simulator-real107-behavior.yaml"
 cluster_name="pilot107-sim"
 
@@ -165,6 +179,15 @@ run_sacctmgr modify user bob set DefaultAccount=students || true
 run_sacctmgr modify user where user=bob account=students cluster="$cluster_name" set QOS=normal,qos_stu_default || true
 run_sacctmgr modify user where user=bob account=students cluster="$cluster_name" set DefaultQOS=qos_stu_default || true
 
+# On a from-scratch deployment slurmctld crash-loops until the QOS/accounts it
+# validates exist; wait for it to recover before reconfiguring so the profile
+# apply does not race the daemon.
+for _ in {1..90}; do
+  if "${compose[@]}" exec -T login-node-sim sinfo >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
 "${compose[@]}" exec -T login-node-sim scontrol reconfigure >/dev/null
 for _ in {1..20}; do
   if "${compose[@]}" exec -T login-node-sim sinfo >/dev/null 2>&1; then

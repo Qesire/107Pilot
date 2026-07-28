@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { ArrowRight, Ban, Bot, CheckCircle2, Play, Plus, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
+import { ArrowRight, Ban, Bot, CheckCircle2, Play, Plus, RefreshCw, ShieldAlert, Wrench, XCircle } from "lucide-react";
 import { api, ApiRequestError } from "./api";
 import { QueryBoundary, SectionHeading, StatusBadge, formatTimestamp } from "./components";
 import { RepairTicketPanel } from "./RepairTicketPanel";
@@ -384,8 +384,23 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
     ),
     onSuccess: refresh,
   });
+  // create_repair_ticket proposals hand off to the M2 repair-ticket workflow
+  // instead of deriving a Run: executing them via the remediation execute API
+  // would fail (no contract candidate). We create the ticket directly, which
+  // binds the session's diagnoses + code context; the embedded
+  // RepairTicketPanel then drives fix → derived Run → resolve.
+  const createTicket = useMutation({
+    mutationFn: (proposal: RemediationProposal) => api.createRepairTicket(user, {
+      session_id: session.session_id,
+      request_key: `ui:${session.session_id}:${proposal.proposal_id}`,
+    }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["repair-tickets", user] });
+      refresh();
+    },
+  });
   const error = advance.error ?? approve.error ?? reject.error ?? cancel.error
-    ?? takeover.error ?? execute.error;
+    ?? takeover.error ?? execute.error ?? createTicket.error;
   const decided = new Set(session.decisions.filter((item) => item.decision === "approve").map((item) => item.proposal_id));
 
   return (
@@ -463,7 +478,11 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
                   </>
                 ) : null}
                 {session.state === "ready" && approved ? (
-                  <button className="button primary" type="button" disabled={execute.isPending} onClick={() => execute.mutate(proposal)}><Play aria-hidden="true" size={15} />执行并提交派生 Run</button>
+                  proposal.action_type === "create_repair_ticket" ? (
+                    <button className="button primary" type="button" disabled={createTicket.isPending} onClick={() => createTicket.mutate(proposal)}><Wrench aria-hidden="true" size={15} />{createTicket.isPending ? "正在创建修复票据" : "创建修复票据"}</button>
+                  ) : (
+                    <button className="button primary" type="button" disabled={execute.isPending} onClick={() => execute.mutate(proposal)}><Play aria-hidden="true" size={15} />执行并提交派生 Run</button>
+                  )
                 ) : null}
               </div>
             </article>

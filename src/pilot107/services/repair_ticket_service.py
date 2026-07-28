@@ -92,6 +92,9 @@ class RepairTicketService:
         )
         # Build requested_change from diagnosis summaries.
         requested_change = _build_requested_change(diagnoses)
+        # Carry the code-context window captured by the Agent so the ticket
+        # is a self-contained handoff (source snippet + Slurm error evidence).
+        code_context = self._code_context_for_session(session_id)
         ticket = RepairTicket(
             ticket_id=ticket_id,
             owner=owner,
@@ -101,6 +104,7 @@ class RepairTicketService:
             session_id=session_id,
             diagnosis_ids=diagnosis_ids,
             cited_facts=cited_facts,
+            code_context=code_context,
             requested_change=requested_change,
             no_go_constraints=(
                 "不得上传完整仓库",
@@ -110,6 +114,31 @@ class RepairTicketService:
         )
         created = self.repair_ticket_store.create_ticket(ticket)
         return created, True
+
+    def _code_context_for_session(self, session_id: str) -> dict[str, Any] | None:
+        """Extract the code-context bundle from the session's latest advice.
+
+        The Agent stores ``code_context`` in the advice payload when the
+        explain service captured a source window. We surface it on the ticket
+        so the repair handoff does not depend on re-deriving the context.
+        Returns None when no advice / code context is available.
+        """
+        if self.remediation_store is None:
+            return None
+        advice_ids = [
+            turn.advice_id
+            for turn in self.remediation_store.list_turns(session_id)
+            if turn.advice_id
+        ]
+        for advice_id in reversed(advice_ids):
+            try:
+                advice = self.run_store.get_agent_advice(advice_id)
+            except KeyError:
+                continue
+            code_context = advice.payload.get("code_context")
+            if isinstance(code_context, dict) and code_context:
+                return code_context
+        return None
 
     def create_direct(
         self,

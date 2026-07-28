@@ -49,6 +49,7 @@ compose=(
   slurmrestd \
   worker-1 \
   worker-2 \
+  login-node-sim \
   pilot107-command-gateway \
   pilot107-api \
   pilot107-worker \
@@ -75,6 +76,17 @@ wait_healthy() {
 }
 
 wait_healthy mariadb
+
+# Slurm accounting bootstrap: slurm.conf partitions reference QOS/accounts that
+# must exist in slurmdbd before slurmctld will start. On a from-scratch
+# deployment slurmctld crash-loops until this profile is applied, which in turn
+# blocks command-gateway (and everything above it). Apply the same real107
+# accounting profile the simulator uses, targeting the competition overlay.
+PILOT107_PROFILE_ENV_FILE="$(basename "$env_file")" \
+PILOT107_PROFILE_COMPOSE_FILES="compose.yml compose.competition.yml" \
+PILOT107_PROFILE_COMPOSE_PROFILE=competition \
+  bash "$root/scripts/apply-sim-real107-profile.sh"
+
 wait_healthy pilot107-command-gateway
 wait_healthy pilot107-api
 wait_healthy pilot107-worker
