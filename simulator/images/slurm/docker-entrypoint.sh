@@ -97,6 +97,14 @@ case "$1" in
     exec gosu pilot107 "$@"
     ;;
   slurmd)
+    # Slurm's cgroup/v2 plugin creates per-step scopes under
+    # /sys/fs/cgroup/system.slice with a single-level mkdir, so the parent
+    # slice must already exist. Inside a Docker container with a private
+    # cgroup namespace it does not, and slurmd's cgroup plugin init fails
+    # ("Could not create scope directory ... No such file or directory")
+    # causing a crash-loop. Best-effort: idempotent, and a no-op where the
+    # slice already exists or the cgroup fs is not writable.
+    mkdir -p /sys/fs/cgroup/system.slice 2>/dev/null || true
     touch \
       /tmp/pilot107-a100-gpu0 /tmp/pilot107-a100-gpu1 \
       /tmp/pilot107-a100-gpu2 /tmp/pilot107-a100-gpu3 \
