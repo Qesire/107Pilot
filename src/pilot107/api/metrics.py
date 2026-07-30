@@ -121,6 +121,8 @@ class ControlPlaneMetrics:
         self._sse_duration_sum = 0.0
         self._sse_duration_count = 0
         self._sse_events = 0
+        self._upload_events: defaultdict[str, int] = defaultdict(int)
+        self._upload_bytes_total = 0
 
     def observe_request(
         self,
@@ -169,6 +171,14 @@ class ControlPlaneMetrics:
         with self._lock:
             self._sse_active += 1
 
+    def observe_upload_event(self, *, outcome: str, size_bytes: int = 0) -> None:
+        normalized = outcome if outcome in {
+            "created", "chunk", "completed", "aborted", "failed", "quota_rejected",
+        } else "error"
+        with self._lock:
+            self._upload_events[normalized] += 1
+            self._upload_bytes_total += max(0, size_bytes)
+
     def observe_sse_closed(
         self,
         *,
@@ -203,6 +213,8 @@ class ControlPlaneMetrics:
             sse_duration_sum = self._sse_duration_sum
             sse_duration_count = self._sse_duration_count
             sse_events = self._sse_events
+            upload_events = dict(self._upload_events)
+            upload_bytes_total = self._upload_bytes_total
         lines = [
             "# HELP pilot107_api_requests_total HTTP requests by normalized route and status.",
             "# TYPE pilot107_api_requests_total counter",
@@ -277,6 +289,17 @@ class ControlPlaneMetrics:
         )
         for outcome, value in sorted(sse_streams.items()):
             lines.append(f"pilot107_sse_streams_total{{{_labels(outcome=outcome)}}} {value}")
+        lines.extend(
+            (
+                "# HELP pilot107_upload_events_total File upload lifecycle events.",
+                "# TYPE pilot107_upload_events_total counter",
+                "# HELP pilot107_upload_bytes_total Total bytes received via file uploads.",
+                "# TYPE pilot107_upload_bytes_total counter",
+                f"pilot107_upload_bytes_total {upload_bytes_total}",
+            )
+        )
+        for outcome, value in sorted(upload_events.items()):
+            lines.append(f"pilot107_upload_events_total{{{_labels(outcome=outcome)}}} {value}")
 
         scrape_error = 0
         try:

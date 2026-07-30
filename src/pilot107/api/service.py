@@ -329,6 +329,7 @@ def config_from_env(
 def _build_file_routes(
     config: ApiServiceConfig,
     ssh_relay_client: SshRelayClient | None,
+    metrics: ControlPlaneMetrics | None = None,
 ) -> FileRoutes | None:
     """Wire the visual-filesystem routes for file-capable backends.
 
@@ -370,7 +371,7 @@ def _build_file_routes(
         session_ttl_seconds=config.upload_session_ttl_seconds,
         store=upload_store,
     )
-    return FileRoutes(upload_service=upload_service, executor=executor)
+    return FileRoutes(upload_service=upload_service, executor=executor, metrics=metrics)
 
 
 def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
@@ -590,7 +591,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         else None
     )
 
-    file_routes = _build_file_routes(config, ssh_relay_client)
+    file_routes = _build_file_routes(config, ssh_relay_client, metrics=metrics)
 
     return Pilot107HttpApi(
         store=store,

@@ -292,5 +292,90 @@ class UploadSessionStoreTests(unittest.TestCase):
         self.assertIsNone(self.store.get(session.upload_id))
 
 
+class UploadQuotaTests(unittest.TestCase):
+    """Per-owner concurrency and byte quota enforcement."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.staging = root / "staging"
+        self.target = str(root / "home" / "alice")
+        Path(self.target).mkdir(parents=True)
+        self.executor = LocalFileOpsExecutor(allowed_roots=[str(root / "home")])
+        self.service = FileUploadService(
+            executor=self.executor,
+            owner_roots=(str(root / "home"),),
+            staging_root=self.staging,
+            max_active_per_owner=2,
+            max_total_bytes_per_owner=1024,
+        )
+
+    def test_concurrent_session_limit_enforced(self) -> None:
+        self.service.create_session(
+            owner="alice", target_path=self.target,
+            filename="a.bin", total_size=100,
+        )
+        self.service.create_session(
+            owner="alice", target_path=self.target,
+            filename="b.bin", total_size=100,
+        )
+        with self.assertRaises(UploadError) as ctx:
+            self.service.create_session(
+                owner="alice", target_path=self.target,
+                filename="c.bin", total_size=100,
+            )
+        self.assertEqual(ctx.exception.code, "UPLOAD.QUOTA_CONCURRENT")
+        self.assertEqual(ctx.exception.status, 429)
+
+    def test_byte_quota_enforced(self) -> None:
+        self.service.create_session(
+            owner="alice", target_path=self.target,
+            filename="big.bin", total_size=900,
+        )
+        with self.assertRaises(UploadError) as ctx:
+            self.service.create_session(
+                owner="alice", target_path=self.target,
+                filename="extra.bin", total_size=200,
+            )
+        self.assertEqual(ctx.exception.code, "UPLOAD.QUOTA_BYTES")
+        self.assertEqual(ctx.exception.status, 429)
+
+    def test_terminal_sessions_free_quota(self) -> None:
+        s1 = self.service.create_session(
+            owner="alice", target_path=self.target,
+            filename="a.bin", total_size=100,
+        )
+        s2 = self.service.create_session(
+            owner="alice", target_path=self.target,
+            filename="b.bin", total_size=100,
+        )
+        self.service.abort(s1.upload_id, "alice")
+        # Now one slot is free
+        s3 = self.service.create_session(
+            owner="alice", target_path=self.target,
+            filename="c.bin", total_size=100,
+        )
+        self.assertIsNotNone(s3.upload_id)
+
+    def test_different_owners_have_independent_quota(self) -> None:
+        bob_target = str(Path(self._tmp.name) / "home" / "bob")
+        Path(bob_target).mkdir(parents=True)
+        self.service.create_session(
+            owner="alice", target_path=self.target,
+            filename="a.bin", total_size=100,
+        )
+        self.service.create_session(
+            owner="alice", target_path=self.target,
+            filename="b.bin", total_size=100,
+        )
+        # Bob still has quota
+        session = self.service.create_session(
+            owner="bob", target_path=bob_target,
+            filename="x.bin", total_size=100,
+        )
+        self.assertEqual(session.owner, "bob")
+
+
 if __name__ == "__main__":
     unittest.main()

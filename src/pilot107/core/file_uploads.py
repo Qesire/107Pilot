@@ -37,6 +37,8 @@ from pilot107.core.path_policy import resolve_owner_roots
 DEFAULT_CHUNK_SIZE = 1024 * 1024  # 1 MiB — comfortably under the 2 MiB body cap.
 MAX_CHUNK_SIZE = 2 * 1024 * 1024
 DEFAULT_SESSION_TTL_SECONDS = 3600
+DEFAULT_MAX_ACTIVE_PER_OWNER = 5
+DEFAULT_MAX_TOTAL_BYTES_PER_OWNER = 512 * 1024 * 1024  # 512 MiB
 _ASSEMBLED_NAME = "assembled"
 _CHUNK_DIR = "chunks"
 
@@ -269,6 +271,8 @@ class FileUploadService:
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         session_ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
         store: UploadSessionStore | None = None,
+        max_active_per_owner: int = DEFAULT_MAX_ACTIVE_PER_OWNER,
+        max_total_bytes_per_owner: int = DEFAULT_MAX_TOTAL_BYTES_PER_OWNER,
     ) -> None:
         if not owner_roots:
             raise ValueError("file upload service requires explicit owner roots")
@@ -276,12 +280,18 @@ class FileUploadService:
             raise ValueError(f"chunk size must be within 1..{MAX_CHUNK_SIZE} bytes")
         if session_ttl_seconds <= 0:
             raise ValueError("session TTL must be positive")
+        if max_active_per_owner <= 0:
+            raise ValueError("max_active_per_owner must be positive")
+        if max_total_bytes_per_owner <= 0:
+            raise ValueError("max_total_bytes_per_owner must be positive")
         self.executor = executor
         self.owner_roots = tuple(owner_roots)
         self.staging_root = Path(staging_root)
         self.chunk_size = chunk_size
         self.session_ttl_seconds = session_ttl_seconds
         self.store = store
+        self.max_active_per_owner = max_active_per_owner
+        self.max_total_bytes_per_owner = max_total_bytes_per_owner
         self._sessions: dict[str, UploadSession] = {}
         self._lock = threading.Lock()
         if store is not None:
@@ -329,6 +339,31 @@ class FileUploadService:
             code="UPLOAD.PATH_FORBIDDEN",
         )
 
+    # -- quota enforcement -------------------------------------------------
+
+    def _enforce_owner_quota(self, owner: str, incoming_size: int) -> None:
+        """Reject new sessions that would exceed per-owner concurrency or byte caps."""
+        with self._lock:
+            active = [
+                s
+                for s in self._sessions.values()
+                if s.owner == owner and s.state not in _TERMINAL_STATES
+            ]
+        if len(active) >= self.max_active_per_owner:
+            raise UploadError(
+                f"too many active upload sessions ({len(active)}/{self.max_active_per_owner})",
+                status=429,
+                code="UPLOAD.QUOTA_CONCURRENT",
+            )
+        pending_bytes = sum(s.total_size for s in active)
+        if pending_bytes + incoming_size > self.max_total_bytes_per_owner:
+            raise UploadError(
+                f"upload quota exceeded: {pending_bytes + incoming_size} bytes "
+                f"would exceed {self.max_total_bytes_per_owner} byte limit",
+                status=429,
+                code="UPLOAD.QUOTA_BYTES",
+            )
+
     # -- session lifecycle -------------------------------------------------
 
     def create_session(
@@ -346,6 +381,7 @@ class FileUploadService:
             raise UploadError(f"unsafe owner: {owner!r}", status=403, code="UPLOAD.OWNER")
         if not isinstance(total_size, int) or total_size <= 0:
             raise UploadError("total_size must be a positive integer")
+        self._enforce_owner_quota(owner, total_size)
         effective_chunk = chunk_size or self.chunk_size
         if not 1 <= effective_chunk <= MAX_CHUNK_SIZE:
             raise UploadError(

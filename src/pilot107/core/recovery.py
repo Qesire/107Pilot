@@ -116,6 +116,7 @@ def create_control_plane_backup(
     sqlite_db: Path,
     evidence_root: Path | None = None,
     capsule_root: Path | None = None,
+    upload_staging_root: Path | None = None,
     postgres_dsn: str | None = None,
     postgres_adapter: PostgresBackupAdapter | None = None,
     quiesced: bool,
@@ -131,6 +132,7 @@ def create_control_plane_backup(
     for source_root, label in (
         (evidence_root, "Evidence"),
         (capsule_root, "Capsule"),
+        (upload_staging_root, "Upload staging"),
     ):
         if source_root is not None and source_root.exists():
             resolved_source = source_root.resolve()
@@ -147,6 +149,7 @@ def create_control_plane_backup(
         _validate_sqlite(sqlite_destination)
         _copy_optional_tree(evidence_root, payload / "evidence", "Evidence")
         _copy_optional_tree(capsule_root, payload / "capsules", "Capsule")
+        _copy_optional_tree(upload_staging_root, payload / "upload-staging", "Upload staging")
         postgres_included = postgres_dsn is not None
         if postgres_included:
             assert postgres_dsn is not None
@@ -165,6 +168,7 @@ def create_control_plane_backup(
                 "sqlite": True,
                 "evidence": evidence_root is not None and evidence_root.exists(),
                 "capsules": capsule_root is not None and capsule_root.exists(),
+                "upload_staging": upload_staging_root is not None and upload_staging_root.exists(),
                 "postgres": postgres_included,
             },
             "files": files,
@@ -255,7 +259,7 @@ def restore_control_plane_backup(
     try:
         payload = backup_root.resolve() / "payload"
         shutil.copy2(payload / "sqlite" / "pilot107.db", staging / "pilot107.db")
-        for name in ("evidence", "capsules"):
+        for name in ("evidence", "capsules", "upload-staging"):
             source = payload / name
             if source.exists():
                 _copy_tree(source, staging / name, name)

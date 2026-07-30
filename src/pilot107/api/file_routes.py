@@ -31,6 +31,7 @@ from pilot107.adapters.slurm import (
     SlurmTransportError,
 )
 from pilot107.api.http_types import ApiResponse
+from pilot107.api.metrics import ControlPlaneMetrics
 from pilot107.core.file_uploads import (
     FileUploadService,
     UploadError,
@@ -48,9 +49,11 @@ class FileRoutes:
         *,
         upload_service: FileUploadService,
         executor: FileOpsExecutor,
+        metrics: ControlPlaneMetrics | None = None,
     ) -> None:
         self.upload_service = upload_service
         self.executor = executor
+        self._metrics = metrics
 
     # -- GET ---------------------------------------------------------------
 
@@ -166,7 +169,13 @@ class FileRoutes:
                     auto_extract=bool(payload.get("auto_extract", False)),
                 )
             except UploadError as exc:
+                if self._metrics is not None and exc.code.startswith("UPLOAD.QUOTA"):
+                    self._metrics.observe_upload_event(outcome="quota_rejected")
                 return _upload_error(exc)
+            if self._metrics is not None:
+                self._metrics.observe_upload_event(
+                    outcome="created", size_bytes=session.total_size
+                )
             return ApiResponse(status=201, payload=session.to_dict())
 
         # POST /files/uploads/{id}/chunks
@@ -182,6 +191,10 @@ class FileRoutes:
                 )
             except UploadError as exc:
                 return _upload_error(exc)
+            if self._metrics is not None:
+                self._metrics.observe_upload_event(
+                    outcome="chunk", size_bytes=session.chunk_size
+                )
             return ApiResponse(status=200, payload=session.to_dict())
 
         # POST /files/uploads/{id}/complete
@@ -189,7 +202,11 @@ class FileRoutes:
             try:
                 session = self.upload_service.complete(parts[2], owner)
             except UploadError as exc:
+                if self._metrics is not None:
+                    self._metrics.observe_upload_event(outcome="failed")
                 return _upload_error(exc)
+            if self._metrics is not None:
+                self._metrics.observe_upload_event(outcome="completed")
             return ApiResponse(status=200, payload=session.to_dict())
 
         # POST /files/uploads/{id}/abort
@@ -198,6 +215,8 @@ class FileRoutes:
                 session = self.upload_service.abort(parts[2], owner)
             except UploadError as exc:
                 return _upload_error(exc)
+            if self._metrics is not None:
+                self._metrics.observe_upload_event(outcome="aborted")
             return ApiResponse(status=200, payload=session.to_dict())
 
         # POST /files/mkdir
