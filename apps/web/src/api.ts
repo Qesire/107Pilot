@@ -1,10 +1,13 @@
 import type {
+  ArchiveResponse,
   ArtifactManifest,
   CapabilityProfile,
   ContractRecordPayload,
   ContractSuggestion,
   ContractValidation,
   EntitlementSnapshot,
+  FileContentResponse,
+  FileListResponse,
   HealthReady,
   PagePayload,
   PlatformConnection,
@@ -32,6 +35,7 @@ import type {
   SuccessfulRunMarketItem,
   SuccessfulRunPublicationInput,
   TerminalCommandResult,
+  UploadSession,
   WebSession,
 } from "./types";
 
@@ -614,4 +618,87 @@ export const api = {
       user,
       signal,
     ),
+  // -------------------------------------------------------------------------
+  // Visual Filesystem
+  // -------------------------------------------------------------------------
+  fileList: (user: string, path: string, signal?: AbortSignal) =>
+    getJson<FileListResponse>(
+      queryPath("/api/v1/files", { path }),
+      user,
+      signal,
+    ),
+  fileContent: (
+    user: string,
+    path: string,
+    offset: number,
+    length: number,
+    signal?: AbortSignal,
+  ) =>
+    getJson<FileContentResponse>(
+      queryPath("/api/v1/files/content", {
+        path,
+        offset: String(offset),
+        length: String(length),
+      }),
+      user,
+      signal,
+    ),
+  fileMkdir: (user: string, path: string, signal?: AbortSignal) =>
+    sendJson<{ status: string; path: string }>("/api/v1/files/mkdir", user, { path }, signal),
+  fileDelete: (user: string, path: string, signal?: AbortSignal) =>
+    sendJson<{ status: string; path: string }>("/api/v1/files/delete", user, { path }, signal),
+  fileArchive: (
+    user: string,
+    paths: string[],
+    destDir: string,
+    archiveName?: string,
+    signal?: AbortSignal,
+  ) =>
+    sendJson<ArchiveResponse>(
+      "/api/v1/files/archive",
+      user,
+      { paths, dest_dir: destDir, ...(archiveName ? { archive_name: archiveName } : {}) },
+      signal,
+    ),
+  uploadInit: (
+    user: string,
+    input: {
+      target_path: string;
+      filename: string;
+      total_size: number;
+      sha256?: string;
+      chunk_size?: number;
+      auto_extract?: boolean;
+    },
+    signal?: AbortSignal,
+  ) => sendJson<UploadSession>("/api/v1/files/uploads", user, input, signal),
+  uploadChunk: (
+    user: string,
+    sessionId: string,
+    index: number,
+    dataB64: string,
+    signal?: AbortSignal,
+  ) =>
+    sendJson<UploadSession>(
+      `/api/v1/files/uploads/${encodeURIComponent(sessionId)}/chunks`,
+      user,
+      { index, data_b64: dataB64 },
+      signal,
+    ),
+  uploadComplete: (user: string, sessionId: string, signal?: AbortSignal) =>
+    sendJson<UploadSession>(
+      `/api/v1/files/uploads/${encodeURIComponent(sessionId)}/complete`,
+      user,
+      {},
+      signal,
+    ),
+  uploadAbort: (user: string, sessionId: string, signal?: AbortSignal) =>
+    sendJson<UploadSession>(
+      `/api/v1/files/uploads/${encodeURIComponent(sessionId)}/abort`,
+      user,
+      {},
+      signal,
+    ),
+  uploadSessions: (user: string, signal?: AbortSignal) =>
+    getJson<{ items: UploadSession[] }>("/api/v1/files/uploads", user, signal),
 };

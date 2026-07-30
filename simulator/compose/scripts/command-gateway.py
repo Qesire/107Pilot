@@ -4,11 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
+import hashlib
 import json
 import os
 import pwd
 import re
+import shutil
 import subprocess
+import tarfile
 import threading
 import time
 import uuid
@@ -102,6 +107,35 @@ def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
                     _write_text(payload, config)
                     status = 200
                     response = {"status": "ok"}
+                elif self.path.rstrip("/") == "/write_bytes":
+                    response = _write_bytes(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/read_bytes":
+                    response = _read_bytes(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/sha256":
+                    response = _file_sha256(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/list_dir":
+                    response = _list_dir(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/mkdir":
+                    _make_dir(payload, config)
+                    status = 200
+                    response = {"status": "ok"}
+                elif self.path.rstrip("/") == "/remove":
+                    _remove_path(payload, config)
+                    status = 200
+                    response = {"status": "ok"}
+                elif self.path.rstrip("/") == "/stat":
+                    response = _file_stat(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/extract":
+                    response = _extract_archive(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/archive":
+                    response = _create_archive(payload, config)
+                    status = 200
                 else:
                     status = 404
                     response = {"error": "not_found"}
@@ -301,6 +335,28 @@ def _audit_request_summary(*, path: str, payload: dict[str, Any]) -> dict[str, A
             "owner": payload.get("owner"),
             "content_bytes": len(content.encode("utf-8")),
         }
+    if path == "/write_bytes":
+        data = "" if payload.get("data_b64") is None else str(payload.get("data_b64"))
+        return {
+            "path": payload.get("path"),
+            "owner": payload.get("owner"),
+            "offset": payload.get("offset"),
+            "data_bytes": (len(data) * 3) // 4,
+        }
+    if path in {"/read_bytes", "/sha256", "/list_dir", "/stat", "/remove", "/extract"}:
+        return {
+            "path": payload.get("path"),
+            "dest_dir": payload.get("dest_dir"),
+            "owner": payload.get("owner"),
+        }
+    if path == "/mkdir":
+        return {"path": payload.get("path"), "owner": payload.get("owner")}
+    if path == "/archive":
+        return {
+            "paths": payload.get("paths"),
+            "dest_dir": payload.get("dest_dir"),
+            "owner": payload.get("owner"),
+        }
     return {}
 
 
@@ -382,6 +438,224 @@ def _write_text(payload: dict[str, Any], config: GatewayConfig) -> None:
         raise GatewayError(f"parent directory does not exist: {target.parent}")
     target.write_text(content, encoding="utf-8")
     os.chown(target, user_info.pw_uid, user_info.pw_gid)
+
+
+def _chown_to_owner(path: str, owner: str) -> None:
+    user_info = pwd.getpwnam(owner)
+    os.chown(path, user_info.pw_uid, user_info.pw_gid)
+
+
+def _write_bytes(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    path = _authorize_path(str(payload.get("path", "")), config, user=owner)
+    data_field = payload.get("data_b64")
+    if not isinstance(data_field, str):
+        raise GatewayError("data_b64 must be a base64 string")
+    try:
+        data = base64.b64decode(data_field, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise GatewayError(f"invalid base64 payload: {exc}") from exc
+    raw_offset = payload.get("offset", -1)
+    try:
+        offset = int(raw_offset)
+    except (TypeError, ValueError) as exc:
+        raise GatewayError("offset must be an integer") from exc
+    target = Path(path)
+    if not target.parent.exists():
+        raise GatewayError(f"parent directory does not exist: {target.parent}")
+    if offset < 0:
+        mode = "ab"
+    elif offset == 0:
+        mode = "wb"
+    else:
+        if not target.exists():
+            raise GatewayError("cannot write at offset before file exists")
+        current = target.stat().st_size
+        if offset != current:
+            raise GatewayError(
+                f"write offset {offset} does not match file size {current}"
+            )
+        mode = "r+b"
+    with open(target, mode) as handle:
+        if offset > 0:
+            handle.seek(offset)
+        handle.write(data)
+    _chown_to_owner(path, owner)
+    return {"status": "ok", "size": target.stat().st_size}
+
+
+def _read_bytes(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    path = _authorize_path(str(payload.get("path", "")), config, user=owner)
+    target = Path(path)
+    if not target.is_file():
+        raise GatewayError(f"not a regular file: {path}", status=404)
+    try:
+        offset = int(payload.get("offset", 0))
+        length = int(payload.get("length", 0))
+    except (TypeError, ValueError) as exc:
+        raise GatewayError("offset and length must be integers") from exc
+    if offset < 0 or length <= 0:
+        raise GatewayError("offset must be >= 0 and length must be positive")
+    size = target.stat().st_size
+    with open(target, "rb") as handle:
+        handle.seek(offset)
+        data = handle.read(length)
+    return {
+        "data_b64": base64.b64encode(data).decode("ascii"),
+        "size": size,
+        "offset": offset,
+        "length": len(data),
+    }
+
+
+def _file_sha256(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    path = _authorize_path(str(payload.get("path", "")), config, user=owner)
+    target = Path(path)
+    if not target.is_file():
+        raise GatewayError(f"not a regular file: {path}", status=404)
+    digest = hashlib.sha256()
+    with open(target, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return {"sha256": digest.hexdigest(), "size": target.stat().st_size}
+
+
+def _list_dir(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    path = _authorize_path(str(payload.get("path", "")), config, user=owner)
+    target = Path(path)
+    if not target.is_dir():
+        raise GatewayError(f"not a directory: {path}", status=404)
+    entries: list[dict[str, Any]] = []
+    for entry in sorted(target.iterdir(), key=lambda item: item.name):
+        try:
+            info = entry.lstat()
+        except OSError:
+            continue
+        if entry.is_symlink():
+            kind = "symlink"
+        elif entry.is_dir():
+            kind = "dir"
+        elif entry.is_file():
+            kind = "file"
+        else:
+            kind = "other"
+        entries.append(
+            {
+                "name": entry.name,
+                "type": kind,
+                "size": info.st_size,
+                "mtime": int(info.st_mtime),
+            }
+        )
+    return {"path": path, "entries": entries}
+
+
+def _make_dir(payload: dict[str, Any], config: GatewayConfig) -> None:
+    owner = _safe_user(str(payload.get("owner", "")))
+    path = _authorize_path(str(payload.get("path", "")), config, user=owner)
+    target = Path(path)
+    target.mkdir(parents=True, exist_ok=True)
+    _chown_to_owner(path, owner)
+
+
+def _remove_path(payload: dict[str, Any], config: GatewayConfig) -> None:
+    owner = _safe_user(str(payload.get("owner", "")))
+    path = _authorize_path(str(payload.get("path", "")), config, user=owner)
+    target = Path(path)
+    if target.is_dir() and not target.is_symlink():
+        shutil.rmtree(target)
+    elif target.exists() or target.is_symlink():
+        target.unlink()
+    else:
+        raise GatewayError(f"path does not exist: {path}", status=404)
+
+
+def _file_stat(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    path = _authorize_path(str(payload.get("path", "")), config, user=owner)
+    target = Path(path)
+    if not target.exists():
+        raise GatewayError(f"path does not exist: {path}", status=404)
+    info = target.lstat()
+    if target.is_symlink():
+        kind = "symlink"
+    elif target.is_dir():
+        kind = "dir"
+    elif target.is_file():
+        kind = "file"
+    else:
+        kind = "other"
+    return {
+        "path": path,
+        "type": kind,
+        "size": info.st_size,
+        "mtime": int(info.st_mtime),
+    }
+
+
+def _extract_archive(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    archive_path = _authorize_path(str(payload.get("path", "")), config, user=owner)
+    dest_dir = _authorize_path(str(payload.get("dest_dir", "")), config, user=owner)
+    archive = Path(archive_path)
+    if not archive.is_file():
+        raise GatewayError(f"archive not found: {archive_path}", status=404)
+    destination = Path(dest_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    dest_resolved = destination.resolve()
+    count = 0
+    with tarfile.open(archive, "r:*") as tar:
+        for member in tar.getmembers():
+            member_dest = (destination / member.name).resolve()
+            if member_dest != dest_resolved and not str(member_dest).startswith(
+                f"{dest_resolved}/"
+            ):
+                raise GatewayError(
+                    f"archive member escapes destination: {member.name}"
+                )
+            if member.issym() or member.islnk():
+                raise GatewayError(
+                    f"archive link members are not permitted: {member.name}"
+                )
+            count += 1
+        tar.extractall(destination)
+    _chown_to_owner(dest_dir, owner)
+    return {"status": "ok", "members": count, "dest_dir": dest_dir}
+
+
+def _create_archive(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    dest_dir = _authorize_path(str(payload.get("dest_dir", "")), config, user=owner)
+    archive_name = str(payload.get("archive_name", "archive.tar.gz"))
+    if "/" in archive_name or "\\" in archive_name or ".." in archive_name:
+        raise GatewayError(f"unsafe archive name: {archive_name}")
+    raw_paths = payload.get("paths")
+    if not isinstance(raw_paths, list) or not raw_paths:
+        raise GatewayError("paths must be a non-empty list")
+    sources: list[str] = []
+    for item in raw_paths:
+        sources.append(_authorize_path(str(item), config, user=owner))
+    destination = Path(dest_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    archive_path = destination / archive_name
+    count = 0
+    with tarfile.open(archive_path, "w:gz") as tar:
+        for source in sources:
+            source_path = Path(source)
+            if not source_path.exists():
+                raise GatewayError(f"path does not exist: {source}", status=404)
+            tar.add(source, arcname=source_path.name)
+            count += 1
+    _chown_to_owner(str(archive_path), owner)
+    return {
+        "status": "ok",
+        "path": str(archive_path),
+        "size": archive_path.stat().st_size,
+        "members": count,
+    }
 
 
 def _authorize_path(path: str, config: GatewayConfig, *, user: str | None = None) -> str:

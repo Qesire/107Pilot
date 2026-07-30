@@ -7,6 +7,7 @@ import {
   CircleUserRound,
   Command,
   FolderKanban,
+  FolderOpen,
   LifeBuoy,
   ListTree,
   MoreHorizontal,
@@ -20,12 +21,14 @@ import { AgentPage } from "./AgentPage";
 import { EnvBoundaryBanner } from "./EnvBoundaryBanner";
 import { useHealth, useWebSession } from "./query";
 import { ClusterPage, NotFoundPage, RunsPage, TerminalCollaborationPage, WorkspacePage } from "./pages";
+import { FilesPage } from "./FilesPage";
 import { MarketItemDetailPage, MarketPage, TemplateDetailPage } from "./MarketPages";
 import { globalNavigationPath, useLocationState, withSearch } from "./url";
 
 const navigation = [
   { path: "/projects", label: "工作台", icon: FolderKanban },
   { path: "/runs", label: "作业", icon: ListTree },
+  { path: "/files", label: "文件", icon: FolderOpen },
   { path: "/market", label: "作业市场", icon: Blocks },
   { path: "/studio/new", label: "Contract Studio", icon: Braces },
   { path: "/agent", label: "Agent", icon: Bot },
@@ -157,6 +160,7 @@ export default function App() {
           {session.isSuccess ? <>
             {location.pathname === "/" || location.pathname === "/projects" ? <WorkspacePage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname === "/runs" || location.pathname.startsWith("/runs/") ? <RunsPage user={user} location={location} navigate={navigate} /> : null}
+            {location.pathname === "/files" ? <FilesPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname === "/cluster" ? <ClusterPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname === "/market" ? <MarketPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname.startsWith("/market/") ? <MarketItemDetailPage user={user} location={location} navigate={navigate} /> : null}
@@ -177,5 +181,5 @@ export default function App() {
 }
 
 function isKnownPath(pathname: string): boolean {
-  return pathname === "/" || pathname === "/projects" || pathname === "/runs" || pathname.startsWith("/runs/") || pathname === "/cluster" || pathname === "/agent" || pathname === "/terminal" || pathname.startsWith("/market") || pathname.startsWith("/templates/") || pathname.startsWith("/studio/");
+  return pathname === "/" || pathname === "/projects" || pathname === "/runs" || pathname.startsWith("/runs/") || pathname === "/files" || pathname === "/cluster" || pathname === "/agent" || pathname === "/terminal" || pathname.startsWith("/market") || pathname.startsWith("/templates/") || pathname.startsWith("/studio/");
 }

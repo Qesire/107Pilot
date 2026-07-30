@@ -9,6 +9,7 @@ password, OTP, private key, or agent socket.
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import subprocess
@@ -18,7 +19,12 @@ from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
-from pilot107.adapters.slurm import CommandResult, SlurmTransportError
+from pilot107.adapters.slurm import (
+    CommandResult,
+    FileEntry,
+    FileStat,
+    SlurmTransportError,
+)
 from pilot107.core.identity import is_safe_username
 from pilot107.core.path_policy import OwnerRootPolicyError, resolve_owner_roots
 
@@ -27,6 +33,7 @@ _SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9_.+-]+$")
 _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _SAFE_SLURM_ATOM = re.compile(r"^[A-Za-z0-9_.:+/@=%,-]+$")
 _SAFE_FORMAT = re.compile(r"^[A-Za-z0-9%|,._:+@=-]+$")
+_BASE64_ALPHABET = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
 
 
 class SshSessionState(StrEnum):
@@ -277,6 +284,57 @@ class SubprocessSshRelayClient:
             stderr=completed.stderr,
         )
 
+    def run_file_shell(
+        self,
+        shell_command: str,
+        *,
+        stdin: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> CommandResult:
+        """Execute an application-built file-operation shell snippet.
+
+        Unlike :meth:`execute` (structured argv), file transfer requires pipes
+        and redirection (``base64 -d >> file``).  The snippet is always built
+        by 107Pilot code from validated paths and base64-checked data; remote
+        tokens are shell-quoted by the caller.
+        """
+        check = self.check()
+        if check.state != SshSessionState.ACTIVE:
+            raise SshRelayAuthRequired(check.status_code)
+        command = [
+            *self._base_ssh_options(),
+            "-o",
+            "ControlMaster=no",
+            "-T",
+            self.config.target,
+            "--",
+            shell_command,
+        ]
+        timeout = timeout_seconds or self.config.timeout_seconds
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                text=True,
+                input=stdin,
+                capture_output=True,
+                timeout=timeout + 2,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise SlurmTransportError("SSH.REMOTE_TIMEOUT") from exc
+        except OSError as exc:
+            raise SlurmTransportError("SSH.CLIENT_UNAVAILABLE") from exc
+        if completed.returncode == 255:
+            follow_up = self.check()
+            if follow_up.state != SshSessionState.ACTIVE:
+                raise SshRelayAuthRequired(follow_up.status_code)
+            raise SlurmTransportError("SSH.TRANSPORT_FAILED")
+        return CommandResult(
+            returncode=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+
     def _require_owner(self, portal_owner: str) -> None:
         if portal_owner != self.config.portal_owner:
             raise SshRelayPolicyError("SSH relay owner mismatch")
@@ -370,6 +428,261 @@ class SshRelayExecutor:
         )
         if chmod_result.returncode != 0:
             raise SlurmTransportError("SSH.CHMOD_FAILED")
+
+    def _file_shell(
+        self,
+        shell_command: str,
+        *,
+        stdin: str | None = None,
+        timeout_seconds: float,
+    ) -> CommandResult:
+        runner = getattr(self.client, "run_file_shell", None)
+        if runner is None:
+            raise SshRelayPolicyError("SSH client lacks file transfer support")
+        result: CommandResult = runner(
+            shell_command, stdin=stdin, timeout_seconds=timeout_seconds
+        )
+        return result
+
+    def _require_file_owner(self, owner: str) -> None:
+        if owner != self.config.slurm_user and owner != self.config.portal_owner:
+            raise SshRelayPolicyError("SSH file owner mismatch")
+
+    def write_bytes_chunk(
+        self,
+        *,
+        path: str,
+        data_b64: str,
+        offset: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> int:
+        self._require_file_owner(owner)
+        safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
+        if not _BASE64_ALPHABET.fullmatch(data_b64):
+            raise SshRelayPolicyError("write payload is not valid base64")
+        quoted = shlex.quote(safe_path)
+        if offset < 0:
+            redirect = ">>"
+        elif offset == 0:
+            redirect = ">"
+        else:
+            raise SshRelayPolicyError(
+                "SSH relay writes sequentially; offset must be 0 or append(-1)"
+            )
+        shell_command = f"base64 -d {redirect} {quoted} && stat -c %s -- {quoted}"
+        result = self._file_shell(
+            shell_command, stdin=data_b64, timeout_seconds=timeout_seconds
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.WRITE_BYTES_FAILED")
+        size_lines = [line for line in result.stdout.splitlines() if line.strip().isdigit()]
+        return int(size_lines[-1]) if size_lines else 0
+
+    def read_bytes_chunk(
+        self,
+        *,
+        path: str,
+        offset: int,
+        length: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> tuple[str, int]:
+        self._require_file_owner(owner)
+        safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
+        if offset < 0 or length <= 0:
+            raise SshRelayPolicyError("offset must be >= 0 and length positive")
+        quoted = shlex.quote(safe_path)
+        shell_command = (
+            f"head -c {int(length)} < {quoted} | base64 -w0; "
+            f"printf '\\n'; stat -c %s -- {quoted}"
+        )
+        if offset > 0:
+            shell_command = (
+                f"tail -c +{int(offset) + 1} < {quoted} | "
+                f"head -c {int(length)} | base64 -w0; "
+                f"printf '\\n'; stat -c %s -- {quoted}"
+            )
+        result = self._file_shell(shell_command, timeout_seconds=timeout_seconds)
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.READ_BYTES_FAILED")
+        lines = result.stdout.splitlines()
+        data_b64 = lines[0].strip() if lines else ""
+        size_lines = [line for line in lines[1:] if line.strip().isdigit()]
+        size = int(size_lines[-1]) if size_lines else 0
+        return data_b64, size
+
+    def file_sha256(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> str:
+        self._require_file_owner(owner)
+        safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
+        result = self.client.execute(
+            ("sha256sum", "--", safe_path),
+            portal_owner=self.config.portal_owner,
+            timeout_seconds=timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.SHA256_FAILED")
+        digest = result.stdout.split()[0] if result.stdout.split() else ""
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise SlurmTransportError("SSH.SHA256_INVALID")
+        return digest
+
+    def list_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> list[FileEntry]:
+        self._require_file_owner(owner)
+        safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
+        script = (
+            'python3 -c "import json,os,sys;p=sys.argv[1];'
+            "print(json.dumps([{'name':n,"
+            "'type':'symlink' if os.path.islink(os.path.join(p,n)) "
+            "else ('dir' if os.path.isdir(os.path.join(p,n)) else 'file'),"
+            "'size':os.lstat(os.path.join(p,n)).st_size,"
+            "'mtime':int(os.lstat(os.path.join(p,n)).st_mtime)}"
+            'for n in sorted(os.listdir(p))]))" '
+        ) + shlex.quote(safe_path)
+        result = self._file_shell(script, timeout_seconds=timeout_seconds)
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.LIST_DIR_FAILED")
+        payload = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "[]"
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise SlurmTransportError("SSH.LIST_DIR_INVALID") from exc
+        return [
+            FileEntry(
+                name=str(item.get("name", "")),
+                type=str(item.get("type", "other")),
+                size=int(item.get("size", 0)),
+                mtime=int(item.get("mtime", 0)),
+            )
+            for item in decoded
+            if isinstance(item, dict)
+        ]
+
+    def make_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
+        self._require_file_owner(owner)
+        safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
+        result = self.client.execute(
+            ("mkdir", "-p", "--", safe_path),
+            portal_owner=self.config.portal_owner,
+            timeout_seconds=timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.MKDIR_FAILED")
+
+    def remove_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
+        self._require_file_owner(owner)
+        safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
+        result = self._file_shell(
+            f"rm -rf -- {shlex.quote(safe_path)}", timeout_seconds=timeout_seconds
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.REMOVE_FAILED")
+
+    def stat_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> FileStat:
+        self._require_file_owner(owner)
+        safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
+        result = self.client.execute(
+            ("stat", "-c", "%F|%s|%Y", "--", safe_path),
+            portal_owner=self.config.portal_owner,
+            timeout_seconds=timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.STAT_FAILED")
+        parts = result.stdout.strip().split("|")
+        if len(parts) != 3:
+            raise SlurmTransportError("SSH.STAT_INVALID")
+        raw_type, size, mtime = parts
+        kind = {
+            "regular file": "file",
+            "directory": "dir",
+            "symbolic link": "symlink",
+        }.get(raw_type, "other")
+        return FileStat(path=safe_path, type=kind, size=int(size), mtime=int(mtime))
+
+    def extract_archive(
+        self,
+        *,
+        archive_path: str,
+        dest_dir: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> int:
+        self._require_file_owner(owner)
+        safe_archive = _validate_remote_path(
+            archive_path, roots=self.config.expanded_owner_roots()
+        )
+        safe_dest = _validate_remote_path(
+            dest_dir, roots=self.config.expanded_owner_roots()
+        )
+        script = (
+            'python3 -c "import sys,tarfile;a,d=sys.argv[1],sys.argv[2];t=tarfile.open(a);'
+            "ms=t.getmembers();"
+            "bad=any(m.name.startswith('/') or '..' in m.name.split('/') "
+            "or m.issym() or m.islnk() for m in ms);"
+            "sys.exit(2) if bad else t.extractall(d);"
+            'print(len(ms))" '
+        ) + shlex.quote(safe_archive) + " " + shlex.quote(safe_dest)
+        result = self._file_shell(
+            f"mkdir -p {shlex.quote(safe_dest)} && {script}",
+            timeout_seconds=timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.EXTRACT_FAILED")
+        count_lines = [line for line in result.stdout.splitlines() if line.strip().isdigit()]
+        return int(count_lines[-1]) if count_lines else 0
+
+    def create_archive(
+        self,
+        *,
+        paths: list[str],
+        dest_dir: str,
+        archive_name: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> tuple[str, int]:
+        self._require_file_owner(owner)
+        if "/" in archive_name or "\\" in archive_name or ".." in archive_name:
+            raise SshRelayPolicyError(f"unsafe archive name: {archive_name}")
+        if not paths:
+            raise SshRelayPolicyError("paths must be a non-empty list")
+        safe_dest = _validate_remote_path(
+            dest_dir, roots=self.config.expanded_owner_roots()
+        )
+        safe_sources = [
+            _validate_remote_path(item, roots=self.config.expanded_owner_roots())
+            for item in paths
+        ]
+        script = (
+            'python3 -c "import sys,tarfile,os;d=sys.argv[1];n=sys.argv[2];'
+            "srcs=sys.argv[3:];p=os.path.join(d,n);"
+            "t=tarfile.open(p,'w:gz');"
+            "[t.add(s,arcname=os.path.basename(s)) for s in srcs];t.close();"
+            'print(p+chr(124)+str(os.path.getsize(p)))" '
+        )
+        quoted = " ".join(
+            shlex.quote(token) for token in [safe_dest, archive_name, *safe_sources]
+        )
+        result = self._file_shell(
+            f"mkdir -p {shlex.quote(safe_dest)} && {script}{quoted}",
+            timeout_seconds=timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.ARCHIVE_FAILED")
+        last = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        if "|" not in last:
+            raise SlurmTransportError("SSH.ARCHIVE_INVALID")
+        archive_path, _, size_text = last.rpartition("|")
+        return archive_path, int(size_text) if size_text.isdigit() else 0
 
 
 def _quote_remote_command(argv: tuple[str, ...], *, with_cd: bool) -> str:

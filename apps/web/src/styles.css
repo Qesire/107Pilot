@@ -909,3 +909,211 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
   text-align: center;
   line-height: 1.4;
 }
+
+/* ---------------------------------------------------------------------------
+   Files Page
+--------------------------------------------------------------------------- */
+
+.files-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.files-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  flex-wrap: wrap;
+}
+
+.files-breadcrumb button {
+  background: none;
+  border: none;
+  color: var(--teal);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: inherit;
+}
+
+.files-breadcrumb button:hover {
+  background: var(--teal-soft);
+}
+
+.files-breadcrumb .breadcrumb-home {
+  display: inline-flex;
+  align-items: center;
+}
+
+.files-breadcrumb .breadcrumb-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.files-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.files-mkdir-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.files-mkdir-form input {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  width: 200px;
+}
+
+.files-upload-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--blue-soft);
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
+.files-upload-progress progress {
+  flex: 1;
+  max-width: 200px;
+  height: 6px;
+}
+
+.files-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--red-soft);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  color: var(--red);
+}
+
+.files-error button {
+  background: none;
+  border: none;
+  color: var(--red);
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.files-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.files-table th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 2px solid var(--line);
+  color: var(--ink-soft);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.files-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.files-table .file-row {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.files-table .file-row:hover {
+  background: var(--surface-soft);
+}
+
+.files-table .file-row.selected {
+  background: var(--teal-soft);
+}
+
+.files-table .parent-row td {
+  color: var(--ink-faint);
+}
+
+.files-table .col-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.files-table .entry-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+.files-table .col-check {
+  width: 32px;
+}
+
+.files-table .col-size,
+.files-table .col-time {
+  white-space: nowrap;
+  color: var(--ink-soft);
+}
+
+.files-table .col-actions {
+  white-space: nowrap;
+}
+
+.files-table .icon-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--ink-soft);
+  display: inline-flex;
+  align-items: center;
+}
+
+.files-table .icon-button:hover {
+  background: var(--surface-strong);
+  color: var(--ink);
+}
+
+.files-table .icon-button.danger:hover {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.icon-folder {
+  color: var(--amber);
+}
+
+.icon-file {
+  color: var(--blue);
+}
+
+.icon-link {
+  color: var(--ink-faint);
+}
+
+.button.danger {
+  background: var(--red);
+  color: #fff;
+  border-color: var(--red);
+}
+
+.button.danger:hover {
+  opacity: 0.9;
+}

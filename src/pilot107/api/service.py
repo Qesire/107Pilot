@@ -25,6 +25,7 @@ from pilot107.adapters.slurm import (
     DockerComposeExecutor,
     DockerComposeTarget,
     DockerSimulatorCommandBackend,
+    FileOpsExecutor,
     HttpCommandGatewayExecutor,
     InMemorySlurmBackend,
     RestAuthStyle,
@@ -42,6 +43,7 @@ from pilot107.adapters.ssh_relay import (
     SubprocessSshRelayClient,
 )
 from pilot107.api.evidence_query import EvidenceQueryService
+from pilot107.api.file_routes import FileRoutes
 from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.api.metrics import ControlPlaneMetrics
 from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
@@ -56,6 +58,7 @@ from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalo
 from pilot107.core.control_repository import ControlRepository
 from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.evidence_binding import EvidenceBinder
+from pilot107.core.file_uploads import FileUploadService
 from pilot107.core.identity import is_safe_username
 from pilot107.core.platform import (
     CapabilityProfile,
@@ -124,6 +127,9 @@ class ApiServiceConfig:
     ssh_slurm_user: str | None = None
     ssh_owner_roots: tuple[str, ...] = ()
     terminal_enabled: bool = False
+    upload_chunk_bytes: int = 1024 * 1024
+    upload_session_ttl_seconds: int = 3600
+    upload_staging_root: Path | None = None
     slurmrestd_url: str = "http://slurmrestd:6820"
     slurm_api_version: str = "v0.0.41"
     slurm_token: str | None = None
@@ -232,6 +238,11 @@ def config_from_env(
             )
         ),
         terminal_enabled=_bool(values, "PILOT107_TERMINAL_ENABLED", False),
+        upload_chunk_bytes=_int(values, "PILOT107_UPLOAD_CHUNK_BYTES", 1024 * 1024),
+        upload_session_ttl_seconds=_int(
+            values, "PILOT107_UPLOAD_SESSION_TTL_SECONDS", 3600
+        ),
+        upload_staging_root=_optional_path(values, "PILOT107_UPLOAD_STAGING_ROOT"),
         slurmrestd_url=values.get("PILOT107_SLURMRESTD_URL", "http://slurmrestd:6820"),
         slurm_api_version=values.get("PILOT107_SLURM_API_VERSION", "v0.0.41"),
         slurm_token=values.get("PILOT107_SLURM_TOKEN"),
@@ -312,6 +323,45 @@ def config_from_env(
             values.get("PILOT107_TEMPLATE_VERIFICATION_ENVIRONMENT")
         ),
     )
+
+
+def _build_file_routes(
+    config: ApiServiceConfig,
+    ssh_relay_client: SshRelayClient | None,
+) -> FileRoutes | None:
+    """Wire the visual-filesystem routes for file-capable backends.
+
+    Only the command-gateway (simulator/cpu-rc) and real107-ssh backends expose
+    the binary file primitives today; other backends leave the routes disabled.
+    """
+
+    executor: FileOpsExecutor | None
+    owner_roots: tuple[str, ...]
+    if config.backend == "command-gateway":
+        executor = HttpCommandGatewayExecutor(
+            base_url=config.command_gateway_url,
+            token=config.command_gateway_token,
+            timeout_seconds=config.command_timeout_seconds,
+        )
+        owner_roots = config.allowed_roots
+    elif config.backend == "real107-ssh" and ssh_relay_client is not None:
+        executor = SshRelayExecutor(ssh_relay_client)
+        owner_roots = config.allowed_roots or ssh_relay_client.config.owner_roots
+    else:
+        return None
+    if not owner_roots:
+        return None
+    staging_root = config.upload_staging_root or (
+        config.db_path.parent / "upload-staging"
+    )
+    upload_service = FileUploadService(
+        executor=executor,
+        owner_roots=owner_roots,
+        staging_root=staging_root,
+        chunk_size=config.upload_chunk_bytes,
+        session_ttl_seconds=config.upload_session_ttl_seconds,
+    )
+    return FileRoutes(upload_service=upload_service, executor=executor)
 
 
 def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
@@ -531,6 +581,8 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         else None
     )
 
+    file_routes = _build_file_routes(config, ssh_relay_client)
+
     return Pilot107HttpApi(
         store=store,
         control_repository=control_repository,
@@ -553,6 +605,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         remediation_store=remediation_store,
         evidence_store=shared_evidence_store,
         terminal_service=terminal_service,
+        file_routes=file_routes,
         ssh_connection_service=(
             None
             if ssh_relay_client is None

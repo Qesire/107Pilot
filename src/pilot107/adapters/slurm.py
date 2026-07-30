@@ -1,10 +1,13 @@
 """Slurm backend contracts and local/simulator implementations."""
 
+import base64
 import hashlib
 import json
 import posixpath
 import re
+import shutil
 import subprocess
+import tarfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -333,6 +336,99 @@ class SimulatorExecutor(Protocol):
         """Write a text file in the simulator and assign ownership."""
 
 
+@dataclass(frozen=True)
+class FileEntry:
+    name: str
+    type: str
+    size: int
+    mtime: int
+
+
+@dataclass(frozen=True)
+class FileStat:
+    path: str
+    type: str
+    size: int
+    mtime: int
+
+
+class FileOpsExecutor(Protocol):
+    """Binary file primitives for transferring user files to the cluster.
+
+    These complement :class:`SimulatorExecutor` (which only writes small text
+    scripts).  All paths are authorized against the owner's allowed roots by
+    the concrete backend before any byte is moved.
+    """
+
+    def write_bytes_chunk(
+        self,
+        *,
+        path: str,
+        data_b64: str,
+        offset: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> int:
+        """Write a base64 chunk at ``offset`` (0 truncates, <0 appends)."""
+
+    def read_bytes_chunk(
+        self,
+        *,
+        path: str,
+        offset: int,
+        length: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> tuple[str, int]:
+        """Read up to ``length`` bytes; return ``(data_b64, total_size)``."""
+
+    def file_sha256(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> str:
+        """Return the hex sha256 of a remote file."""
+
+    def list_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> list[FileEntry]:
+        """List a directory's entries."""
+
+    def make_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
+        """Create a directory (and parents)."""
+
+    def remove_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
+        """Remove a file or directory tree."""
+
+    def stat_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> FileStat:
+        """Return metadata for a path."""
+
+    def extract_archive(
+        self,
+        *,
+        archive_path: str,
+        dest_dir: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> int:
+        """Safely extract a tar archive; return the member count."""
+
+    def create_archive(
+        self,
+        *,
+        paths: list[str],
+        dest_dir: str,
+        archive_name: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> tuple[str, int]:
+        """Pack paths into a tar.gz under dest_dir; return (archive_path, size)."""
+
+
 class HttpCommandGatewayExecutor:
     """Run simulator commands through a narrow HTTP command gateway."""
 
@@ -403,6 +499,160 @@ class HttpCommandGatewayExecutor:
             timeout_seconds=timeout_seconds,
         )
 
+    def write_bytes_chunk(
+        self,
+        *,
+        path: str,
+        data_b64: str,
+        offset: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> int:
+        payload = self._request(
+            "/write_bytes",
+            {
+                "path": path,
+                "data_b64": data_b64,
+                "offset": offset,
+                "owner": owner,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return int(payload.get("size", 0))
+
+    def read_bytes_chunk(
+        self,
+        *,
+        path: str,
+        offset: int,
+        length: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> tuple[str, int]:
+        payload = self._request(
+            "/read_bytes",
+            {
+                "path": path,
+                "offset": offset,
+                "length": length,
+                "owner": owner,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return str(payload.get("data_b64", "")), int(payload.get("size", 0))
+
+    def file_sha256(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> str:
+        payload = self._request(
+            "/sha256",
+            {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
+            timeout_seconds=timeout_seconds,
+        )
+        value = payload.get("sha256")
+        if not isinstance(value, str) or not value:
+            raise SlurmTransportError("gateway sha256 response missing digest")
+        return value
+
+    def list_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> list[FileEntry]:
+        payload = self._request(
+            "/list_dir",
+            {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
+            timeout_seconds=timeout_seconds,
+        )
+        entries = payload.get("entries")
+        if not isinstance(entries, list):
+            raise SlurmTransportError("gateway list_dir response missing entries")
+        return [
+            FileEntry(
+                name=str(item.get("name", "")),
+                type=str(item.get("type", "other")),
+                size=int(item.get("size", 0)),
+                mtime=int(item.get("mtime", 0)),
+            )
+            for item in entries
+            if isinstance(item, dict)
+        ]
+
+    def make_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
+        self._request(
+            "/mkdir",
+            {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
+            timeout_seconds=timeout_seconds,
+        )
+
+    def remove_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
+        self._request(
+            "/remove",
+            {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
+            timeout_seconds=timeout_seconds,
+        )
+
+    def stat_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> FileStat:
+        payload = self._request(
+            "/stat",
+            {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
+            timeout_seconds=timeout_seconds,
+        )
+        return FileStat(
+            path=str(payload.get("path", path)),
+            type=str(payload.get("type", "other")),
+            size=int(payload.get("size", 0)),
+            mtime=int(payload.get("mtime", 0)),
+        )
+
+    def extract_archive(
+        self,
+        *,
+        archive_path: str,
+        dest_dir: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> int:
+        payload = self._request(
+            "/extract",
+            {
+                "path": archive_path,
+                "dest_dir": dest_dir,
+                "owner": owner,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return int(payload.get("members", 0))
+
+    def create_archive(
+        self,
+        *,
+        paths: list[str],
+        dest_dir: str,
+        archive_name: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> tuple[str, int]:
+        payload = self._request(
+            "/archive",
+            {
+                "paths": paths,
+                "dest_dir": dest_dir,
+                "archive_name": archive_name,
+                "owner": owner,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return str(payload.get("path", "")), int(payload.get("size", 0))
+
     def _request(
         self,
         path: str,
@@ -439,6 +689,214 @@ class HttpCommandGatewayExecutor:
         if not isinstance(parsed, dict):
             raise SlurmTransportError(f"gateway {path} returned non-object JSON")
         return parsed
+
+
+class LocalFileOpsExecutor:
+    """File primitives against the local filesystem (tests / local backend).
+
+    Mirrors the command-gateway semantics: every path is authorized against
+    ``allowed_roots`` before any byte is moved, and archive extraction rejects
+    members that would escape the destination.
+    """
+
+    def __init__(self, *, allowed_roots: list[str]) -> None:
+        self.allowed_roots = [root.rstrip("/") or "/" for root in allowed_roots]
+
+    def _authorize(self, path: str) -> Path:
+        resolved = Path(path).resolve()
+        for root in self.allowed_roots:
+            resolved_root = Path(root).resolve()
+            if resolved == resolved_root or str(resolved).startswith(
+                f"{resolved_root}/"
+            ):
+                return resolved
+        raise SlurmSubmissionRejected(f"path outside allowed roots: {path}")
+
+    def write_bytes_chunk(
+        self,
+        *,
+        path: str,
+        data_b64: str,
+        offset: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> int:
+        target = self._authorize(path)
+        data = base64.b64decode(data_b64, validate=True)
+        if not target.parent.exists():
+            raise SlurmTransportError(
+                f"parent directory does not exist: {target.parent}"
+            )
+        if offset < 0:
+            mode = "ab"
+        elif offset == 0:
+            mode = "wb"
+        else:
+            if not target.exists():
+                raise SlurmTransportError("cannot write at offset before file exists")
+            current = target.stat().st_size
+            if offset != current:
+                raise SlurmTransportError(
+                    f"write offset {offset} does not match file size {current}"
+                )
+            mode = "r+b"
+        with open(target, mode) as handle:
+            if offset > 0:
+                handle.seek(offset)
+            handle.write(data)
+        return target.stat().st_size
+
+    def read_bytes_chunk(
+        self,
+        *,
+        path: str,
+        offset: int,
+        length: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> tuple[str, int]:
+        target = self._authorize(path)
+        if not target.is_file():
+            raise SlurmTransportError(f"not a regular file: {path}")
+        if offset < 0 or length <= 0:
+            raise SlurmTransportError("offset must be >= 0 and length positive")
+        size = target.stat().st_size
+        with open(target, "rb") as handle:
+            handle.seek(offset)
+            data = handle.read(length)
+        return base64.b64encode(data).decode("ascii"), size
+
+    def file_sha256(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> str:
+        target = self._authorize(path)
+        if not target.is_file():
+            raise SlurmTransportError(f"not a regular file: {path}")
+        digest = hashlib.sha256()
+        with open(target, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+
+    def list_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> list[FileEntry]:
+        target = self._authorize(path)
+        if not target.is_dir():
+            raise SlurmTransportError(f"not a directory: {path}")
+        entries: list[FileEntry] = []
+        for entry in sorted(target.iterdir(), key=lambda item: item.name):
+            info = entry.lstat()
+            if entry.is_symlink():
+                kind = "symlink"
+            elif entry.is_dir():
+                kind = "dir"
+            elif entry.is_file():
+                kind = "file"
+            else:
+                kind = "other"
+            entries.append(
+                FileEntry(
+                    name=entry.name,
+                    type=kind,
+                    size=info.st_size,
+                    mtime=int(info.st_mtime),
+                )
+            )
+        return entries
+
+    def make_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
+        self._authorize(path).mkdir(parents=True, exist_ok=True)
+
+    def remove_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
+        target = self._authorize(path)
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        elif target.exists() or target.is_symlink():
+            target.unlink()
+        else:
+            raise SlurmTransportError(f"path does not exist: {path}")
+
+    def stat_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> FileStat:
+        target = self._authorize(path)
+        if not target.exists():
+            raise SlurmTransportError(f"path does not exist: {path}")
+        info = target.lstat()
+        if target.is_symlink():
+            kind = "symlink"
+        elif target.is_dir():
+            kind = "dir"
+        elif target.is_file():
+            kind = "file"
+        else:
+            kind = "other"
+        return FileStat(
+            path=str(target), type=kind, size=info.st_size, mtime=int(info.st_mtime)
+        )
+
+    def extract_archive(
+        self,
+        *,
+        archive_path: str,
+        dest_dir: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> int:
+        archive = self._authorize(archive_path)
+        destination = self._authorize(dest_dir)
+        if not archive.is_file():
+            raise SlurmTransportError(f"archive not found: {archive_path}")
+        destination.mkdir(parents=True, exist_ok=True)
+        dest_resolved = destination.resolve()
+        count = 0
+        with tarfile.open(archive, "r:*") as tar:
+            for member in tar.getmembers():
+                member_dest = (destination / member.name).resolve()
+                if member_dest != dest_resolved and not str(member_dest).startswith(
+                    f"{dest_resolved}/"
+                ):
+                    raise SlurmSubmissionRejected(
+                        f"archive member escapes destination: {member.name}"
+                    )
+                if member.issym() or member.islnk():
+                    raise SlurmSubmissionRejected(
+                        f"archive link members are not permitted: {member.name}"
+                    )
+                count += 1
+            tar.extractall(destination)
+        return count
+
+    def create_archive(
+        self,
+        *,
+        paths: list[str],
+        dest_dir: str,
+        archive_name: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> tuple[str, int]:
+        destination = self._authorize(dest_dir)
+        if "/" in archive_name or "\\" in archive_name or ".." in archive_name:
+            raise SlurmSubmissionRejected(f"unsafe archive name: {archive_name}")
+        if not paths:
+            raise SlurmTransportError("paths must be a non-empty list")
+        sources = [self._authorize(item) for item in paths]
+        destination.mkdir(parents=True, exist_ok=True)
+        archive_path = destination / archive_name
+        count = 0
+        with tarfile.open(archive_path, "w:gz") as tar:
+            for source in sources:
+                if not source.exists():
+                    raise SlurmTransportError(f"path does not exist: {source}")
+                tar.add(source, arcname=source.name)
+                count += 1
+        return str(archive_path), archive_path.stat().st_size
 
 
 class SimulatorPathChecker:

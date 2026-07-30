@@ -1,7 +1,13 @@
+import base64
+import hashlib
 import importlib.util
+import io
 import json
+import tarfile
 import tempfile
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -12,6 +18,17 @@ assert _SPEC is not None
 assert _SPEC.loader is not None
 gateway = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(gateway)
+
+
+@contextmanager
+def _mock_ownership() -> Iterator[None]:
+    """Stub out user lookup + chown so file ops run in an unprivileged test."""
+    fake_pw = SimpleNamespace(pw_uid=0, pw_gid=0)
+    with (
+        mock.patch.object(gateway.pwd, "getpwnam", return_value=fake_pw),
+        mock.patch.object(gateway.os, "chown"),
+    ):
+        yield
 
 
 class CommandGatewayTests(unittest.TestCase):
@@ -175,6 +192,216 @@ class CommandGatewayTests(unittest.TestCase):
         self.assertNotIn("PRIVATE=secret", serialized)
         self.assertNotIn("SECRET_STDIN", serialized)
         self.assertNotIn("secret-token", serialized)
+
+    def test_write_bytes_rejects_path_outside_allowed_roots(self) -> None:
+        config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
+
+        with self.assertRaisesRegex(gateway.GatewayError, "outside allowed roots"):
+            gateway._write_bytes(
+                {
+                    "path": "/public/home/bob/blob.bin",
+                    "data_b64": base64.b64encode(b"x").decode(),
+                    "offset": 0,
+                    "owner": "alice",
+                },
+                config,
+            )
+
+    def test_read_bytes_rejects_path_outside_allowed_roots(self) -> None:
+        config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
+
+        with self.assertRaisesRegex(gateway.GatewayError, "outside allowed roots"):
+            gateway._read_bytes(
+                {"path": "/public/home/bob/blob.bin", "offset": 0, "length": 4, "owner": "alice"},
+                config,
+            )
+
+    def test_list_dir_rejects_path_outside_allowed_roots(self) -> None:
+        config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
+
+        with self.assertRaisesRegex(gateway.GatewayError, "outside allowed roots"):
+            gateway._list_dir({"path": "/public/home/bob", "owner": "alice"}, config)
+
+    def test_write_bytes_rejects_invalid_base64(self) -> None:
+        config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
+
+        with self.assertRaisesRegex(gateway.GatewayError, "base64"):
+            gateway._write_bytes(
+                {
+                    "path": "/public/home/alice/blob.bin",
+                    "data_b64": "!!!",
+                    "offset": 0,
+                    "owner": "alice",
+                },
+                config,
+            )
+
+    def test_write_read_sha256_roundtrip_with_mocked_ownership(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            target = str(Path(tmp) / "blob.bin")
+            payload = b"hello \x00\x01 binary"
+            with _mock_ownership():
+                gateway._write_bytes(
+                    {
+                        "path": target,
+                        "data_b64": base64.b64encode(payload).decode(),
+                        "offset": 0,
+                        "owner": "alice",
+                    },
+                    config,
+                )
+                read_back = gateway._read_bytes(
+                    {
+                        "path": target,
+                        "offset": 0,
+                        "length": len(payload) + 8,
+                        "owner": "alice",
+                    },
+                    config,
+                )
+                digest = gateway._file_sha256({"path": target, "owner": "alice"}, config)
+
+            self.assertEqual(base64.b64decode(read_back["data_b64"]), payload)
+            self.assertEqual(read_back["size"], len(payload))
+            self.assertEqual(digest["sha256"], hashlib.sha256(payload).hexdigest())
+
+    def test_write_bytes_append_and_offset_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            target = str(Path(tmp) / "blob.bin")
+            with _mock_ownership():
+                gateway._write_bytes(
+                    {
+                        "path": target,
+                        "data_b64": base64.b64encode(b"abc").decode(),
+                        "offset": 0,
+                        "owner": "alice",
+                    },
+                    config,
+                )
+                gateway._write_bytes(
+                    {
+                        "path": target,
+                        "data_b64": base64.b64encode(b"def").decode(),
+                        "offset": -1,
+                        "owner": "alice",
+                    },
+                    config,
+                )
+                self.assertEqual(Path(target).read_bytes(), b"abcdef")
+                with self.assertRaisesRegex(gateway.GatewayError, "does not match file size"):
+                    gateway._write_bytes(
+                        {
+                            "path": target,
+                            "data_b64": base64.b64encode(b"z").decode(),
+                            "offset": 99,
+                            "owner": "alice",
+                        },
+                        config,
+                    )
+
+    def _make_tar(self, members: dict[str, bytes], *, symlink: str | None = None) -> bytes:
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as tar:
+            for name, content in members.items():
+                info = tarfile.TarInfo(name=name)
+                info.size = len(content)
+                tar.addfile(info, io.BytesIO(content))
+            if symlink is not None:
+                link = tarfile.TarInfo(name="evil_link")
+                link.type = tarfile.SYMTYPE
+                link.linkname = symlink
+                tar.addfile(link)
+        return buffer.getvalue()
+
+    def test_extract_rejects_traversal_member(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            archive = Path(tmp) / "evil.tar"
+            archive.write_bytes(self._make_tar({"../evil.txt": b"x"}))
+            dest = Path(tmp) / "out"
+            with _mock_ownership(), self.assertRaisesRegex(
+                gateway.GatewayError, "escapes destination"
+            ):
+                gateway._extract_archive(
+                    {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
+                    config,
+                )
+
+    def test_extract_rejects_symlink_member(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            archive = Path(tmp) / "link.tar"
+            archive.write_bytes(self._make_tar({"ok.txt": b"x"}, symlink="/etc/passwd"))
+            dest = Path(tmp) / "out"
+            with _mock_ownership(), self.assertRaisesRegex(
+                gateway.GatewayError, "link members"
+            ):
+                gateway._extract_archive(
+                    {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
+                    config,
+                )
+
+    def test_extract_valid_archive_reports_member_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            archive = Path(tmp) / "good.tar"
+            archive.write_bytes(self._make_tar({"a.txt": b"1", "sub/b.txt": b"22"}))
+            dest = Path(tmp) / "out"
+            with _mock_ownership():
+                result = gateway._extract_archive(
+                    {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
+                    config,
+                )
+            self.assertEqual(result["members"], 2)
+            self.assertEqual((dest / "sub" / "b.txt").read_bytes(), b"22")
+
+    def test_create_archive_packs_sources_into_tarball(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            (Path(tmp) / "a.txt").write_bytes(b"1")
+            (Path(tmp) / "b.txt").write_bytes(b"22")
+            with _mock_ownership():
+                result = gateway._create_archive(
+                    {
+                        "paths": [str(Path(tmp) / "a.txt"), str(Path(tmp) / "b.txt")],
+                        "dest_dir": tmp,
+                        "archive_name": "bundle.tar.gz",
+                        "owner": "alice",
+                    },
+                    config,
+                )
+            self.assertEqual(result["members"], 2)
+            archive = Path(tmp) / "bundle.tar.gz"
+            self.assertEqual(result["path"], str(archive))
+            self.assertEqual(result["size"], archive.stat().st_size)
+            with tarfile.open(archive, "r:gz") as tar:
+                self.assertEqual(sorted(tar.getnames()), ["a.txt", "b.txt"])
+
+    def test_create_archive_rejects_unsafe_name_and_bad_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            with self.assertRaisesRegex(gateway.GatewayError, "unsafe archive name"):
+                gateway._create_archive(
+                    {
+                        "paths": [tmp],
+                        "dest_dir": tmp,
+                        "archive_name": "../x.tar.gz",
+                        "owner": "alice",
+                    },
+                    config,
+                )
+            with self.assertRaisesRegex(gateway.GatewayError, "non-empty list"):
+                gateway._create_archive(
+                    {
+                        "paths": [],
+                        "dest_dir": tmp,
+                        "archive_name": "x.tar.gz",
+                        "owner": "alice",
+                    },
+                    config,
+                )
 
 
 if __name__ == "__main__":

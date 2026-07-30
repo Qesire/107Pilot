@@ -11,6 +11,7 @@ import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from http.client import HTTPResponse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -247,6 +248,9 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
             )
             try:
                 with urllib.request.urlopen(request, timeout=30) as response:
+                    if self._streamable_download():
+                        self._stream_upstream(response)
+                        return
                     response_body = response.read(config.max_response_body_bytes + 1)
                     if len(response_body) > config.max_response_body_bytes:
                         self._send_error(502, "WEB.UPSTREAM_RESPONSE_TOO_LARGE")
@@ -277,6 +281,51 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
                     ensure_ascii=False,
                 ).encode("utf-8") + b"\n"
                 self._send_bytes(502, payload, "application/json; charset=utf-8")
+
+        def _streamable_download(self) -> bool:
+            """Large file reads bypass whole-response buffering.
+
+            ``/api/v1/files/content`` returns one base64 slice per request; the
+            client assembles the file.  Piping the upstream response avoids
+            holding the slice (and any future raw download) entirely in memory
+            and lifts the ``max_response_body_bytes`` cap for these paths.
+            """
+            return self.command == "GET" and urlparse(self.path).path.startswith(
+                "/api/v1/files/content"
+            )
+
+        def _stream_upstream(self, response: HTTPResponse) -> None:
+            status = response.status
+            headers = response.headers
+            self.send_response(status)
+            self.send_header(
+                "Content-Type",
+                headers.get("Content-Type", "application/octet-stream"),
+            )
+            length = headers.get("Content-Length")
+            if length is not None:
+                self.send_header("Content-Length", length)
+            disposition = headers.get("Content-Disposition")
+            if disposition:
+                self.send_header("Content-Disposition", disposition)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            remaining = int(length) if length is not None else None
+            while True:
+                if remaining is not None:
+                    if remaining <= 0:
+                        break
+                    block = response.read(min(65536, remaining))
+                else:
+                    block = response.read(65536)
+                if not block:
+                    break
+                self.wfile.write(block)
+                if remaining is not None:
+                    remaining -= len(block)
 
         def _send_bytes(
             self,

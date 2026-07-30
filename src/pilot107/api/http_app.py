@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from pilot107.adapters.slurm import SlurmBackendError
 from pilot107.api.evidence_query import EvidencePreviewUnavailable, EvidenceQueryService
+from pilot107.api.file_routes import FileRoutes
 from pilot107.api.health import ApiHealthService
 from pilot107.api.http_types import ApiResponse as ApiResponse
 from pilot107.api.metrics import ControlPlaneMetrics, normalize_http_route
@@ -167,6 +168,7 @@ class Pilot107HttpApi:
         evidence_store: EvidenceStore | None = None,
         terminal_service: TerminalCommandService | None = None,
         ssh_connection_service: SshConnectionService | None = None,
+        file_routes: FileRoutes | None = None,
         auth_required: bool = False,
         trusted_user_header: str = "X-Pilot107-User",
         proxy_hmac_secret: bytes | None = None,
@@ -228,6 +230,7 @@ class Pilot107HttpApi:
         self.repair_ticket_routes = RepairTicketRoutes(self.repair_ticket_service)
         self.terminal_service = terminal_service
         self.ssh_connection_service = ssh_connection_service
+        self.file_routes = file_routes
         self.platform_snapshot_store = platform_snapshot_store
         self.user_entitlement_store = user_entitlement_store
         self.template_market_store = template_market_store
@@ -339,6 +342,14 @@ class Pilot107HttpApi:
         )
         if repair_ticket_response is not None:
             return repair_ticket_response
+        if self.file_routes is not None:
+            file_response = self.file_routes.handle_get(
+                parts,
+                params=params,
+                identity=identity,
+            )
+            if file_response is not None:
+                return file_response
         if len(parts) == 1 and parts[0] == "recipes":
             return ApiResponse(
                 status=200,
@@ -800,6 +811,14 @@ class Pilot107HttpApi:
         )
         if repair_ticket_response is not None:
             return repair_ticket_response
+        if self.file_routes is not None:
+            file_response = self.file_routes.handle_post(
+                parts,
+                body=body,
+                identity=identity,
+            )
+            if file_response is not None:
+                return file_response
         if parts == ["terminal", "commands"]:
             return self._terminal_command(body=body, identity=identity)
         if (

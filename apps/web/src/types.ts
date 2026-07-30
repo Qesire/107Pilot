@@ -669,3 +669,62 @@ export interface RepairTicket {
   created_at: string;
   updated_at: string;
 }
+
+// ---------------------------------------------------------------------------
+// Visual Filesystem
+// ---------------------------------------------------------------------------
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  kind: "file" | "directory" | "symlink";
+  size: number;
+  modified: string;
+}
+
+export interface FileListResponse {
+  path: string;
+  entries: FileEntry[];
+}
+
+export interface FileContentResponse {
+  path: string;
+  offset: number;
+  size: number;
+  data_b64: string;
+}
+
+export type UploadSessionState =
+  | "initialized"
+  | "uploading"
+  | "completing"
+  | "completed"
+  | "written"
+  | "aborted"
+  | "failed";
+
+export interface UploadSession {
+  upload_id: string;
+  owner: string;
+  target_path: string;
+  filename: string;
+  total_size: number;
+  chunk_size: number;
+  total_chunks: number;
+  received_chunks: number[];
+  received_bytes: number;
+  sha256_expected: string | null;
+  sha256_actual: string | null;
+  state: UploadSessionState;
+  auto_extract: boolean;
+  created_at: string;
+  written_path: string | null;
+  extracted_members: number | null;
+  error: string | null;
+}
+
+export interface ArchiveResponse {
+  status: string;
+  path: string;
+  size: number;
+}
