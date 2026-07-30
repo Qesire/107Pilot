@@ -58,7 +58,7 @@ from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalo
 from pilot107.core.control_repository import ControlRepository
 from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.evidence_binding import EvidenceBinder
-from pilot107.core.file_uploads import FileUploadService
+from pilot107.core.file_uploads import FileUploadService, UploadSessionStore
 from pilot107.core.identity import is_safe_username
 from pilot107.core.platform import (
     CapabilityProfile,
@@ -74,6 +74,7 @@ from pilot107.core.postgres_domain_stores import (
     PostgresRunPublicationStore,
     PostgresRunStore,
     PostgresTemplateMarketStore,
+    PostgresUploadSessionStore,
     PostgresUserEntitlementStore,
 )
 from pilot107.core.preflight import LocalPathChecker
@@ -354,12 +355,20 @@ def _build_file_routes(
     staging_root = config.upload_staging_root or (
         config.db_path.parent / "upload-staging"
     )
+    upload_store: UploadSessionStore
+    if config.postgres_dsn is not None:
+        upload_store = PostgresUploadSessionStore(
+            config.postgres_dsn, compatibility_path=config.db_path
+        )
+    else:
+        upload_store = UploadSessionStore(config.db_path)
     upload_service = FileUploadService(
         executor=executor,
         owner_roots=owner_roots,
         staging_root=staging_root,
         chunk_size=config.upload_chunk_bytes,
         session_ttl_seconds=config.upload_session_ttl_seconds,
+        store=upload_store,
     )
     return FileRoutes(upload_service=upload_service, executor=executor)
 

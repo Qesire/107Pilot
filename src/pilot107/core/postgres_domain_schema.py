@@ -655,9 +655,35 @@ _RUN_PUBLICATION_SCHEMA = _statements(
     "CREATE UNIQUE INDEX idx_run_publication_adoptions_target_contract ON run_publication_adoptions(target_contract_id) WHERE target_contract_id IS NOT NULL"
 )
 
+_UPLOAD_SESSION_SCHEMA = _statements(
+    """
+    CREATE TABLE upload_sessions (
+        upload_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        target_path TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        total_size BIGINT NOT NULL,
+        chunk_size INTEGER NOT NULL,
+        total_chunks INTEGER NOT NULL,
+        sha256_expected TEXT,
+        auto_extract SMALLINT NOT NULL DEFAULT 0,
+        state TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        received_chunks_json TEXT NOT NULL DEFAULT '{}',
+        sha256_actual TEXT,
+        written_path TEXT,
+        extracted_members INTEGER,
+        error TEXT
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_upload_sessions_owner ON upload_sessions(owner, created_at DESC)"
+)
+
 _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.001.postgres_domain_schema", _DOMAIN_SCHEMA),
     ("004a.002.run_publications", _RUN_PUBLICATION_SCHEMA),
+    ("004a.003.upload_sessions", _UPLOAD_SESSION_SCHEMA),
 )
 
 
@@ -730,6 +756,7 @@ def domain_table_names() -> tuple[str, ...]:
         "remediation_action_executions",
         "remediation_evaluations",
         "remediation_session_events",
+        "upload_sessions",
     )
 
 

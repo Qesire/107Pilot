@@ -7,6 +7,7 @@ from typing import Any
 
 from pilot107.core.contracts import ContractStore
 from pilot107.core.control_repository import SQLiteControlRepository
+from pilot107.core.file_uploads import UploadSessionStore
 from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.postgres_domain_migration import (
     DomainDataMigrationError,
@@ -77,6 +78,7 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
             TemplateMarketStore(database)
             RunPublicationStore(database, run_store=run_store)
             RemediationStore(database)
+            UploadSessionStore(database)
             SQLiteControlRepository(database)
             with sqlite3.connect(database) as connection:
                 sqlite_tables = {

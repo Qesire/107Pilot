@@ -16,6 +16,7 @@ from pilot107.core.file_uploads import (
     FileUploadService,
     UploadError,
     UploadNotFound,
+    UploadSessionStore,
     UploadState,
 )
 
@@ -198,6 +199,97 @@ class FileUploadServiceTests(unittest.TestCase):
         self.assertEqual(removed, 1)
         with self.assertRaises(UploadNotFound):
             self.service.get_session(session.upload_id, self.owner)
+
+
+class UploadSessionStoreTests(unittest.TestCase):
+    """SQLite store persistence for upload sessions."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        base = Path(self._tmp.name)
+        self.cluster_root = base / "cluster" / "alice"
+        self.cluster_root.mkdir(parents=True)
+        self.staging_root = base / "staging"
+        self.db_path = base / "test.db"
+        self.store = UploadSessionStore(self.db_path)
+        self.executor = LocalFileOpsExecutor(allowed_roots=[str(self.cluster_root)])
+        self.service = FileUploadService(
+            executor=self.executor,
+            owner_roots=(str(self.cluster_root),),
+            staging_root=self.staging_root,
+            chunk_size=_CHUNK,
+            store=self.store,
+        )
+        self.owner = "alice"
+        self.target = str(self.cluster_root)
+
+    def test_session_persisted_on_create(self) -> None:
+        session = self.service.create_session(
+            owner=self.owner, target_path=self.target,
+            filename="test.bin", total_size=32,
+        )
+        row = self.store.get(session.upload_id)
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(row.owner, self.owner)
+        self.assertEqual(row.state, UploadState.INITIALIZED)
+
+    def test_session_survives_restart(self) -> None:
+        """A new service instance reloads non-terminal sessions from the store."""
+        session = self.service.create_session(
+            owner=self.owner, target_path=self.target,
+            filename="restart.bin", total_size=16,
+        )
+        # Simulate restart: new service with same store
+        service2 = FileUploadService(
+            executor=self.executor,
+            owner_roots=(str(self.cluster_root),),
+            staging_root=self.staging_root,
+            chunk_size=_CHUNK,
+            store=self.store,
+        )
+        reloaded = service2.get_session(session.upload_id, self.owner)
+        self.assertEqual(reloaded.filename, "restart.bin")
+        self.assertEqual(reloaded.state, UploadState.INITIALIZED)
+
+    def test_chunk_update_persisted(self) -> None:
+        session = self.service.create_session(
+            owner=self.owner, target_path=self.target,
+            filename="chunk.bin", total_size=32,
+        )
+        self.service.put_chunk(session.upload_id, self.owner, 0, _b64(b"A" * _CHUNK))
+        row = self.store.get(session.upload_id)
+        assert row is not None
+        self.assertEqual(row.state, UploadState.UPLOADING)
+        self.assertIn(0, row.received_chunks)
+
+    def test_complete_persisted(self) -> None:
+        payload = b"X" * 32
+        sha = hashlib.sha256(payload).hexdigest()
+        session = self.service.create_session(
+            owner=self.owner, target_path=self.target,
+            filename="done.bin", total_size=32, sha256_expected=sha,
+        )
+        for i in range(2):
+            self.service.put_chunk(
+                session.upload_id, self.owner, i,
+                _b64(payload[i * _CHUNK:(i + 1) * _CHUNK]),
+            )
+        self.service.complete(session.upload_id, self.owner)
+        row = self.store.get(session.upload_id)
+        assert row is not None
+        self.assertEqual(row.state, UploadState.WRITTEN)
+        self.assertEqual(row.sha256_actual, sha)
+
+    def test_cleanup_removes_from_store(self) -> None:
+        session = self.service.create_session(
+            owner=self.owner, target_path=self.target,
+            filename="expire.bin", total_size=16,
+        )
+        future = datetime.now(UTC) + timedelta(seconds=self.service.session_ttl_seconds + 10)
+        self.service.cleanup_expired(now=future)
+        self.assertIsNone(self.store.get(session.upload_id))
 
 
 if __name__ == "__main__":

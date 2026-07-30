@@ -19,13 +19,16 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import json
 import secrets
 import shutil
+import sqlite3
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from pilot107.adapters.slurm import FileOpsExecutor
 from pilot107.core.identity import is_safe_username
@@ -128,6 +131,132 @@ def _safe_filename(filename: str) -> str:
     return cleaned
 
 
+_UPLOAD_SESSIONS_DDL = """
+CREATE TABLE IF NOT EXISTS upload_sessions (
+    upload_id TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    target_path TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    total_size INTEGER NOT NULL,
+    chunk_size INTEGER NOT NULL,
+    total_chunks INTEGER NOT NULL,
+    sha256_expected TEXT,
+    auto_extract INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    received_chunks_json TEXT NOT NULL DEFAULT '{}',
+    sha256_actual TEXT,
+    written_path TEXT,
+    extracted_members INTEGER,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_upload_sessions_owner
+    ON upload_sessions(owner, created_at DESC);
+"""
+
+
+def _session_from_row(row: sqlite3.Row | dict[str, Any]) -> UploadSession:
+    """Reconstruct an UploadSession from a database row."""
+    raw_chunks = row["received_chunks_json"]
+    received = json.loads(raw_chunks)
+    return UploadSession(
+        upload_id=row["upload_id"],
+        owner=row["owner"],
+        target_path=row["target_path"],
+        filename=row["filename"],
+        total_size=row["total_size"],
+        chunk_size=row["chunk_size"],
+        total_chunks=row["total_chunks"],
+        sha256_expected=row["sha256_expected"],
+        auto_extract=bool(row["auto_extract"]),
+        state=UploadState(row["state"]),
+        created_at=row["created_at"],
+        received_chunks={int(k): v for k, v in received.items()},
+        sha256_actual=row["sha256_actual"],
+        written_path=row["written_path"],
+        extracted_members=row["extracted_members"],
+        error=row["error"],
+    )
+
+
+class UploadSessionStore:
+    """SQLite-backed persistence for upload session metadata."""
+
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.connect() as conn:
+            conn.executescript(_UPLOAD_SESSIONS_DDL)
+
+    def connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        return conn
+
+    def insert(self, session: UploadSession) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO upload_sessions "
+                "(upload_id, owner, target_path, filename, total_size, chunk_size, "
+                " total_chunks, sha256_expected, auto_extract, state, created_at, "
+                " received_chunks_json, sha256_actual, written_path, extracted_members, error) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    session.upload_id, session.owner, session.target_path,
+                    session.filename, session.total_size, session.chunk_size,
+                    session.total_chunks, session.sha256_expected,
+                    int(session.auto_extract), str(session.state),
+                    session.created_at, json.dumps(session.received_chunks),
+                    session.sha256_actual, session.written_path,
+                    session.extracted_members, session.error,
+                ),
+            )
+
+    def update(self, session: UploadSession) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE upload_sessions SET state=?, received_chunks_json=?, "
+                "sha256_actual=?, written_path=?, extracted_members=?, error=? "
+                "WHERE upload_id=?",
+                (
+                    str(session.state), json.dumps(session.received_chunks),
+                    session.sha256_actual, session.written_path,
+                    session.extracted_members, session.error,
+                    session.upload_id,
+                ),
+            )
+
+    def get(self, upload_id: str) -> UploadSession | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM upload_sessions WHERE upload_id=?", (upload_id,)
+            ).fetchone()
+        return _session_from_row(row) if row else None
+
+    def list_by_owner(self, owner: str) -> list[UploadSession]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM upload_sessions WHERE owner=? ORDER BY created_at DESC",
+                (owner,),
+            ).fetchall()
+        return [_session_from_row(r) for r in rows]
+
+    def delete(self, upload_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM upload_sessions WHERE upload_id=?", (upload_id,))
+
+    def delete_terminal_before(self, cutoff_iso: str) -> int:
+        terminal = ",".join(f"'{s}'" for s in _TERMINAL_STATES)
+        with self.connect() as conn:
+            cur = conn.execute(
+                f"DELETE FROM upload_sessions WHERE state IN ({terminal}) AND created_at < ?",
+                (cutoff_iso,),
+            )
+            return cur.rowcount
+
+
 class FileUploadService:
     """Owner-isolated chunked upload sessions staged on control-plane disk."""
 
@@ -139,6 +268,7 @@ class FileUploadService:
         staging_root: Path,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         session_ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
+        store: UploadSessionStore | None = None,
     ) -> None:
         if not owner_roots:
             raise ValueError("file upload service requires explicit owner roots")
@@ -151,8 +281,32 @@ class FileUploadService:
         self.staging_root = Path(staging_root)
         self.chunk_size = chunk_size
         self.session_ttl_seconds = session_ttl_seconds
+        self.store = store
         self._sessions: dict[str, UploadSession] = {}
         self._lock = threading.Lock()
+        if store is not None:
+            self._load_sessions_from_store()
+
+    def _load_sessions_from_store(self) -> None:
+        """Reload non-terminal sessions from the persistent store on startup."""
+        assert self.store is not None
+        with self.store.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM upload_sessions WHERE state NOT IN (?,?,?,?)",
+                tuple(str(s) for s in _TERMINAL_STATES),
+            ).fetchall()
+        with self._lock:
+            for row in rows:
+                session = _session_from_row(row)
+                self._sessions[session.upload_id] = session
+
+    def _persist_insert(self, session: UploadSession) -> None:
+        if self.store is not None:
+            self.store.insert(session)
+
+    def _persist_update(self, session: UploadSession) -> None:
+        if self.store is not None:
+            self.store.update(session)
 
     # -- path policy -------------------------------------------------------
 
@@ -223,6 +377,7 @@ class FileUploadService:
         (self._session_dir(session) / _CHUNK_DIR).mkdir(exist_ok=True)
         with self._lock:
             self._sessions[upload_id] = session
+        self._persist_insert(session)
         return session
 
     def get_session(self, upload_id: str, owner: str) -> UploadSession:
@@ -241,6 +396,7 @@ class FileUploadService:
         with self._lock:
             if session.state not in _TERMINAL_STATES:
                 session.state = UploadState.ABORTED
+        self._persist_update(session)
         self._purge_staging(session)
         return session
 
@@ -276,6 +432,7 @@ class FileUploadService:
             session.received_chunks[index] = len(data)
             if session.state == UploadState.INITIALIZED:
                 session.state = UploadState.UPLOADING
+        self._persist_update(session)
         return session
 
     def _expected_chunk_length(self, session: UploadSession, index: int) -> int:
@@ -313,6 +470,7 @@ class FileUploadService:
                 session.error = (
                     f"sha256 mismatch: expected {session.sha256_expected}, got {digest}"
                 )
+                self._persist_update(session)
                 self._purge_staging(session)
                 raise UploadError(
                     session.error, status=409, code="UPLOAD.SHA256_MISMATCH"
@@ -334,12 +492,14 @@ class FileUploadService:
         except Exception as exc:  # transport / executor failure
             session.state = UploadState.FAILED
             session.error = str(exc)
+            self._persist_update(session)
             self._purge_staging(session)
             raise UploadError(
                 f"upload completion failed: {exc}",
                 status=502,
                 code="UPLOAD.WRITE_FAILED",
             ) from exc
+        self._persist_update(session)
         self._purge_staging(session)
         return session
 
@@ -412,4 +572,6 @@ class FileUploadService:
                 session = self._sessions.pop(upload_id)
                 removed += 1
                 self._purge_staging(session)
+                if self.store is not None:
+                    self.store.delete(upload_id)
         return removed

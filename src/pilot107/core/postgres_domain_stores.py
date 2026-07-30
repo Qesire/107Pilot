@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from pilot107.core.contracts import ContractService, ContractStore
+from pilot107.core.file_uploads import UploadSessionStore
 from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.postgres_control_repository import PostgresDriverUnavailable
 from pilot107.core.postgres_domain_schema import initialize_postgres_domain_schema
@@ -176,6 +177,14 @@ class PostgresRunPublicationStore(_PostgresDomainStore, RunPublicationStore):
 
 
 class PostgresRemediationStore(_PostgresDomainStore, RemediationStore):
+    def __init__(self, dsn: str, *, compatibility_path: Path) -> None:
+        self._configure_postgres(dsn=dsn, compatibility_path=compatibility_path)
+
+    def connect(self) -> sqlite3.Connection:
+        return cast(sqlite3.Connection, self._postgres_connect())
+
+
+class PostgresUploadSessionStore(_PostgresDomainStore, UploadSessionStore):
     def __init__(self, dsn: str, *, compatibility_path: Path) -> None:
         self._configure_postgres(dsn=dsn, compatibility_path=compatibility_path)
 
