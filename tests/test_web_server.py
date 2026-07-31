@@ -131,6 +131,29 @@ class WebServerTests(unittest.TestCase):
             "CSRF.JSON_REQUIRED",
         )
 
+    def test_origin_fallback_honours_forwarded_proto_and_host(self) -> None:
+        # No public_origin configured: the BFF sits behind an HTTPS reverse
+        # proxy that strips Host and sets X-Forwarded-Proto/Host.
+        config = WebConfig(api_base_url="http://api:8080", public_origin=None)
+        base = {
+            "Content-Type": "application/json",
+            "Sec-Fetch-Site": "same-origin",
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "pilot.example.edu:8443",
+            "Host": "pilot107-web:3000",
+        }
+        self.assertIsNone(
+            mutating_request_error(
+                config, {**base, "Origin": "https://pilot.example.edu:8443"}
+            )
+        )
+        self.assertEqual(
+            mutating_request_error(
+                config, {**base, "Origin": "http://pilot.example.edu:8443"}
+            ),
+            "CSRF.ORIGIN_DENIED",
+        )
+
     def test_public_origin_is_canonical_and_hsts_is_explicit(self) -> None:
         config = config_from_env(
             {

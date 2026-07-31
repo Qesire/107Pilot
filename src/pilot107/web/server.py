@@ -455,8 +455,11 @@ def mutating_request_error(config: WebConfig, headers: Mapping[str, str]) -> str
     if origin:
         expected = normalize_origin(config.public_origin) if config.public_origin else None
         if expected is None:
-            host = normalized.get("host", "")
-            expected = normalize_origin(f"http://{host}") if host else None
+            host = normalized.get("x-forwarded-host") or normalized.get("host", "")
+            scheme = normalized.get("x-forwarded-proto", "http").strip().lower()
+            if scheme not in {"http", "https"}:
+                scheme = "http"
+            expected = normalize_origin(f"{scheme}://{host}") if host else None
         if normalize_origin(origin) != expected:
             return "CSRF.ORIGIN_DENIED"
     return None

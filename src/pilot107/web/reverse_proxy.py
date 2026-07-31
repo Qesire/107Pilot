@@ -78,6 +78,7 @@ def make_proxy_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                 self.send_error(413, "request too large")
                 return
             body = self.rfile.read(length) if length > 0 else None
+            original_host = self.headers.get("Host", "")
             headers = {
                 key: value
                 for key, value in self.headers.items()
@@ -85,6 +86,8 @@ def make_proxy_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
             }
             headers["X-Forwarded-Proto"] = "https"
             headers["X-Forwarded-For"] = self.client_address[0]
+            if original_host:
+                headers["X-Forwarded-Host"] = original_host
             request = urllib.request.Request(
                 url=f"{config.target}{self.path}",
                 data=body,
