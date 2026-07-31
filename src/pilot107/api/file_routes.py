@@ -12,6 +12,8 @@ POST /files/uploads/{id}/complete      verify + write (+ optional extract)
 POST /files/uploads/{id}/abort         abandon a session
 POST /files/mkdir                      create a directory
 POST /files/delete                     remove a file or tree
+POST /files/rename                     rename or move a file/directory
+POST /files/archive                    pack paths into a tar.gz
 
 Path authorization is enforced both here (upload destinations against the
 owner roots) and inside the executor backend (every primitive re-checks the
@@ -250,6 +252,34 @@ class FileRoutes:
             except SlurmTransportError as exc:
                 return _error(502, "FILES.DELETE_FAILED", str(exc))
             return ApiResponse(status=200, payload={"status": "ok", "path": path})
+
+        # POST /files/rename  (rename or move; new_path may be in another dir)
+        if len(parts) == 2 and parts[1] == "rename":
+            payload, error = _json_body(body)
+            if error is not None:
+                return error
+            path = _optional_string(payload, "path")
+            new_path = _optional_string(payload, "new_path")
+            if not path:
+                return _error(400, "FILES.INVALID_REQUEST", "path is required")
+            if not new_path:
+                return _error(400, "FILES.INVALID_REQUEST", "new_path is required")
+            overwrite = bool(payload.get("overwrite", False))
+            try:
+                self.executor.rename_path(
+                    path=path, new_path=new_path, owner=owner, overwrite=overwrite
+                )
+            except SlurmSubmissionRejected as exc:
+                message = str(exc)
+                if "already exists" in message:
+                    return _error(409, "FILES.TARGET_EXISTS", message)
+                return _error(403, "FILES.PATH_FORBIDDEN", message)
+            except SlurmTransportError as exc:
+                return _error(502, "FILES.RENAME_FAILED", str(exc))
+            return ApiResponse(
+                status=200,
+                payload={"status": "ok", "path": path, "new_path": new_path},
+            )
 
         # POST /files/archive
         if len(parts) == 2 and parts[1] == "archive":

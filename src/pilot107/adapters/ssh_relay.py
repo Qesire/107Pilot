@@ -586,6 +586,33 @@ class SshRelayExecutor:
         if result.returncode != 0:
             raise SlurmTransportError("SSH.REMOVE_FAILED")
 
+    def rename_path(
+        self,
+        *,
+        path: str,
+        new_path: str,
+        owner: str,
+        overwrite: bool = False,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        self._require_file_owner(owner)
+        safe_src = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
+        safe_dst = _validate_remote_path(
+            new_path, roots=self.config.expanded_owner_roots()
+        )
+        if overwrite:
+            command = f"mv -f -- {shlex.quote(safe_src)} {shlex.quote(safe_dst)}"
+        else:
+            command = (
+                f"test -e {shlex.quote(safe_dst)} && echo EXISTS && exit 1 || "
+                f"mv -- {shlex.quote(safe_src)} {shlex.quote(safe_dst)}"
+            )
+        result = self._file_shell(command, timeout_seconds=timeout_seconds)
+        if result.returncode != 0:
+            if "EXISTS" in result.stdout:
+                raise SlurmTransportError("SSH.RENAME_TARGET_EXISTS")
+            raise SlurmTransportError("SSH.RENAME_FAILED")
+
     def stat_path(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
     ) -> FileStat:

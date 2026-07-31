@@ -98,6 +98,23 @@ class FakeExecutor:
         self.files.pop(path, None)
         self.dirs.discard(path)
 
+    def rename_path(
+        self, *, path, new_path, owner, overwrite=False, timeout_seconds=30.0
+    ) -> None:
+        self._check(path)
+        self._check(new_path)
+        if path in self.files:
+            if new_path in self.files and not overwrite:
+                raise SlurmSubmissionRejected(f"target already exists: {new_path}")
+            self.files[new_path] = self.files.pop(path)
+        elif path in self.dirs:
+            self.dirs.discard(path)
+            self.dirs.add(new_path)
+        else:
+            from pilot107.adapters.slurm import SlurmTransportError
+
+            raise SlurmTransportError(f"path does not exist: {path}")
+
     def stat_path(self, *, path, owner, timeout_seconds=30.0) -> FileStat:
         self._check(path)
         if path in self.files:
@@ -320,6 +337,45 @@ class FileUploadApiTests(unittest.TestCase):
         response = self.api.handle_post(
             "/api/v1/files/archive",
             body=_json({"paths": [], "dest_dir": "/public/home/alice"}),
+            headers=self._headers("alice"),
+        )
+        self.assertEqual(response.status, 400)
+
+    def test_rename_route_moves_file(self) -> None:
+        self.executor.files["/public/home/alice/old.txt"] = bytearray(b"data")
+        response = self.api.handle_post(
+            "/api/v1/files/rename",
+            body=_json(
+                {
+                    "path": "/public/home/alice/old.txt",
+                    "new_path": "/public/home/alice/new.txt",
+                }
+            ),
+            headers=self._headers("alice"),
+        )
+        self.assertEqual(response.status, 200, response.payload)
+        self.assertNotIn("/public/home/alice/old.txt", self.executor.files)
+        self.assertIn("/public/home/alice/new.txt", self.executor.files)
+
+    def test_rename_rejects_existing_target_without_overwrite(self) -> None:
+        self.executor.files["/public/home/alice/a.txt"] = bytearray(b"1")
+        self.executor.files["/public/home/alice/b.txt"] = bytearray(b"2")
+        response = self.api.handle_post(
+            "/api/v1/files/rename",
+            body=_json(
+                {
+                    "path": "/public/home/alice/a.txt",
+                    "new_path": "/public/home/alice/b.txt",
+                }
+            ),
+            headers=self._headers("alice"),
+        )
+        self.assertEqual(response.status, 409)
+
+    def test_rename_requires_new_path(self) -> None:
+        response = self.api.handle_post(
+            "/api/v1/files/rename",
+            body=_json({"path": "/public/home/alice/a.txt"}),
             headers=self._headers("alice"),
         )
         self.assertEqual(response.status, 400)

@@ -402,6 +402,21 @@ class FileOpsExecutor(Protocol):
     ) -> None:
         """Remove a file or directory tree."""
 
+    def rename_path(
+        self,
+        *,
+        path: str,
+        new_path: str,
+        owner: str,
+        overwrite: bool = False,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        """Rename or move ``path`` to ``new_path``.
+
+        Both endpoints are authorized against the owner's roots. When
+        ``overwrite`` is false an existing target is rejected.
+        """
+
     def stat_path(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
     ) -> FileStat:
@@ -593,6 +608,27 @@ class HttpCommandGatewayExecutor:
         self._request(
             "/remove",
             {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
+            timeout_seconds=timeout_seconds,
+        )
+
+    def rename_path(
+        self,
+        *,
+        path: str,
+        new_path: str,
+        owner: str,
+        overwrite: bool = False,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        self._request(
+            "/rename",
+            {
+                "path": path,
+                "new_path": new_path,
+                "owner": owner,
+                "overwrite": overwrite,
+                "timeout_seconds": timeout_seconds,
+            },
             timeout_seconds=timeout_seconds,
         )
 
@@ -820,6 +856,29 @@ class LocalFileOpsExecutor:
             target.unlink()
         else:
             raise SlurmTransportError(f"path does not exist: {path}")
+
+    def rename_path(
+        self,
+        *,
+        path: str,
+        new_path: str,
+        owner: str,
+        overwrite: bool = False,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        source = self._authorize(path)
+        destination = self._authorize(new_path)
+        if not source.exists() and not source.is_symlink():
+            raise SlurmTransportError(f"path does not exist: {path}")
+        if destination.exists() and not overwrite:
+            raise SlurmSubmissionRejected(f"target already exists: {new_path}")
+        if destination.exists():
+            if destination.is_dir() and not destination.is_symlink():
+                shutil.rmtree(destination)
+            else:
+                destination.unlink()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(destination)
 
     def stat_path(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0

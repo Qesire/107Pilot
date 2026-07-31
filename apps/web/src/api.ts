@@ -647,6 +647,19 @@ export const api = {
     sendJson<{ status: string; path: string }>("/api/v1/files/mkdir", user, { path }, signal),
   fileDelete: (user: string, path: string, signal?: AbortSignal) =>
     sendJson<{ status: string; path: string }>("/api/v1/files/delete", user, { path }, signal),
+  fileRename: (
+    user: string,
+    path: string,
+    newPath: string,
+    overwrite = false,
+    signal?: AbortSignal,
+  ) =>
+    sendJson<{ status: string; path: string; new_path: string }>(
+      "/api/v1/files/rename",
+      user,
+      { path, new_path: newPath, overwrite },
+      signal,
+    ),
   fileArchive: (
     user: string,
     paths: string[],

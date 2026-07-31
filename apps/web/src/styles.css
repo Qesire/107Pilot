@@ -1192,6 +1192,7 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 .files-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 0.84rem;
 }
 
@@ -1252,9 +1253,13 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 }
 
 .files-table .col-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  /* keep td as table-cell; align icon+name inline */
+}
+
+.files-table .col-name svg {
+  vertical-align: -2px;
+  margin-right: 8px;
+  flex-shrink: 0;
 }
 
 .files-table .entry-name {
@@ -1267,6 +1272,7 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 
 .files-table .col-check {
   width: 36px;
+  text-align: center;
 }
 
 .files-table .col-check input[type="checkbox"] {
@@ -1282,6 +1288,10 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
   color: var(--ink-soft);
   font-size: 0.8rem;
 }
+
+.files-table .col-size { width: 90px; }
+.files-table .col-time { width: 120px; }
+.files-table .col-actions { width: 148px; }
 
 .files-table .col-actions {
   white-space: nowrap;
@@ -1313,6 +1323,100 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 .files-table .icon-button.danger:hover {
   background: var(--red-soft);
   color: var(--red);
+}
+
+.files-table .icon-button.confirm {
+  color: var(--teal);
+}
+
+/* -- Inline rename form -- */
+.rename-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.rename-inline input {
+  font: inherit;
+  font-weight: 500;
+  padding: 3px 8px;
+  border: 1.5px solid var(--teal);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+  max-width: 260px;
+  box-shadow: 0 0 0 3px rgb(22 123 105 / 10%);
+}
+
+.file-row.renaming {
+  background: var(--surface-soft);
+}
+
+/* -- Move modal -- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: rgb(15 23 32 / 45%);
+  backdrop-filter: blur(3px);
+  animation: fadeIn 0.15s ease;
+}
+
+.modal-card {
+  width: min(440px, 90vw);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgb(15 23 32 / 18%);
+  padding: 24px;
+  animation: slideIn 0.18s ease;
+}
+
+.modal-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.modal-title svg { color: var(--teal); }
+
+.modal-hint {
+  margin: 0 0 12px;
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+}
+
+.modal-input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.84rem;
+  padding: 9px 12px;
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.modal-input:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgb(22 123 105 / 10%);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  justify-content: flex-end;
 }
 
 /* -- File type icon colors -- */

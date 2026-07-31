@@ -10,11 +10,12 @@ import {
   FileImage,
   FileText,
   Folder,
-  FolderOpen,
+  FolderInput,
   FolderPlus,
   Home,
   Link2,
   LoaderCircle,
+  Pencil,
   Trash2,
   Upload,
   UploadCloud,
@@ -83,6 +84,10 @@ export function FilesPage({ user }: PageProps) {
   } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [movingEntry, setMovingEntry] = useState<FileEntry | null>(null);
+  const [moveDest, setMoveDest] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounter = useRef(0);
 
@@ -155,6 +160,52 @@ export function FilesPage({ user }: PageProps) {
     },
     onError: (err) => setActionError(err instanceof Error ? err.message : "删除失败"),
   });
+
+  // -- rename / move --
+  const renameMutation = useMutation({
+    mutationFn: ({ path, newPath }: { path: string; newPath: string }) =>
+      api.fileRename(user, path, newPath),
+    onSuccess: () => {
+      setRenamingPath(null);
+      setRenameValue("");
+      setMovingEntry(null);
+      setMoveDest("");
+      invalidate();
+    },
+    onError: (err) =>
+      setActionError(err instanceof Error ? err.message : "重命名/移动失败"),
+  });
+
+  const startRename = (entry: FileEntry) => {
+    setRenamingPath(entry.path);
+    setRenameValue(entry.name);
+    setActionError(null);
+  };
+
+  const commitRename = (entry: FileEntry) => {
+    const name = renameValue.trim();
+    if (!name || name === entry.name) {
+      setRenamingPath(null);
+      return;
+    }
+    const dir = entry.path.slice(0, entry.path.lastIndexOf("/")) || "/";
+    renameMutation.mutate({ path: entry.path, newPath: `${dir}/${name}` });
+  };
+
+  const startMove = (entry: FileEntry) => {
+    setMovingEntry(entry);
+    setMoveDest(homePath);
+    setActionError(null);
+  };
+
+  const commitMove = () => {
+    if (!movingEntry) return;
+    const dest = moveDest.trim().replace(/\/+$/, "") || "/";
+    renameMutation.mutate({
+      path: movingEntry.path,
+      newPath: `${dest}/${movingEntry.name}`,
+    });
+  };
 
   // -- archive --
   const archiveMutation = useMutation({
@@ -418,8 +469,9 @@ export function FilesPage({ user }: PageProps) {
               {sortedEntries.map((entry) => (
                 <tr
                   key={entry.path}
-                  className={`file-row${selected.has(entry.path) ? " selected" : ""}`}
+                  className={`file-row${selected.has(entry.path) ? " selected" : ""}${renamingPath === entry.path ? " renaming" : ""}`}
                   onClick={() => {
+                    if (renamingPath === entry.path) return;
                     if (entry.kind === "directory") navigateTo(entry.path);
                     else toggleSelect(entry.path);
                   }}
@@ -435,7 +487,29 @@ export function FilesPage({ user }: PageProps) {
                   </td>
                   <td className="col-name">
                     <EntryIcon kind={entry.kind} name={entry.name} />
-                    <span className="entry-name" title={entry.path}>{entry.name}</span>
+                    {renamingPath === entry.path ? (
+                      <form
+                        className="rename-inline"
+                        onSubmit={(e) => { e.preventDefault(); commitRename(entry); }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          autoFocus
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Escape") { setRenamingPath(null); setRenameValue(""); } }}
+                          onFocus={(e) => {
+                            const dot = renameValue.lastIndexOf(".");
+                            e.target.setSelectionRange(0, dot > 0 ? dot : renameValue.length);
+                          }}
+                          aria-label="新名称"
+                        />
+                        <button type="submit" className="icon-button confirm" title="确认">✓</button>
+                        <button type="button" className="icon-button" title="取消" onClick={() => { setRenamingPath(null); setRenameValue(""); }}>✕</button>
+                      </form>
+                    ) : (
+                      <span className="entry-name" title={entry.path}>{entry.name}</span>
+                    )}
                   </td>
                   <td className="col-size">{entry.kind === "directory" ? "—" : formatSize(entry.size)}</td>
                   <td className="col-time">{formatTime(entry.modified)}</td>
@@ -450,6 +524,22 @@ export function FilesPage({ user }: PageProps) {
                         <Download size={14} aria-hidden="true" />
                       </button>
                     )}
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title="重命名"
+                      onClick={(e) => { e.stopPropagation(); startRename(entry); }}
+                    >
+                      <Pencil size={14} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title="移动到…"
+                      onClick={(e) => { e.stopPropagation(); startMove(entry); }}
+                    >
+                      <FolderInput size={14} aria-hidden="true" />
+                    </button>
                     <button
                       type="button"
                       className="icon-button danger"
@@ -468,6 +558,36 @@ export function FilesPage({ user }: PageProps) {
           </table>
         </QueryBoundary>
       </div>
+
+      {/* Move dialog */}
+      {movingEntry && (
+        <div className="modal-backdrop" onClick={() => { setMovingEntry(null); setMoveDest(""); }}>
+          <div className="modal-card" role="dialog" aria-label="移动文件" onClick={(e) => e.stopPropagation()}>
+            <h3 className="modal-title">
+              <FolderInput size={18} aria-hidden="true" />
+              移动 “{movingEntry.name}”
+            </h3>
+            <p className="modal-hint">输入目标目录的完整路径：</p>
+            <input
+              autoFocus
+              className="modal-input"
+              value={moveDest}
+              onChange={(e) => setMoveDest(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") commitMove(); if (e.key === "Escape") { setMovingEntry(null); setMoveDest(""); } }}
+              placeholder={homePath}
+              aria-label="目标目录"
+            />
+            <div className="modal-actions">
+              <button type="button" className="button primary" onClick={commitMove} disabled={renameMutation.isPending}>
+                {renameMutation.isPending ? "移动中…" : "移动"}
+              </button>
+              <button type="button" className="button ghost" onClick={() => { setMovingEntry(null); setMoveDest(""); }}>
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

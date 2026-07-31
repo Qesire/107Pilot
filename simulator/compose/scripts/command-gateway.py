@@ -127,6 +127,10 @@ def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
                     _remove_path(payload, config)
                     status = 200
                     response = {"status": "ok"}
+                elif self.path.rstrip("/") == "/rename":
+                    _rename_path(payload, config)
+                    status = 200
+                    response = {"status": "ok"}
                 elif self.path.rstrip("/") == "/stat":
                     response = _file_stat(payload, config)
                     status = 200
@@ -351,6 +355,12 @@ def _audit_request_summary(*, path: str, payload: dict[str, Any]) -> dict[str, A
         }
     if path == "/mkdir":
         return {"path": payload.get("path"), "owner": payload.get("owner")}
+    if path == "/rename":
+        return {
+            "path": payload.get("path"),
+            "new_path": payload.get("new_path"),
+            "owner": payload.get("owner"),
+        }
     if path == "/archive":
         return {
             "paths": payload.get("paths"),
@@ -571,6 +581,27 @@ def _remove_path(payload: dict[str, Any], config: GatewayConfig) -> None:
         target.unlink()
     else:
         raise GatewayError(f"path does not exist: {path}", status=404)
+
+
+def _rename_path(payload: dict[str, Any], config: GatewayConfig) -> None:
+    owner = _safe_user(str(payload.get("owner", "")))
+    path = _authorize_path(str(payload.get("path", "")), config, user=owner)
+    new_path = _authorize_path(str(payload.get("new_path", "")), config, user=owner)
+    overwrite = bool(payload.get("overwrite", False))
+    source = Path(path)
+    destination = Path(new_path)
+    if not source.exists() and not source.is_symlink():
+        raise GatewayError(f"path does not exist: {path}", status=404)
+    if destination.exists():
+        if not overwrite:
+            raise GatewayError(f"target already exists: {new_path}", status=409)
+        if destination.is_dir() and not destination.is_symlink():
+            shutil.rmtree(destination)
+        else:
+            destination.unlink()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(destination)
+    _chown_to_owner(new_path, owner)
 
 
 def _file_stat(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:

@@ -91,6 +91,7 @@ _STATIC_SEGMENTS = frozenset(
         "reject",
         "releases",
         "remediation-sessions",
+        "rename",
         "review-queue",
         "reviews",
         "schema",
