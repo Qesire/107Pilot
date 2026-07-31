@@ -346,7 +346,7 @@ class UploadQuotaTests(unittest.TestCase):
             owner="alice", target_path=self.target,
             filename="a.bin", total_size=100,
         )
-        s2 = self.service.create_session(
+        self.service.create_session(
             owner="alice", target_path=self.target,
             filename="b.bin", total_size=100,
         )
