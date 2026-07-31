@@ -914,10 +914,61 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
    Files Page
 --------------------------------------------------------------------------- */
 
+/* ==========================================================================
+   Files Page — Visual Filesystem
+   ========================================================================== */
+
 .files-page {
+  position: relative;
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+
+/* -- Drag & drop overlay -- */
+.files-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgb(22 123 105 / 8%);
+  backdrop-filter: blur(2px);
+  animation: fadeIn 0.15s ease;
+}
+
+.files-drop-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 12px;
+  padding: 48px 64px;
+  border: 2px dashed var(--teal);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--teal);
+  text-align: center;
+}
+
+.files-drop-inner strong {
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+
+.files-drop-inner span {
+  font-size: 0.78rem;
+  font-family: ui-monospace, monospace;
+  color: var(--ink-faint);
+}
+
+/* -- Path bar (breadcrumb + stats) -- */
+.files-path-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .files-breadcrumb {
@@ -927,6 +978,10 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
   font-size: 0.82rem;
   color: var(--ink-soft);
   flex-wrap: wrap;
+  padding: 6px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
 }
 
 .files-breadcrumb button {
@@ -934,13 +989,16 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
   border: none;
   color: var(--teal);
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
+  padding: 3px 6px;
+  border-radius: 6px;
   font-size: inherit;
+  font-weight: 550;
+  transition: background 0.12s, color 0.12s;
 }
 
 .files-breadcrumb button:hover {
   background: var(--teal-soft);
+  color: var(--teal);
 }
 
 .files-breadcrumb .breadcrumb-home {
@@ -954,52 +1012,158 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
   gap: 2px;
 }
 
+.files-breadcrumb .breadcrumb-seg svg {
+  color: var(--ink-faint);
+}
+
+.files-stats {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+}
+
+.files-stats .stats-sep {
+  margin: 0 2px;
+}
+
+/* -- Toolbar -- */
 .files-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
-.files-mkdir-form {
+.files-toolbar-left {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.files-mkdir-form input {
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  font-size: 0.85rem;
-  width: 200px;
+.files-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  background: var(--teal-soft);
+  border-radius: 10px;
+  animation: slideIn 0.15s ease;
 }
 
-.files-upload-progress {
+.files-toolbar-actions .selection-count {
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--teal);
+  margin-right: 4px;
+}
+
+/* -- Mkdir form -- */
+.files-mkdir-form {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  animation: slideIn 0.15s ease;
+}
+
+.files-mkdir-form .mkdir-icon {
+  color: var(--amber);
+  flex: none;
+}
+
+.files-mkdir-form input {
   padding: 8px 12px;
-  background: var(--blue-soft);
+  border: 1px solid var(--line);
   border-radius: 8px;
-  font-size: 0.82rem;
+  font-size: 0.85rem;
+  width: 220px;
+  background: var(--surface-soft);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.files-upload-progress progress {
-  flex: 1;
-  max-width: 200px;
+.files-mkdir-form input:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgb(22 123 105 / 10%);
+  outline: none;
+}
+
+/* -- Upload progress card -- */
+.files-upload-card {
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  animation: slideIn 0.2s ease;
+}
+
+.upload-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.upload-spinner {
+  color: var(--teal);
+}
+
+.upload-filename {
+  font-weight: 650;
+  font-size: 0.85rem;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-state {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+}
+
+.upload-progress-track {
   height: 6px;
+  border-radius: 3px;
+  background: var(--surface-strong);
+  overflow: hidden;
 }
 
+.upload-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--teal), #1fa88e);
+  transition: width 0.3s ease;
+}
+
+.upload-card-footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+
+/* -- Error banner -- */
 .files-error {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  padding: 10px 16px;
   background: var(--red-soft);
-  border-radius: 8px;
+  border: 1px solid rgb(180 66 59 / 15%);
+  border-radius: 10px;
   font-size: 0.82rem;
   color: var(--red);
+  animation: slideIn 0.15s ease;
 }
 
 .files-error button {
@@ -1008,6 +1172,21 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
   color: var(--red);
   cursor: pointer;
   font-size: 1rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.files-error button:hover {
+  background: rgb(180 66 59 / 10%);
+}
+
+/* -- File listing card -- */
+.files-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
 }
 
 .files-table {
@@ -1018,22 +1197,30 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 
 .files-table th {
   text-align: left;
-  padding: 8px 10px;
-  border-bottom: 2px solid var(--line);
-  color: var(--ink-soft);
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-faint);
   font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   white-space: nowrap;
+  background: var(--surface-soft);
 }
 
 .files-table td {
-  padding: 7px 10px;
+  padding: 9px 14px;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
 }
 
+.files-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
 .files-table .file-row {
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background 0.12s ease;
 }
 
 .files-table .file-row:hover {
@@ -1044,46 +1231,78 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
   background: var(--teal-soft);
 }
 
+.files-table .file-row.selected:hover {
+  background: rgb(22 123 105 / 12%);
+}
+
 .files-table .parent-row td {
   color: var(--ink-faint);
+}
+
+.files-table .parent-row .parent-hint {
+  margin-left: 8px;
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.files-table .parent-row:hover .parent-hint {
+  opacity: 1;
 }
 
 .files-table .col-name {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .files-table .entry-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 320px;
+  max-width: 360px;
+  font-weight: 500;
 }
 
 .files-table .col-check {
-  width: 32px;
+  width: 36px;
+}
+
+.files-table .col-check input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--teal);
+  cursor: pointer;
 }
 
 .files-table .col-size,
 .files-table .col-time {
   white-space: nowrap;
   color: var(--ink-soft);
+  font-size: 0.8rem;
 }
 
 .files-table .col-actions {
   white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.files-table .file-row:hover .col-actions {
+  opacity: 1;
 }
 
 .files-table .icon-button {
   background: none;
   border: none;
   cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
+  padding: 5px;
+  border-radius: 6px;
   color: var(--ink-soft);
   display: inline-flex;
   align-items: center;
+  transition: background 0.12s, color 0.12s;
 }
 
 .files-table .icon-button:hover {
@@ -1096,11 +1315,28 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
   color: var(--red);
 }
 
+/* -- File type icon colors -- */
 .icon-folder {
   color: var(--amber);
 }
 
 .icon-file {
+  color: var(--ink-faint);
+}
+
+.icon-code {
+  color: var(--teal);
+}
+
+.icon-archive {
+  color: #8b5cf6;
+}
+
+.icon-image {
+  color: #d946ef;
+}
+
+.icon-text {
   color: var(--blue);
 }
 
@@ -1108,6 +1344,7 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
   color: var(--ink-faint);
 }
 
+/* -- Buttons -- */
 .button.danger {
   background: var(--red);
   color: #fff;
@@ -1116,4 +1353,26 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 
 .button.danger:hover {
   opacity: 0.9;
+}
+
+.button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-soft);
+}
+
+.button.ghost:hover {
+  background: var(--surface-strong);
+  color: var(--ink);
+}
+
+/* -- Animations -- */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
