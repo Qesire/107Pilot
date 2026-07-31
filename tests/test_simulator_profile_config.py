@@ -211,11 +211,15 @@ class SimulatorProfileConfigTests(unittest.TestCase):
                 encoding="utf-8"
             ),
         )
-        self.assertNotIn(
-            "/sys/fs/cgroup/system.slice",
-            (ROOT / "simulator/images/slurm/docker-entrypoint.sh").read_text(
-                encoding="utf-8"
-            ),
+        # The entrypoint pre-creates /sys/fs/cgroup/system.slice for slurmd
+        # under private cgroupns (commit 3b86ac9). This is best-effort and
+        # required for cpu-rc cgroup/v2 enforcement; harmless in base sim.
+        entrypoint = (ROOT / "simulator/images/slurm/docker-entrypoint.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "mkdir -p /sys/fs/cgroup/system.slice 2>/dev/null || true",
+            entrypoint,
         )
 
     def test_gres_conf_matches_profile_gpu_nodes(self) -> None:
