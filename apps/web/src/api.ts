@@ -7,6 +7,7 @@ import type {
   ContractValidation,
   EntitlementSnapshot,
   FileContentResponse,
+  FileEntry,
   FileListResponse,
   HealthReady,
   PagePayload,
@@ -621,12 +622,23 @@ export const api = {
   // -------------------------------------------------------------------------
   // Visual Filesystem
   // -------------------------------------------------------------------------
-  fileList: (user: string, path: string, signal?: AbortSignal) =>
-    getJson<FileListResponse>(
-      queryPath("/api/v1/files", { path }),
-      user,
-      signal,
-    ),
+  fileList: async (user: string, path: string, signal?: AbortSignal) => {
+    const raw = await getJson<{
+      path: string;
+      entries: Array<{ name: string; type: string; size: number; mtime: number }>;
+    }>(queryPath("/api/v1/files", { path }), user, signal);
+    const base = raw.path.replace(/\/+$/, "");
+    return {
+      path: raw.path,
+      entries: raw.entries.map((e) => ({
+        name: e.name,
+        path: `${base}/${e.name}`,
+        kind: (e.type === "dir" ? "directory" : e.type) as FileEntry["kind"],
+        size: e.size,
+        modified: e.mtime > 0 ? new Date(e.mtime * 1000).toISOString() : "",
+      })),
+    } satisfies FileListResponse;
+  },
   fileContent: (
     user: string,
     path: string,
