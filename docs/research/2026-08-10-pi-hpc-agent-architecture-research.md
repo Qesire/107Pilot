@@ -10,13 +10,14 @@
 
 学校反馈表明，Slurm 登录节点不能承受所有学生各自常驻 Claude、Hermes 或同类大型编码 Agent；如果仅要求学生在个人电脑运行 Agent，再通过 SSH 对集群进行大量细碎操作，又会产生延迟、认证、文件同步和环境差异问题。
 
-本研究回答五个问题：
+本研究回答六个问题：
 
 1. 107Pilot Agent 应定位为远程 shell、通用编码 Agent，还是 HPC 原生控制面？
 2. 模型循环、代码工作区、Slurm 控制和真实计算分别应放在哪里？
 3. 是否能采用成熟 Agent harness，而不在登录节点运行完整 Agent？
 4. 如何支持从零创建实验工程、修复代码和异步验证，同时保持低资源占用？
 5. 现有 107Pilot 的 SSH relay、Worker、Evidence、Runtime Watch、文件传输和修复状态机可以复用到什么程度？
+6. Template Market 如何成为工程创建、成功 Run 复用和后续运行验证的完整支线，而不是静态模板列表？
 
 ## 2. 研究范围与方法
 
@@ -229,9 +230,10 @@ tool call
 - Worker/outbox 已有 lease、heartbeat、重试和 fencing 基础；
 - Remediation Session 已有持久状态、预算、审批和派生 Run；
 - Evidence、Diagnosis、PlatformSnapshot、Runtime Watch 和文件传输已形成可引用数据源；
+- Template Market 已有 draft/review/publish、immutable release、visibility、adoption、environment verification、ranking 和 withdrawal 数据模型；
 - 真实 `/public` 是否可挂载到应用节点仍未确认，因此设计不能依赖共享文件系统直挂。
 
-因此需要新增的是统一 AgentSession/Turn、Pi kernel、WorkspaceSnapshot/ChangeSet、Tool Gateway 和 AgentTask；不需要重写 Slurm、文件或 Evidence 层。
+因此需要新增的是统一 AgentSession/Turn、Pi kernel、WorkspaceSnapshot/ChangeSet、Tool Gateway、AgentTask，以及把既有 Template Market 操作收口到持久 Application/Publication Session；不需要重写 Slurm、文件、Evidence 或市场存储层。
 
 ## 11. 推荐架构
 
@@ -247,7 +249,7 @@ pilot-agentd (pi-agent-core)
   └── Internal Tool Gateway
         ├── workspace mirror/sandbox
         ├── platform/run/evidence
-        ├── template/contract
+        ├── template market/contract
         └── SSH/REST/Slurm adapters
                            │
                      Slurm AgentTask
@@ -284,6 +286,9 @@ pilot-agentd (pi-agent-core)
 - 多 owner 不串 workspace/task/evidence；
 - 项目文件中的提示注入不能扩大权限；
 - 模型不可用时确定性能力继续，代码创建明确阻塞；
+- 自然语言目标能够发现并应用兼容模板；没有合适模板时明确进入空白创建流程；
+- 成功 Run 能经过严格脱敏、参数化、复现验证和审核形成 immutable release；
+- 模板采纳、环境验证、新版本建议和撤回决策均可绑定 Run/Evidence 并追溯；
 - 登录节点不存在 Pi/Node Agent 常驻进程。
 
 如果下列任一条件成立，应重新评估架构：
@@ -294,8 +299,54 @@ pilot-agentd (pi-agent-core)
 - 学校禁止应用节点运行必要的 Agent Worker；
 - 真实身份/凭据模式无法让 durable Worker 在不保存长期凭据的情况下完成操作。
 
-## 14. 最终结论
+## 14. Template Market 领域支线补充
+
+初版总体抽象若只提供 `template_application` 和 `template_publication` 两个工具型 Profile，会遗漏市场的核心网络效应：模板需要被发现、适配、运行、验证、修订和治理，才能从一次成功作业变成可信的复用资产。
+
+### 14.1 消费支线
+
+```text
+user intent
+→ market search / compare
+→ compatibility + verification ranking
+→ TemplateApplicationSession
+→ user-specific ApplicationPlan
+→ private Contract / ChangeSet
+→ Run
+```
+
+Agent 必须参与模板应用，因为共享 release 只表达可复用的不变量、参数 schema 和环境约束，不能直接代表当前学生的输入、路径、PlatformSnapshot 和资源选择。即使用户已经手选模板，Agent 也要解析参数、识别兼容性、补齐安全默认值、暴露假设并形成一次确认计划；自然语言入口则先完成搜索与比较。
+
+既有 `adopt_release()` 应降为 `TemplateApplicationSession` 的内部确定性 finalizer，不能作为绕过 Agent 的公共应用入口。若没有兼容模板，系统返回显式的 `no_suitable_template`，再进入空白工程或已有工程创建路径，不为凑命中率强推模板。
+
+### 14.2 生产支线
+
+```text
+successful Run
+→ TemplatePublicationSession
+→ extract invariants
+→ strict sanitization
+→ parameterization
+→ private draft
+→ reproduction validation
+→ review
+→ immutable release
+```
+
+发布模板不是“复制一次成功作业”。Agent 需要区分领域不变量、用户参数、平台参数、运行时派生值和禁止发布值，并对用户名、绝对路径、账号、课程/项目标识、数据集与 checkpoint 路径、令牌、socket 以及偶然资源值执行严格脱敏。生成的 draft 必须先保持私有，经独立复现 Run 和审核后才能发布。
+
+### 14.3 运行反馈与版本治理
+
+模板采纳不等于成功。一次可信验证至少绑定 release、ApplicationSession、Run、PlatformSnapshot 和 Evidence digest，并区分 Docker、本地模拟、真实 CPU 与真实 GPU 环境。验证结果以 append-only 记录累积，过期或失败会影响推荐排序，但不会自动修改或撤回 release。
+
+Agent 可以基于失败验证和 Runtime Watch 证据提出新版本、降权、弃用或撤回建议；最终发布、弃用和撤回仍由模板发布者或审核者决定。release 保持 immutable，修复通过新 draft/version 完成，旧版本谱系、历史 Contract 和既有 Run 保留可追溯性。
+
+### 14.4 复用原则
+
+该支线复用现有 Template Market 的 draft/review/release、visibility、adoption、environment verification、ranking 与 withdrawal 数据模型，也复用 Workspace、AgentTask、Run 和 Evidence。Pi 只能调用 `template_market_search`、`template_application_*`、`template_publication_*` 等高层工具，不能直接调用底层 publish、adopt 或 withdraw 操作。
+
+## 15. 最终结论
 
 采用 `pi-agent-core` 能减少自研通用 Agent loop 的成本，但性能收益来自整体架构而不只是库本身：共享校内模型、短时 Turn、休眠零进程、应用侧上下文缓存、异步 Slurm AgentTask 和严格的执行位置分类共同消除了登录节点常驻 Agent 的主要负担。
 
-正式实现应从本地只读 Pi Turn 开始，再依次完成从零创建、隔离验证、异步 Slurm、ChangeSet 发布和 Run 闭环。完整 Pi CLI、任意 SSH shell、每用户常驻容器以及计算节点上的 Agent brain 均不进入正式路径。
+正式实现应从本地只读 Pi Turn 开始，再依次完成从零创建、隔离验证、异步 Slurm、ChangeSet 发布、Template Market 双向循环和 Run 闭环。完整 Pi CLI、任意 SSH shell、每用户常驻容器以及计算节点上的 Agent brain 均不进入正式路径。

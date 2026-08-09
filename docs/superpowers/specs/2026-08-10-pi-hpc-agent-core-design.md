@@ -53,6 +53,7 @@ Agent 必须同时支持创建与修复。P0 创建能力的完成标准不是�
 12. 用户项目中的 Pi extensions、packages、MCP servers 和 skills 默认不加载。
 13. 普通 owner-scoped Agent 上下文使用校内自部署模型，不做过度脱敏；从成功 Run 发布共享模板时必须严格脱敏。
 14. Pi 精确锁版；先用薄适配层，不立即维护大型 fork。
+15. Template Market 是连接工程创建入口、成功 Run 发布出口和运行 Evidence 反馈的完整领域支线，不只是两个孤立 Profile。
 
 ## 4. 方案比较
 
@@ -426,7 +427,9 @@ Tool Gateway 必须重新验证 owner、profile、工具、预算、状态版本
 
 - `platform_get_snapshot`
 - `workspace_list/search/read`
-- `template_search`
+- `template_market_search`
+- `template_release_get`
+- `template_release_compare`
 - `contract_get`
 - `run_get`
 - `run_log_read`
@@ -446,7 +449,19 @@ Tool Gateway 必须重新验证 owner、profile、工具、预算、状态版本
 - `task_cancel`
 - `changeset_publish`
 
-不提供通用 `ssh`、`sbatch`、`srun` 或远端 shell 工具。
+模板市场领域动作：
+
+- `template_application_start`
+- `template_application_resolve`
+- `template_application_finalize`
+- `template_publication_start`
+- `template_publication_extract`
+- `template_sanitization_preview`
+- `template_publication_submit_review`
+- `template_verification_record`
+- `template_withdraw_propose`
+
+Pi 不直接调用底层 `publish()`、`adopt_release()` 或 `withdraw_release()`。这些方法只由领域服务在状态、权限、gate 和审批全部满足后执行。系统不提供通用 `ssh`、`sbatch`、`srun` 或远端 shell 工具。
 
 ### 11.4 动态最小工具集
 
@@ -590,7 +605,217 @@ Agent 使用模板 schema、平台事实和项目上下文；没有合适模板�
 
 后续轻量 Profile，用于 Slurm 解释和平台问答，并可将对话转为模板应用或实验创建。当前不建设完整初学者知识库。
 
-## 15. 领域工作流与完成标准
+## 15. Template Market 完整领域支线
+
+Template Market 同时连接：
+
+- `ExperimentProjectSession` 的创建入口；
+- 成功 Run 的复用与发布出口；
+- Run/Evidence 对 release 的验证反馈；
+- immutable release 的版本、撤回和可追溯治理。
+
+它不是模型直接读写的数据库，也不是只在用户主动打开市场时才出现的页面功能。
+
+```text
+                         Template Market
+                     ┌─────────┴─────────┐
+                     │                   │
+             消费/应用支线          生产/发布支线
+                     │                   │
+自然语言/主动选模板              成功 Run
+→ 搜索与比较                    → 提取候选模板
+→ Agent 应用                    → 严格脱敏
+→ Contract                      → 参数化
+→ Run                           → 验证与审核
+                     │                   │
+                     └─────────┬─────────┘
+                               │
+                       运行验证与市场反馈
+                               │
+                    新版本 / 降权 / 撤回建议
+```
+
+### 15.1 发现与推荐支线
+
+工程创建、迁移或修复开始时，Agent 可以主动查询市场，而不要求用户先手工选择模板：
+
+```text
+用户描述实验
+→ template_market_search
+→ 按平台兼容、目标匹配和验证事实排序
+├─ 明确匹配：解释选择并进入 TemplateApplicationSession
+├─ 多个接近：比较关键差异并请求用户选择
+└─ 无合适模板：no_suitable_template
+                → ExperimentProjectSession(origin=blank/existing)
+```
+
+推荐排序必须先过滤授权和当前兼容性，再使用历史信号：
+
+1. visibility、course scope 和 owner 权限；
+2. 当前 PlatformSnapshot 中的软件、GPU、partition/QoS 与资源限制；
+3. 用户目标、输入输出和参数 schema 匹配程度；
+4. 当前环境的 verification tier、新鲜度和 Evidence 完整度；
+5. adoption count 和历史结果。
+
+热门或最近发布不能覆盖当前平台不兼容。Agent 的匹配解释必须引用 release metadata、compatibility finding 和 PlatformSnapshot，不得仅返回无依据的“推荐”。
+
+### 15.2 `TemplateApplicationSession`
+
+模板应用必须经过持久 Agent 会话，面向用户的直接复制/采用路径被移除：
+
+```text
+discovering
+→ evaluating
+→ collecting_inputs
+→ adapting
+→ planning
+→ ready_for_confirmation
+→ finalizing
+→ completed
+```
+
+```yaml
+TemplateApplicationSession:
+  session_id:
+  owner:
+  release_id:
+  user_intent:
+  platform_snapshot_id:
+  workspace_snapshot_id:
+  resolved_parameters:
+  assumptions:
+  compatibility_findings:
+  application_plan:
+  target_contract_id:
+  target_workspace_changeset_id:
+  state:
+  state_version:
+```
+
+行为约束：
+
+- 用户主动选择 release 和自然语言查找模板使用同一个状态机；
+- LLM 可用时负责解释、匹配、适配和最小追问；
+- LLM 不可用时由 schema、平台事实和确定性默认值继续收集参数；
+- Agent 自动填写安全且有事实依据的值，只询问真正未知项；
+- 用户确认完整 `ApplicationPlan`，而不是逐字段批准；
+- ApplicationPlan 可以生成 WorkspaceChangeSet 和 Contract，但创建 Contract 与正式 Slurm 提交保持分离；
+- withdrawn、gate stale、无权限或当前平台不兼容的 release 不能 finalizing；
+- 找不到合适模板时明确 `no_suitable_template` 并转 experiment builder，不能伪造匹配；
+- 共享 release 永不因用户适配而改变。
+
+现有 `adopt_release()` 保留为 `finalizing` 内部的确定性 finalizer。API 和 Pi 工具不得绕过 ApplicationSession 直接调用它。finalizer 继续创建用户私有 draft/Contract 和完整 source release lineage。
+
+### 15.3 成功 Run 到发布支线
+
+```text
+成功 Run
+→ 用户选择或 Agent 提议为候选
+→ TemplatePublicationSession
+→ 提取稳定命令、资源和环境
+→ 严格脱敏
+→ 参数化
+→ 私有 draft
+→ 复现验证
+→ review
+→ immutable release
+```
+
+状态机：
+
+```text
+selecting_source
+→ extracting
+→ sanitizing
+→ parameterizing
+→ validating
+→ ready_for_review
+→ submitted
+├─ rejected → revising
+└─ approved → publishing → published
+```
+
+```yaml
+TemplatePublicationSession:
+  session_id:
+  owner:
+  source_run_id:
+  source_contract_id:
+  source_evidence_digest:
+  extracted_invariants:
+  proposed_parameters:
+  sanitization_findings:
+  reproduction_runs:
+  draft_id:
+  review_id:
+  release_id:
+  state:
+  state_version:
+```
+
+只有这一共享发布路径执行严格脱敏，至少检查：
+
+- 用户名、home/public 路径和工作区根；
+- Run、job、account、课程和研究项目标识；
+- 数据集、输入、输出、checkpoint 和私有制品路径；
+- token、credential、环境 secret 和 socket；
+- 成功 Run 中偶然存在、但不应成为默认值的资源或平台值。
+
+Publication Agent 必须区分模板不变量、用户参数、平台适配参数、运行时派生值和不得发布内容。仅把字符串替换为占位符不能通过 sanitization gate。
+
+### 15.4 验证反馈支线
+
+每次模板应用必须保留：
+
+```text
+release
+→ application_session
+→ private draft / Contract
+→ Run
+→ Evidence
+→ application outcome
+→ template verification
+```
+
+规则：
+
+- adoption 只表示发生了应用，不等于验证成功；
+- verification 必须绑定 release、application session、Run、environment 和 Evidence digest；
+- Docker、真实 CPU、真实 GPU 等环境分别记录，不能互相冒充；
+- passed/failed/expired 都作为追加记录存在，不修改 release；
+- verification 过期改变市场读模型和推荐可信度，但不删除历史；
+- 失败验证可以降低推荐权重并触发 Agent 建议，但不自动撤回 release；
+- Runtime Watch 或普通失败 Run 只有能证明其来自该 release/application lineage 时才能形成市场反馈。
+
+市场读模型先按授权和兼容性过滤，再综合 verification tier、最近通过时间、adoption count 和发布时间。原始 Evidence 仍由 EvidenceStore 管理，市场只保存引用和摘要。
+
+### 15.5 版本、修订与撤回治理
+
+- release 内容不可变；
+- 修复模板必须创建新 draft 和新 release version；
+- 旧 release 的 Contract、Run、adoption 和 verification lineage 永久可追溯；
+- withdrawn release 不再允许新的 ApplicationSession finalizing；
+- 既有私有 draft、Contract 和 Run 不因撤回被删除；
+- Agent 可以提出 `new_version`、`deprecate` 或 `withdraw` 建议，但发布者/审核角色作最终决定；
+- 共享模板发布、撤回和替代关系必须记录审核 actor、reason、digest 和时间。
+
+### 15.6 与统一实验生命周期的连接
+
+```text
+ExperimentProjectSession
+├─ 先发现市场并应用 release
+└─ 无匹配时从 blank/existing 创建
+
+成功 Run
+└─ 可进入 TemplatePublicationSession
+
+后续采用 Run
+└─ 产生 verification 和推荐反馈
+```
+
+模板分支不能复制另一套 Workspace、AgentTask、Contract、Run 或 Evidence 实现；它只通过领域状态机组合本规格中的统一基础能力。
+
+## 16. 领域工作流与完成标准
 
 通用状态：
 
@@ -630,7 +855,7 @@ next_actions:
 
 仅生成自然语言回答不等于完成。代码任务至少应达到“形成经验证的待批准 ChangeSet”或基于 Evidence 明确记录无法继续的阻塞条件。
 
-## 16. Agent Context
+## 17. Agent Context
 
 `AgentContextAssembler` 按层构造每 Turn 输入：
 
@@ -649,7 +874,7 @@ memory: 决定、失败尝试、待办、最近 checkpoint
 - 不得改变 owner、allowed roots、预算或审批；
 - 不自动执行其中命令。
 
-## 17. 模型不可用与确定性降级
+## 18. 模型不可用与确定性降级
 
 - 平台查询、文件管理、模板 schema 填充、规则诊断、Task/Run 推进继续工作；
 - 模板应用进入确定性参数收集；
@@ -657,13 +882,13 @@ memory: 决定、失败尝试、待办、最近 checkpoint
 - 需要新代码推理或补丁时进入 `blocked:model_unavailable`；
 - 不把确定性 fallback 伪装成智能代码修复完成。
 
-## 18. `pilot-agentd` 部署
+## 19. `pilot-agentd` 部署
 
-### 18.1 正式路径
+### 19.1 正式路径
 
 独立 TypeScript 服务直接嵌入 `pi-agent-core`。完整 Pi RPC 子进程只用于 A0 spike，不进入生产路径。
 
-### 18.2 共享服务
+### 19.2 共享服务
 
 - `pilot-agentd` 是共享 Worker 池，不按学生常驻；
 - Turn 请求包含可恢复 state 和 version；
@@ -671,7 +896,7 @@ memory: 决定、失败尝试、待办、最近 checkpoint
 - Python Worker 持有 Turn lease 和公平队列；
 - 一个实例的并发数由 CPU、memory 和模型 gateway 限制。
 
-### 18.3 容器边界
+### 19.3 容器边界
 
 `pilot-agentd`：
 
@@ -684,9 +909,9 @@ memory: 决定、失败尝试、待办、最近 checkpoint
 
 Workspace Sandbox 使用单独短时容器。两者不能共享权限扩大路径。
 
-## 19. Python—TypeScript Turn 协议
+## 20. Python—TypeScript Turn 协议
 
-### 19.1 `AgentTurnRequest`
+### 20.1 `AgentTurnRequest`
 
 ```yaml
 protocol_version:
@@ -705,7 +930,7 @@ capability_token:
 deadline:
 ```
 
-### 19.2 事件流
+### 20.2 事件流
 
 ```text
 turn_started
@@ -721,7 +946,7 @@ turn_failed
 
 事件使用 `turn_id + sequence` 去重；浏览器只订阅已持久事件。
 
-### 19.3 Capability token
+### 20.3 Capability token
 
 短期 token 绑定：
 
@@ -734,9 +959,9 @@ turn_failed
 
 token 不是集群凭据，不能被换取 SSH 私钥、MFA 或通用远端执行。
 
-## 20. 持久数据与恢复
+## 21. 持久数据与恢复
 
-### 20.1 `AgentSession`
+### 21.1 `AgentSession`
 
 ```text
 session_id / owner / profile / state / state_version
@@ -745,7 +970,7 @@ active_tasks / approvals / resource_usage
 outcome / created_at / updated_at
 ```
 
-### 20.2 `AgentTurn`
+### 21.2 `AgentTurn`
 
 ```text
 turn_id / session_id / owner
@@ -756,7 +981,7 @@ event_sequence / final_checkpoint / outcome
 created_at / started_at / finished_at
 ```
 
-### 20.3 恢复规则
+### 21.3 恢复规则
 
 - Worker 先持久化 Turn 和 lease，再调用 agentd；
 - 事件先写 durable store，再发布浏览器；
@@ -767,7 +992,7 @@ created_at / started_at / finished_at
 - 旧 state version 或 fencing token 的写回被拒绝；
 - 已提交 Slurm/传输任务只对账，不重复创建。
 
-## 21. Schema 与版本治理
+## 22. Schema 与版本治理
 
 仓库新增共享 JSON Schema：
 
@@ -794,7 +1019,7 @@ Pi 升级流程：
 
 如果适配器和 hooks 足以实现需求，不维护 fork；只有缺失无法外置的关键语义时才评估受控 fork。
 
-## 22. 现有代码迁移
+## 23. 现有代码迁移
 
 | 当前模块 | 迁移方式 |
 |---|---|
@@ -820,7 +1045,7 @@ schemas/agent/v1/
 
 Pi Node 依赖和 lockfile 与现有前端依赖分离。
 
-## 23. 实现阶段
+## 24. 实现阶段
 
 ### A0：Pi compatibility spike
 
@@ -864,13 +1089,17 @@ Pi Node 依赖和 lockfile 与现有前端依赖分离。
 - explicit approval；
 - Run + Runtime Watch。
 
-### A5：修复和模板 Profiles
+### A5：修复与 Template Market 完整支线
 
 - failed Run diagnosis/repair；
-- template application；
-- successful Run publication sanitization。
+- template discovery/recommendation；
+- TemplateApplicationSession 与内部 adoption finalizer；
+- successful Run → TemplatePublicationSession；
+- publication sanitization/review/immutable release；
+- adoption outcome → environment verification；
+- new version/withdrawal governance。
 
-## 24. 本地模拟环境
+## 25. 本地模拟环境
 
 ```text
 pilot-api
@@ -884,7 +1113,7 @@ slurm-sim
 
 远程 VM 不可用期间，所有 P0 完成声明必须来自该环境的客观证据。
 
-## 25. 本地验收矩阵
+## 26. 本地验收矩阵
 
 | 场景 | 预期 |
 |---|---|
@@ -903,8 +1132,14 @@ slurm-sim
 | 两 owner 并发 | workspace/task/evidence 不串线 |
 | 浏览器断线 | 重连后读取 durable events |
 | Worker/agentd 重启 | 从 checkpoint/Task 恢复 |
+| 自然语言目标有兼容模板 | Agent 解释推荐并完成 ApplicationSession |
+| 没有合适模板 | `no_suitable_template` 后转 blank/existing 创建 |
+| withdrawn/gate stale release | ApplicationSession finalizing 被拒绝 |
+| 成功 Run 发布模板 | 严格脱敏、复现、review 后创建 immutable release |
+| 采用模板后的 Run | adoption 与 environment verification 分别记录 |
+| 模板后续修订 | 创建新 version，旧 lineage 保持不变 |
 
-## 26. 性能验收
+## 27. 性能验收
 
 - 空闲会话对应零常驻 Agent 进程；
 - 资源使用随活动 Turn 数而不是总会话数增长；
@@ -917,7 +1152,7 @@ slurm-sim
 - 达到资源上限时公平排队而不是过载；
 - fake model 并发压测与真实校内模型兼容测试分别报告。
 
-## 27. 首条比赛演示闭环
+## 28. 首条比赛演示闭环
 
 ```text
 学生：“创建一个读取参数并进行数值计算的 Slurm 实验”
@@ -934,17 +1169,19 @@ slurm-sim
 
 随后人为引入代码错误，演示相同 AgentSession/Workspace/Task 基础上的诊断与修复，证明创建和修复是同一个实验工程生命周期。
 
-## 28. 与既有设计的关系
+第三段可从该成功 Run 发起 TemplatePublicationSession，展示严格脱敏、审核发布，并由另一个隔离会话通过 TemplateApplicationSession 采用和验证，证明市场不是静态 YAML 列表。
+
+## 29. 与既有设计的关系
 
 - `2026-08-09-agent-repair-closed-loop-design.md`：保留其 Evidence、审批、隔离修复和派生 Run 约束；开放式 Agent loop 被本规格的 Pi kernel 和 typed tools 取代。
 - `2026-08-09-file-discovery-transfer-design.md`：继续作为工作区同步、大文件和集群连接权威设计；Pi 不增加第二条 SSH/文件通道。
 - `2026-08-09-resource-observability-design.md`：PlatformSnapshot 和资源观测作为 Agent context，不由 Pi 重复采集。
 - `2026-08-10-runtime-watch-design.md`：日志 cursor、运行期异常和 terminal drain 作为 Agent 唤醒与 Evidence 来源。
-- 后续模板 Agent 设计必须实现为本规格 Profile，而不是独立 LLM 服务。
+- 后续模板 Agent 详细设计必须实现本规格第 15 节的市场支线，而不是独立 LLM 服务或直接 adoption API。
 
 如与旧修复设计中的“代码类型或工具限制”冲突，本规格只在隔离 AgentWorkspace 和 Sandbox 内扩大创建/编辑能力；远端发布、审批、owner、Evidence 和 Slurm 边界不放宽。
 
-## 29. 非目标
+## 30. 非目标
 
 - 本轮不设计前端布局；
 - 不在远程 VM 上进行验收；
@@ -955,7 +1192,7 @@ slurm-sim
 - 不把运行成功等同于科学正确；
 - 不在本轮完成课程自动批改、完整初学者知识库或四领域模板内容。
 
-## 30. 风险与待确认事项
+## 31. 风险与待确认事项
 
 1. 校内模型的 tool calling、streaming 和 context 兼容性需要 A0 真实验证。
 2. 应用节点容量未知，需以 benchmark 决定默认并发和 context 上限。
@@ -964,8 +1201,9 @@ slurm-sim
 5. Pi 上游变化快，需要精确锁版和契约测试。
 6. 真实身份凭据刷新仍沿用现有 `paused_auth`/用户恢复，不引入长期凭据存储。
 7. 科学有效性只能通过显式领域检查和用户判断逐步增强。
+8. 市场 verification 的推荐权重和过期窗口必须通过本地/真实使用数据校准，不能把 adoption count 当成功率。
 
-## 31. 完成门槛
+## 32. 完成门槛
 
 本规格的 Agent P0 只有同时满足以下条件才算完成：
 
@@ -980,4 +1218,6 @@ slurm-sim
 9. 能进入正式 Run、Runtime Watch 和 Evidence；
 10. owner、预算、审批、幂等和重启恢复均有本地测试；
 11. 5GB 以上权重不进入 Agent context 或代码镜像；
-12. 所有完成结论可由本地 simulator 证据复现。
+12. 所有完成结论可由本地 simulator 证据复现；
+13. 模板发现、Agent 应用、成功 Run 发布、环境验证、新版本和撤回形成可追溯市场闭环；
+14. 面向用户的模板采用不能绕过 `TemplateApplicationSession`。
