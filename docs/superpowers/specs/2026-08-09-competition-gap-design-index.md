@@ -28,6 +28,12 @@
 - 状态：设计已确认，等待文档审阅。
 - 核心：有界搜索、异步归档、Range 下载、tusd、5GB+ 大文件、SSH/SFTP 双通道、ClusterAsset、提交依赖门禁和本地同构模拟。
 
+### 2.3 平台动态状态与作业资源观测
+
+- 规格：[`2026-08-09-resource-observability-design.md`](2026-08-09-resource-observability-design.md)
+- 状态：后端范围、数据边界、指标语义、规则和本地模拟验收已确认；前端 Dashboard 设计暂缓。
+- 核心：集群/学生账号/Run 三级视角、租约采集器、20 秒平台动态、24 小时短趋势、`sstat`/`sacct` 资源事实、确定性效率评价和 Agent Evidence 绑定。
+
 ## 3. 已完成的代码整理前置
 
 以下本地提交保存了进入本轮设计前已经存在但未整理的实现：
