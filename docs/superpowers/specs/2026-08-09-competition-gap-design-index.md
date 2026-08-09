@@ -31,8 +31,10 @@
 ### 2.3 平台动态状态与作业资源观测
 
 - 规格：[`2026-08-09-resource-observability-design.md`](2026-08-09-resource-observability-design.md)
-- 状态：后端范围、数据边界、指标语义、规则和本地模拟验收已确认；前端 Dashboard 设计暂缓。
-- 核心：集群/学生账号/Run 三级视角、租约采集器、20 秒平台动态、24 小时短趋势、`sstat`/`sacct` 资源事实、确定性效率评价和 Agent Evidence 绑定。
+- 实施级细化：[`2026-08-10-resource-observability-detailed-design.md`](2026-08-10-resource-observability-detailed-design.md)
+- 状态：总体设计与实施级后端细化均已逐节确认；实现未开始；前端 Dashboard 明确不在本规格内，后续可单独重做。
+- 核心：每连接单租约、类型化 Platform/Account/Run 事实、`sstat`/`sacct` 字段级口径、不可变 Summary/Evidence、短期有界时序、丰富 owner-scoped Pi Agent 取证工具、查询预算和本地 Slurm live 验收。
+- 本地限制：当前 simulator 的 `JobAcctGatherType=jobacct_gather/none` 不能证明实际 CPU/RSS/I/O；实施 Slice 0 必须先验证可选 `jobacct_gather/linux` observability profile。Fake GPU 只验证 unsupported/coverage 门禁。
 
 ### 2.4 Runtime Watch
 

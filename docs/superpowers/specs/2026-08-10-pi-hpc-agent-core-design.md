@@ -1238,7 +1238,8 @@ slurm-sim
 
 - `2026-08-09-agent-repair-closed-loop-design.md`：保留其 Evidence、审批、隔离修复和派生 Run 约束；开放式 Agent loop 被本规格的 Pi kernel 和 typed tools 取代。
 - `2026-08-09-file-discovery-transfer-design.md`：继续作为工作区同步、大文件和集群连接权威设计；Pi 不增加第二条 SSH/文件通道。
-- `2026-08-09-resource-observability-design.md`：PlatformSnapshot 和资源观测作为 Agent context，不由 Pi 重复采集。
+- `2026-08-09-resource-observability-design.md`：平台/账号/Run 三级资源观测总体决策。
+- `2026-08-10-resource-observability-detailed-design.md`：实施级 Observability Tools、`AgentObservationBundle`、充分性门禁和 owner-scoped 丰富取证；Pi 从 107Pilot Store 按需读取，不在登录节点或每次会话中重复采集 Slurm。
 - `2026-08-10-runtime-watch-design.md`：日志 cursor、运行期异常和 terminal drain 作为 Agent 唤醒与 Evidence 来源。
 - `2026-08-10-template-market-agent-detailed-design.md`：是第 15 节的强类型应用、可选分享、bundle、查重、发布、verification、API 和本地验收权威细化规格。
 - 后续模板 Agent 实现不得成为独立 LLM 服务或直接 adoption API。

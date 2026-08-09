@@ -1,9 +1,11 @@
 # 107Pilot 平台动态状态与作业资源观测设计
 
 - 日期：2026-08-09
-- 状态：后端范围与指标语义已确认；实现未开始
+- 状态：总体决策保留；实施级细化已由 `2026-08-10-resource-observability-detailed-design.md` 继承；实现未开始
 - 环境边界：先在本地 Docker Slurm simulator 验证；远程 VM 当前不可用且不作为前置条件
 - 本轮不包含：Dashboard 页面布局、视觉稿和前端组件实现
+
+> 实施权威：本文件保存最初的范围、三级视角与方案选择；采集租约、类型化事实、accounting 归并、终态固化、API、Pi Agent 取证和本地验收以 [`2026-08-10-resource-observability-detailed-design.md`](2026-08-10-resource-observability-detailed-design.md) 为准。若两者冲突，后者优先。
 
 ## 1. 背景与结论
 
