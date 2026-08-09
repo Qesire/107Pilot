@@ -45,7 +45,7 @@
 - 单文件直接下载；多文件默认生成 ZIP64；支持显式 `tar`/`tar.gz`。
 - 标准 HTTP Range、ETag、If-Range、206 和 416 行为。
 - 5GB+ 权重文件上传、传入集群、作业读取、传出集群和下载恢复。
-- 比赛阶段使用专用 Slurm 身份，同时保留门户身份与集群身份分离的数据模型。
+- 比赛阶段将一个 107Pilot 门户学生一对一绑定到该学生自己的 POSIX/Slurm 账号，同时保留门户身份与集群身份两个显式字段。
 - SSH 控制通道、SFTP 文件通道和 Evidence 通道共享同一个连接定义。
 - 本地 Docker 环境先完成同构 SSH/SFTP/Slurm 测试。
 
@@ -56,7 +56,7 @@
 - 把 WebDAV、SFTPGo、rclone 或 Nextcloud 整套引入并替换现有文件产品界面。
 - 在集群侧安装 107Pilot Gateway 作为比赛前置条件。
 - 把集群共享文件系统直接挂载进应用容器作为正式数据面。
-- 在比赛共享 Slurm 账号模式下宣称强多租户隔离。
+- 把一个真实学生账号共享给多个门户身份，或把比赛账号当作跨学生服务账号。
 - 依赖当前不可用的远程 VM 完成本阶段验收。
 
 课程批改、四类领域模板内容和初学者通用问答继续按本轮约定暂缓；它们不属于本规格。
@@ -235,13 +235,15 @@ browser tus-js-client
 
 ### 7.1 身份模式
 
-选定“比赛专用账号、未来逐用户映射”的兼容模式：
+选定“比赛单学生一对一绑定、未来扩展为每名学生各自绑定”的兼容模式：
 
-- `portal_owner` 是 107Pilot 身份。
-- `cluster_user` 是当前比赛专用 POSIX/Slurm 身份。
-- 两者必须是独立字段。
+- `portal_owner` 是当前参赛学生的 107Pilot 身份。
+- `cluster_user` 是同一名学生自己的 POSIX/Slurm 用户名。
+- 比赛配置中两者是一对一关系，但必须保留为独立字段，以便显式审计身份映射并适配名称不一致的环境。
+- 一个真实学生账号不得同时绑定给多个门户身份。
+- 同一学生通过终端等方式提交的非 107Pilot 作业仍属于该学生，但必须标记为外部作业，不能伪造 Run 关联。
 - 已创建 Run 和 TransferTask 固定其 `connection_id`，不能随默认集群配置漂移。
-- 未来切换逐用户账号只替换身份映射和认证引用，不改变 Run、Asset 或 Transfer 状态机。
+- 未来扩展多学生时，每个门户身份都必须拥有独立的集群身份映射和认证引用，不改变 Run、Asset 或 Transfer 状态机。
 
 ### 7.2 拓扑方案比较
 
@@ -401,20 +403,23 @@ TransferTask ready
 
 实时 stdout/stderr 可按范围读取，不要求先生成完整制品。用户请求“下载完整日志”时仍走冻结制品流程。
 
-## 9. 共享账号安全边界
+## 9. 单学生账号与未来多用户边界
 
-比赛模式中的多个门户身份映射到同一个 POSIX/Slurm 用户。路径授权和 API 策略能够阻止 Web 越权，但无法阻止该 Unix 身份运行的任意作业代码访问同一身份下的其他目录。
+比赛模式只允许一个门户学生绑定其自己的 POSIX/Slurm 账号。该学生的文件、Slurm association、配额、107Pilot Run 和外部作业处于同一个真实账号边界内；107Pilot 不创建跨学生共享服务身份。
 
-因此必须显式标记：
+身份规则：
 
-> 比赛专用账号模式是单一信任域，不提供强多租户隔离。
+- 连接、文件、Run、Evidence 和 TransferTask 都绑定同一 `portal_owner ↔ cluster_user ↔ connection_id` 映射。
+- 只有该门户 owner 能使用连接；演示用用户切换不得改变真实连接 owner。
+- 107Pilot 管理的作业通过 `connection_id + job_id` 关联 Run。
+- 同一学生账号下无法关联 Run 的作业标记为“外部作业”，可以计入该学生资源态势，但不能获得伪造的 Contract、Evidence 或 lineage。
 
-正式面向互不信任的学生开放前，必须满足其一：
+正式扩展到多名互不信任的学生时，必须满足其一：
 
 1. 每个门户用户映射到独立 POSIX/Slurm 身份；或
 2. 集群提供具有独立文件权限边界的容器或执行身份。
 
-随机目录名、API 检查或同 UID 下的 `0700` 目录不能替代这个要求。
+不得通过把多个学生映射到同一 Unix UID，再依赖随机目录名、API 检查或同 UID 下的 `0700` 目录来冒充隔离。
 
 ## 10. 本地同构模拟
 
@@ -434,7 +439,7 @@ pilot107-api / worker / transfer-worker
       cluster-access-sim
        ├── sshd/SFTP
        ├── Slurm CLI
-       ├── pilot107svc user
+       ├── alice student user
        └── shared /public volume
                    │
           worker-1 / worker-2
@@ -445,7 +450,8 @@ pilot107-api / worker / transfer-worker
 - `ssh-session-sim` 以应用 UID 建立和持有 ControlMaster。
 - API、Worker 和 Transfer Worker 只看到 socket 引用。
 - 同构 profile 下应用容器不挂载 `/public`。
-- `alice`/`bob` 门户身份映射到测试 Slurm 身份 `pilot107svc`，审计仍保留门户 owner。
+- `alice` 作为一对一比赛载体身份，同时是门户 owner 和模拟 Slurm 学生账号。
+- `bob` 保留为独立学生与负面权限/QoS fixture，不得复用 Alice 的连接或目录。
 - 终止 ControlMaster 用于模拟 MFA/会话失效；重建后任务必须恢复。
 
 ## 11. 测试与验收
