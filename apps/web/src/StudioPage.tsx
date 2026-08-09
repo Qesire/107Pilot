@@ -26,8 +26,14 @@ import {
   type SourceFormat,
 } from "./contract-state";
 import { QueryBoundary, SectionHeading, StatusBadge } from "./components";
-import { useContract, useContractSchema, useRecipes } from "./query";
+import { useContract, useContractSchema, useRecipes, useRecipeVersion } from "./query";
 import { compileClientSchemaValidator } from "./schema-validation";
+import {
+  parseParameterSchema,
+  splitRecipeVersionId,
+  validateRequiredParameters,
+} from "./template-schema";
+import { TemplateExtraParameters } from "./TemplateParametersPanel";
 import type { JsonObject } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
@@ -172,8 +178,22 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
     setSourceError(null);
   };
   const busy = validation.isPending || creation.isPending;
-  const blocked = sourceDirty || clientErrors.length > 0 || busy;
   const recipeVersionId = readContractValue(canonical, ["recipe_version_id"], "");
+  // Recipe parameter schema drives inline enhancements (enum selects,
+  // required markers, extra template parameters) without duplicating the
+  // first-class BasicProjection inputs.
+  const recipeParts = splitRecipeVersionId(recipeVersionId);
+  const recipeVersionQuery = useRecipeVersion(
+    user,
+    recipeParts?.recipeId ?? null,
+    recipeParts?.version ?? null,
+  );
+  const parameterSchema = recipeVersionQuery.data?.parameter_schema;
+  const templateErrors = useMemo(
+    () => validateRequiredParameters(canonical, parameterSchema),
+    [canonical, parameterSchema],
+  );
+  const blocked = sourceDirty || clientErrors.length > 0 || templateErrors.length > 0 || busy;
 
   // `isHydrated` gates the studio-shell: for /studio/new it is always true
   // (default contract is the starting point); for /studio/<id> it only flips
@@ -217,8 +237,8 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
             </div>
             <div className="studio-actions">
               <StatusBadge
-                label={sourceDirty ? "源码未应用" : clientErrors.length ? `${clientErrors.length} 个客户端问题` : "客户端结构通过"}
-                tone={sourceDirty || clientErrors.length ? "warning" : "success"}
+                label={sourceDirty ? "源码未应用" : (clientErrors.length + templateErrors.length) ? `${clientErrors.length + templateErrors.length} 个客户端问题` : "客户端结构通过"}
+                tone={sourceDirty || clientErrors.length + templateErrors.length > 0 ? "warning" : "success"}
               />
               <button className="button secondary" type="button" disabled={blocked} onClick={() => validation.mutate()}>
                 <ClipboardCheck aria-hidden="true" size={16} /> {validation.isPending ? "校验中" : "服务端校验"}
@@ -238,6 +258,15 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
             </div>
           ) : null}
           {sourceError ? <div className="studio-notice error" role="alert"><AlertTriangle aria-hidden="true" /><div><strong>源码未应用</strong><p>{sourceError}</p></div></div> : null}
+          {templateErrors.length ? (
+            <div className="studio-notice warning" role="alert">
+              <AlertTriangle aria-hidden="true" />
+              <div>
+                <strong>Recipe 必填参数未填写</strong>
+                <ul>{templateErrors.map((item) => <li key={item.path}>{item.message}</li>)}</ul>
+              </div>
+            </div>
+          ) : null}
           {validation.isError || creation.isError ? (
             <div className="studio-notice error" role="alert"><AlertTriangle aria-hidden="true" /><div><strong>服务器拒绝请求</strong><p>{(validation.error ?? creation.error)?.message}</p></div></div>
           ) : null}
@@ -249,7 +278,7 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
                 <p>基础与高级字段共享同一 canonical；滚动查看全部字段。</p>
               </header>
               <div className="studio-form-scroll">
-                <BasicProjection contract={canonical} recipes={recipes.data?.items ?? []} update={update} />
+                <BasicProjection contract={canonical} recipes={recipes.data?.items ?? []} update={update} parameterSchema={parameterSchema} />
                 <AdvancedProjection contract={canonical} update={update} />
               </div>
             </section>
@@ -367,7 +396,7 @@ function RunLaunchPanel({ user, contractId, localDirty, navigate }: { user: stri
   );
 }
 
-function BasicProjection({ contract, recipes, update }: ProjectionProps & { recipes: Array<{ recipe_id: string; latest_version: string; title: string }> }) {
+function BasicProjection({ contract, recipes, update, parameterSchema }: ProjectionProps & { recipes: Array<{ recipe_id: string; latest_version: string; title: string }>; parameterSchema?: unknown }) {
   const currentRecipe = readContractValue(contract, ["recipe_version_id"], "");
   const recipeOptions = recipes.map((recipe) => ({ value: `${recipe.recipe_id}@${recipe.latest_version}`, label: `${recipe.title} · ${recipe.latest_version}` }));
   if (currentRecipe && !recipeOptions.some((option) => option.value === currentRecipe)) {
@@ -378,25 +407,46 @@ function BasicProjection({ contract, recipes, update }: ProjectionProps & { reci
   const typedOutputs = expected.filter((item) => typeof item !== "string");
   const commandValue = readContractValue(contract, ["entry", "command"], "");
   const workdirValue = readContractValue(contract, ["project", "workdir"], "");
+  const schemaFields = parseParameterSchema(parameterSchema);
+  const fieldOf = (path: string) => schemaFields.find((field) => field.path === path);
+  const requiredLabel = (path: string, base: string) => (fieldOf(path)?.required ? `${base}（必填）` : base);
+  const partitionField = fieldOf("resources.partition");
+  const partitionValue = readContractValue(contract, ["resources", "partition"], "");
+  const timeLimitField = fieldOf("resources.time_limit");
   return (
     <div className="projection-stack">
       <ProjectionHeading title="基础模式" detail="任务、路径、资源和常用输出；高级字段保留在 canonical object 中。" />
       <fieldset className="field-group"><legend>任务</legend><div className="form-grid two">
         <SelectField label="Recipe version" value={currentRecipe} onChange={(value) => update(["recipe_version_id"], value)} options={recipeOptions} />
         <TextField label="项目名（可选）" value={readContractValue(contract, ["project", "name"], "")} onChange={(value) => update(["project", "name"], value)} />
-        <TextField className="span-2" label="Workdir" value={workdirValue} onChange={(value) => update(["project", "workdir"], value)} customizable={isPlaceholderValue(workdirValue)} />
-        <TextField className="span-2" label="Command" multiline value={commandValue} onChange={(value) => update(["entry", "command"], value)} customizable={isPlaceholderValue(commandValue)} />
+        <TextField className="span-2" label={requiredLabel("project.workdir", "Workdir")} value={workdirValue} onChange={(value) => update(["project", "workdir"], value)} customizable={isPlaceholderValue(workdirValue)} placeholder={fieldOf("project.workdir")?.prefix ?? undefined} />
+        <TextField className="span-2" label={requiredLabel("entry.command", "Command")} multiline value={commandValue} onChange={(value) => update(["entry", "command"], value)} customizable={isPlaceholderValue(commandValue)} />
       </div></fieldset>
       <fieldset className="field-group"><legend>资源</legend><div className="form-grid three">
-        <TextField label="Partition" value={readContractValue(contract, ["resources", "partition"], "")} onChange={(value) => update(["resources", "partition"], value)} />
-        <TextField label="QoS" value={readContractValue(contract, ["resources", "qos"], "")} onChange={(value) => update(["resources", "qos"], value || null)} />
-        <TextField label="Time limit" value={readContractValue(contract, ["resources", "time_limit"], "")} onChange={(value) => update(["resources", "time_limit"], value)} />
+        {partitionField && partitionField.allowed.length > 0 ? (
+          <SelectField
+            label={requiredLabel("resources.partition", "Partition")}
+            value={partitionValue}
+            onChange={(value) => update(["resources", "partition"], value)}
+            options={[
+              ...(partitionValue && !partitionField.allowed.includes(partitionValue)
+                ? [{ value: partitionValue, label: `${partitionValue} · 当前值（不在 allowed 列表）` }]
+                : []),
+              ...partitionField.allowed.map((item) => ({ value: item, label: item })),
+            ]}
+          />
+        ) : (
+          <TextField label={requiredLabel("resources.partition", "Partition")} value={partitionValue} onChange={(value) => update(["resources", "partition"], value)} />
+        )}
+        <TextField label={requiredLabel("resources.qos", "QoS")} value={readContractValue(contract, ["resources", "qos"], "")} onChange={(value) => update(["resources", "qos"], value || null)} />
+        <TextField label={requiredLabel("resources.time_limit", "Time limit")} value={readContractValue(contract, ["resources", "time_limit"], "")} onChange={(value) => update(["resources", "time_limit"], value)} placeholder={timeLimitField?.type === "slurm_time" ? "HH:MM:SS" : undefined} detail={timeLimitField?.type === "slurm_time" ? "Slurm 时限格式 HH:MM:SS（或 D-HH:MM:SS）。" : undefined} />
         <NumberField label="Nodes" value={readContractValue(contract, ["resources", "nodes"], 1)} min={1} onChange={(value) => update(["resources", "nodes"], value)} />
         <NumberField label="Tasks" value={readContractValue(contract, ["resources", "ntasks"], 1)} min={1} onChange={(value) => update(["resources", "ntasks"], value)} />
         <NumberField label="CPU / task" value={readContractValue(contract, ["resources", "cpus_per_task"], 1)} min={1} onChange={(value) => update(["resources", "cpus_per_task"], value)} />
-        <TextField label="Memory" value={String(readContractValue(contract, ["resources", "memory"], ""))} onChange={(value) => update(["resources", "memory"], value || null)} />
+        <TextField label={requiredLabel("resources.memory", "Memory")} value={String(readContractValue(contract, ["resources", "memory"], ""))} onChange={(value) => update(["resources", "memory"], value || null)} />
         <NumberField label="GPU / node" value={readContractValue(contract, ["resources", "gpus_per_node"], 0) ?? 0} min={0} onChange={(value) => update(["resources", "gpus_per_node"], value)} />
       </div></fieldset>
+      <TemplateExtraParameters contract={contract} schema={parameterSchema} update={update} />
       <fieldset className="field-group"><legend>输出</legend><div className="form-grid">
         <TextField label="预期输出（每行一个）" multiline value={stringOutputs.join("\n")} detail={typedOutputs.length ? `${typedOutputs.length} 个 typed output 会被原样保留。` : undefined} onChange={(value) => update(["outputs", "expected"], [...linesToStrings(value), ...typedOutputs])} />
       </div></fieldset>
@@ -482,7 +532,7 @@ function ProjectionEmpty({ title, detail }: { title: string; detail: string }) {
   return <div className="projection-empty"><FileCode2 aria-hidden="true" /><div><strong>{title}</strong><p>{detail}</p></div></div>;
 }
 
-function TextField({ label, value, onChange, multiline, detail, className, customizable }: { label: string; value: string; onChange: (value: string) => void; multiline?: boolean; detail?: string | undefined; className?: string | undefined; customizable?: boolean | undefined }) {
+export function TextField({ label, value, onChange, multiline, detail, className, customizable, placeholder }: { label: string; value: string; onChange: (value: string) => void; multiline?: boolean; detail?: string | undefined; className?: string | undefined; customizable?: boolean | undefined; placeholder?: string | undefined }) {
   return (
     <label className={`form-field ${className ?? ""}`}>
       <span className="form-field-label">
@@ -493,7 +543,7 @@ function TextField({ label, value, onChange, multiline, detail, className, custo
           </small>
         ) : null}
       </span>
-      {multiline ? <textarea value={value} rows={4} onChange={(event) => onChange(event.target.value)} /> : <input value={value} onChange={(event) => onChange(event.target.value)} />}
+      {multiline ? <textarea value={value} rows={4} onChange={(event) => onChange(event.target.value)} /> : <input value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />}
       {detail ? <small>{detail}</small> : null}
     </label>
   );
@@ -503,7 +553,7 @@ function NumberField({ label, value, onChange, min, max, disabled }: { label: st
   return <label className="form-field"><span className="form-field-label">{label}</span><input type="number" value={value} min={min} max={max} disabled={disabled} onChange={(event) => onChange(Number(event.target.value))} /></label>;
 }
 
-function SelectField({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) {
+export function SelectField({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) {
   return <label className="form-field"><span className="form-field-label">{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>;
 }
 

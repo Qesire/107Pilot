@@ -1,5 +1,12 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api } from "./api";
+import {
+  cpuAllocation,
+  jobsByState,
+  nodesByState,
+  type CpuAllocation,
+  type StateCount,
+} from "./resource-summary";
 
 export function useWebSession(requestedUser: string) {
   return useQuery({
@@ -48,6 +55,50 @@ export function useLatestEntitlement(user: string) {
     queryKey: ["entitlement", user],
     queryFn: ({ signal }) => api.latestEntitlement(user, signal),
     retry: false,
+  });
+}
+
+export interface ResourceSummary {
+  nodes: StateCount[];
+  cpu: CpuAllocation;
+  jobs: StateCount[];
+  freshness: string;
+  capturedAt?: string | undefined;
+  collectionStatus?: string | undefined;
+  hasDetail: boolean;
+}
+
+// Polls the latest platform snapshot and reduces it to chart-ready aggregates.
+// Shares the ["platform-snapshot"] cache with useLatestPlatform; the 20s poll
+// is the "real-time" mechanism (the snapshot itself carries freshness facts).
+export function useResourceSummary(user: string) {
+  return useQuery({
+    queryKey: ["platform-snapshot", user],
+    queryFn: ({ signal }) => api.latestPlatform(user, signal),
+    retry: false,
+    refetchInterval: 20_000,
+    select: (snapshot): ResourceSummary => {
+      const detail = snapshot.snapshot;
+      return {
+        nodes: nodesByState(detail?.nodes),
+        cpu: cpuAllocation(detail?.nodes),
+        jobs: jobsByState(detail?.squeue_jobs),
+        freshness: snapshot.freshness,
+        capturedAt: detail?.captured_at ?? snapshot.captured_at,
+        collectionStatus: snapshot.collection_status,
+        hasDetail:
+          (detail?.nodes?.length ?? 0) > 0 || (detail?.squeue_jobs?.length ?? 0) > 0,
+      };
+    },
+  });
+}
+
+export function useStorageUsage(user: string) {
+  return useQuery({
+    queryKey: ["storage-usage", user],
+    queryFn: ({ signal }) => api.storageUsage(user, signal),
+    retry: false,
+    refetchInterval: 60_000,
   });
 }
 
@@ -166,6 +217,44 @@ export function useRecipes(user: string) {
     queryKey: ["recipes", user],
     queryFn: ({ signal }) => api.recipes(user, signal),
     staleTime: 60_000,
+  });
+}
+
+export function useRecipeVersion(
+  user: string,
+  recipeId: string | null,
+  version: string | null,
+) {
+  return useQuery({
+    queryKey: ["recipe-version", user, recipeId, version],
+    queryFn: ({ signal }) => api.recipeVersion(user, recipeId ?? "", version ?? "", signal),
+    enabled: Boolean(recipeId && version),
+    staleTime: 60_000,
+  });
+}
+
+export function useTemplateDrafts(user: string) {
+  return useQuery({
+    queryKey: ["template-drafts", user],
+    queryFn: ({ signal }) => api.templateDrafts(user, {}, signal),
+    staleTime: 15_000,
+  });
+}
+
+export function useTemplateDraft(user: string, draftId: string | null) {
+  return useQuery({
+    queryKey: ["template-draft", user, draftId],
+    queryFn: ({ signal }) => api.templateDraft(user, draftId ?? "", signal),
+    enabled: Boolean(draftId),
+    staleTime: 15_000,
+  });
+}
+
+export function useTemplateReviews(user: string) {
+  return useQuery({
+    queryKey: ["template-reviews", user],
+    queryFn: ({ signal }) => api.templateReviews(user, {}, signal),
+    staleTime: 15_000,
   });
 }
 

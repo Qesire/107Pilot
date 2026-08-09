@@ -251,15 +251,62 @@ export interface CapabilityProfile {
   } | null;
 }
 
+export interface PlatformNodeSnapshot {
+  node_name: string;
+  partitions?: string[];
+  state_raw?: string | null;
+  state_normalized: string;
+  cpus_total?: number | null;
+  cpus_allocated?: number | null;
+  memory_mb?: number | null;
+}
+
+export interface PlatformJobSnapshot {
+  job_id: string;
+  state_raw: string;
+  pending_reason?: string | null;
+  partition?: string | null;
+  name?: string | null;
+}
+
+export interface PlatformSnapshotDetail {
+  snapshot_id?: string;
+  scope?: string;
+  captured_at?: string;
+  partitions?: Array<Record<string, unknown>>;
+  nodes?: PlatformNodeSnapshot[];
+  squeue_jobs?: PlatformJobSnapshot[];
+}
+
 export interface PlatformSnapshot {
   snapshot_id: string;
   scope: string;
   source_type: string;
-  observed_at: string;
+  source_name?: string;
+  captured_at?: string;
+  expires_at?: string;
   freshness: string;
-  data_quality: string;
+  collection_status?: string;
+  counts?: {
+    commands: number;
+    partitions: number;
+    nodes: number;
+    jobs: number;
+    limitations: number;
+  };
+  snapshot?: PlatformSnapshotDetail;
+  // Legacy/compat fields referenced by older UI panels.
+  observed_at?: string;
+  data_quality?: string;
   facts?: Record<string, unknown>;
   limitations?: string[];
+}
+
+export interface StorageUsage {
+  home: string;
+  used_bytes: number;
+  total_bytes: number | null;
+  observed_at: string;
 }
 
 export interface EntitlementSnapshot {
@@ -617,6 +664,121 @@ export interface RecipeSummaryPayload {
   executable: boolean;
 }
 
+/** Full recipe version read model (GET /api/v1/recipes/{id}/versions/{v}). */
+export interface RecipeVersionPayload {
+  recipe_id: string;
+  version: string;
+  recipe_version_id: string;
+  title: string;
+  description: string;
+  trust_level: string;
+  /** Dotted-path parameter schema: `required` array plus per-field metadata. */
+  parameter_schema: JsonObject;
+  compatibility: JsonObject;
+  risk_declaration: JsonObject | null;
+  preflight_checks: unknown[];
+  recovery: JsonObject | null;
+  success_protocol: JsonObject | null;
+  source: JsonObject;
+  content_sha256: string;
+  materializer: string;
+  executable: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Agent explanation (POST /api/v1/runs/{id}/agent/explain)
+// ---------------------------------------------------------------------------
+
+export interface AgentFactPayload {
+  fact_id: string;
+  statement: string;
+  evidence_refs: string[];
+  evidence_object_ids: string[];
+  confidence: string;
+}
+
+export interface AgentCitationPayload {
+  fact_id: string;
+  evidence_object_ids: string[];
+}
+
+export interface AgentExplanation {
+  run_id: string;
+  provider: string;
+  status: string;
+  summary: string;
+  facts: AgentFactPayload[];
+  diagnoses: DiagnosisRecordPayload[];
+  model: string | null;
+  narrative: string | null;
+  recommendations: string[];
+  citations: AgentCitationPayload[];
+  warnings: string[];
+  evidence_bundle_sha256: string | null;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Template authoring: drafts, reviews, publication gate
+// ---------------------------------------------------------------------------
+
+export interface TemplateDraft {
+  draft_id: string;
+  template_id: string;
+  owner: string;
+  title: string;
+  description: string;
+  visibility: MarketVisibility;
+  scope_key: string | null;
+  state: string;
+  version: number;
+  payload: JsonObject;
+  compatibility: JsonObject;
+  publication: JsonObject;
+  content_sha256: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TemplateReview {
+  review_id: string;
+  draft_id: string;
+  requester: string;
+  reviewer: string | null;
+  reviewer_role: string | null;
+  reviewer_scope_key: string | null;
+  state: string;
+  version: number;
+  draft_version: number;
+  content_sha256: string;
+  note: string | null;
+  gate_report: JsonObject | null;
+  validated_at: string | null;
+  created_at: string;
+  updated_at: string;
+  decided_at: string | null;
+}
+
+/** Review queue rows additionally carry draft title and scope facts. */
+export interface TemplateReviewQueueItem extends TemplateReview {
+  draft_title: string;
+  visibility: MarketVisibility;
+  scope_key: string | null;
+}
+
+export interface TemplateGateFinding {
+  code: string;
+  severity: string;
+  message: string;
+  [key: string]: unknown;
+}
+
+export interface TemplateGateValidation {
+  policy_version: string;
+  status: string;
+  findings: TemplateGateFinding[];
+}
+
 // ---------------------------------------------------------------------------
 // M2: Repair Ticket & Artifact Manifest
 // ---------------------------------------------------------------------------
@@ -709,9 +871,7 @@ export interface UploadSession {
   target_path: string;
   filename: string;
   total_size: number;
-  chunk_size: number;
-  total_chunks: number;
-  received_chunks: number[];
+  is_partial: boolean;
   received_bytes: number;
   sha256_expected: string | null;
   sha256_actual: string | null;

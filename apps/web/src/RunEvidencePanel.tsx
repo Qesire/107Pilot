@@ -38,6 +38,7 @@ import {
   useRunEvents,
   useRunLineage,
 } from "./query";
+import { RunExplanationPanel } from "./RunExplanationPanel";
 import type {
   DiagnosisRecordPayload,
   EvidenceObject,
@@ -233,6 +234,7 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
           />
         ) : null}
         {tab === "diagnosis" ? (
+          <>
           <DiagnosisView
             pending={diagnoses.isPending}
             error={diagnoses.error ?? diagnose.error}
@@ -245,6 +247,12 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
               if (object) setView("objects", object.object_id);
             }}
           />
+          <RunExplanationPanel
+            user={user}
+            runId={run.run_id}
+            onOpenObject={(objectId) => setView("objects", objectId)}
+          />
+          </>
         ) : null}
         {tab === "capsule" ? (
           <CapsuleView

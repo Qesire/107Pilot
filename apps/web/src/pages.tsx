@@ -29,6 +29,7 @@ import {
   StatusBadge,
 } from "./components";
 import { ConnectionPanel } from "./ConnectionStatus";
+import { ResourceDashboard } from "./ResourceDashboard";
 import { useCapabilities, useLatestEntitlement, useLatestPlatform, useRun, useRunPages, useRuns } from "./query";
 import { RunList } from "./RunList";
 import { RunTable } from "./RunTable";
@@ -91,6 +92,8 @@ export function WorkspacePage({ user, location, navigate }: PageProps) {
           </div>
         </article>
       </section>
+
+      <ResourceDashboard user={user} />
 
       <div className="workspace-grid">
         <section className="panel span-2" aria-labelledby="recent-runs-heading">

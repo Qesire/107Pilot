@@ -23,6 +23,7 @@ import { useHealth, useWebSession } from "./query";
 import { ClusterPage, NotFoundPage, RunsPage, TerminalCollaborationPage, WorkspacePage } from "./pages";
 import { FilesPage } from "./FilesPage";
 import { MarketItemDetailPage, MarketPage, TemplateDetailPage } from "./MarketPages";
+import { TemplateWorkbenchPage } from "./TemplateWorkbenchPage";
 import { globalNavigationPath, useLocationState, withSearch } from "./url";
 
 const navigation = [
@@ -164,7 +165,8 @@ export default function App() {
             {location.pathname === "/cluster" ? <ClusterPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname === "/market" ? <MarketPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname.startsWith("/market/") ? <MarketItemDetailPage user={user} location={location} navigate={navigate} /> : null}
-            {location.pathname.startsWith("/templates/") ? <TemplateDetailPage user={user} location={location} navigate={navigate} /> : null}
+            {location.pathname === "/templates" || location.pathname === "/templates/new" || location.pathname === "/templates/reviews" || location.pathname.startsWith("/templates/draft/") ? <TemplateWorkbenchPage user={user} location={location} navigate={navigate} /> : null}
+            {location.pathname.startsWith("/templates/") && !location.pathname.startsWith("/templates/draft/") ? <TemplateDetailPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname.startsWith("/studio/") ? (
               <Suspense fallback={<div className="query-state" role="status"><span>正在加载 Contract Studio…</span></div>}>
                 <StudioPage user={user} location={location} navigate={navigate} />
@@ -181,5 +183,5 @@ export default function App() {
 }
 
 function isKnownPath(pathname: string): boolean {
-  return pathname === "/" || pathname === "/projects" || pathname === "/runs" || pathname.startsWith("/runs/") || pathname === "/files" || pathname === "/cluster" || pathname === "/agent" || pathname === "/terminal" || pathname.startsWith("/market") || pathname.startsWith("/templates/") || pathname.startsWith("/studio/");
+  return pathname === "/" || pathname === "/projects" || pathname === "/runs" || pathname.startsWith("/runs/") || pathname === "/files" || pathname === "/cluster" || pathname === "/agent" || pathname === "/terminal" || pathname.startsWith("/market") || pathname === "/templates" || pathname.startsWith("/templates/") || pathname.startsWith("/studio/");
 }

@@ -44,6 +44,7 @@ export function MarketPage({ user, location, navigate }: MarketPageProps) {
         eyebrow="Market / templates and successful Runs"
         title="作业与模板市场"
         detail="统一市场按发布时间稳定分页。成功 Run 只证明发布者曾运行成功；curated release 才带审核与验证事实。"
+        action={<div className="agent-action-row"><button className="button secondary" type="button" onClick={() => navigate(`/templates?user=${encodeURIComponent(user)}`)}>我的模板</button><button className="button primary" type="button" onClick={() => navigate(`/templates/new?user=${encodeURIComponent(user)}`)}>发布模板</button></div>}
       />
       <section className="market-filter" aria-label="市场筛选">
         <label className="search-field"><Search aria-hidden="true" size={17} /><span className="sr-only">搜索市场</span><input value={q} placeholder="搜索标题、描述或 Template ID" onChange={(event) => update({ q: event.target.value || null })} /></label>
@@ -156,6 +157,17 @@ export function TemplateDetailPage({ user, location, navigate }: MarketPageProps
   const from = location.search.get("from") ?? (versions.find((item) => item !== version) ?? null);
   const diff = useTemplateDiff(user, templateId, from, version);
   const [requestKey, setRequestKey] = useState<string | null>(null);
+  const [withdrawReason, setWithdrawReason] = useState("");
+  const queryClient = useQueryClient();
+  const withdrawRelease = useMutation({
+    mutationFn: (reason: string) =>
+      api.withdrawTemplateRelease(user, templateId, version ?? "", reason),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["template-release", user, templateId] });
+      await queryClient.invalidateQueries({ queryKey: ["templates", user] });
+      await queryClient.invalidateQueries({ queryKey: ["market-items"] });
+    },
+  });
   const adoption = useMutation({
     mutationFn: (key: string) => api.adoptTemplate(user, templateId, version ?? "", key),
     onSuccess: (result) => {
@@ -191,6 +203,15 @@ export function TemplateDetailPage({ user, location, navigate }: MarketPageProps
             </section>
             <aside className="template-detail-side">
               <section className="panel"><div className="panel-heading"><div><p className="panel-kicker">Adopt</p><h2>采用此 release</h2></div><CopyPlus aria-hidden="true" size={19} /></div><p className="side-detail">不会修改 release；服务器原子创建 private draft、Contract 和 lineage。</p>{adoption.isError ? <p className="limitation" role="alert">{adoption.error.message}</p> : null}<button className="button primary wide" type="button" disabled={Boolean(release.data.withdrawn_at) || adoption.isPending} onClick={adopt}>{adoption.isPending ? "采用中" : "采用并进入 Studio"}</button>{requestKey ? <p className="request-key mono">request key: {requestKey}</p> : null}</section>
+              {release.data.publisher === user && !release.data.withdrawn_at ? (
+                <section className="panel">
+                  <div className="panel-heading"><div><p className="panel-kicker">Publisher control</p><h2>撤回 release</h2></div></div>
+                  <p className="side-detail">撤回后条目不再出现在市场，也不能被采用；已创建的采用副本不受影响。</p>
+                  <label className="form-field"><span>撤回原因</span><textarea value={withdrawReason} onChange={(event) => setWithdrawReason(event.target.value)} /></label>
+                  {withdrawRelease.isError ? <p className="limitation" role="alert">{withdrawRelease.error.message}</p> : null}
+                  <button className="button danger wide" type="button" disabled={!withdrawReason.trim() || withdrawRelease.isPending} onClick={() => withdrawRelease.mutate(withdrawReason.trim())}>{withdrawRelease.isPending ? "撤回中" : "确认撤回"}</button>
+                </section>
+              ) : null}
               <section className="panel"><div className="panel-heading"><div><p className="panel-kicker">Versions</p><h2>Release diff</h2></div><FileDiff aria-hidden="true" size={19} /></div><label className="form-field"><span>当前版本</span><select value={version ?? ""} onChange={(event) => navigate(withSearch(location.pathname, location.search, { version: event.target.value, from: null }))}>{versions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label><label className="form-field"><span>对比版本</span><select value={from ?? ""} onChange={(event) => navigate(withSearch(location.pathname, location.search, { from: event.target.value || null }))}><option value="">不对比</option>{versions.filter((item) => item !== version).map((item) => <option key={item} value={item}>{item}</option>)}</select></label><QueryBoundary pending={diff.isPending && Boolean(from)} error={diff.error}>{diff.data ? <ul className="diff-list">{diff.data.changes.map((change, index) => <li key={`${change.path}-${index}`}><strong>{change.path}</strong><span className="removed">− {compactJson(change.before)}</span><span className="added">+ {compactJson(change.after)}</span></li>)}</ul> : <p className="no-findings">选择另一个版本查看 immutable content diff。</p>}</QueryBoundary></section>
             </aside>
           </div>

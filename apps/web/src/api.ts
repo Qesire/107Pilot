@@ -1,4 +1,5 @@
 import type {
+  AgentExplanation,
   ArchiveResponse,
   ArtifactManifest,
   CapabilityProfile,
@@ -10,10 +11,13 @@ import type {
   FileEntry,
   FileListResponse,
   HealthReady,
+  MarketVisibility,
   PagePayload,
   PlatformConnection,
   PlatformConnections,
   PlatformSnapshot,
+  StorageUsage,
+  RecipeVersionPayload,
   RepairTicket,
   RunEvent,
   RunLineage,
@@ -27,9 +31,13 @@ import type {
   RunDiagnoses,
   RunEvidence,
   TemplateAdoption,
+  TemplateDraft,
+  TemplateGateValidation,
   TemplateMarketItem,
   TemplateRelease,
   TemplateReleaseDiff,
+  TemplateReview,
+  TemplateReviewQueueItem,
   MarketItem,
   MarketItemAdoption,
   SuccessfulRunAdoption,
@@ -104,6 +112,32 @@ async function sendJson<T>(
 ): Promise<T> {
   const request: RequestInit = {
     method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Pilot107-User": user,
+    },
+    body: JSON.stringify(body),
+  };
+  if (signal) request.signal = signal;
+  const response = await fetch(path, request);
+  const payload = (await response.json().catch(() => ({}))) as T & ErrorPayload;
+  if (!response.ok) {
+    const code = payload.error?.code ?? `HTTP.${response.status}`;
+    const message = describeApiError(code, payload.error?.message ?? response.statusText);
+    throw new ApiRequestError(response.status, code, message);
+  }
+  return payload;
+}
+
+async function patchJson<T>(
+  path: string,
+  user: string,
+  body: object,
+  signal?: AbortSignal,
+): Promise<T> {
+  const request: RequestInit = {
+    method: "PATCH",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
@@ -257,6 +291,157 @@ export const api = {
     ),
   recipes: (user: string, signal?: AbortSignal) =>
     getJson<{ items: RecipeSummaryPayload[] }>("/api/v1/recipes", user, signal),
+  recipeVersion: (
+    user: string,
+    recipeId: string,
+    version: string,
+    signal?: AbortSignal,
+  ) => getJson<RecipeVersionPayload>(
+    `/api/v1/recipes/${encodeURIComponent(recipeId)}/versions/${encodeURIComponent(version)}`,
+    user,
+    signal,
+  ),
+  explainRun: (
+    user: string,
+    runId: string,
+    provider: "local" | "none",
+    signal?: AbortSignal,
+  ) => sendJson<AgentExplanation>(
+    `/api/v1/runs/${encodeURIComponent(runId)}/agent/explain`,
+    user,
+    { provider },
+    signal,
+  ),
+  templateDrafts: (
+    user: string,
+    filters: { limit?: string | undefined; cursor?: string | undefined },
+    signal?: AbortSignal,
+  ) => getJson<PagePayload<TemplateDraft>>(
+    queryPath("/api/v1/template-drafts", {
+      owner: user,
+      limit: filters.limit ?? "50",
+      cursor: filters.cursor,
+    }),
+    user,
+    signal,
+  ),
+  templateDraft: (user: string, draftId: string, signal?: AbortSignal) =>
+    getJson<TemplateDraft>(
+      queryPath(`/api/v1/template-drafts/${encodeURIComponent(draftId)}`, { owner: user }),
+      user,
+      signal,
+    ),
+  createTemplateDraft: (
+    user: string,
+    input: {
+      title: string;
+      description: string;
+      visibility: MarketVisibility;
+      scope_key: string | null;
+      payload: JsonObject;
+      compatibility: JsonObject;
+      publication: JsonObject;
+    },
+    signal?: AbortSignal,
+  ) => sendJson<TemplateDraft>(
+    "/api/v1/template-drafts",
+    user,
+    { owner: user, ...input },
+    signal,
+  ),
+  updateTemplateDraft: (
+    user: string,
+    draftId: string,
+    input: {
+      expected_version: number;
+      title?: string | undefined;
+      description?: string | undefined;
+      visibility?: MarketVisibility | undefined;
+      scope_key?: string | null | undefined;
+      payload?: JsonObject | undefined;
+      compatibility?: JsonObject | undefined;
+      publication?: JsonObject | undefined;
+    },
+    signal?: AbortSignal,
+  ) => patchJson<TemplateDraft>(
+    `/api/v1/template-drafts/${encodeURIComponent(draftId)}`,
+    user,
+    { owner: user, ...input },
+    signal,
+  ),
+  validateTemplateDraft: (user: string, draftId: string, signal?: AbortSignal) =>
+    sendJson<TemplateGateValidation>(
+      `/api/v1/template-drafts/${encodeURIComponent(draftId)}/validate`,
+      user,
+      { owner: user },
+      signal,
+    ),
+  submitTemplateDraftForReview: (
+    user: string,
+    draftId: string,
+    expectedVersion: number,
+    signal?: AbortSignal,
+  ) => sendJson<TemplateReview>(
+    `/api/v1/template-drafts/${encodeURIComponent(draftId)}/reviews`,
+    user,
+    { owner: user, expected_version: expectedVersion },
+    signal,
+  ),
+  publishTemplateDraft: (
+    user: string,
+    draftId: string,
+    input: { reviewId: string; releaseVersion: string; requestKey: string },
+    signal?: AbortSignal,
+  ) => sendJson<TemplateRelease>(
+    `/api/v1/template-drafts/${encodeURIComponent(draftId)}/publish`,
+    user,
+    {
+      owner: user,
+      review_id: input.reviewId,
+      release_version: input.releaseVersion,
+      request_key: input.requestKey,
+    },
+    signal,
+  ),
+  templateReviews: (
+    user: string,
+    filters: { limit?: string | undefined; cursor?: string | undefined },
+    signal?: AbortSignal,
+  ) => getJson<PagePayload<TemplateReviewQueueItem>>(
+    queryPath("/api/v1/template-reviews", {
+      limit: filters.limit ?? "50",
+      cursor: filters.cursor,
+    }),
+    user,
+    signal,
+  ),
+  decideTemplateReview: (
+    user: string,
+    reviewId: string,
+    input: { expectedVersion: number; approve: boolean; note?: string | undefined },
+    signal?: AbortSignal,
+  ) => sendJson<TemplateReview>(
+    `/api/v1/template-reviews/${encodeURIComponent(reviewId)}/decision`,
+    user,
+    {
+      expected_version: input.expectedVersion,
+      approve: input.approve,
+      ...(input.note !== undefined ? { note: input.note } : {}),
+    },
+    signal,
+  ),
+  withdrawTemplateRelease: (
+    user: string,
+    templateId: string,
+    releaseVersion: string,
+    reason: string,
+    signal?: AbortSignal,
+  ) => sendJson<TemplateRelease>(
+    `/api/v1/templates/${encodeURIComponent(templateId)}/releases/${encodeURIComponent(releaseVersion)}/withdraw`,
+    user,
+    { reason },
+    signal,
+  ),
   validateContract: (user: string, contract: JsonObject, signal?: AbortSignal) =>
     sendJson<ContractValidation>("/api/v1/contracts/validate", user, contract, signal),
   createContract: (user: string, contract: JsonObject, signal?: AbortSignal) =>
@@ -659,6 +844,8 @@ export const api = {
     sendJson<{ status: string; path: string }>("/api/v1/files/mkdir", user, { path }, signal),
   fileDelete: (user: string, path: string, signal?: AbortSignal) =>
     sendJson<{ status: string; path: string }>("/api/v1/files/delete", user, { path }, signal),
+  storageUsage: (user: string, signal?: AbortSignal) =>
+    getJson<StorageUsage>("/api/v1/files/usage", user, signal),
   fileRename: (
     user: string,
     path: string,
@@ -670,6 +857,25 @@ export const api = {
       "/api/v1/files/rename",
       user,
       { path, new_path: newPath, overwrite },
+      signal,
+    ),
+  fileCopy: (
+    user: string,
+    paths: string[],
+    destDir: string,
+    signal?: AbortSignal,
+  ) =>
+    sendJson<{ status: string; copied: string[]; dest_dir: string }>(
+      "/api/v1/files/copy",
+      user,
+      { paths, dest_dir: destDir },
+      signal,
+    ),
+  fileCreate: (user: string, dir: string, name: string, signal?: AbortSignal) =>
+    sendJson<{ status: string; path: string }>(
+      "/api/v1/files/create-file",
+      user,
+      { dir, name },
       signal,
     ),
   fileArchive: (
@@ -685,29 +891,16 @@ export const api = {
       { paths, dest_dir: destDir, ...(archiveName ? { archive_name: archiveName } : {}) },
       signal,
     ),
-  uploadInit: (
+  fileExtract: (
     user: string,
-    input: {
-      target_path: string;
-      filename: string;
-      total_size: number;
-      sha256?: string;
-      chunk_size?: number;
-      auto_extract?: boolean;
-    },
-    signal?: AbortSignal,
-  ) => sendJson<UploadSession>("/api/v1/files/uploads", user, input, signal),
-  uploadChunk: (
-    user: string,
-    sessionId: string,
-    index: number,
-    dataB64: string,
+    path: string,
+    destDir?: string,
     signal?: AbortSignal,
   ) =>
-    sendJson<UploadSession>(
-      `/api/v1/files/uploads/${encodeURIComponent(sessionId)}/chunks`,
+    sendJson<{ status: string; members: number; dest_dir: string }>(
+      "/api/v1/files/extract",
       user,
-      { index, data_b64: dataB64 },
+      { path, ...(destDir ? { dest_dir: destDir } : {}) },
       signal,
     ),
   uploadComplete: (user: string, sessionId: string, signal?: AbortSignal) =>
