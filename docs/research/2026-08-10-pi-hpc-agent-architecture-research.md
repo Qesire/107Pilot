@@ -231,9 +231,10 @@ tool call
 - Remediation Session 已有持久状态、预算、审批和派生 Run；
 - Evidence、Diagnosis、PlatformSnapshot、Runtime Watch 和文件传输已形成可引用数据源；
 - Template Market 已有 draft/review/publish、immutable release、visibility、adoption、environment verification、ranking 和 withdrawal 数据模型；
+- 统一 MarketReadService 还合并了低门槛的成功 RunPublication；其产品承诺与 curated TemplateRelease 不同；
 - 真实 `/public` 是否可挂载到应用节点仍未确认，因此设计不能依赖共享文件系统直挂。
 
-因此需要新增的是统一 AgentSession/Turn、Pi kernel、WorkspaceSnapshot/ChangeSet、Tool Gateway、AgentTask，以及把既有 Template Market 操作收口到持久 Application/Publication Session；不需要重写 Slurm、文件、Evidence 或市场存储层。
+因此需要新增的是统一 AgentSession/Turn、Pi kernel、WorkspaceSnapshot/ChangeSet、Tool Gateway、AgentTask，以及把两类市场采用收口到持久强类型 Application Session、把 curated 发布收口到 Publication Session；不需要重写 Slurm、文件、Evidence 或市场存储层。
 
 ## 11. 推荐架构
 
@@ -287,7 +288,10 @@ pilot-agentd (pi-agent-core)
 - 项目文件中的提示注入不能扩大权限；
 - 模型不可用时确定性能力继续，代码创建明确阻塞；
 - 自然语言目标能够发现并应用兼容模板；没有合适模板时明确进入空白创建流程；
+- curated 与 RunPublication 的采用都不能绕过 Agent，且 reference_only 不继承验证保证；
+- 成功 Run 默认不分享，ShareManifest 未授权字段和 Contract 不可被采用者获得；
 - 成功 Run 能经过严格脱敏、参数化、复现验证和审核形成 immutable release；
+- exact、metadata-only 与等价成功 Run 不会产生重复 release；
 - 模板采纳、环境验证、新版本建议和撤回决策均可绑定 Run/Evidence 并追溯；
 - 登录节点不存在 Pi/Node Agent 常驻进程。
 
@@ -309,31 +313,36 @@ pilot-agentd (pi-agent-core)
 user intent
 → market search / compare
 → compatibility + verification ranking
-→ TemplateApplicationSession
+→ MarketApplicationSession
+  ├─ TemplateApplicationSession(curated)
+  └─ ReferenceAdaptationSession(reference_only)
 → user-specific ApplicationPlan
 → private Contract / ChangeSet
 → Run
 ```
 
-Agent 必须参与模板应用，因为共享 release 只表达可复用的不变量、参数 schema 和环境约束，不能直接代表当前学生的输入、路径、PlatformSnapshot 和资源选择。即使用户已经手选模板，Agent 也要解析参数、识别兼容性、补齐安全默认值、暴露假设并形成一次确认计划；自然语言入口则先完成搜索与比较。
+Agent 必须参与两类市场采用。curated release 只表达可复用不变量、参数 schema 和环境约束，不能直接代表当前学生；RunPublication 更只证明一次成功运行，必须以 reference_only 重新检查路径、依赖和资源。即使用户已经手选条目，Agent 也要形成一次完整确认计划；自然语言入口则先完成搜索与比较。
 
-既有 `adopt_release()` 应降为 `TemplateApplicationSession` 的内部确定性 finalizer，不能作为绕过 Agent 的公共应用入口。若没有兼容模板，系统返回显式的 `no_suitable_template`，再进入空白工程或已有工程创建路径，不为凑命中率强推模板。
+既有 `adopt_release()` 与 `RunPublicationStore.adopt()` 的授权、幂等和 lineage 写入应提取为强类型 finalizer 的内部 transaction helper；当前 copy-only 行为不足以应用已确认计划，也不能作为公共入口。没有可采用 Contract 的 RunPublication 只能作为说明性参考。若没有兼容候选，系统返回显式的 `no_suitable_template`，再进入空白工程或已有工程创建路径。
 
 ### 14.2 生产支线
 
 ```text
 successful Run
-→ TemplatePublicationSession
+├─ default: do not share
+├─ optional ShareManifest → RunPublication
+└─ TemplatePublicationSession
 → extract invariants
 → strict sanitization
 → parameterization
+→ semantic duplicate check
 → private draft
 → reproduction validation
 → review
 → immutable release
 ```
 
-发布模板不是“复制一次成功作业”。Agent 需要区分领域不变量、用户参数、平台参数、运行时派生值和禁止发布值，并对用户名、绝对路径、账号、课程/项目标识、数据集与 checkpoint 路径、令牌、socket 以及偶然资源值执行严格脱敏。生成的 draft 必须先保持私有，经独立复现 Run 和审核后才能发布。
+成功 Run 默认不分享；普通分享由用户逐字段授权。发布 curated template 不是“复制一次成功作业”：Agent 需要区分领域不变量、用户参数、平台参数、运行时派生值和禁止发布值，并执行严格脱敏。生成的 draft 必须先保持私有，经语义查重、独立复现 Run 和审核后才能发布。
 
 ### 14.3 运行反馈与版本治理
 
@@ -341,9 +350,11 @@ successful Run
 
 Agent 可以基于失败验证和 Runtime Watch 证据提出新版本、降权、弃用或撤回建议；最终发布、弃用和撤回仍由模板发布者或审核者决定。release 保持 immutable，修复通过新 draft/version 完成，旧版本谱系、历史 Contract 和既有 Run 保留可追溯性。
 
+查重使用提取前 family fingerprint 与 sanitized bundle content fingerprint。exact 或 metadata-only 差异不创建新 release；等价的新成功 Run 优先增加既有 release 的 verification。LLM 只解释 near-duplicate 的结构化 diff，不能成为唯一阻塞依据。
+
 ### 14.4 复用原则
 
-该支线复用现有 Template Market 的 draft/review/release、visibility、adoption、environment verification、ranking 与 withdrawal 数据模型，也复用 Workspace、AgentTask、Run 和 Evidence。Pi 只能调用 `template_market_search`、`template_application_*`、`template_publication_*` 等高层工具，不能直接调用底层 publish、adopt 或 withdraw 操作。
+该支线复用现有 Template Market 与 RunPublication 的存储模型，也复用 Workspace、AgentTask、Run 和 Evidence。Pi 只能调用 `market_discover`、`market_application_*`、`template_publication_*` 等高层工具，不能直接调用底层 publish、adopt 或 withdraw 操作。完整契约见 `docs/superpowers/specs/2026-08-10-template-market-agent-detailed-design.md`。
 
 ## 15. 最终结论
 

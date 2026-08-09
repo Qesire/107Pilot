@@ -53,7 +53,8 @@ Agent 必须同时支持创建与修复。P0 创建能力的完成标准不是�
 12. 用户项目中的 Pi extensions、packages、MCP servers 和 skills 默认不加载。
 13. 普通 owner-scoped Agent 上下文使用校内自部署模型，不做过度脱敏；从成功 Run 发布共享模板时必须严格脱敏。
 14. Pi 精确锁版；先用薄适配层，不立即维护大型 fork。
-15. Template Market 是连接工程创建入口、成功 Run 发布出口和运行 Evidence 反馈的完整领域支线，不只是两个孤立 Profile。
+15. Template Market 是连接工程创建入口、成功 Run 发布出口和运行 Evidence 反馈的完整领域支线；统一市场同时包含低保证的 RunPublication 和 curated TemplateRelease，二者应用均强制经过 Agent。
+16. 成功 Run 默认不分享；市场发布必须由用户选择范围和内容，curated 发布还必须执行语义查重，避免实际差别很小的重复 release。
 
 ## 4. 方案比较
 
@@ -427,9 +428,11 @@ Tool Gateway 必须重新验证 owner、profile、工具、预算、状态版本
 
 - `platform_get_snapshot`
 - `workspace_list/search/read`
-- `template_market_search`
+- `market_discover`
+- `market_candidate_compare`
 - `template_release_get`
 - `template_release_compare`
+- `run_publication_get`
 - `contract_get`
 - `run_get`
 - `run_log_read`
@@ -451,17 +454,25 @@ Tool Gateway 必须重新验证 owner、profile、工具、预算、状态版本
 
 模板市场领域动作：
 
-- `template_application_start`
-- `template_application_resolve`
-- `template_application_finalize`
+- `market_application_start`
+- `market_application_get`
+- `market_application_resolve_inputs`
+- `market_application_build_plan`
+- `market_application_finalize`
 - `template_publication_start`
 - `template_publication_extract`
+- `template_publication_classify`
 - `template_sanitization_preview`
+- `template_parameterization_build`
+- `template_bundle_build`
+- `template_duplicate_check`
+- `template_reproduction_schedule`
 - `template_publication_submit_review`
-- `template_verification_record`
+- `template_failure_attribution_propose`
+- `template_new_version_propose`
 - `template_withdraw_propose`
 
-Pi 不直接调用底层 `publish()`、`adopt_release()` 或 `withdraw_release()`。这些方法只由领域服务在状态、权限、gate 和审批全部满足后执行。系统不提供通用 `ssh`、`sbatch`、`srun` 或远端 shell 工具。
+`market_application_finalize` 与 `template_publication_submit_review` 只在对应用户确认后动态加入工具集，并消费绑定精确 digest 的一次性 capability。Verification 由 Outcome/Evidence 服务确定性记录，Pi 只能提出失败归因。Pi 不直接调用底层 `publish()`、`adopt_release()`、`RunPublicationStore.adopt()` 或 `withdraw_release()`。这些方法只由领域服务在状态、权限、gate 和审批全部满足后执行。系统不提供通用 `ssh`、`sbatch`、`srun` 或远端 shell 工具。
 
 ### 11.4 动态最小工具集
 
@@ -582,16 +593,17 @@ PilotAgentProfile:
 
 支持 blank/template/existing/failed_run，从目标理解、创建或编辑、验证，到 ChangeSet、Contract 和 Run。它是主要的通用实验编码 Agent。
 
-### 14.2 `template_application`
+### 14.2 `market_application`
 
 支持：
 
 ```text
-用户选择模板 → Agent 实例化
-用户描述任务 → Agent 搜索/选择/实例化
+用户选择 curated template → TemplateApplicationSession
+用户选择 RunPublication → ReferenceAdaptationSession
+用户描述任务 → Agent 搜索/比较/选择 → 对应强类型会话
 ```
 
-Agent 使用模板 schema、平台事实和项目上下文；没有合适模板时明确 `no_suitable_template` 并转 experiment builder，不伪造匹配。
+两类会话共享 MarketApplicationSession envelope，但保证等级分别固定为 `curated` 和 `reference_only`。Agent 使用来源事实、平台事实和项目上下文；没有合适条目时明确 `no_suitable_template` 并转 experiment builder，不伪造匹配。
 
 ### 14.3 `run_diagnosis_repair`
 
@@ -606,6 +618,8 @@ Agent 使用模板 schema、平台事实和项目上下文；没有合适模板�
 后续轻量 Profile，用于 Slurm 解释和平台问答，并可将对话转为模板应用或实验创建。当前不建设完整初学者知识库。
 
 ## 15. Template Market 完整领域支线
+
+本节的强类型状态、ShareManifest、bundle、语义查重、verification 和 API 细节以 `2026-08-10-template-market-agent-detailed-design.md` 为权威规格。
 
 Template Market 同时连接：
 
@@ -622,11 +636,11 @@ Template Market 同时连接：
                      │                   │
              消费/应用支线          生产/发布支线
                      │                   │
-自然语言/主动选模板              成功 Run
-→ 搜索与比较                    → 提取候选模板
-→ Agent 应用                    → 严格脱敏
-→ Contract                      → 参数化
-→ Run                           → 验证与审核
+自然语言/主动选市场条目          成功 Run
+→ 搜索与比较                    → 默认不分享
+→ 强类型 Agent 应用             ├─ 可选 RunPublication
+→ Contract                      └─ curated 发布
+→ Run                              → 脱敏/查重/复现/审核
                      │                   │
                      └─────────┬─────────┘
                                │
@@ -637,15 +651,16 @@ Template Market 同时连接：
 
 ### 15.1 发现与推荐支线
 
-工程创建、迁移或修复开始时，Agent 可以主动查询市场，而不要求用户先手工选择模板：
+工程创建、迁移或修复开始时，Agent 可以主动查询统一市场，而不要求用户先手工选择模板：
 
 ```text
 用户描述实验
-→ template_market_search
+→ market_discover
 → 按平台兼容、目标匹配和验证事实排序
-├─ 明确匹配：解释选择并进入 TemplateApplicationSession
+├─ curated：解释选择并进入 TemplateApplicationSession
+├─ RunPublication：标明 reference_only 并进入 ReferenceAdaptationSession
 ├─ 多个接近：比较关键差异并请求用户选择
-└─ 无合适模板：no_suitable_template
+└─ 无合适条目：no_suitable_template
                 → ExperimentProjectSession(origin=blank/existing)
 ```
 
@@ -657,65 +672,85 @@ Template Market 同时连接：
 4. 当前环境的 verification tier、新鲜度和 Evidence 完整度；
 5. adoption count 和历史结果。
 
-热门或最近发布不能覆盖当前平台不兼容。Agent 的匹配解释必须引用 release metadata、compatibility finding 和 PlatformSnapshot，不得仅返回无依据的“推荐”。
+热门或最近发布不能覆盖当前平台不兼容。RunPublication 默认只具有 `adaptable/reference_only`，不得冒充 compatible curated template。Agent 的匹配解释必须引用市场 metadata、compatibility finding 和 PlatformSnapshot，不得仅返回无依据的“推荐”。
 
-### 15.2 `TemplateApplicationSession`
+### 15.2 `MarketApplicationSession` 判别联合
 
-模板应用必须经过持久 Agent 会话，面向用户的直接复制/采用路径被移除：
+所有可采用市场条目必须经过持久 Agent 会话，面向用户的直接复制/采用路径被移除。共同 envelope 只能实例化两个强类型分支：
 
 ```text
-discovering
-→ evaluating
+MarketApplicationSession
+├─ TemplateApplicationSession(assurance=curated)
+└─ ReferenceAdaptationSession(assurance=reference_only)
+```
+
+source kind、item id 和 assurance 创建后不可改变：
+
+```text
+evaluating
 → collecting_inputs
 → adapting
 → planning
-→ ready_for_confirmation
+→ awaiting_confirmation
 → finalizing
 → completed
 ```
 
 ```yaml
-TemplateApplicationSession:
+MarketApplicationSession:
   session_id:
   owner:
-  release_id:
+  source_kind:
+  source_item_id:
+  source_digest:
+  assurance:
   user_intent:
   platform_snapshot_id:
   workspace_snapshot_id:
-  resolved_parameters:
+  resolved_inputs:
   assumptions:
-  compatibility_findings:
+  findings:
   application_plan:
+  plan_digest:
+  confirmation:
   target_contract_id:
   target_workspace_changeset_id:
-  state:
+  phase:
+  status:
   state_version:
 ```
 
 行为约束：
 
-- 用户主动选择 release 和自然语言查找模板使用同一个状态机；
+- 用户主动选择条目和自然语言发现使用同一 envelope；
+- curated 与 reference 分支使用判别 schema，不能在会话中互换；
 - LLM 可用时负责解释、匹配、适配和最小追问；
 - LLM 不可用时由 schema、平台事实和确定性默认值继续收集参数；
 - Agent 自动填写安全且有事实依据的值，只询问真正未知项；
 - 用户确认完整 `ApplicationPlan`，而不是逐字段批准；
 - ApplicationPlan 可以生成 WorkspaceChangeSet 和 Contract，但创建 Contract 与正式 Slurm 提交保持分离；
-- withdrawn、gate stale、无权限或当前平台不兼容的 release 不能 finalizing；
+- withdrawn、gate stale、无权限、source digest 变化或当前平台不兼容时不能 finalizing；
+- RunPublication 未显式分享可采用 Contract 时不能创建 ReferenceAdaptationSession；
+- reference 分支必须重新检查路径、依赖和资源，不能继承 verification；
 - 找不到合适模板时明确 `no_suitable_template` 并转 experiment builder，不能伪造匹配；
 - 共享 release 永不因用户适配而改变。
 
-现有 `adopt_release()` 保留为 `finalizing` 内部的确定性 finalizer。API 和 Pi 工具不得绕过 ApplicationSession 直接调用它。finalizer 继续创建用户私有 draft/Contract 和完整 source release lineage。
+现有 `adopt_release()` 与 `RunPublicationStore.adopt()` 的授权、幂等和 lineage 写入被提取为内部 transaction helper；其 copy-only 行为不能直接充当 Agent finalizer。类型专属 finalizer 必须创建与已确认 plan digest 精确一致的私有 draft/Contract/ChangeSet，API 和 Pi 工具不得绕过 MarketApplicationSession 调用底层 helper。
 
 ### 15.3 成功 Run 到发布支线
 
+成功 Run 默认不分享。Agent 只能提出一次 owner-only suggestion，用户选择：不分享、以逐字段 ShareManifest 发布低保证 RunPublication，或启动严格的 curated 发布。RunPublication 是否可适配由 `contract_for_adaptation` 显式授权。
+
 ```text
 成功 Run
-→ 用户选择或 Agent 提议为候选
+→ 用户主动选择制作 curated template
+→ duplicate precheck
 → TemplatePublicationSession
 → 提取稳定命令、资源和环境
 → 严格脱敏
 → 参数化
 → 私有 draft
+→ sanitized bundle duplicate check
 → 复现验证
 → review
 → immutable release
@@ -726,13 +761,16 @@ TemplateApplicationSession:
 ```text
 selecting_source
 → extracting
+→ classifying
 → sanitizing
 → parameterizing
+→ drafting
+→ deduplicating
 → validating
-→ ready_for_review
+→ awaiting_publication_confirmation
 → submitted
 ├─ rejected → revising
-└─ approved → publishing → published
+└─ approved → publishing → completed
 ```
 
 ```yaml
@@ -741,10 +779,14 @@ TemplatePublicationSession:
   owner:
   source_run_id:
   source_contract_id:
+  source_workspace_snapshot_id:
   source_evidence_digest:
+  source_bundle_digest:
   extracted_invariants:
   proposed_parameters:
   sanitization_findings:
+  duplicate_report:
+  bundle_manifest_digest:
   reproduction_runs:
   draft_id:
   review_id:
@@ -763,9 +805,11 @@ TemplatePublicationSession:
 
 Publication Agent 必须区分模板不变量、用户参数、平台适配参数、运行时派生值和不得发布内容。仅把字符串替换为占位符不能通过 sanitization gate。
 
+模板 bundle 使用 content-addressed manifest 保存 Contract、参数 schema、compatibility、validation recipe 和小型文本文件；数据集、checkpoint 与 5GB 以上权重只进入 external asset manifest。完全相同的 bundle 被阻止，metadata-only 变化写 catalog annotation，同一模板家族的实际变化进入新版本。等价的新成功 Run 优先成为既有 release 的 verification。
+
 ### 15.4 验证反馈支线
 
-每次模板应用必须保留：
+两种市场应用都产生 MarketApplicationOutcome；只有 curated template 的完整 lineage 可以形成 TemplateVerification：
 
 ```text
 release
@@ -780,11 +824,14 @@ release
 规则：
 
 - adoption 只表示发生了应用，不等于验证成功；
-- verification 必须绑定 release、application session、Run、environment 和 Evidence digest；
+- verification 必须绑定 release、application session、adoption、Contract、bundle digest、Run、environment 和 Evidence digest；
+- 应用后存在计划外代码修改时只记录 outcome，不形成 verification；
+- ReferenceAdaptationSession 的成功 Run 永不形成 TemplateVerification；
 - Docker、真实 CPU、真实 GPU 等环境分别记录，不能互相冒充；
-- passed/failed/expired 都作为追加记录存在，不修改 release；
+- passed/failed attempt 与 expired/revoked/superseded status event 都追加存在，不修改历史；
 - verification 过期改变市场读模型和推荐可信度，但不删除历史；
-- 失败验证可以降低推荐权重并触发 Agent 建议，但不自动撤回 release；
+- 只有 Evidence 足以归因为 template defect 或 platform incompatibility 的失败才进入负向推荐信号；
+- 可信失败可以降低推荐权重并触发 Agent 建议，但不自动撤回 release；
 - Runtime Watch 或普通失败 Run 只有能证明其来自该 release/application lineage 时才能形成市场反馈。
 
 市场读模型先按授权和兼容性过滤，再综合 verification tier、最近通过时间、adoption count 和发布时间。原始 Evidence 仍由 EvidenceStore 管理，市场只保存引用和摘要。
@@ -792,25 +839,32 @@ release
 ### 15.5 版本、修订与撤回治理
 
 - release 内容不可变；
+- exact duplicate 和 metadata-only difference 不创建新 release；
+- 标题、描述、标签和弃用说明通过 append-only catalog annotation 修订；
 - 修复模板必须创建新 draft 和新 release version；
+- 同一 owner/template family 只允许一个 pending review，同一 content digest 只能发布一次；
 - 旧 release 的 Contract、Run、adoption 和 verification lineage 永久可追溯；
 - withdrawn release 不再允许新的 ApplicationSession finalizing；
 - 既有私有 draft、Contract 和 Run 不因撤回被删除；
 - Agent 可以提出 `new_version`、`deprecate` 或 `withdraw` 建议，但发布者/审核角色作最终决定；
-- 共享模板发布、撤回和替代关系必须记录审核 actor、reason、digest 和时间。
+- `supersedes_release_id` 显式记录替代关系；
+- 共享模板发布、撤回、查重决策和替代关系必须记录审核 actor、reason、digest 和时间。
 
 ### 15.6 与统一实验生命周期的连接
 
 ```text
 ExperimentProjectSession
-├─ 先发现市场并应用 release
+├─ 先发现市场并进入对应 MarketApplicationSession
 └─ 无匹配时从 blank/existing 创建
 
 成功 Run
+├─ 默认不分享
+├─ 可选 RunPublication + ShareManifest
 └─ 可进入 TemplatePublicationSession
 
-后续采用 Run
-└─ 产生 verification 和推荐反馈
+后续应用 Run
+├─ 两类均产生 MarketApplicationOutcome
+└─ curated eligible lineage 产生 verification 和推荐反馈
 ```
 
 模板分支不能复制另一套 Workspace、AgentTask、Contract、Run 或 Evidence 实现；它只通过领域状态机组合本规格中的统一基础能力。
@@ -1092,10 +1146,11 @@ Pi Node 依赖和 lockfile 与现有前端依赖分离。
 ### A5：修复与 Template Market 完整支线
 
 - failed Run diagnosis/repair；
-- template discovery/recommendation；
-- TemplateApplicationSession 与内部 adoption finalizer；
+- unified market discovery/recommendation；
+- MarketApplicationSession 的 curated/reference 强类型分支；
+- 成功 Run 默认不分享与 RunPublication ShareManifest；
 - successful Run → TemplatePublicationSession；
-- publication sanitization/review/immutable release；
+- publication sanitization/bundle/deduplication/reproduction/review/immutable release；
 - adoption outcome → environment verification；
 - new version/withdrawal governance。
 
@@ -1133,10 +1188,18 @@ slurm-sim
 | 浏览器断线 | 重连后读取 durable events |
 | Worker/agentd 重启 | 从 checkpoint/Task 恢复 |
 | 自然语言目标有兼容模板 | Agent 解释推荐并完成 ApplicationSession |
+| 采用普通成功作业分享 | reference_only 且重新检查路径、依赖和资源 |
+| RunPublication 未分享 Contract | 不允许适配，转 blank/existing |
 | 没有合适模板 | `no_suitable_template` 后转 blank/existing 创建 |
 | withdrawn/gate stale release | ApplicationSession finalizing 被拒绝 |
+| 成功 Run 未主动分享 | 不创建任何市场记录 |
+| 逐字段 ShareManifest | 未授权字段不进入 read model，未授权 Contract 不可适配 |
 | 成功 Run 发布模板 | 严格脱敏、复现、review 后创建 immutable release |
+| 等价 bundle 再发布 | 查重阻止并建议复用现有 release |
+| 只有展示 metadata 变化 | 写 annotation/revision，不发布新 release |
+| 等价新成功 Run | 形成既有 release verification，不重复发布 |
 | 采用模板后的 Run | adoption 与 environment verification 分别记录 |
+| reference Run 成功 | 记录 outcome，但不形成 TemplateVerification |
 | 模板后续修订 | 创建新 version，旧 lineage 保持不变 |
 
 ## 27. 性能验收
@@ -1169,7 +1232,7 @@ slurm-sim
 
 随后人为引入代码错误，演示相同 AgentSession/Workspace/Task 基础上的诊断与修复，证明创建和修复是同一个实验工程生命周期。
 
-第三段可从该成功 Run 发起 TemplatePublicationSession，展示严格脱敏、审核发布，并由另一个隔离会话通过 TemplateApplicationSession 采用和验证，证明市场不是静态 YAML 列表。
+第三段从成功 Run 展示“默认不分享”、可选低保证 RunPublication 和 curated TemplatePublicationSession。curated 路径展示严格脱敏、语义查重、隔离复现和审核发布，再由另一个隔离会话通过 TemplateApplicationSession 采用和验证；等价的新 Run 转为 verification 而不是重复 release。
 
 ## 29. 与既有设计的关系
 
@@ -1177,7 +1240,8 @@ slurm-sim
 - `2026-08-09-file-discovery-transfer-design.md`：继续作为工作区同步、大文件和集群连接权威设计；Pi 不增加第二条 SSH/文件通道。
 - `2026-08-09-resource-observability-design.md`：PlatformSnapshot 和资源观测作为 Agent context，不由 Pi 重复采集。
 - `2026-08-10-runtime-watch-design.md`：日志 cursor、运行期异常和 terminal drain 作为 Agent 唤醒与 Evidence 来源。
-- 后续模板 Agent 详细设计必须实现本规格第 15 节的市场支线，而不是独立 LLM 服务或直接 adoption API。
+- `2026-08-10-template-market-agent-detailed-design.md`：是第 15 节的强类型应用、可选分享、bundle、查重、发布、verification、API 和本地验收权威细化规格。
+- 后续模板 Agent 实现不得成为独立 LLM 服务或直接 adoption API。
 
 如与旧修复设计中的“代码类型或工具限制”冲突，本规格只在隔离 AgentWorkspace 和 Sandbox 内扩大创建/编辑能力；远端发布、审批、owner、Evidence 和 Slurm 边界不放宽。
 
@@ -1202,6 +1266,7 @@ slurm-sim
 6. 真实身份凭据刷新仍沿用现有 `paused_auth`/用户恢复，不引入长期凭据存储。
 7. 科学有效性只能通过显式领域检查和用户判断逐步增强。
 8. 市场 verification 的推荐权重和过期窗口必须通过本地/真实使用数据校准，不能把 adoption count 当成功率。
+9. semantic family 的 near-duplicate 规则必须先以结构化 diff 校准；LLM 或 embedding 不能成为唯一阻塞依据。
 
 ## 32. 完成门槛
 
@@ -1220,4 +1285,6 @@ slurm-sim
 11. 5GB 以上权重不进入 Agent context 或代码镜像；
 12. 所有完成结论可由本地 simulator 证据复现；
 13. 模板发现、Agent 应用、成功 Run 发布、环境验证、新版本和撤回形成可追溯市场闭环；
-14. 面向用户的模板采用不能绕过 `TemplateApplicationSession`。
+14. curated template 与 RunPublication 的应用均不能绕过对应的 MarketApplicationSession 强类型分支；
+15. 成功 Run 默认不分享，ShareManifest 精确约束可见与可适配内容；
+16. exact、metadata-only 和等价成功 Run 不产生重复 release。
