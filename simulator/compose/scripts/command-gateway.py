@@ -12,11 +12,13 @@ import os
 import pwd
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import threading
 import time
 import uuid
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -131,8 +133,17 @@ def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
                     _rename_path(payload, config)
                     status = 200
                     response = {"status": "ok"}
+                elif self.path.rstrip("/") == "/copy":
+                    response = _copy_entries(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/create-file":
+                    response = _create_file(payload, config)
+                    status = 200
                 elif self.path.rstrip("/") == "/stat":
                     response = _file_stat(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/disk_usage":
+                    response = _disk_usage(payload, config)
                     status = 200
                 elif self.path.rstrip("/") == "/extract":
                     response = _extract_archive(payload, config)
@@ -347,7 +358,15 @@ def _audit_request_summary(*, path: str, payload: dict[str, Any]) -> dict[str, A
             "offset": payload.get("offset"),
             "data_bytes": (len(data) * 3) // 4,
         }
-    if path in {"/read_bytes", "/sha256", "/list_dir", "/stat", "/remove", "/extract"}:
+    if path in {
+        "/read_bytes",
+        "/sha256",
+        "/list_dir",
+        "/stat",
+        "/disk_usage",
+        "/remove",
+        "/extract",
+    }:
         return {
             "path": payload.get("path"),
             "dest_dir": payload.get("dest_dir"),
@@ -359,6 +378,18 @@ def _audit_request_summary(*, path: str, payload: dict[str, Any]) -> dict[str, A
         return {
             "path": payload.get("path"),
             "new_path": payload.get("new_path"),
+            "owner": payload.get("owner"),
+        }
+    if path == "/copy":
+        return {
+            "paths": payload.get("paths"),
+            "dest_dir": payload.get("dest_dir"),
+            "owner": payload.get("owner"),
+        }
+    if path == "/create-file":
+        return {
+            "dir": payload.get("dir"),
+            "name": payload.get("name"),
             "owner": payload.get("owner"),
         }
     if path == "/archive":
@@ -604,6 +635,63 @@ def _rename_path(payload: dict[str, Any], config: GatewayConfig) -> None:
     _chown_to_owner(new_path, owner)
 
 
+def _copy_entries(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    """Copy files/directories into dest_dir (overwrite, same as move)."""
+    owner = _safe_user(str(payload.get("owner", "")))
+    dest_dir = _authorize_path(str(payload.get("dest_dir", "")), config, user=owner)
+    raw_paths = payload.get("paths")
+    if not isinstance(raw_paths, list) or not raw_paths:
+        raise GatewayError("paths must be a non-empty list")
+    destination = Path(dest_dir)
+    if not destination.is_dir():
+        raise GatewayError(f"destination is not a directory: {dest_dir}", status=404)
+    dest_resolved = destination.resolve()
+    copied: list[str] = []
+    for item in raw_paths:
+        source = Path(_authorize_path(str(item), config, user=owner))
+        if not source.exists() and not source.is_symlink():
+            raise GatewayError(f"path does not exist: {item}", status=404)
+        if source.is_dir() and not source.is_symlink():
+            source_resolved = source.resolve()
+            if dest_resolved == source_resolved or str(dest_resolved).startswith(
+                f"{source_resolved}/"
+            ):
+                raise GatewayError(f"cannot copy a directory into itself: {item}")
+        target = destination / source.name
+        if target.exists() or target.is_symlink():
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        if source.is_dir() and not source.is_symlink():
+            shutil.copytree(source, target, symlinks=True)
+        else:
+            shutil.copy2(source, target, follow_symlinks=False)
+        _chown_to_owner(str(target), owner)
+        copied.append(str(target))
+    return {"status": "ok", "copied": copied}
+
+
+def _create_file(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    """Create an empty file; 409 when the name is already taken."""
+    owner = _safe_user(str(payload.get("owner", "")))
+    dir_path = _authorize_path(str(payload.get("dir", "")), config, user=owner)
+    name = str(payload.get("name", ""))
+    if not name or name in {".", ".."} or "/" in name or "\\" in name:
+        raise GatewayError(f"unsafe file name: {name}")
+    parent = Path(dir_path)
+    if not parent.is_dir():
+        raise GatewayError(f"directory does not exist: {dir_path}", status=404)
+    target = parent / name
+    try:
+        with target.open("xb"):
+            pass
+    except FileExistsError as exc:
+        raise GatewayError(f"file already exists: {target}", status=409) from exc
+    _chown_to_owner(str(target), owner)
+    return {"status": "ok", "path": str(target)}
+
+
 def _file_stat(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
     owner = _safe_user(str(payload.get("owner", "")))
     path = _authorize_path(str(payload.get("path", "")), config, user=owner)
@@ -627,6 +715,108 @@ def _file_stat(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]
     }
 
 
+def _disk_usage(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    path = _authorize_path(str(payload.get("path", "")), config, user=owner)
+    target = Path(path)
+    if not target.exists():
+        raise GatewayError(f"path does not exist: {path}", status=404)
+    if target.is_dir() and not target.is_symlink():
+        used = 0
+        stack = [target]
+        while stack:
+            current = stack.pop()
+            try:
+                handle = os.scandir(current)
+            except OSError:
+                continue
+            with handle:
+                for entry in handle:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(Path(entry.path))
+                            continue
+                        used += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+    else:
+        used = target.lstat().st_size
+    try:
+        total: int | None = shutil.disk_usage(target).total
+    except OSError:
+        total = None
+    return {"path": path, "used_bytes": used, "total_bytes": total}
+
+
+_TAR_SUFFIXES = {".tar", ".gz", ".tgz", ".bz2", ".xz"}
+_SUPPORTED_ARCHIVE_HINT = (
+    "supported formats: .tar, .tar.gz, .tgz, .tar.bz2, .tar.xz, .zip, .rar"
+)
+
+
+def _require_member_within(
+    member_name: str, destination: Path, dest_resolved: Path
+) -> None:
+    member_dest = (destination / member_name).resolve()
+    if member_dest != dest_resolved and not str(member_dest).startswith(
+        f"{dest_resolved}/"
+    ):
+        raise GatewayError(f"archive member escapes destination: {member_name}")
+
+
+def _extract_tar_members(archive: Path, destination: Path, dest_resolved: Path) -> int:
+    count = 0
+    with tarfile.open(archive, "r:*") as tar:
+        for member in tar.getmembers():
+            _require_member_within(member.name, destination, dest_resolved)
+            if member.issym() or member.islnk():
+                raise GatewayError(
+                    f"archive link members are not permitted: {member.name}"
+                )
+            count += 1
+        tar.extractall(destination)
+    return count
+
+
+def _extract_zip_members(archive: Path, destination: Path, dest_resolved: Path) -> int:
+    count = 0
+    with zipfile.ZipFile(archive) as zf:
+        for info in zf.infolist():
+            _require_member_within(info.filename, destination, dest_resolved)
+            unix_mode = info.external_attr >> 16
+            if unix_mode and stat.S_ISLNK(unix_mode):
+                raise GatewayError(
+                    f"archive link members are not permitted: {info.filename}"
+                )
+            count += 1
+        zf.extractall(destination)
+    return count
+
+
+def _extract_rar_members(archive: Path, destination: Path) -> int:
+    # rar is proprietary: shell out to unar (installed in the slurm image).
+    # Fixed argument list, no shell; unar itself refuses ".." members.
+    try:
+        proc = subprocess.run(
+            ["unar", "-f", "-o", str(destination), str(archive)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise GatewayError("unar is not available on this host", status=500) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise GatewayError("rar extraction timed out") from exc
+    if proc.returncode != 0:
+        lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+        detail = lines[-1] if lines else "unknown error"
+        raise GatewayError(f"rar extraction failed: {detail}")
+    # unar has no machine-readable member count; report what now exists under
+    # the destination (informational only).
+    return sum(1 for _ in destination.rglob("*"))
+
+
 def _extract_archive(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
     owner = _safe_user(str(payload.get("owner", "")))
     archive_path = _authorize_path(str(payload.get("path", "")), config, user=owner)
@@ -637,22 +827,17 @@ def _extract_archive(payload: dict[str, Any], config: GatewayConfig) -> dict[str
     destination = Path(dest_dir)
     destination.mkdir(parents=True, exist_ok=True)
     dest_resolved = destination.resolve()
-    count = 0
-    with tarfile.open(archive, "r:*") as tar:
-        for member in tar.getmembers():
-            member_dest = (destination / member.name).resolve()
-            if member_dest != dest_resolved and not str(member_dest).startswith(
-                f"{dest_resolved}/"
-            ):
-                raise GatewayError(
-                    f"archive member escapes destination: {member.name}"
-                )
-            if member.issym() or member.islnk():
-                raise GatewayError(
-                    f"archive link members are not permitted: {member.name}"
-                )
-            count += 1
-        tar.extractall(destination)
+    suffix = archive.suffix.lower()
+    if suffix in _TAR_SUFFIXES:
+        count = _extract_tar_members(archive, destination, dest_resolved)
+    elif suffix == ".zip":
+        count = _extract_zip_members(archive, destination, dest_resolved)
+    elif suffix == ".rar":
+        count = _extract_rar_members(archive, destination)
+    else:
+        raise GatewayError(
+            f"unsupported archive format: {archive.name} ({_SUPPORTED_ARCHIVE_HINT})"
+        )
     _chown_to_owner(dest_dir, owner)
     return {"status": "ok", "members": count, "dest_dir": dest_dir}
 

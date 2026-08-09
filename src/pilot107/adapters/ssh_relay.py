@@ -21,6 +21,7 @@ from typing import Protocol
 
 from pilot107.adapters.slurm import (
     CommandResult,
+    DiskUsage,
     FileEntry,
     FileStat,
     SlurmTransportError,
@@ -613,6 +614,62 @@ class SshRelayExecutor:
                 raise SlurmTransportError("SSH.RENAME_TARGET_EXISTS")
             raise SlurmTransportError("SSH.RENAME_FAILED")
 
+    def copy_entries(
+        self,
+        *,
+        paths: list[str],
+        dest_dir: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> list[str]:
+        self._require_file_owner(owner)
+        if not paths:
+            raise SshRelayPolicyError("paths must be a non-empty list")
+        safe_dest = _validate_remote_path(
+            dest_dir, roots=self.config.expanded_owner_roots()
+        )
+        safe_sources = [
+            _validate_remote_path(item, roots=self.config.expanded_owner_roots())
+            for item in paths
+        ]
+        quoted = " ".join(
+            shlex.quote(token) for token in [*safe_sources, safe_dest]
+        )
+        result = self._file_shell(
+            f"mkdir -p {shlex.quote(safe_dest)} && cp -a -- {quoted}",
+            timeout_seconds=timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.COPY_FAILED")
+        dest_prefix = safe_dest.rstrip("/")
+        return [f"{dest_prefix}/{item.rpartition('/')[2]}" for item in safe_sources]
+
+    def create_file(
+        self,
+        *,
+        dir_path: str,
+        name: str,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> str:
+        self._require_file_owner(owner)
+        if not name or name in {".", ".."} or "/" in name or "\\" in name:
+            raise SshRelayPolicyError(f"unsafe file name: {name}")
+        safe_dir = _validate_remote_path(
+            dir_path, roots=self.config.expanded_owner_roots()
+        )
+        target = f"{safe_dir.rstrip('/')}/{name}"
+        command = (
+            f"test -e {shlex.quote(target)} && echo EXISTS && exit 1 || "
+            f"touch -- {shlex.quote(target)}"
+        )
+        result = self._file_shell(command, timeout_seconds=timeout_seconds)
+        if result.returncode != 0:
+            if "EXISTS" in result.stdout:
+                raise SlurmTransportError("SSH.CREATE_FILE_EXISTS")
+            raise SlurmTransportError("SSH.CREATE_FILE_FAILED")
+        return target
+
     def stat_path(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
     ) -> FileStat:
@@ -635,6 +692,31 @@ class SshRelayExecutor:
             "symbolic link": "symlink",
         }.get(raw_type, "other")
         return FileStat(path=safe_path, type=kind, size=int(size), mtime=int(mtime))
+
+    def disk_usage(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> DiskUsage:
+        self._require_file_owner(owner)
+        safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
+        script = (
+            'python3 -c "import os,shutil,sys;p=sys.argv[1];'
+            "u=sum(os.lstat(os.path.join(r,f)).st_size "
+            "for r,_,fs in os.walk(p) for f in fs);"
+            "t=shutil.disk_usage(p).total;"
+            'print(str(u)+chr(124)+str(t))" '
+        ) + shlex.quote(safe_path)
+        result = self._file_shell(script, timeout_seconds=timeout_seconds)
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.DISK_USAGE_FAILED")
+        last = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        used_text, sep, total_text = last.partition("|")
+        if not sep or not used_text.isdigit():
+            raise SlurmTransportError("SSH.DISK_USAGE_INVALID")
+        return DiskUsage(
+            path=safe_path,
+            used_bytes=int(used_text),
+            total_bytes=int(total_text) if total_text.isdigit() else None,
+        )
 
     def extract_archive(
         self,

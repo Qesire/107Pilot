@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from pilot107.adapters.platform_cli import ExecutorPlatformCliCollector
 from pilot107.adapters.rest_token import (
     SimulatorRestTokenProvider,
     TokenValidityProbe,
@@ -94,6 +95,7 @@ from pilot107.core.template_verification import TemplateVerificationService
 from pilot107.core.terminal import TerminalCommandService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
 from pilot107.services.platform_snapshot_freshness import SnapshotCollectionMonitor
+from pilot107.services.platform_snapshot_service import PlatformSnapshotService
 from pilot107.worker.capsule import RawCapsuleService
 from pilot107.worker.evidence import EvidenceStore
 
@@ -128,7 +130,7 @@ class ApiServiceConfig:
     ssh_slurm_user: str | None = None
     ssh_owner_roots: tuple[str, ...] = ()
     terminal_enabled: bool = False
-    upload_chunk_bytes: int = 1024 * 1024
+    upload_chunk_bytes: int = 8 * 1024 * 1024
     upload_session_ttl_seconds: int = 3600
     upload_staging_root: Path | None = None
     slurmrestd_url: str = "http://slurmrestd:6820"
@@ -199,8 +201,7 @@ def config_from_env(
             or None
         ),
         postgres_dsn=values.get("PILOT107_POSTGRES_DSN") or None,
-        backend=values.get("PILOT107_API_BACKEND")
-        or values.get("PILOT107_BACKEND", "none"),
+        backend=values.get("PILOT107_API_BACKEND") or values.get("PILOT107_BACKEND", "none"),
         allowed_roots=tuple(_split_csv(values.get("PILOT107_ALLOWED_ROOTS", ""))),
         command_timeout_seconds=_float(values, "PILOT107_COMMAND_TIMEOUT_SECONDS", 20.0),
         compose_file=_path(values, "PILOT107_COMPOSE_FILE", compose_workdir / "compose.yml"),
@@ -222,27 +223,20 @@ def config_from_env(
         ssh_control_path=_optional_path(values, "PILOT107_SSH_CONTROL_PATH"),
         ssh_known_hosts_file=_optional_path(values, "PILOT107_SSH_KNOWN_HOSTS_FILE"),
         ssh_port=(
-            None
-            if not values.get("PILOT107_SSH_PORT")
-            else _int(values, "PILOT107_SSH_PORT", 22)
+            None if not values.get("PILOT107_SSH_PORT") else _int(values, "PILOT107_SSH_PORT", 22)
         ),
         ssh_portal_owner=values.get("PILOT107_SSH_PORTAL_OWNER") or None,
         ssh_slurm_user=(
-            values.get("PILOT107_SSH_SLURM_USER")
-            or values.get("PILOT107_SLURM_USER_NAME")
-            or None
+            values.get("PILOT107_SSH_SLURM_USER") or values.get("PILOT107_SLURM_USER_NAME") or None
         ),
         ssh_owner_roots=tuple(
             _split_csv(
-                values.get("PILOT107_SSH_OWNER_ROOTS")
-                or values.get("PILOT107_ALLOWED_ROOTS", "")
+                values.get("PILOT107_SSH_OWNER_ROOTS") or values.get("PILOT107_ALLOWED_ROOTS", "")
             )
         ),
         terminal_enabled=_bool(values, "PILOT107_TERMINAL_ENABLED", False),
-        upload_chunk_bytes=_int(values, "PILOT107_UPLOAD_CHUNK_BYTES", 1024 * 1024),
-        upload_session_ttl_seconds=_int(
-            values, "PILOT107_UPLOAD_SESSION_TTL_SECONDS", 3600
-        ),
+        upload_chunk_bytes=_int(values, "PILOT107_UPLOAD_CHUNK_BYTES", 8 * 1024 * 1024),
+        upload_session_ttl_seconds=_int(values, "PILOT107_UPLOAD_SESSION_TTL_SECONDS", 3600),
         upload_staging_root=_optional_path(values, "PILOT107_UPLOAD_STAGING_ROOT"),
         slurmrestd_url=values.get("PILOT107_SLURMRESTD_URL", "http://slurmrestd:6820"),
         slurm_api_version=values.get("PILOT107_SLURM_API_VERSION", "v0.0.41"),
@@ -266,7 +260,7 @@ def config_from_env(
         proxy_signature_max_age_seconds=_int(
             values, "PILOT107_PROXY_SIGNATURE_MAX_AGE_SECONDS", 30
         ),
-        max_request_body_bytes=_int(values, "PILOT107_MAX_REQUEST_BODY_BYTES", 2 * 1024 * 1024),
+        max_request_body_bytes=_int(values, "PILOT107_MAX_REQUEST_BODY_BYTES", 16 * 1024 * 1024),
         max_response_body_bytes=_int(values, "PILOT107_MAX_RESPONSE_BODY_BYTES", 8 * 1024 * 1024),
         rate_limit_requests=_int(values, "PILOT107_RATE_LIMIT_REQUESTS", 600),
         rate_limit_window_seconds=_int(values, "PILOT107_RATE_LIMIT_WINDOW_SECONDS", 60),
@@ -296,9 +290,7 @@ def config_from_env(
         code_context_max_chunks=_int(values, "PILOT107_CODE_CONTEXT_MAX_CHUNKS", 3),
         code_context_before_lines=_int(values, "PILOT107_CODE_CONTEXT_BEFORE_LINES", 60),
         code_context_after_lines=_int(values, "PILOT107_CODE_CONTEXT_AFTER_LINES", 60),
-        code_context_max_file_bytes=_int(
-            values, "PILOT107_CODE_CONTEXT_MAX_FILE_BYTES", 64 * 1024
-        ),
+        code_context_max_file_bytes=_int(values, "PILOT107_CODE_CONTEXT_MAX_FILE_BYTES", 64 * 1024),
         worker_metrics_root=_optional_path(
             values,
             "PILOT107_WORKER_METRICS_ROOT",
@@ -353,9 +345,7 @@ def _build_file_routes(
         return None
     if not owner_roots:
         return None
-    staging_root = config.upload_staging_root or (
-        config.db_path.parent / "upload-staging"
-    )
+    staging_root = config.upload_staging_root or (config.db_path.parent / "upload-staging")
     upload_store: UploadSessionStore
     if config.postgres_dsn is not None:
         upload_store = PostgresUploadSessionStore(
@@ -367,7 +357,7 @@ def _build_file_routes(
         executor=executor,
         owner_roots=owner_roots,
         staging_root=staging_root,
-        chunk_size=config.upload_chunk_bytes,
+        write_block_size=config.upload_chunk_bytes,
         session_ttl_seconds=config.upload_session_ttl_seconds,
         store=upload_store,
     )
@@ -416,9 +406,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         default_partition=capability_profile.default_partition,
         default_qos=capability_profile.default_qos,
     )
-    ssh_relay_client = (
-        _build_ssh_relay_client(config) if config.backend == "real107-ssh" else None
-    )
+    ssh_relay_client = _build_ssh_relay_client(config) if config.backend == "real107-ssh" else None
     run_service, token_validity_probe = _build_run_service_and_probe(
         config,
         store,
@@ -534,11 +522,74 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     # Initial collection at startup (non-blocking on failure)
     _collect_and_store_snapshot()
 
+    # --- A-1b: Login-node CLI snapshot auto-collect via command-gateway ---
+    # The slurmrestd REST path (A-1) only yields a simulator-scope snapshot and
+    # needs a JWT the deployment may not provision (it 401s on cpu-rc).  When the
+    # backend is the command-gateway we additionally collect real login-node facts
+    # (nodes/partitions via ``scontrol``, jobs via ``squeue``) by running them as
+    # each allowed user through the gateway, storing a per-owner ``login_node``
+    # snapshot so the dashboard and preflight resource checks find real data.
+    def _login_snapshot_users() -> list[tuple[str, str]]:
+        pairs: list[tuple[str, str]] = []
+        for root in config.allowed_roots:
+            user = root.rstrip("/").rsplit("/", 1)[-1]
+            if is_safe_username(user):
+                pairs.append((user, root))
+        return pairs
+
+    def _collect_and_store_login_snapshots() -> None:
+        users = _login_snapshot_users()
+        if not users:
+            return
+        gateway_cli_executor = HttpCommandGatewayExecutor(
+            base_url=config.command_gateway_url,
+            token=config.command_gateway_token,
+            timeout_seconds=config.command_timeout_seconds,
+        )
+        stored = 0
+        last_error: Exception | None = None
+        for user, home in users:
+            try:
+                collector = ExecutorPlatformCliCollector(
+                    executor=gateway_cli_executor,
+                    user=user,
+                    cwd=home,
+                )
+                service = PlatformSnapshotService(collector=collector)
+                service.collect_and_store_login_snapshot(
+                    store=platform_snapshot_store,
+                    owner=user,
+                    username=user,
+                    source_type=ObservationSourceType.CLI,
+                    source_name="command-gateway-auto",
+                    home=home,
+                    ttl_seconds=300,
+                )
+                stored += 1
+            except Exception as exc:  # noqa: BLE001 - startup must not crash on snapshot failure
+                last_error = exc
+                logger.warning(
+                    "login-node snapshot collection failed for %s: %s: %s",
+                    user,
+                    type(exc).__name__,
+                    exc,
+                    exc_info=False,
+                )
+        if stored:
+            snapshot_freshness_monitor.record_success()
+        elif last_error is not None:
+            snapshot_freshness_monitor.record_failure(last_error)
+
+    if config.backend == "command-gateway":
+        _collect_and_store_login_snapshots()
+
     # Background refresh thread (daemon, 5min interval)
     def _refresh_loop() -> None:
         while True:
             threading.Event().wait(timeout=300.0)
             _collect_and_store_snapshot()
+            if config.backend == "command-gateway":
+                _collect_and_store_login_snapshots()
 
     refresh_thread = threading.Thread(
         target=_refresh_loop, name="slurmrest-snapshot-refresh", daemon=True

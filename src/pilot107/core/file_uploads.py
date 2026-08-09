@@ -1,30 +1,33 @@
-"""Chunked upload sessions for transferring large user files to the cluster.
+"""Resumable, offset-based upload sessions for transferring large user files.
 
-The control plane never asks the browser to send a whole file in one request:
-the API and Web BFF cap request bodies (default 2 MiB), so the client slices a
-file into ``chunk_size`` pieces (default 1 MiB) and posts them one at a time.
-This service stages those pieces on control-plane local disk, reassembles them,
-verifies the whole-file sha256 *before* a single byte reaches the cluster
-(front-loaded integrity, mirroring the production ``sha256sum -c`` step), and
-only then writes the file through the owner's :class:`FileOpsExecutor`.
+The control plane implements the `tus <https://tus.io>`_ resumable-upload
+model on top of owner-isolated staging: the browser appends raw binary ranges
+(``append_bytes``) to a per-``upload_id`` partial file instead of posting
+base64 JSON chunks.  Appends are truncate-then-write at the client-declared
+offset, so a retried ``PATCH`` is idempotent and an interrupted transfer can be
+resumed from the persisted ``received_bytes`` offset.
 
-Sessions are owner-isolated: every chunk and the reassembled blob live under a
-per-``upload_id`` staging directory, and the destination path is authorized
-against the owner's allowed roots before write.  Archive extraction is opt-in
-and delegated to the executor, which rejects path-traversal members.
+Parallel uploads use the tus *concatenation* extension: the client opens
+several ``is_partial`` byte buckets, fills them concurrently, then asks the
+service to ``concatenate`` them into one whole session.  Quota bytes are
+counted when partials are admitted so the merged session does not double count.
+
+Once ``received_bytes`` reaches ``total_size`` the whole-file sha256 is
+verified *before* a single byte reaches the cluster (front-loaded integrity,
+mirroring the production ``sha256sum -c`` step), and only then is the file
+written through the owner's :class:`FileOpsExecutor`.  Archive extraction is
+opt-in and delegated to the executor, which rejects path-traversal members.
 """
 
 from __future__ import annotations
 
 import base64
-import binascii
 import hashlib
-import json
 import secrets
 import shutil
 import sqlite3
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -34,13 +37,11 @@ from pilot107.adapters.slurm import FileOpsExecutor
 from pilot107.core.identity import is_safe_username
 from pilot107.core.path_policy import resolve_owner_roots
 
-DEFAULT_CHUNK_SIZE = 1024 * 1024  # 1 MiB — comfortably under the 2 MiB body cap.
-MAX_CHUNK_SIZE = 2 * 1024 * 1024
 DEFAULT_SESSION_TTL_SECONDS = 3600
 DEFAULT_MAX_ACTIVE_PER_OWNER = 8
 DEFAULT_MAX_TOTAL_BYTES_PER_OWNER = 16 * 1024 * 1024 * 1024  # 16 GiB
-_ASSEMBLED_NAME = "assembled"
-_CHUNK_DIR = "chunks"
+DEFAULT_WRITE_BLOCK_SIZE = 8 * 1024 * 1024  # staging -> cluster write block
+_PARTIAL_NAME = "partial"
 
 
 class UploadState(StrEnum):
@@ -82,21 +83,16 @@ class UploadSession:
     target_path: str
     filename: str
     total_size: int
-    chunk_size: int
-    total_chunks: int
     sha256_expected: str | None
     auto_extract: bool
     state: UploadState
     created_at: str
-    received_chunks: dict[int, int] = field(default_factory=dict)
+    is_partial: bool = False
+    received_bytes: int = 0
     sha256_actual: str | None = None
     written_path: str | None = None
     extracted_members: int | None = None
     error: str | None = None
-
-    @property
-    def received_bytes(self) -> int:
-        return sum(self.received_chunks.values())
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -105,9 +101,7 @@ class UploadSession:
             "target_path": self.target_path,
             "filename": self.filename,
             "total_size": self.total_size,
-            "chunk_size": self.chunk_size,
-            "total_chunks": self.total_chunks,
-            "received_chunks": sorted(self.received_chunks),
+            "is_partial": self.is_partial,
             "received_bytes": self.received_bytes,
             "sha256_expected": self.sha256_expected,
             "sha256_actual": self.sha256_actual,
@@ -133,6 +127,15 @@ def _safe_filename(filename: str) -> str:
     return cleaned
 
 
+def _normalize_sha256(value: str | None) -> str | None:
+    if value is None:
+        return None
+    digest = value.strip().lower()
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise UploadError("sha256_expected must be a 64-char hex digest")
+    return digest
+
+
 _UPLOAD_SESSIONS_DDL = """
 CREATE TABLE IF NOT EXISTS upload_sessions (
     upload_id TEXT PRIMARY KEY,
@@ -140,13 +143,12 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     target_path TEXT NOT NULL,
     filename TEXT NOT NULL,
     total_size INTEGER NOT NULL,
-    chunk_size INTEGER NOT NULL,
-    total_chunks INTEGER NOT NULL,
     sha256_expected TEXT,
     auto_extract INTEGER NOT NULL DEFAULT 0,
     state TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    received_chunks_json TEXT NOT NULL DEFAULT '{}',
+    received_bytes INTEGER NOT NULL DEFAULT 0,
+    is_partial INTEGER NOT NULL DEFAULT 0,
     sha256_actual TEXT,
     written_path TEXT,
     extracted_members INTEGER,
@@ -159,21 +161,18 @@ CREATE INDEX IF NOT EXISTS idx_upload_sessions_owner
 
 def _session_from_row(row: sqlite3.Row | dict[str, Any]) -> UploadSession:
     """Reconstruct an UploadSession from a database row."""
-    raw_chunks = row["received_chunks_json"]
-    received = json.loads(raw_chunks)
     return UploadSession(
         upload_id=row["upload_id"],
         owner=row["owner"],
         target_path=row["target_path"],
         filename=row["filename"],
         total_size=row["total_size"],
-        chunk_size=row["chunk_size"],
-        total_chunks=row["total_chunks"],
         sha256_expected=row["sha256_expected"],
         auto_extract=bool(row["auto_extract"]),
         state=UploadState(row["state"]),
         created_at=row["created_at"],
-        received_chunks={int(k): v for k, v in received.items()},
+        is_partial=bool(row["is_partial"]),
+        received_bytes=int(row["received_bytes"]),
         sha256_actual=row["sha256_actual"],
         written_path=row["written_path"],
         extracted_members=row["extracted_members"],
@@ -187,8 +186,21 @@ class UploadSessionStore:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._drop_legacy_chunk_schema()
         with self.connect() as conn:
             conn.executescript(_UPLOAD_SESSIONS_DDL)
+
+    def _drop_legacy_chunk_schema(self) -> None:
+        """Drop the pre-tus chunk-indexed table so it is recreated offset-based.
+
+        Upload sessions are transient staging metadata; dropping the legacy
+        layout on upgrade simply discards any in-flight sessions from an older
+        build rather than carrying over an incompatible row shape.
+        """
+        with self.connect() as conn:
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(upload_sessions)")}
+            if "received_chunks_json" in columns:
+                conn.execute("DROP TABLE upload_sessions")
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -201,16 +213,17 @@ class UploadSessionStore:
         with self.connect() as conn:
             conn.execute(
                 "INSERT INTO upload_sessions "
-                "(upload_id, owner, target_path, filename, total_size, chunk_size, "
-                " total_chunks, sha256_expected, auto_extract, state, created_at, "
-                " received_chunks_json, sha256_actual, written_path, extracted_members, error) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "(upload_id, owner, target_path, filename, total_size, "
+                " sha256_expected, auto_extract, state, created_at, "
+                " received_bytes, is_partial, sha256_actual, written_path, "
+                " extracted_members, error) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     session.upload_id, session.owner, session.target_path,
-                    session.filename, session.total_size, session.chunk_size,
-                    session.total_chunks, session.sha256_expected,
-                    int(session.auto_extract), str(session.state),
-                    session.created_at, json.dumps(session.received_chunks),
+                    session.filename, session.total_size,
+                    session.sha256_expected, int(session.auto_extract),
+                    str(session.state), session.created_at,
+                    session.received_bytes, int(session.is_partial),
                     session.sha256_actual, session.written_path,
                     session.extracted_members, session.error,
                 ),
@@ -219,11 +232,11 @@ class UploadSessionStore:
     def update(self, session: UploadSession) -> None:
         with self.connect() as conn:
             conn.execute(
-                "UPDATE upload_sessions SET state=?, received_chunks_json=?, "
+                "UPDATE upload_sessions SET state=?, received_bytes=?, "
                 "sha256_actual=?, written_path=?, extracted_members=?, error=? "
                 "WHERE upload_id=?",
                 (
-                    str(session.state), json.dumps(session.received_chunks),
+                    str(session.state), session.received_bytes,
                     session.sha256_actual, session.written_path,
                     session.extracted_members, session.error,
                     session.upload_id,
@@ -260,7 +273,7 @@ class UploadSessionStore:
 
 
 class FileUploadService:
-    """Owner-isolated chunked upload sessions staged on control-plane disk."""
+    """Owner-isolated, offset-based upload sessions staged on control-plane disk."""
 
     def __init__(
         self,
@@ -268,7 +281,7 @@ class FileUploadService:
         executor: FileOpsExecutor,
         owner_roots: tuple[str, ...] | list[str],
         staging_root: Path,
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        write_block_size: int = DEFAULT_WRITE_BLOCK_SIZE,
         session_ttl_seconds: int = DEFAULT_SESSION_TTL_SECONDS,
         store: UploadSessionStore | None = None,
         max_active_per_owner: int = DEFAULT_MAX_ACTIVE_PER_OWNER,
@@ -276,8 +289,8 @@ class FileUploadService:
     ) -> None:
         if not owner_roots:
             raise ValueError("file upload service requires explicit owner roots")
-        if not 1 <= chunk_size <= MAX_CHUNK_SIZE:
-            raise ValueError(f"chunk size must be within 1..{MAX_CHUNK_SIZE} bytes")
+        if write_block_size <= 0:
+            raise ValueError("write block size must be positive")
         if session_ttl_seconds <= 0:
             raise ValueError("session TTL must be positive")
         if max_active_per_owner <= 0:
@@ -287,7 +300,7 @@ class FileUploadService:
         self.executor = executor
         self.owner_roots = tuple(owner_roots)
         self.staging_root = Path(staging_root)
-        self.chunk_size = chunk_size
+        self.write_block_size = write_block_size
         self.session_ttl_seconds = session_ttl_seconds
         self.store = store
         self.max_active_per_owner = max_active_per_owner
@@ -341,20 +354,38 @@ class FileUploadService:
 
     # -- quota enforcement -------------------------------------------------
 
-    def _enforce_owner_quota(self, owner: str, incoming_size: int) -> None:
-        """Reject new sessions that would exceed per-owner concurrency or byte caps."""
+    def _enforce_owner_quota(
+        self,
+        owner: str,
+        incoming_size: int,
+        *,
+        is_partial: bool = False,
+        exclude_ids: frozenset[str] = frozenset(),
+    ) -> None:
+        """Reject new sessions that would exceed per-owner concurrency or byte caps.
+
+        Partial (parallel-upload) byte buckets count against the byte cap but
+        not the concurrency cap, so a single parallel upload's N parts do not
+        exhaust the owner's whole-session slots.  ``exclude_ids`` lets the
+        concatenation step release the parts it merges before re-admitting the
+        same bytes as one whole session.
+        """
         with self._lock:
             active = [
                 s
                 for s in self._sessions.values()
-                if s.owner == owner and s.state not in _TERMINAL_STATES
+                if s.owner == owner
+                and s.state not in _TERMINAL_STATES
+                and s.upload_id not in exclude_ids
             ]
-        if len(active) >= self.max_active_per_owner:
-            raise UploadError(
-                f"too many active upload sessions ({len(active)}/{self.max_active_per_owner})",
-                status=429,
-                code="UPLOAD.QUOTA_CONCURRENT",
-            )
+        if not is_partial:
+            whole = [s for s in active if not s.is_partial]
+            if len(whole) >= self.max_active_per_owner:
+                raise UploadError(
+                    f"too many active upload sessions ({len(whole)}/{self.max_active_per_owner})",
+                    status=429,
+                    code="UPLOAD.QUOTA_CONCURRENT",
+                )
         pending_bytes = sum(s.total_size for s in active)
         if pending_bytes + incoming_size > self.max_total_bytes_per_owner:
             raise UploadError(
@@ -374,7 +405,6 @@ class FileUploadService:
         filename: str,
         total_size: int,
         sha256_expected: str | None = None,
-        chunk_size: int | None = None,
         auto_extract: bool = False,
     ) -> UploadSession:
         if not is_safe_username(owner):
@@ -382,35 +412,62 @@ class FileUploadService:
         if not isinstance(total_size, int) or total_size <= 0:
             raise UploadError("total_size must be a positive integer")
         self._enforce_owner_quota(owner, total_size)
-        effective_chunk = chunk_size or self.chunk_size
-        if not 1 <= effective_chunk <= MAX_CHUNK_SIZE:
-            raise UploadError(
-                f"chunk_size must be within 1..{MAX_CHUNK_SIZE} bytes"
-            )
-        if sha256_expected is not None:
-            digest = sha256_expected.strip().lower()
-            if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
-                raise UploadError("sha256_expected must be a 64-char hex digest")
-            sha256_expected = digest
+        sha256_expected = _normalize_sha256(sha256_expected)
         authorized_target = self._authorize_target(owner, target_path)
         safe_name = _safe_filename(filename)
-        total_chunks = (total_size + effective_chunk - 1) // effective_chunk
-        upload_id = secrets.token_hex(16)
-        session = UploadSession(
-            upload_id=upload_id,
+        return self._new_session(
             owner=owner,
             target_path=authorized_target,
             filename=safe_name,
             total_size=total_size,
-            chunk_size=effective_chunk,
-            total_chunks=total_chunks,
+            sha256_expected=sha256_expected,
+            auto_extract=auto_extract,
+            is_partial=False,
+        )
+
+    def create_partial_session(self, *, owner: str, total_size: int) -> UploadSession:
+        """Create a tus concatenation *partial* byte bucket (no target yet)."""
+        if not is_safe_username(owner):
+            raise UploadError(f"unsafe owner: {owner!r}", status=403, code="UPLOAD.OWNER")
+        if not isinstance(total_size, int) or total_size <= 0:
+            raise UploadError("total_size must be a positive integer")
+        self._enforce_owner_quota(owner, total_size, is_partial=True)
+        return self._new_session(
+            owner=owner,
+            target_path="",
+            filename="",
+            total_size=total_size,
+            sha256_expected=None,
+            auto_extract=False,
+            is_partial=True,
+        )
+
+    def _new_session(
+        self,
+        *,
+        owner: str,
+        target_path: str,
+        filename: str,
+        total_size: int,
+        sha256_expected: str | None,
+        auto_extract: bool,
+        is_partial: bool,
+    ) -> UploadSession:
+        upload_id = secrets.token_hex(16)
+        session = UploadSession(
+            upload_id=upload_id,
+            owner=owner,
+            target_path=target_path,
+            filename=filename,
+            total_size=total_size,
             sha256_expected=sha256_expected,
             auto_extract=auto_extract,
             state=UploadState.INITIALIZED,
             created_at=datetime.now(UTC).isoformat(),
+            is_partial=is_partial,
         )
         self._session_dir(session).mkdir(parents=True, exist_ok=True)
-        (self._session_dir(session) / _CHUNK_DIR).mkdir(exist_ok=True)
+        self._partial_path(session).touch()
         with self._lock:
             self._sessions[upload_id] = session
         self._persist_insert(session)
@@ -436,45 +493,128 @@ class FileUploadService:
         self._purge_staging(session)
         return session
 
-    # -- chunk intake ------------------------------------------------------
+    # -- byte intake -------------------------------------------------------
 
-    def put_chunk(
-        self, upload_id: str, owner: str, index: int, data_b64: str
-    ) -> UploadSession:
+    def append_bytes(self, upload_id: str, owner: str, offset: int, data: bytes) -> int:
+        """Append ``data`` at ``offset``; returns the new received byte count.
+
+        The offset must not run ahead of what has already been received (a gap
+        means the client skipped bytes, rejected with 409).  Rewriting an
+        already-received range truncates back to ``offset`` first, which keeps
+        retried ``PATCH`` requests idempotent instead of corrupting the file.
+        """
         session = self._require_session(upload_id, owner)
         if session.state in _TERMINAL_STATES:
             raise UploadError(
                 f"upload session is {session.state}", code="UPLOAD.STATE"
             )
-        if not isinstance(index, int) or index < 0 or index >= session.total_chunks:
+        if not isinstance(offset, int) or offset < 0:
+            raise UploadError("offset must be a non-negative integer")
+        if offset > session.received_bytes:
             raise UploadError(
-                f"chunk index out of range: {index} (total {session.total_chunks})"
+                f"offset {offset} is ahead of received bytes {session.received_bytes}",
+                status=409,
+                code="UPLOAD.OFFSET_MISMATCH",
             )
-        try:
-            data = base64.b64decode(data_b64, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise UploadError("chunk data is not valid base64") from exc
-        expected_len = self._expected_chunk_length(session, index)
-        if len(data) != expected_len:
-            raise UploadError(
-                f"chunk {index} must be {expected_len} bytes, got {len(data)}"
-            )
-        chunk_path = self._chunk_path(session, index)
-        # Idempotent: re-putting an already-received index is a no-op.
-        if index in session.received_chunks:
-            return session
-        chunk_path.write_bytes(data)
+        path = self._partial_path(session)
+        with open(path, "r+b") as handle:
+            handle.truncate(offset)
+            handle.seek(offset)
+            handle.write(data)
         with self._lock:
-            session.received_chunks[index] = len(data)
+            session.received_bytes = offset + len(data)
             if session.state == UploadState.INITIALIZED:
                 session.state = UploadState.UPLOADING
         self._persist_update(session)
-        return session
+        return session.received_bytes
 
-    def _expected_chunk_length(self, session: UploadSession, index: int) -> int:
-        if index < session.total_chunks - 1:
-            return session.chunk_size
-        return session.total_size - (session.total_chunks - 1) * session.chunk_size
+    # -- concatenation -----------------------------------------------------
+
+    def concatenate(
+        self,
+        *,
+        owner: str,
+        partial_ids: list[str],
+        target_path: str,
+        filename: str,
+        total_size: int | None = None,
+        sha256_expected: str | None = None,
+        auto_extract: bool = False,
+    ) -> UploadSession:
+        """Merge completed partial uploads into one whole session (tus concat).
+
+        ``total_size`` may be omitted, in which case it defaults to the sum of
+        the parts; when provided it must match that sum exactly.
+        """
+        if not is_safe_username(owner):
+            raise UploadError(f"unsafe owner: {owner!r}", status=403, code="UPLOAD.OWNER")
+        if not partial_ids:
+            raise UploadError("concatenation requires at least one partial upload")
+        partials = [self._require_session(pid, owner) for pid in partial_ids]
+        for partial in partials:
+            if not partial.is_partial:
+                raise UploadError(
+                    f"upload {partial.upload_id} is not a partial upload",
+                    code="UPLOAD.CONCAT_INVALID",
+                )
+            if partial.state in _TERMINAL_STATES:
+                raise UploadError(
+                    f"partial upload {partial.upload_id} is {partial.state}",
+                    code="UPLOAD.CONCAT_INVALID",
+                )
+            if partial.received_bytes != partial.total_size:
+                raise UploadError(
+                    f"partial upload {partial.upload_id} is incomplete "
+                    f"({partial.received_bytes}/{partial.total_size})",
+                    status=409,
+                    code="UPLOAD.CONCAT_INCOMPLETE",
+                )
+        declared = sum(p.total_size for p in partials)
+        if total_size is None:
+            total_size = declared
+        if not isinstance(total_size, int) or total_size <= 0:
+            raise UploadError("total_size must be a positive integer")
+        if declared != total_size:
+            raise UploadError(
+                f"concat length {total_size} does not match sum of parts {declared}",
+                code="UPLOAD.CONCAT_INVALID",
+            )
+        sha256_expected = _normalize_sha256(sha256_expected)
+        authorized_target = self._authorize_target(owner, target_path)
+        safe_name = _safe_filename(filename)
+        # The parts' bytes were quota-counted when admitted; exclude them so
+        # re-admitting the merged whole does not double count.
+        self._enforce_owner_quota(owner, total_size, exclude_ids=frozenset(partial_ids))
+
+        session = UploadSession(
+            upload_id=secrets.token_hex(16),
+            owner=owner,
+            target_path=authorized_target,
+            filename=safe_name,
+            total_size=total_size,
+            sha256_expected=sha256_expected,
+            auto_extract=auto_extract,
+            state=UploadState.INITIALIZED,
+            created_at=datetime.now(UTC).isoformat(),
+            is_partial=False,
+        )
+        self._session_dir(session).mkdir(parents=True, exist_ok=True)
+        with open(self._partial_path(session), "wb") as out:
+            for partial in partials:
+                with open(self._partial_path(partial), "rb") as src:
+                    shutil.copyfileobj(src, out)
+        session.received_bytes = total_size
+        session.state = UploadState.UPLOADING
+        with self._lock:
+            self._sessions[session.upload_id] = session
+            for partial in partials:
+                self._sessions.pop(partial.upload_id, None)
+        self._persist_insert(session)
+        for partial in partials:
+            if self.store is not None:
+                self.store.delete(partial.upload_id)
+            self._purge_staging(partial)
+        return session
 
     # -- completion --------------------------------------------------------
 
@@ -486,18 +626,18 @@ class FileUploadService:
             raise UploadError(
                 f"upload session is {session.state}", code="UPLOAD.STATE"
             )
-        missing = [
-            index
-            for index in range(session.total_chunks)
-            if index not in session.received_chunks
-        ]
-        if missing:
+        if session.is_partial:
             raise UploadError(
-                f"missing {len(missing)} chunk(s); first missing index {missing[0]}",
+                "partial uploads are merged via concatenation, not completed",
+                code="UPLOAD.STATE",
+            )
+        if session.received_bytes != session.total_size:
+            raise UploadError(
+                f"upload incomplete: {session.received_bytes}/{session.total_size} bytes",
                 code="UPLOAD.INCOMPLETE",
             )
         try:
-            assembled_path = self._assemble(session)
+            assembled_path = self._partial_path(session)
             session.state = UploadState.ASSEMBLED
             digest = self._sha256_file(assembled_path)
             session.sha256_actual = digest
@@ -545,7 +685,7 @@ class FileUploadService:
         with open(assembled_path, "rb") as handle:
             first = True
             while True:
-                block = handle.read(session.chunk_size)
+                block = handle.read(self.write_block_size)
                 if not block:
                     break
                 write_offset = 0 if first else offset
@@ -571,15 +711,8 @@ class FileUploadService:
     def _session_dir(self, session: UploadSession) -> Path:
         return self.staging_root / session.owner / session.upload_id
 
-    def _chunk_path(self, session: UploadSession, index: int) -> Path:
-        return self._session_dir(session) / _CHUNK_DIR / f"{index:010d}"
-
-    def _assemble(self, session: UploadSession) -> Path:
-        assembled = self._session_dir(session) / _ASSEMBLED_NAME
-        with open(assembled, "wb") as out:
-            for index in range(session.total_chunks):
-                out.write(self._chunk_path(session, index).read_bytes())
-        return assembled
+    def _partial_path(self, session: UploadSession) -> Path:
+        return self._session_dir(session) / _PARTIAL_NAME
 
     @staticmethod
     def _sha256_file(path: Path) -> str:

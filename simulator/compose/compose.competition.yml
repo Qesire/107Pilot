@@ -116,6 +116,8 @@ services:
       - /etc/nginx/certs/tls.crt
       - --key
       - /etc/nginx/certs/tls.key
+      - --max-request-body-bytes
+      - "16777216"
     depends_on:
       - pilot107-web
     healthcheck:

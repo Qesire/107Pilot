@@ -680,10 +680,30 @@ _UPLOAD_SESSION_SCHEMA = _statements(
     "CREATE INDEX idx_upload_sessions_owner ON upload_sessions(owner, created_at DESC)"
 )
 
+# tus resumable uploads replace the chunk-indexed staging model with a single
+# contiguous offset.  Upload sessions are transient, so the upgrade discards
+# any in-flight rows rather than translating the per-chunk map.
+_UPLOAD_SESSION_TUS_SCHEMA = _statements(
+    """
+    ALTER TABLE upload_sessions DROP COLUMN chunk_size
+    """
+    "\n-- statement\n"
+    "ALTER TABLE upload_sessions DROP COLUMN total_chunks"
+    "\n-- statement\n"
+    "ALTER TABLE upload_sessions DROP COLUMN received_chunks_json"
+    "\n-- statement\n"
+    "ALTER TABLE upload_sessions ADD COLUMN received_bytes BIGINT NOT NULL DEFAULT 0"
+    "\n-- statement\n"
+    "ALTER TABLE upload_sessions ADD COLUMN is_partial SMALLINT NOT NULL DEFAULT 0"
+    "\n-- statement\n"
+    "DELETE FROM upload_sessions"
+)
+
 _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.001.postgres_domain_schema", _DOMAIN_SCHEMA),
     ("004a.002.run_publications", _RUN_PUBLICATION_SCHEMA),
     ("004a.003.upload_sessions", _UPLOAD_SESSION_SCHEMA),
+    ("004a.004.upload_sessions_tus", _UPLOAD_SESSION_TUS_SCHEMA),
 )
 
 

@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from email.message import Message
 from enum import StrEnum
 from http.client import HTTPResponse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,6 +29,37 @@ _CONTENT_TYPES = {
     ".json": "application/json; charset=utf-8",
     ".svg": "image/svg+xml",
 }
+# tus resumable-upload request headers forwarded verbatim to the API.
+_TUS_PROXY_REQUEST_HEADERS = (
+    "Tus-Resumable",
+    "Upload-Offset",
+    "Upload-Length",
+    "Upload-Metadata",
+    "Upload-Concat",
+)
+# tus response headers relayed back to the browser.
+_TUS_PROXY_RESPONSE_HEADERS = (
+    "Upload-Offset",
+    "Upload-Length",
+    "Location",
+    "Tus-Resumable",
+    "Tus-Version",
+    "Tus-Extension",
+    "Tus-Max-Size",
+)
+
+
+def _tus_data_plane(path: str) -> bool:
+    """Return True for high-frequency tus data-plane requests.
+
+    PATCH/HEAD ``/api/v1/files/tus/{id}`` fire once per chunk (a multi-GiB
+    upload issues hundreds of them) and are already bounded by owner quota and
+    auth, so they are exempt from the per-IP API rate limit. Control-plane tus
+    requests (create/concat/complete/DELETE/OPTIONS/GET) stay rate-limited.
+    """
+    parsed_path = urlparse(path).path
+    prefix = "/api/v1/files/tus/"
+    return parsed_path.startswith(prefix) and len(parsed_path) > len(prefix)
 
 
 class WebIdentityMode(StrEnum):
@@ -46,8 +78,12 @@ class WebConfig:
     proxy_hmac_secret: bytes | None = field(default=None, repr=False)
     public_origin: str | None = None
     enable_hsts: bool = False
-    max_request_body_bytes: int = 2 * 1024 * 1024
+    max_request_body_bytes: int = 16 * 1024 * 1024
     max_response_body_bytes: int = 8 * 1024 * 1024
+    # Upstream (API) socket timeout. Large-file upload ``complete`` performs a
+    # whole-file sha256 + cluster write before responding, which can take
+    # minutes for multi-GiB uploads, so this must be generous.
+    upstream_timeout_seconds: int = 600
     rate_limit_requests: int = 300
     rate_limit_window_seconds: int = 60
 
@@ -69,6 +105,7 @@ class WebConfig:
         if min(
             self.max_request_body_bytes,
             self.max_response_body_bytes,
+            self.upstream_timeout_seconds,
             self.rate_limit_requests,
             self.rate_limit_window_seconds,
         ) <= 0:
@@ -93,10 +130,13 @@ def config_from_env(env: Mapping[str, str] | None = None) -> WebConfig:
         public_origin=values.get("PILOT107_WEB_PUBLIC_ORIGIN") or None,
         enable_hsts=_env_bool(values.get("PILOT107_WEB_ENABLE_HSTS"), False),
         max_request_body_bytes=int(
-            values.get("PILOT107_WEB_MAX_REQUEST_BODY_BYTES", str(2 * 1024 * 1024))
+            values.get("PILOT107_WEB_MAX_REQUEST_BODY_BYTES", str(16 * 1024 * 1024))
         ),
         max_response_body_bytes=int(
             values.get("PILOT107_WEB_MAX_RESPONSE_BODY_BYTES", str(8 * 1024 * 1024))
+        ),
+        upstream_timeout_seconds=int(
+            values.get("PILOT107_WEB_UPSTREAM_TIMEOUT_SECONDS", "600")
         ),
         rate_limit_requests=int(values.get("PILOT107_WEB_RATE_LIMIT_REQUESTS", "300")),
         rate_limit_window_seconds=int(
@@ -140,7 +180,11 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
                 )
                 return
             if self.path.startswith("/api/"):
-                self._send_bytes(405, b"", "text/plain; charset=utf-8", send_body=False)
+                # tus resume probes (HEAD /api/v1/files/tus/{id}) must reach the
+                # API; data-plane probes are exempt from the per-IP rate limit.
+                if not _tus_data_plane(self.path) and not self._allow_api_request():
+                    return
+                self._proxy()
                 return
             self._serve_static(send_body=False)
 
@@ -154,6 +198,18 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
 
         def do_PATCH(self) -> None:  # noqa: N802
             if self.path.startswith("/api/"):
+                # tus chunk PATCHes are high-frequency data plane: exempt from
+                # the per-IP rate limit but still subject to CSRF checks.
+                if not _tus_data_plane(self.path) and not self._allow_api_request():
+                    return
+                if not self._allow_mutating_request():
+                    return
+                self._proxy()
+                return
+            self._send_bytes(404, b"not found\n", "text/plain; charset=utf-8")
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            if self.path.startswith("/api/"):
                 if not self._allow_api_request() or not self._allow_mutating_request():
                     return
                 self._proxy()
@@ -161,6 +217,12 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
             self._send_bytes(404, b"not found\n", "text/plain; charset=utf-8")
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self.path.startswith("/api/"):
+                # tus capability discovery (OPTIONS /api/v1/files/tus).
+                if not self._allow_api_request():
+                    return
+                self._proxy()
+                return
             self._send_error(405, "HTTP.METHOD_NOT_ALLOWED")
 
         def log_message(self, format: str, *args: object) -> None:
@@ -229,6 +291,11 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
             content_type = self.headers.get("Content-Type")
             if content_type:
                 headers["Content-Type"] = content_type
+            # tus resumable-upload headers pass through untouched.
+            for name in _TUS_PROXY_REQUEST_HEADERS:
+                value = self.headers.get(name)
+                if value is not None:
+                    headers[name] = value
             if config.proxy_hmac_secret is not None:
                 headers.update(
                     signed_proxy_headers(
@@ -247,7 +314,9 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
                 method=self.command,
             )
             try:
-                with urllib.request.urlopen(request, timeout=30) as response:
+                with urllib.request.urlopen(
+                    request, timeout=config.upstream_timeout_seconds
+                ) as response:
                     if self._streamable_download():
                         self._stream_upstream(response)
                         return
@@ -259,6 +328,8 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
                         response.status,
                         response_body,
                         response.headers.get("Content-Type", "application/json; charset=utf-8"),
+                        send_body=self.command != "HEAD",
+                        extra_headers=_tus_response_headers(response.headers),
                     )
             except urllib.error.HTTPError as exc:
                 response_body = exc.read(config.max_response_body_bytes + 1)
@@ -269,6 +340,8 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
                     exc.code,
                     response_body,
                     exc.headers.get("Content-Type", "application/json; charset=utf-8"),
+                    send_body=self.command != "HEAD",
+                    extra_headers=_tus_response_headers(exc.headers),
                 )
             except OSError as exc:
                 payload = json.dumps(
@@ -449,7 +522,10 @@ def mutating_request_error(config: WebConfig, headers: Mapping[str, str]) -> str
     if fetch_site in {"cross-site", "same-site"}:
         return "CSRF.CROSS_SITE_DENIED"
     content_type = normalized.get("content-type", "").split(";", 1)[0].strip().lower()
-    if content_type != "application/json":
+    # tus PATCH streams ``application/offset+octet-stream`` and DELETE/OPTIONS
+    # carry no body; only JSON-equivalent or bodyless requests pass, while the
+    # browser-auto-submittable form encodings stay rejected.
+    if content_type not in {"", "application/json", "application/offset+octet-stream"}:
         return "CSRF.JSON_REQUIRED"
     origin = normalized.get("origin")
     if origin:
@@ -463,6 +539,16 @@ def mutating_request_error(config: WebConfig, headers: Mapping[str, str]) -> str
         if normalize_origin(origin) != expected:
             return "CSRF.ORIGIN_DENIED"
     return None
+
+
+def _tus_response_headers(upstream: Message) -> dict[str, str]:
+    """Relay tus protocol headers from the upstream API response."""
+    forwarded: dict[str, str] = {}
+    for name in _TUS_PROXY_RESPONSE_HEADERS:
+        value = upstream.get(name)
+        if value is not None:
+            forwarded[name] = str(value)
+    return forwarded
 
 
 def _env_bool(value: str | None, default: bool) -> bool:

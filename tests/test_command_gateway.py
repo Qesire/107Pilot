@@ -6,6 +6,7 @@ import json
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -222,6 +223,25 @@ class CommandGatewayTests(unittest.TestCase):
         with self.assertRaisesRegex(gateway.GatewayError, "outside allowed roots"):
             gateway._list_dir({"path": "/public/home/bob", "owner": "alice"}, config)
 
+    def test_disk_usage_rejects_path_outside_allowed_roots(self) -> None:
+        config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
+
+        with self.assertRaisesRegex(gateway.GatewayError, "outside allowed roots"):
+            gateway._disk_usage({"path": "/public/home/bob", "owner": "alice"}, config)
+
+    def test_disk_usage_sums_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            (Path(tmp) / "a.txt").write_bytes(b"12345")
+            (Path(tmp) / "sub").mkdir()
+            (Path(tmp) / "sub" / "b.txt").write_bytes(b"678")
+
+            result = gateway._disk_usage({"path": tmp, "owner": "alice"}, config)
+
+            self.assertEqual(result["used_bytes"], 8)
+            self.assertIsNotNone(result["total_bytes"])
+            self.assertGreater(result["total_bytes"], 0)
+
     def test_write_bytes_rejects_invalid_base64(self) -> None:
         config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
 
@@ -356,6 +376,110 @@ class CommandGatewayTests(unittest.TestCase):
                 )
             self.assertEqual(result["members"], 2)
             self.assertEqual((dest / "sub" / "b.txt").read_bytes(), b"22")
+
+    def _make_zip(self, members: dict[str, bytes]) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            for name, content in members.items():
+                zf.writestr(name, content)
+        return buffer.getvalue()
+
+    def test_extract_zip_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            archive = Path(tmp) / "good.zip"
+            archive.write_bytes(self._make_zip({"a.txt": b"1", "sub/b.txt": b"22"}))
+            dest = Path(tmp) / "out"
+            with _mock_ownership():
+                result = gateway._extract_archive(
+                    {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
+                    config,
+                )
+            self.assertEqual(result["members"], 2)
+            self.assertEqual((dest / "sub" / "b.txt").read_bytes(), b"22")
+
+    def test_extract_zip_rejects_traversal_member(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            archive = Path(tmp) / "evil.zip"
+            archive.write_bytes(self._make_zip({"../evil.txt": b"x"}))
+            dest = Path(tmp) / "out"
+            with _mock_ownership(), self.assertRaisesRegex(
+                gateway.GatewayError, "escapes destination"
+            ):
+                gateway._extract_archive(
+                    {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
+                    config,
+                )
+
+    def test_extract_rar_dispatches_to_unar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            archive = Path(tmp) / "box.rar"
+            archive.write_bytes(b"Rar!\x1a\x07\x00fake")
+            dest = Path(tmp) / "out"
+            real_run = gateway.subprocess.run
+
+            def fake_run(argv, *args, **kwargs):
+                if argv and argv[0] == "unar":
+                    return SimpleNamespace(returncode=0, stdout="a.txt\n", stderr="")
+                return real_run(argv, *args, **kwargs)
+
+            with _mock_ownership(), mock.patch.object(
+                gateway.subprocess, "run", side_effect=fake_run
+            ) as patched_run:
+                result = gateway._extract_archive(
+                    {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
+                    config,
+                )
+            unar_calls = [
+                call
+                for call in patched_run.call_args_list
+                if call.args and call.args[0] and call.args[0][0] == "unar"
+            ]
+            self.assertEqual(len(unar_calls), 1)
+            self.assertEqual(
+                unar_calls[0].args[0], ["unar", "-f", "-o", str(dest), str(archive)]
+            )
+            self.assertEqual(unar_calls[0].kwargs.get("timeout"), 300)
+            self.assertEqual(result["status"], "ok")
+
+    def test_extract_rar_failure_raises_gateway_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            archive = Path(tmp) / "broken.rar"
+            archive.write_bytes(b"not really rar")
+            dest = Path(tmp) / "out"
+            real_run = gateway.subprocess.run
+
+            def fake_run(argv, *args, **kwargs):
+                if argv and argv[0] == "unar":
+                    return SimpleNamespace(
+                        returncode=1, stdout="", stderr="unar: corrupt archive\n"
+                    )
+                return real_run(argv, *args, **kwargs)
+
+            with _mock_ownership(), mock.patch.object(
+                gateway.subprocess, "run", side_effect=fake_run
+            ), self.assertRaisesRegex(gateway.GatewayError, "rar extraction failed"):
+                gateway._extract_archive(
+                    {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
+                    config,
+                )
+
+    def test_extract_unsupported_format_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+            archive = Path(tmp) / "notes.txt"
+            archive.write_bytes(b"hello")
+            dest = Path(tmp) / "out"
+            with _mock_ownership(), self.assertRaisesRegex(
+                gateway.GatewayError, "unsupported archive format"
+            ):
+                gateway._extract_archive(
+                    {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
+                    config,
+                )
 
     def test_create_archive_packs_sources_into_tarball(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

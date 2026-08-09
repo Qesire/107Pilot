@@ -20,11 +20,13 @@ class ProxyConfig:
         https_port: int,
         max_request_body_bytes: int = 2 * 1024 * 1024,
         max_response_body_bytes: int = 8 * 1024 * 1024,
+        upstream_timeout_seconds: int = 600,
     ) -> None:
         self.target = target.rstrip("/")
         self.https_port = https_port
         self.max_request_body_bytes = max_request_body_bytes
         self.max_response_body_bytes = max_response_body_bytes
+        self.upstream_timeout_seconds = upstream_timeout_seconds
 
 
 def make_redirect_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
@@ -57,6 +59,18 @@ def make_proxy_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
             self._proxy()
 
         def do_POST(self) -> None:  # noqa: N802
+            self._proxy()
+
+        def do_PATCH(self) -> None:  # noqa: N802
+            self._proxy()
+
+        def do_HEAD(self) -> None:  # noqa: N802
+            self._proxy()
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            self._proxy()
+
+        def do_OPTIONS(self) -> None:  # noqa: N802
             self._proxy()
 
         def log_message(self, format: str, *args: object) -> None:
@@ -95,7 +109,9 @@ def make_proxy_handler(config: ProxyConfig) -> type[BaseHTTPRequestHandler]:
                 method=self.command,
             )
             try:
-                with urllib.request.urlopen(request, timeout=30) as response:
+                with urllib.request.urlopen(
+                    request, timeout=config.upstream_timeout_seconds
+                ) as response:
                     response_body = response.read(config.max_response_body_bytes + 1)
                     if len(response_body) > config.max_response_body_bytes:
                         self.send_error(502, "upstream response too large")
@@ -139,6 +155,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--key", type=Path, required=True)
     parser.add_argument("--max-request-body-bytes", type=int, default=2 * 1024 * 1024)
     parser.add_argument("--max-response-body-bytes", type=int, default=8 * 1024 * 1024)
+    # Large-file upload ``complete`` does a whole-file sha256 + cluster write
+    # before responding (minutes for multi-GiB), so the upstream socket timeout
+    # must be generous.
+    parser.add_argument("--upstream-timeout-seconds", type=int, default=600)
     args = parser.parse_args(argv)
 
     config = ProxyConfig(
@@ -146,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         https_port=args.https_port,
         max_request_body_bytes=args.max_request_body_bytes,
         max_response_body_bytes=args.max_response_body_bytes,
+        upstream_timeout_seconds=args.upstream_timeout_seconds,
     )
     https_server = ThreadingHTTPServer((args.host, args.https_port), make_proxy_handler(config))
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

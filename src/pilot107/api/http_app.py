@@ -173,7 +173,7 @@ class Pilot107HttpApi:
         trusted_user_header: str = "X-Pilot107-User",
         proxy_hmac_secret: bytes | None = None,
         proxy_signature_max_age_seconds: int = 30,
-        max_request_body_bytes: int = 2 * 1024 * 1024,
+        max_request_body_bytes: int = 16 * 1024 * 1024,
         max_response_body_bytes: int = 8 * 1024 * 1024,
         rate_limit_requests: int = 600,
         rate_limit_window_seconds: int = 60,
@@ -731,9 +731,120 @@ class Pilot107HttpApi:
                 status=404,
                 payload={"error": {"code": "not_found", "path": parsed.path}},
             )
+            if self.file_routes is not None:
+                file_response = self.file_routes.handle_patch(
+                    parts,
+                    body=body,
+                    identity=identity,
+                    headers=headers,
+                )
+                if file_response is not None:
+                    response = file_response
         return self._finalize_and_trace(
             response,
             method="PATCH",
+            path=path,
+            request_id=request_id,
+            request_headers=headers,
+            enable_etag=False,
+        )
+
+    def handle_head(
+        self,
+        path: str,
+        headers: Mapping[str, str] | None = None,
+    ) -> ApiResponse:
+        request_id = _request_id(headers)
+        parsed = urlparse(path)
+        parts = _route_parts(parsed.path)
+        proxy_error = self._proxy_auth_error("HEAD", path, b"", headers)
+        identity, auth_error = self._resolve_identity(headers)
+        if proxy_error is not None:
+            response = proxy_error
+        elif auth_error is not None:
+            response = auth_error
+        else:
+            response = ApiResponse(
+                status=404,
+                payload={"error": {"code": "not_found", "path": parsed.path}},
+            )
+            if self.file_routes is not None:
+                file_response = self.file_routes.handle_head(
+                    parts,
+                    identity=identity,
+                )
+                if file_response is not None:
+                    response = file_response
+        return self._finalize_and_trace(
+            response,
+            method="HEAD",
+            path=path,
+            request_id=request_id,
+            request_headers=headers,
+            enable_etag=False,
+        )
+
+    def handle_delete(
+        self,
+        path: str,
+        headers: Mapping[str, str] | None = None,
+    ) -> ApiResponse:
+        request_id = _request_id(headers)
+        parsed = urlparse(path)
+        parts = _route_parts(parsed.path)
+        proxy_error = self._proxy_auth_error("DELETE", path, b"", headers)
+        identity, auth_error = self._resolve_identity(headers)
+        if proxy_error is not None:
+            response = proxy_error
+        elif auth_error is not None:
+            response = auth_error
+        else:
+            response = ApiResponse(
+                status=404,
+                payload={"error": {"code": "not_found", "path": parsed.path}},
+            )
+            if self.file_routes is not None:
+                file_response = self.file_routes.handle_delete(
+                    parts,
+                    identity=identity,
+                )
+                if file_response is not None:
+                    response = file_response
+        return self._finalize_and_trace(
+            response,
+            method="DELETE",
+            path=path,
+            request_id=request_id,
+            request_headers=headers,
+            enable_etag=False,
+        )
+
+    def handle_options(
+        self,
+        path: str,
+        headers: Mapping[str, str] | None = None,
+    ) -> ApiResponse:
+        request_id = _request_id(headers)
+        parsed = urlparse(path)
+        parts = _route_parts(parsed.path)
+        proxy_error = self._proxy_auth_error("OPTIONS", path, b"", headers)
+        if proxy_error is not None:
+            response = proxy_error
+        else:
+            response = ApiResponse(
+                status=404,
+                payload={"error": {"code": "not_found", "path": parsed.path}},
+            )
+            if self.file_routes is not None:
+                file_response = self.file_routes.handle_options(
+                    parts,
+                    identity=None,
+                )
+                if file_response is not None:
+                    response = file_response
+        return self._finalize_and_trace(
+            response,
+            method="OPTIONS",
             path=path,
             request_id=request_id,
             request_headers=headers,
@@ -816,6 +927,7 @@ class Pilot107HttpApi:
                 parts,
                 body=body,
                 identity=identity,
+                headers=headers,
             )
             if file_response is not None:
                 return file_response
@@ -3249,13 +3361,55 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
                 duration_seconds=time.monotonic() - started,
             )
 
+        def do_HEAD(self) -> None:  # noqa: N802
+            started = time.monotonic()
+            if not self._allow_request():
+                self._observe_rejected("HEAD", 429, started)
+                return
+            response = api.handle_head(self.path, headers=dict(self.headers.items()))
+            self._send_json(response, include_body=False)
+            api.metrics.observe_request(
+                method="HEAD",
+                route=normalize_http_route(self.path),
+                status=response.status,
+                duration_seconds=time.monotonic() - started,
+            )
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            started = time.monotonic()
+            if not self._allow_request():
+                self._observe_rejected("DELETE", 429, started)
+                return
+            response = api.handle_delete(self.path, headers=dict(self.headers.items()))
+            self._send_json(response)
+            api.metrics.observe_request(
+                method="DELETE",
+                route=normalize_http_route(self.path),
+                status=response.status,
+                duration_seconds=time.monotonic() - started,
+            )
+
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            started = time.monotonic()
+            if not self._allow_request():
+                self._observe_rejected("OPTIONS", 429, started)
+                return
+            response = api.handle_options(self.path, headers=dict(self.headers.items()))
+            self._send_json(response)
+            api.metrics.observe_request(
+                method="OPTIONS",
+                route=normalize_http_route(self.path),
+                status=response.status,
+                duration_seconds=time.monotonic() - started,
+            )
+
         def log_message(self, format: str, *args: object) -> None:
             return
 
-        def _send_json(self, response: ApiResponse) -> None:
+        def _send_json(self, response: ApiResponse, *, include_body: bool = True) -> None:
             body = (
                 b""
-                if response.status == 304
+                if response.status in {204, 304}
                 else json.dumps(response.payload, ensure_ascii=False, sort_keys=True).encode(
                     "utf-8"
                 )
@@ -3274,7 +3428,7 @@ def make_handler(api: Pilot107HttpApi) -> type[BaseHTTPRequestHandler]:
             for key, value in (response.headers or {}).items():
                 self.send_header(key, value)
             self.end_headers()
-            if body:
+            if body and include_body:
                 self.wfile.write(body)
 
         def _allow_request(self) -> bool:

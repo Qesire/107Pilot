@@ -112,6 +112,34 @@ class LocalFileOpsExecutorTests(unittest.TestCase):
         with self.assertRaisesRegex(SlurmTransportError, "does not exist"):
             self.executor.stat_path(path=str(self.root / "nope"), owner="alice")
 
+    def test_disk_usage_sums_tree(self) -> None:
+        (self.root / "a.txt").write_bytes(b"12345")
+        (self.root / "sub").mkdir()
+        (self.root / "sub" / "b.txt").write_bytes(b"678")
+
+        usage = self.executor.disk_usage(path=str(self.root), owner="alice")
+
+        self.assertEqual(usage.used_bytes, 8)
+        self.assertEqual(usage.path, str(self.root.resolve()))
+        self.assertIsNotNone(usage.total_bytes)
+        self.assertGreater(usage.total_bytes, 0)
+
+    def test_disk_usage_single_file(self) -> None:
+        (self.root / "only.bin").write_bytes(b"0123456789")
+
+        usage = self.executor.disk_usage(path=str(self.root / "only.bin"), owner="alice")
+
+        self.assertEqual(usage.used_bytes, 10)
+
+    def test_disk_usage_missing_path_raises(self) -> None:
+        with self.assertRaisesRegex(SlurmTransportError, "does not exist"):
+            self.executor.disk_usage(path=str(self.root / "nope"), owner="alice")
+
+    def test_disk_usage_rejects_path_outside_allowed_roots(self) -> None:
+        outside = self.root.parent / "elsewhere"
+        with self.assertRaisesRegex(SlurmSubmissionRejected, "outside allowed roots"):
+            self.executor.disk_usage(path=str(outside), owner="alice")
+
     def _make_tar(self, members: dict[str, bytes]) -> Path:
         archive_path = self.root / "archive.tar"
         with tarfile.open(archive_path, "w") as tar:

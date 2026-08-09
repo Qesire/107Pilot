@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import tempfile
 import threading
 import unittest
@@ -8,11 +9,17 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from pilot107.api.http_app import build_api
+from pilot107.adapters.slurm import LocalFileOpsExecutor
+from pilot107.api.evidence_query import EvidenceQueryService
+from pilot107.api.file_routes import FileRoutes
+from pilot107.api.http_app import Pilot107HttpApi, build_api
 from pilot107.api.http_app import make_handler as make_api_handler
+from pilot107.core.file_uploads import FileUploadService
+from pilot107.core.run_store import RunStore
 from pilot107.web.server import (
     WebConfig,
     WebIdentityMode,
+    _tus_data_plane,
     config_from_env,
     is_safe_demo_user,
     is_safe_terminal_deep_link,
@@ -22,6 +29,7 @@ from pilot107.web.server import (
     resolve_proxy_user,
     resolve_static_request,
 )
+from pilot107.worker.evidence import EvidenceStore
 
 
 class WebServerTests(unittest.TestCase):
@@ -70,6 +78,16 @@ class WebServerTests(unittest.TestCase):
             resolve_proxy_user(config, {"X-Pilot107-User": "bob"}),
             "alice",
         )
+
+    def test_tus_data_plane_matches_chunk_endpoints_only(self) -> None:
+        # High-frequency data plane: PATCH/HEAD on a specific upload id.
+        self.assertTrue(_tus_data_plane("/api/v1/files/tus/abc123"))
+        self.assertTrue(_tus_data_plane("/api/v1/files/tus/abc123?x=1"))
+        # Control plane stays rate-limited: create/concat, capability, other APIs.
+        self.assertFalse(_tus_data_plane("/api/v1/files/tus"))
+        self.assertFalse(_tus_data_plane("/api/v1/files/tus/"))
+        self.assertFalse(_tus_data_plane("/api/v1/files/uploads/abc/complete"))
+        self.assertFalse(_tus_data_plane("/api/v1/runs"))
 
     def test_config_from_env_reads_fixed_identity_mode(self) -> None:
         config = config_from_env(
@@ -128,6 +146,24 @@ class WebServerTests(unittest.TestCase):
         )
         self.assertEqual(
             mutating_request_error(config, {"Content-Type": "text/plain"}),
+            "CSRF.JSON_REQUIRED",
+        )
+
+    def test_mutating_request_allows_tus_content_types(self) -> None:
+        config = WebConfig(api_base_url="http://api:8080")
+        # tus PATCH streams ``application/offset+octet-stream``; DELETE/OPTIONS
+        # carry no body, so an absent Content-Type must pass the CSRF gate.
+        self.assertIsNone(
+            mutating_request_error(
+                config, {"Content-Type": "application/offset+octet-stream"}
+            )
+        )
+        self.assertIsNone(mutating_request_error(config, {}))
+        # Browser-auto-submittable form encodings stay rejected.
+        self.assertEqual(
+            mutating_request_error(
+                config, {"Content-Type": "application/x-www-form-urlencoded"}
+            ),
             "CSRF.JSON_REQUIRED",
         )
 
@@ -264,6 +300,138 @@ class WebServerTests(unittest.TestCase):
                 api_server.shutdown()
                 api_server.server_close()
                 api_thread.join(timeout=5)
+
+
+class TusProxyTests(unittest.TestCase):
+    """The BFF forwards tus methods and protocol headers to the API verbatim.
+
+    Spins up the real API (http_app with file routes) behind the real BFF
+    (web.server) and drives a full tus lifecycle over HTTP, asserting that the
+    tus request headers reach the API and the tus response headers are relayed
+    back to the client.
+    """
+
+    def setUp(self) -> None:
+        self._temporary = tempfile.TemporaryDirectory()
+        root = Path(self._temporary.name)
+        self.cluster_root = root / "cluster" / "alice"
+        self.cluster_root.mkdir(parents=True)
+        executor = LocalFileOpsExecutor(allowed_roots=[str(self.cluster_root)])
+        upload_service = FileUploadService(
+            executor=executor,
+            owner_roots=(str(self.cluster_root),),
+            staging_root=root / "staging",
+        )
+        run_store = RunStore(root / "pilot107.db")
+        api = Pilot107HttpApi(
+            store=run_store,
+            evidence_query=EvidenceQueryService(
+                store=run_store,
+                evidence_store=EvidenceStore(root / "evidence"),
+            ),
+            file_routes=FileRoutes(upload_service=upload_service, executor=executor),
+            auth_required=True,
+        )
+        self._api_server = ThreadingHTTPServer(("127.0.0.1", 0), make_api_handler(api))
+        self._api_thread = threading.Thread(
+            target=self._api_server.serve_forever, daemon=True
+        )
+        self._api_thread.start()
+        api_base = f"http://127.0.0.1:{self._api_server.server_port}"
+
+        config = WebConfig(api_base_url=api_base, public_origin=None)
+        self._bff_server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(config))
+        self._bff_thread = threading.Thread(
+            target=self._bff_server.serve_forever, daemon=True
+        )
+        self._bff_thread.start()
+        self.base = f"http://127.0.0.1:{self._bff_server.server_port}"
+        self.tus = f"{self.base}/api/v1/files/tus"
+        self.target = str(self.cluster_root)
+
+    def tearDown(self) -> None:
+        self._bff_server.shutdown()
+        self._bff_server.server_close()
+        self._bff_thread.join(timeout=5)
+        self._api_server.shutdown()
+        self._api_server.server_close()
+        self._api_thread.join(timeout=5)
+        self._temporary.cleanup()
+
+    @staticmethod
+    def _request(method: str, url: str, *, headers=None, body=None):
+        request = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+        try:
+            return urllib.request.urlopen(request, timeout=5)
+        except urllib.error.HTTPError as exc:
+            return exc
+
+    @staticmethod
+    def _metadata(**fields: str) -> str:
+        return ",".join(
+            f"{key} {base64.b64encode(value.encode('utf-8')).decode('ascii')}"
+            for key, value in fields.items()
+        )
+
+    def test_options_capabilities_relayed(self) -> None:
+        response = self._request("OPTIONS", self.tus)
+        self.assertEqual(response.status, 204)
+        self.assertEqual(response.headers.get("Tus-Resumable"), "1.0.0")
+        self.assertEqual(response.headers.get("Tus-Version"), "1.0.0")
+        self.assertEqual(
+            response.headers.get("Tus-Extension"), "creation,termination,concatenation"
+        )
+        self.assertIsNotNone(response.headers.get("Tus-Max-Size"))
+
+    def test_create_patch_head_delete_headers_relayed(self) -> None:
+        payload = b"hello tus through the bff" * 4
+        user = {"X-Pilot107-User": "alice", "Tus-Resumable": "1.0.0"}
+
+        # creation: Upload-Length/Upload-Metadata forwarded, Location relayed.
+        # A tus create is a bodyless POST (no Content-Type), so pass body=None;
+        # urllib would otherwise inject application/x-www-form-urlencoded.
+        created = self._request(
+            "POST",
+            self.tus,
+            headers={
+                **user,
+                "Upload-Length": str(len(payload)),
+                "Upload-Metadata": self._metadata(
+                    filename="proxied.bin", target_path=self.target
+                ),
+            },
+        )
+        self.assertEqual(created.status, 201)
+        self.assertEqual(created.headers.get("Tus-Resumable"), "1.0.0")
+        location = created.headers.get("Location")
+        self.assertIsNotNone(location)
+        upload_url = f"{self.base}{location}"
+
+        # PATCH: offset+octet-stream body forwarded, new Upload-Offset relayed.
+        patched = self._request(
+            "PATCH",
+            upload_url,
+            headers={
+                **user,
+                "Content-Type": "application/offset+octet-stream",
+                "Upload-Offset": "0",
+            },
+            body=payload,
+        )
+        self.assertEqual(patched.status, 204)
+        self.assertEqual(patched.headers.get("Upload-Offset"), str(len(payload)))
+
+        # HEAD resume probe: offset/length relayed, no body.
+        head = self._request("HEAD", upload_url, headers=user)
+        self.assertEqual(head.status, 200)
+        self.assertEqual(head.headers.get("Upload-Offset"), str(len(payload)))
+        self.assertEqual(head.headers.get("Upload-Length"), str(len(payload)))
+        self.assertEqual(head.read(), b"")
+
+        # DELETE termination.
+        deleted = self._request("DELETE", upload_url, headers=user)
+        self.assertEqual(deleted.status, 204)
+        self.assertEqual(deleted.headers.get("Tus-Resumable"), "1.0.0")
 
 
 if __name__ == "__main__":

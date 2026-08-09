@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import os
 import posixpath
 import re
 import shutil
@@ -352,6 +353,19 @@ class FileStat:
     mtime: int
 
 
+@dataclass(frozen=True)
+class DiskUsage:
+    """Recursive apparent size of a path plus the filesystem total.
+
+    ``total_bytes`` is ``None`` when the backend cannot determine the
+    containing filesystem size (e.g. some remote gateways).
+    """
+
+    path: str
+    used_bytes: int
+    total_bytes: int | None
+
+
 class FileOpsExecutor(Protocol):
     """Binary file primitives for transferring user files to the cluster.
 
@@ -417,10 +431,35 @@ class FileOpsExecutor(Protocol):
         ``overwrite`` is false an existing target is rejected.
         """
 
+    def copy_entries(
+        self,
+        *,
+        paths: list[str],
+        dest_dir: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> list[str]:
+        """Copy entries into ``dest_dir`` (overwrite); return copied paths."""
+
+    def create_file(
+        self,
+        *,
+        dir_path: str,
+        name: str,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> str:
+        """Create an empty file; reject when the name is already taken."""
+
     def stat_path(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
     ) -> FileStat:
         """Return metadata for a path."""
+
+    def disk_usage(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> DiskUsage:
+        """Return recursive used bytes for ``path`` plus filesystem total."""
 
     def extract_archive(
         self,
@@ -632,6 +671,47 @@ class HttpCommandGatewayExecutor:
             timeout_seconds=timeout_seconds,
         )
 
+    def copy_entries(
+        self,
+        *,
+        paths: list[str],
+        dest_dir: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> list[str]:
+        payload = self._request(
+            "/copy",
+            {
+                "paths": paths,
+                "dest_dir": dest_dir,
+                "owner": owner,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        copied = payload.get("copied", [])
+        return [str(item) for item in copied] if isinstance(copied, list) else []
+
+    def create_file(
+        self,
+        *,
+        dir_path: str,
+        name: str,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> str:
+        payload = self._request(
+            "/create-file",
+            {
+                "dir": dir_path,
+                "name": name,
+                "owner": owner,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return str(payload.get("path", ""))
+
     def stat_path(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
     ) -> FileStat:
@@ -645,6 +725,21 @@ class HttpCommandGatewayExecutor:
             type=str(payload.get("type", "other")),
             size=int(payload.get("size", 0)),
             mtime=int(payload.get("mtime", 0)),
+        )
+
+    def disk_usage(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> DiskUsage:
+        payload = self._request(
+            "/disk_usage",
+            {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
+            timeout_seconds=timeout_seconds,
+        )
+        total = payload.get("total_bytes")
+        return DiskUsage(
+            path=str(payload.get("path", path)),
+            used_bytes=int(payload.get("used_bytes", 0)),
+            total_bytes=None if total is None else int(total),
         )
 
     def extract_archive(
@@ -725,6 +820,34 @@ class HttpCommandGatewayExecutor:
         if not isinstance(parsed, dict):
             raise SlurmTransportError(f"gateway {path} returned non-object JSON")
         return parsed
+
+
+def _directory_apparent_size(root: Path) -> int:
+    """Sum regular-file apparent sizes under ``root`` without following links.
+
+    Close enough to ``du -sb`` for a storage-usage card: symlinks are counted
+    by their own size and never traversed, and unreadable entries are skipped
+    rather than aborting the whole walk.
+    """
+
+    total = 0
+    stack: list[Path] = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            handle = os.scandir(current)
+        except OSError:
+            continue
+        with handle:
+            for entry in handle:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                        continue
+                    total += entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+    return total
 
 
 class LocalFileOpsExecutor:
@@ -880,6 +1003,65 @@ class LocalFileOpsExecutor:
         destination.parent.mkdir(parents=True, exist_ok=True)
         source.rename(destination)
 
+    def copy_entries(
+        self,
+        *,
+        paths: list[str],
+        dest_dir: str,
+        owner: str,
+        timeout_seconds: float = 120.0,
+    ) -> list[str]:
+        destination = self._authorize(dest_dir)
+        if not destination.is_dir():
+            raise SlurmTransportError(f"destination is not a directory: {dest_dir}")
+        copied: list[str] = []
+        for item in paths:
+            source = self._authorize(item)
+            if not source.exists() and not source.is_symlink():
+                raise SlurmTransportError(f"path does not exist: {item}")
+            if source.is_dir() and not source.is_symlink():
+                source_resolved = source.resolve()
+                dest_resolved = destination.resolve()
+                if dest_resolved == source_resolved or str(dest_resolved).startswith(
+                    f"{source_resolved}/"
+                ):
+                    raise SlurmSubmissionRejected(
+                        f"cannot copy a directory into itself: {item}"
+                    )
+            target = destination / source.name
+            if target.exists() or target.is_symlink():
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                else:
+                    target.unlink()
+            if source.is_dir() and not source.is_symlink():
+                shutil.copytree(source, target, symlinks=True)
+            else:
+                shutil.copy2(source, target, follow_symlinks=False)
+            copied.append(str(target))
+        return copied
+
+    def create_file(
+        self,
+        *,
+        dir_path: str,
+        name: str,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> str:
+        if not name or name in {".", ".."} or "/" in name or "\\" in name:
+            raise SlurmSubmissionRejected(f"unsafe file name: {name}")
+        parent = self._authorize(dir_path)
+        if not parent.is_dir():
+            raise SlurmTransportError(f"directory does not exist: {dir_path}")
+        target = parent / name
+        try:
+            with target.open("xb"):
+                pass
+        except FileExistsError as exc:
+            raise SlurmSubmissionRejected(f"file already exists: {target}") from exc
+        return str(target)
+
     def stat_path(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
     ) -> FileStat:
@@ -898,6 +1080,22 @@ class LocalFileOpsExecutor:
         return FileStat(
             path=str(target), type=kind, size=info.st_size, mtime=int(info.st_mtime)
         )
+
+    def disk_usage(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> DiskUsage:
+        target = self._authorize(path)
+        if not target.exists():
+            raise SlurmTransportError(f"path does not exist: {path}")
+        if target.is_dir() and not target.is_symlink():
+            used = _directory_apparent_size(target)
+        else:
+            used = target.lstat().st_size
+        try:
+            total: int | None = shutil.disk_usage(target).total
+        except OSError:
+            total = None
+        return DiskUsage(path=str(target), used_bytes=used, total_bytes=total)
 
     def extract_archive(
         self,

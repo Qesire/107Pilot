@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from pilot107.adapters.slurm import SimulatorPathChecker
 from pilot107.api.service import build_api_service, config_from_env
@@ -287,6 +288,70 @@ class ApiServiceTests(unittest.TestCase):
         checker = factory("alice")
         self.assertIsInstance(checker, SimulatorPathChecker)
         self.assertEqual(checker.user, "alice")
+
+    def test_command_gateway_backend_auto_collects_login_node_snapshot(self) -> None:
+        scontrol_nodes = (
+            "NodeName=anode16 Arch=x86_64 CoresPerSocket=8\n"
+            "   CPUAlloc=2 CPUEfctv=8 CPUTot=8 CPULoad=0.64\n"
+            "   Gres=(null)\n"
+            "   RealMemory=15360 AllocMem=0 FreeMem=2816\n"
+            "   State=MIXED ThreadsPerCore=1\n"
+            "   Partitions=CPU-RC\n"
+        )
+        scontrol_part = "PartitionName=CPU-RC State=UP TotalCPUs=8 TotalNodes=1\n"
+        squeue_out = "42|RUNNING|CPU-RC|CPU-RC|trainjob\n"
+
+        class FakeGatewayExecutor:
+            def __init__(self, *args: object, **kwargs: object) -> None: ...
+
+            def run(
+                self,
+                argv: list[str],
+                *,
+                cwd: str | None = None,
+                user: str | None = None,
+                stdin: str | None = None,
+                timeout_seconds: float = 10.0,
+            ) -> object:
+                from pilot107.adapters.slurm import CommandResult
+
+                if argv[:3] == ["scontrol", "show", "nodes"]:
+                    return CommandResult(0, scontrol_nodes, "")
+                if argv[:3] == ["scontrol", "show", "part"]:
+                    return CommandResult(0, scontrol_part, "")
+                if argv[:1] == ["squeue"]:
+                    return CommandResult(0, squeue_out, "")
+                return CommandResult(0, "", "")
+
+        with patch("pilot107.api.service.HttpCommandGatewayExecutor", FakeGatewayExecutor):
+            api = build_api_service(
+                config_from_env(
+                    {
+                        "PILOT107_API_BACKEND": "command-gateway",
+                        "PILOT107_AUTH_REQUIRED": "1",
+                        "PILOT107_ALLOWED_ROOTS": "/public/home/alice",
+                        "PILOT107_COMMAND_GATEWAY_URL": "http://gateway.invalid:8090",
+                    },
+                    project_root=self.root,
+                )
+            )
+
+        response = api.handle_get(
+            "/api/v1/platform/snapshots/latest?owner=alice&scope=login_node",
+            headers={"X-Pilot107-User": "alice"},
+        )
+
+        self.assertEqual(response.status, 200)
+        snapshot = response.payload["snapshot"]
+        self.assertEqual(snapshot["scope"], "login_node")
+        self.assertEqual(len(snapshot["nodes"]), 1)
+        self.assertEqual(snapshot["nodes"][0]["node_name"], "anode16")
+        self.assertEqual(snapshot["nodes"][0]["cpus_total"], 8)
+        self.assertEqual(snapshot["nodes"][0]["cpus_allocated"], 2)
+        self.assertEqual(len(snapshot["partitions"]), 1)
+        self.assertEqual(snapshot["partitions"][0]["name"], "CPU-RC")
+        self.assertEqual(len(snapshot["squeue_jobs"]), 1)
+        self.assertEqual(snapshot["squeue_jobs"][0]["state_raw"], "RUNNING")
 
     def test_contract_preflight_includes_owner_platform_snapshot_findings(self) -> None:
         api = build_api_service(

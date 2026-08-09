@@ -63,6 +63,7 @@ RUN apt-get update \
         slurmdbd=23.11.4-1.2ubuntu5 \
         slurmrestd=23.11.4-1.2ubuntu5 \
         tini \
+        unar \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the control-plane JWT auth plugin built above. Slurm loads plugins
