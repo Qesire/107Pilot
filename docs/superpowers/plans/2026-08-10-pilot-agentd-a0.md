@@ -432,7 +432,7 @@ git commit -m "feat: define pilot agent turn protocol"
 - Consumes: no request data except `model_profile_id` from Task 2.
 - Produces: `ModelProfile`, `AgentdConfig`, `configFromEnv()`, `createCampusModelRuntime()`, and `createFauxModelRuntime()`.
 
-- [ ] **Step 1: Write failing conservative-profile and secret-redaction tests**
+- [x] **Step 1: Write failing conservative-profile and secret-redaction tests**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -469,7 +469,7 @@ it("never serializes either secret", () => {
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -479,7 +479,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 Expected: FAIL because config/model modules do not exist.
 
-- [ ] **Step 3: Implement bounded environment parsing**
+- [x] **Step 3: Implement bounded environment parsing**
 
 ```ts
 export interface ModelProfile {
@@ -509,7 +509,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv): AgentdConfig;
 
 Rules: bind host defaults to `0.0.0.0`, port to `8091`, token must be non-empty outside tests, URL must be `http:` or `https:` with no username/password, timeouts are 1–300 seconds, output tokens 1–32,000, attempts 1–3, and all thrown messages use variable names rather than values. Missing campus URL/model yields `configured: false` rather than preventing the process from starting; an API key remains optional for keyless self-hosted gateways. A Turn against an unconfigured profile fails with non-retryable `provider_unavailable`, allowing Python deterministic fallback while `/readyz` reports the degraded capability without spending tokens.
 
-- [ ] **Step 4: Register the campus and faux providers through Pi AI**
+- [x] **Step 4: Register the campus and faux providers through Pi AI**
 
 ```ts
 import {
@@ -578,7 +578,7 @@ export function createCampusModelRuntime(profile: ModelProfile): ModelRuntime {
 
 `createFauxModelRuntime()` must return the Pi `fauxProvider()` handle in addition to `ModelRuntime` so tests can queue `fauxAssistantMessage`, `fauxText`, and `fauxToolCall` deterministically. `configFromEnv()` recognizes `faux-default` only when `PILOT107_AGENTD_FAUX_SCENARIO=a0-smoke` or `NODE_ENV=test`; the `a0-smoke` scenario queues a fixed server-side response sequence and never accepts arbitrary response JSON from an environment variable.
 
-- [ ] **Step 5: Run GREEN**
+- [x] **Step 5: Run GREEN**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -586,7 +586,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node:22.19.0-bookworm-slim npm test -- tests/config.test.ts tests/models.test.ts
 ```
 
-- [ ] **Step 6: Commit the model boundary**
+- [x] **Step 6: Commit the model boundary**
 
 ```bash
 git add services/pilot-agentd/src/config.ts services/pilot-agentd/src/models.ts services/pilot-agentd/tests/config.test.ts services/pilot-agentd/tests/models.test.ts
