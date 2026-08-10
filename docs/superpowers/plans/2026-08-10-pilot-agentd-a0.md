@@ -708,7 +708,7 @@ git commit -m "feat: add constrained pilot agent tasks"
 - Consumes: Task 2 wire types and Pi `AgentEvent`/messages.
 - Produces: `TurnEventSink`, `checkpointFromState()`, `restoreMessages()`, `AgentdTurnError`, and `mapProviderError()`.
 
-- [ ] **Step 1: Write failing sequence/terminal and checkpoint-redaction tests**
+- [x] **Step 1: Write failing sequence/terminal and checkpoint-redaction tests**
 
 ```ts
 const fixedClock = () => new Date("2026-08-10T00:00:00.000Z");
@@ -754,7 +754,7 @@ it("removes secrets and thinking from checkpoints", () => {
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -762,7 +762,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node:22.19.0-bookworm-slim npm test -- tests/events.test.ts tests/checkpoint.test.ts tests/errors.test.ts
 ```
 
-- [ ] **Step 3: Implement the awaited event sink**
+- [x] **Step 3: Implement the awaited event sink**
 
 ```ts
 export type EventWrite = (event: AgentTurnEvent) => void | Promise<void>;
@@ -806,7 +806,7 @@ export class TurnEventSink {
 }
 ```
 
-- [ ] **Step 4: Implement canonical checkpoint and stable error mapping**
+- [x] **Step 4: Implement canonical checkpoint and stable error mapping**
 
 Use recursively sorted JSON keys before SHA-256. Preserve user text, assistant final text, tool calls, and tool results; remove thinking blocks, headers, URLs with query strings, and keys matching `/api[_-]?key|authorization|token|password/i`.
 
@@ -831,7 +831,7 @@ export class AgentdTurnError extends Error {
 
 Map 401/403 to `provider_auth`, 408 to `provider_timeout`, 429 to `provider_rate_limited`, 5xx/transport to `provider_unavailable`, malformed provider events to `provider_invalid_response`, AbortError to `aborted`, and all remaining errors to a sanitized `internal_error`.
 
-- [ ] **Step 5: Run GREEN**
+- [x] **Step 5: Run GREEN**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -839,7 +839,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node:22.19.0-bookworm-slim npm run check
 ```
 
-- [ ] **Step 6: Commit event/checkpoint/error primitives**
+- [x] **Step 6: Commit event/checkpoint/error primitives**
 
 ```bash
 git add services/pilot-agentd/src/events.ts services/pilot-agentd/src/checkpoint.ts services/pilot-agentd/src/errors.ts services/pilot-agentd/tests/events.test.ts services/pilot-agentd/tests/checkpoint.test.ts services/pilot-agentd/tests/errors.test.ts
