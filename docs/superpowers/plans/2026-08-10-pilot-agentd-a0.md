@@ -603,7 +603,7 @@ git commit -m "feat: add pilot agent model registry"
 - Consumes: validated `AgentTurnRequest` from Task 2.
 - Produces: `PreparedTask`, `prepareTask(request)`, `getStructuredResult()`, and task-specific `emit_result` `AgentTool`s.
 
-- [ ] **Step 1: Write failing tests for all four task kinds**
+- [x] **Step 1: Write failing tests for all four task kinds**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -631,7 +631,7 @@ it("interactive A0 exposes no production tools", () => {
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -639,7 +639,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node:22.19.0-bookworm-slim npm test -- tests/tasks.test.ts
 ```
 
-- [ ] **Step 3: Implement `PreparedTask` and the result-capturing tool**
+- [x] **Step 3: Implement `PreparedTask` and the result-capturing tool**
 
 ```ts
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -679,7 +679,7 @@ function resultTool(schema: TSchema): {
 
 Define closed TypeBox schemas matching `_LLM_EXPLANATION_SCHEMA`, `_LLM_CONTRACT_PATCH_SCHEMA`, and `REMEDIATION_PLAN_JSON_SCHEMA`. Keep `needs_user_confirmation` out of the model schema and force it to `true` in Python. Use `JSON.stringify(input)` as data inside task-specific user messages; do not splice evidence into the system prompt.
 
-- [ ] **Step 4: Run GREEN and typecheck**
+- [x] **Step 4: Run GREEN and typecheck**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -687,7 +687,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node:22.19.0-bookworm-slim npm run check
 ```
 
-- [ ] **Step 5: Commit task profiles**
+- [x] **Step 5: Commit task profiles**
 
 ```bash
 git add services/pilot-agentd/src/tasks.ts services/pilot-agentd/tests/tasks.test.ts
