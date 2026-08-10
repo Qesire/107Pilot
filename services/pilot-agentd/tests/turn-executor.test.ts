@@ -253,6 +253,81 @@ describe("structured output repair", () => {
 });
 
 describe("provider retry policy", () => {
+  it("retries a leading 429 provider error even when Pi never reports an HTTP response", async () => {
+    const runtime = createFauxModelRuntime();
+    const sleeps: number[] = [];
+    runtime.faux.setResponses([
+      fauxAssistantMessage([], {
+        stopReason: "error",
+        errorMessage: '429: {"error":{"message":"rate limited"}}',
+        timestamp: 1,
+      }),
+      fauxAssistantMessage([fauxText("rate limit recovered")], { timestamp: 2 }),
+    ]);
+
+    const events = await executeCollect(executor(runtime, sleeps), interactiveRequest());
+
+    expect(terminal(events)).toMatchObject({
+      type: "turn_completed",
+      payload: { result: "rate limit recovered", provider_calls: 2 },
+    });
+    expect(runtime.faux.state.callCount).toBe(2);
+    expect(sleeps).toEqual([100]);
+  });
+
+  it("maps a leading 401 provider error to non-retryable authentication failure", async () => {
+    const runtime = createFauxModelRuntime();
+    const sleeps: number[] = [];
+    runtime.faux.setResponses([
+      fauxAssistantMessage([], {
+        stopReason: "error",
+        errorMessage: "401 Incorrect API key ending in secret-value",
+        timestamp: 1,
+      }),
+      fauxAssistantMessage([fauxText("must not retry")], { timestamp: 2 }),
+    ]);
+
+    const events = await executeCollect(executor(runtime, sleeps), interactiveRequest());
+
+    expect(terminal(events)).toMatchObject({
+      type: "turn_failed",
+      payload: {
+        error: {
+          code: "provider_auth",
+          retryable: false,
+          provider_status: 401,
+        },
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain("secret-value");
+    expect(runtime.faux.state.callCount).toBe(1);
+    expect(runtime.faux.getPendingResponseCount()).toBe(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  it("does not infer an HTTP status from arbitrary numbers inside provider text", async () => {
+    const runtime = createFauxModelRuntime();
+    runtime.faux.setResponses([
+      fauxAssistantMessage([], {
+        stopReason: "error",
+        errorMessage: "Provider rejected an invalid record containing value 429.",
+        timestamp: 1,
+      }),
+      fauxAssistantMessage([fauxText("must not retry")], { timestamp: 2 }),
+    ]);
+
+    const events = await executeCollect(executor(runtime), interactiveRequest());
+
+    expect(terminal(events)).toMatchObject({
+      type: "turn_failed",
+      payload: {
+        error: { code: "provider_invalid_response", retryable: false },
+      },
+    });
+    expect(runtime.faux.state.callCount).toBe(1);
+    expect(runtime.faux.getPendingResponseCount()).toBe(1);
+  });
+
   it.each([
     ["429", 429],
     ["5xx", 503],
@@ -397,6 +472,46 @@ describe("provider retry policy", () => {
       payload: { provider_calls: 2 },
     });
     expect(runtime.faux.state.callCount).toBe(2);
+  });
+
+  it("aggregates usage from a failed constrained attempt and its successful retry", async () => {
+    const runtime = createFauxModelRuntime();
+    runtime.faux.setResponses([
+      fauxAssistantMessage([fauxText("x".repeat(480))], {
+        stopReason: "error",
+        errorMessage: "503: provider unavailable",
+        timestamp: 1,
+      }),
+      fauxAssistantMessage(
+        [
+          fauxToolCall(
+            "emit_result",
+            {
+              suggested_patch: {},
+              explanation_zh: "重试后返回安全结果。",
+            },
+            { id: "usage-retry" },
+          ),
+        ],
+        { stopReason: "toolUse", timestamp: 2 },
+      ),
+    ]);
+
+    const events = await executeCollect(executor(runtime), contractPatchRequest());
+    const completed = terminal(events);
+    if (completed.type !== "turn_completed" || completed.payload.checkpoint === undefined) {
+      throw new Error("expected a completed Turn with a checkpoint");
+    }
+
+    expect(completed.payload.provider_calls).toBe(2);
+    expect(completed.payload.usage.input_tokens).toBeGreaterThan(0);
+    expect(completed.payload.usage.output_tokens).toBeGreaterThan(120);
+    expect(completed.payload.usage.cache_read_tokens).toBeGreaterThan(0);
+    expect(completed.payload.usage.cache_write_tokens).toBeGreaterThan(0);
+    expect(completed.payload.checkpoint.usage).toEqual(completed.payload.usage);
+    expect(computeCheckpointDigest(completed.payload.checkpoint)).toBe(
+      completed.payload.checkpoint.digest,
+    );
   });
 
   it("exports a policy helper that enforces attempts, retryability, and interactive no-replay", async () => {
@@ -579,9 +694,94 @@ describe("abort, timeout, and checkpoint restore", () => {
       expect(assertTerminalInvariant(events)).toBe(events.at(-1));
     },
   );
+
+  it("does not count restored checkpoint usage again in the resumed execution", async () => {
+    const request = interactiveRequest();
+    const prior = {
+      ...fauxAssistantMessage([fauxText("prior response")], { timestamp: 1 }),
+      usage: {
+        input: 100_000,
+        output: 100_000,
+        cacheRead: 100_000,
+        cacheWrite: 100_000,
+        totalTokens: 400_000,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+    };
+    const checkpoint = checkpointFromState(request, { messages: [prior] });
+    expect(checkpoint.usage.output_tokens).toBe(100_000);
+
+    const runtime = createFauxModelRuntime();
+    runtime.faux.setResponses([
+      fauxAssistantMessage([fauxText("fresh")], { timestamp: 2 }),
+    ]);
+
+    const events = await executeCollect(
+      executor(runtime),
+      interactiveRequest({ checkpoint }),
+    );
+    const completed = terminal(events);
+    if (completed.type !== "turn_completed") {
+      throw new Error("expected a completed resumed Turn");
+    }
+
+    expect(completed.payload.result).toBe("fresh");
+    expect(completed.payload.usage.output_tokens).toBe(2);
+    expect(completed.payload.usage.input_tokens).toBeLessThan(100_000);
+    expect(completed.payload.usage.cache_read_tokens).toBe(0);
+    expect(completed.payload.usage.cache_write_tokens).toBeGreaterThan(0);
+  });
 });
 
 describe("execution boundaries", () => {
+  it("reports unavailable campus streaming usage as null in completion and checkpoint", async () => {
+    const faux = createFauxModelRuntime();
+    const runtime: FauxModelRuntime = {
+      ...faux,
+      profile: {
+        ...faux.profile,
+        provider: "campus-openai-compatible",
+        baseUrl: "https://campus.invalid/v1",
+      },
+      model: {
+        ...faux.model,
+        compat: {
+          ...faux.model.compat,
+          supportsUsageInStreaming: false,
+        },
+      },
+    };
+    runtime.faux.setResponses([
+      fauxAssistantMessage([fauxText("campus response without stream usage")], {
+        timestamp: 1,
+      }),
+    ]);
+
+    const events = await executeCollect(executor(runtime), interactiveRequest());
+    const completed = terminal(events);
+    if (completed.type !== "turn_completed" || completed.payload.checkpoint === undefined) {
+      throw new Error("expected a completed Turn with a checkpoint");
+    }
+
+    expect(completed.payload.usage).toEqual({
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_tokens: null,
+      cache_write_tokens: null,
+    });
+    expect(completed.payload.checkpoint.usage).toEqual(completed.payload.usage);
+    expect(computeCheckpointDigest(completed.payload.checkpoint)).toBe(
+      completed.payload.checkpoint.digest,
+    );
+    expect(assertTerminalInvariant(events)).toBe(events.at(-1));
+  });
+
   it.each([
     {
       name: "request",

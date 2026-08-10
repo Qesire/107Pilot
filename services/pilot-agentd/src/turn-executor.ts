@@ -6,6 +6,7 @@ import type {
 
 import {
   checkpointFromState,
+  computeCheckpointDigest,
   restoreMessages,
   type CheckpointableAgentState,
 } from "./checkpoint.js";
@@ -53,6 +54,15 @@ export function shouldRetry(decision: RetryDecision): boolean {
 interface AttemptBudget {
   providerCalls: number;
   repairUsed: boolean;
+}
+
+interface TurnUsageAccumulator {
+  readonly available: boolean;
+  sawAssistant: boolean;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 interface AttemptSuccess {
@@ -169,15 +179,22 @@ export class TurnExecutor {
       runtime.model.maxTokens,
     );
     const budget: AttemptBudget = { providerCalls: 0, repairUsed: false };
+    const usage = createUsageAccumulator(runtime);
     let lastState: CheckpointableAgentState = { messages: restored };
 
     for (let attempt = 1; attempt <= runtime.profile.maxAttempts; attempt += 1) {
       if (outerSignal.aborted) {
-        await sink.fail(abortedTurnError(), safeCheckpoint(request, lastState));
+        await sink.fail(
+          abortedTurnError(),
+          safeCheckpoint(request, lastState, usage),
+        );
         return;
       }
       if (Date.now() >= deadlineAt) {
-        await sink.fail(timeoutTurnError(), safeCheckpoint(request, lastState));
+        await sink.fail(
+          timeoutTurnError(),
+          safeCheckpoint(request, lastState, usage),
+        );
         return;
       }
 
@@ -203,9 +220,16 @@ export class TurnExecutor {
         };
       }
       lastState = outcome.state;
+      recordAttemptUsage(
+        usage,
+        outcome.state.messages.slice(restored.length),
+      );
 
       if (outcome.kind === "success") {
-        const checkpoint = checkpointFromState(request, outcome.state);
+        const checkpoint = checkpointWithUsage(
+          checkpointFromState(request, outcome.state),
+          normalizedUsage(usage),
+        );
         await sink.emit("checkpoint", { checkpoint });
         await sink.complete({
           result: outcome.result,
@@ -231,20 +255,29 @@ export class TurnExecutor {
           maxAttempts: runtime.profile.maxAttempts,
         });
       if (!retry) {
-        await sink.fail(outcome.error, safeCheckpoint(request, outcome.state));
+        await sink.fail(
+          outcome.error,
+          safeCheckpoint(request, outcome.state, usage),
+        );
         return;
       }
 
       const delay = RETRY_DELAYS_MS[attempt - 1] ?? RETRY_DELAYS_MS.at(-1)!;
       if (Date.now() + delay >= deadlineAt) {
-        await sink.fail(timeoutTurnError(), safeCheckpoint(request, outcome.state));
+        await sink.fail(
+          timeoutTurnError(),
+          safeCheckpoint(request, outcome.state, usage),
+        );
         return;
       }
       try {
         await this.sleep(delay, outerSignal);
       } catch (error) {
         const mapped = outerSignal.aborted ? abortedTurnError() : mapProviderError(error);
-        await sink.fail(mapped, safeCheckpoint(request, outcome.state));
+        await sink.fail(
+          mapped,
+          safeCheckpoint(request, outcome.state, usage),
+        );
         return;
       }
     }
@@ -255,7 +288,7 @@ export class TurnExecutor {
         false,
         "The Turn exhausted its bounded execution attempts.",
       ),
-      safeCheckpoint(request, lastState),
+      safeCheckpoint(request, lastState, usage),
     );
   }
 }
@@ -440,11 +473,11 @@ function errorFromStoppedMessage(
   }
 
   const detail = message.errorMessage ?? "";
-  const status = /(?:HTTP|status)\s*[:=]?\s*([1-5][0-9]{2})/i.exec(detail)?.[1];
+  const status = providerStatusFromMessage(detail);
   if (status !== undefined) {
     return mapProviderError(
       Object.assign(new Error("provider request failed"), {
-        status: Number(status),
+        status,
       }),
     );
   }
@@ -510,12 +543,86 @@ function bindAbortToAgent(
 function safeCheckpoint(
   request: AgentTurnRequest,
   state: CheckpointableAgentState,
+  usage?: TurnUsageAccumulator,
 ): AgentCheckpoint | undefined {
   try {
-    return checkpointFromState(request, state);
+    const checkpoint = checkpointFromState(request, state);
+    return usage === undefined
+      ? checkpoint
+      : checkpointWithUsage(checkpoint, normalizedUsage(usage));
   } catch {
     return undefined;
   }
+}
+
+function providerStatusFromMessage(message: string): number | undefined {
+  const leading = /^\s*([1-5][0-9]{2})(?=\s|:|-|$)/.exec(message)?.[1];
+  if (leading !== undefined) return Number(leading);
+  const fixedProvider =
+    /^\s*(?:OpenAI|Azure OpenAI) API error\s*\(\s*([1-5][0-9]{2})\s*\)\s*:/i.exec(
+      message,
+    )?.[1];
+  return fixedProvider === undefined ? undefined : Number(fixedProvider);
+}
+
+function createUsageAccumulator(runtime: ModelRuntime): TurnUsageAccumulator {
+  const compat = runtime.model.compat;
+  const streamingUsageDisabled =
+    compat !== undefined &&
+    "supportsUsageInStreaming" in compat &&
+    compat.supportsUsageInStreaming === false;
+  return {
+    available:
+      runtime.profile.provider === "faux" ||
+      !streamingUsageDisabled,
+    sawAssistant: false,
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+  };
+}
+
+function recordAttemptUsage(
+  accumulator: TurnUsageAccumulator,
+  messages: readonly AgentMessage[],
+): void {
+  if (!accumulator.available) return;
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    accumulator.sawAssistant = true;
+    accumulator.input += message.usage.input;
+    accumulator.output += message.usage.output;
+    accumulator.cacheRead += message.usage.cacheRead;
+    accumulator.cacheWrite += message.usage.cacheWrite;
+  }
+}
+
+function normalizedUsage(
+  accumulator: TurnUsageAccumulator,
+): AgentCheckpoint["usage"] {
+  if (!accumulator.available || !accumulator.sawAssistant) {
+    return {
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_tokens: null,
+      cache_write_tokens: null,
+    };
+  }
+  return {
+    input_tokens: accumulator.input,
+    output_tokens: accumulator.output,
+    cache_read_tokens: accumulator.cacheRead,
+    cache_write_tokens: accumulator.cacheWrite,
+  };
+}
+
+function checkpointWithUsage(
+  checkpoint: AgentCheckpoint,
+  usage: AgentCheckpoint["usage"],
+): AgentCheckpoint {
+  const updated = { ...checkpoint, usage };
+  return { ...updated, digest: computeCheckpointDigest(updated) };
 }
 
 function runtimeResolutionError(error: unknown): AgentdTurnError {
