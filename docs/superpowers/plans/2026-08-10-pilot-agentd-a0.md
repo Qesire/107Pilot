@@ -257,7 +257,7 @@ git commit -m "build: scaffold pilot-agentd on node 22"
 - Consumes: version constants from Task 1.
 - Produces: `AgentTurnRequest`, `AgentTurnEvent`, `AgentCheckpoint`, `parseTurnRequest()`, `parseCheckpoint()`, `isTerminalEvent()`, and shared request/event fixtures used by later service tests.
 
-- [ ] **Step 1: Write failing strict-validation and terminal-invariant tests**
+- [x] **Step 1: Write failing strict-validation and terminal-invariant tests**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -291,7 +291,7 @@ it("recognizes only completed and failed as terminal", () => {
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -301,7 +301,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 Expected: FAIL because `src/protocol.ts` is absent.
 
-- [ ] **Step 3: Implement the discriminated request and event types with TypeBox validation**
+- [x] **Step 3: Implement the discriminated request and event types with TypeBox validation**
 
 Use closed TypeBox objects (`additionalProperties: false`) for every level. The central API must have these signatures:
 
@@ -391,7 +391,7 @@ export const neverAbort: AbortSignal;
 
 Each request helper calls `parseTurnRequest()` on a complete v1 object. `terminal()` requires exactly one terminal event and throws otherwise; `errorCode()` reads `payload.error.code`; `deltaText()` returns `payload.delta` only for `message_delta`.
 
-- [ ] **Step 4: Export the exact TypeBox schemas into the three checked-in JSON files**
+- [x] **Step 4: Export the exact TypeBox schemas into the three checked-in JSON files**
 
 The JSON files must contain `$schema: "https://json-schema.org/draft/2020-12/schema"`, stable `$id` values under `https://107pilot.local/schemas/agent/v1/`, and `additionalProperties: false` on every protocol object. Add a test that reads each file and compares its semantic object to the exported TypeBox schema after removing only TypeBox runtime symbols.
 
@@ -403,7 +403,7 @@ it("keeps checked-in request schema equal to runtime schema", async () => {
 });
 ```
 
-- [ ] **Step 5: Run GREEN and compile**
+- [x] **Step 5: Run GREEN and compile**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -413,7 +413,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 Expected: protocol tests, typecheck, and build pass.
 
-- [ ] **Step 6: Commit the protocol**
+- [x] **Step 6: Commit the protocol**
 
 ```bash
 git add services/pilot-agentd/src/protocol.ts services/pilot-agentd/tests/protocol.test.ts services/pilot-agentd/tests/support/fixtures.ts schemas/agent/v1
