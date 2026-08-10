@@ -1,11 +1,14 @@
-import json
+import os
 import tempfile
+import traceback
 import unittest
-import urllib.error
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from pilot107.adapters.slurm import JobSnapshot, SubmissionStrategy, SubmitReceipt
+from pilot107.agent.config import AgentdClientConfig
+from pilot107.agent.protocol import AgentdClientError, AgentdTurnResult
 from pilot107.core.agent import (
     AgentCitation,
     AgentExplainService,
@@ -116,7 +119,7 @@ class AgentExplainTests(unittest.TestCase):
         self.assertEqual(explanation.facts[0].evidence_object_ids, ("ev_agent_stderr",))
         self.assertEqual(explanation.citations[0].fact_id, explanation.facts[0].fact_id)
 
-    def test_openai_compatible_provider_uses_json_schema_without_api_key(self) -> None:
+    def test_agentd_provider_preserves_domain_result_and_terminal_metrics(self) -> None:
         fact = AgentFact(
             fact_id="fact_1",
             statement="The stderr reports a missing package.",
@@ -133,53 +136,39 @@ class AgentExplainTests(unittest.TestCase):
             diagnoses=(),
         )
         observer = CapturingLLMObserver()
-        provider = OpenAICompatibleLLMProvider(
-            base_url="http://llm.internal/v1",
-            api_key=None,
-            model="local-model",
-            structured_output_mode="json_schema",
-            observer=observer,
-        )
-        response_body = json.dumps(
-            {
-                "choices": [
+        client = FakeAgentdClient(
+            result={
+                "summary": "Package missing.",
+                "narrative": "The package import failed.",
+                "recommendations": ["Use the validated environment."],
+                "warnings": [],
+                "citations": [
                     {
-                        "message": {
-                            "content": json.dumps(
-                                {
-                                    "summary": "Package missing.",
-                                    "narrative": "The package import failed.",
-                                    "recommendations": ["Use the validated environment."],
-                                    "warnings": [],
-                                    "citations": [
-                                        {
-                                            "fact_id": "fact_1",
-                                            "evidence_object_ids": ["ev_1"],
-                                        }
-                                    ],
-                                }
-                            )
-                        }
+                        "fact_id": "fact_1",
+                        "evidence_object_ids": ["ev_1"],
                     }
                 ],
-                "usage": {"prompt_tokens": 120, "completion_tokens": 35},
-            }
-        ).encode()
+            },
+            model="campus-model",
+            input_tokens=120,
+            output_tokens=35,
+        )
+        provider = OpenAICompatibleLLMProvider(
+            client=client,
+            observer=observer,
+        )
 
-        with patch(
-            "pilot107.core.agent.urllib.request.urlopen",
-            return_value=FakeHttpResponse(response_body),
-        ) as urlopen:
-            result = provider.explain(explanation)
+        result = provider.explain(explanation)
 
-        request = urlopen.call_args.args[0]
-        request_payload = json.loads(request.data)
-        self.assertNotIn("Authorization", request.headers)
-        self.assertEqual(request_payload["response_format"]["type"], "json_schema")
-        self.assertTrue(request_payload["response_format"]["json_schema"]["strict"])
         self.assertEqual(result.citations[0].evidence_object_ids, ("ev_1",))
+        self.assertEqual(result.model, "campus-model")
+        self.assertEqual(client.calls[0]["task_kind"], "explain")
+        input_payload = client.calls[0]["input_payload"]
+        self.assertEqual(input_payload["run_id"], "run_1")
+        self.assertEqual(input_payload["facts"][0]["fact_id"], "fact_1")
         self.assertEqual(len(observer.calls), 1)
         self.assertEqual(observer.calls[0]["outcome"], "success")
+        self.assertEqual(observer.calls[0]["model"], "campus-model")
         self.assertEqual(observer.calls[0]["input_tokens"], 120)
         self.assertEqual(observer.calls[0]["output_tokens"], 35)
 
@@ -211,7 +200,7 @@ class AgentExplainTests(unittest.TestCase):
         self.assertIn("local_llm_fallback:invalid_citation", explanation.warnings)
         self.assertEqual(explanation.provider, "local")
 
-    def test_openai_provider_retries_strict_format_and_citation_validation(self) -> None:
+    def test_agentd_provider_does_not_retry_python_citation_validation(self) -> None:
         fact = AgentFact(
             fact_id="fact_retry",
             statement="The stderr reports a missing package.",
@@ -227,147 +216,115 @@ class AgentExplainTests(unittest.TestCase):
             facts=(fact,),
             diagnoses=(),
         )
-        provider = OpenAICompatibleLLMProvider(
-            base_url="http://llm.internal/v1",
-            api_key="test-key",
-            model="local-model",
-            max_attempts=2,
-        )
-        invalid = _chat_response(json.dumps({"summary": "missing fields"}))
-        valid = _chat_response(
-            json.dumps(
-                {
-                    "summary": "Package missing.",
-                    "narrative": "The evidence shows a failed import.",
-                    "recommendations": ["Use a validated environment."],
-                    "warnings": [],
-                    "citations": [
-                        {
-                            "fact_id": "fact_retry",
-                            "evidence_object_ids": ["ev_retry"],
-                        }
-                    ],
-                }
-            )
-        )
-
-        with patch(
-            "pilot107.core.agent.urllib.request.urlopen",
-            side_effect=[FakeHttpResponse(invalid), FakeHttpResponse(valid)],
-        ) as urlopen:
-            result = provider.explain(explanation)
-
-        self.assertEqual(urlopen.call_count, 2)
-        retry_payload = json.loads(urlopen.call_args_list[1].args[0].data)
-        self.assertIn("format repair attempt", retry_payload["messages"][0]["content"])
-        self.assertEqual(result.citations[0].evidence_object_ids, ("ev_retry",))
-
-    def test_openai_provider_wraps_read_timeout_as_transport_error(self) -> None:
-        provider = OpenAICompatibleLLMProvider(
-            base_url="http://llm.internal/v1",
-            api_key=None,
-            model="local-model",
-            max_attempts=1,
-        )
-        explanation = AgentExplanation(
-            run_id="run_timeout",
-            provider="none",
-            status="explained",
-            summary="Timeout test.",
-            facts=(),
-            diagnoses=(),
-        )
-
-        with (
-            patch(
-                "pilot107.core.agent.urllib.request.urlopen",
-                side_effect=TimeoutError("read timed out"),
-            ),
-            self.assertRaises(AgentProviderError) as raised,
-        ):
-            provider.explain(explanation)
-
-        self.assertEqual(raised.exception.code, "transport_error")
-
-    def test_openai_provider_does_not_retry_nonretryable_http_error(self) -> None:
-        provider = OpenAICompatibleLLMProvider(
-            base_url="http://llm.internal/v1",
-            api_key=None,
-            model="missing-model",
-            max_attempts=2,
-        )
-        explanation = AgentExplanation(
-            run_id="run_http_error",
-            provider="none",
-            status="explained",
-            summary="HTTP error test.",
-            facts=(),
-            diagnoses=(),
-        )
-        error = urllib.error.HTTPError(
-            "http://llm.internal/v1/chat/completions",
-            404,
-            "Not Found",
-            {},
-            None,
-        )
-
-        with (
-            patch(
-                "pilot107.core.agent.urllib.request.urlopen",
-                side_effect=error,
-            ) as urlopen,
-            self.assertRaises(AgentProviderError) as raised,
-        ):
-            provider.explain(explanation)
-
-        self.assertEqual(raised.exception.code, "http_404")
-        self.assertEqual(urlopen.call_count, 1)
-
-    def test_openai_provider_accepts_closed_thinking_prefix_before_strict_json(self) -> None:
-        fact = AgentFact(
-            fact_id="fact_thinking",
-            statement="The job timed out.",
-            evidence_refs=("evidence://runs/run_thinking/logs/stderr.tail.txt",),
-            confidence="high",
-            evidence_object_ids=("ev_thinking",),
-        )
-        explanation = AgentExplanation(
-            run_id="run_thinking",
-            provider="none",
-            status="explained",
-            summary="Timeout.",
-            facts=(fact,),
-            diagnoses=(),
-        )
-        content = "<think>internal reasoning</think>\n" + json.dumps(
-            {
-                "summary": "Timeout.",
-                "narrative": "The cited log reports a timeout.",
-                "recommendations": ["Increase the validated time limit."],
+        client = FakeAgentdClient(
+            result={
+                "summary": "Package missing.",
+                "narrative": "The evidence shows a failed import.",
+                "recommendations": ["Use a validated environment."],
                 "warnings": [],
                 "citations": [
                     {
-                        "fact_id": "fact_thinking",
-                        "evidence_object_ids": ["ev_thinking"],
+                        "fact_id": "fact_retry",
+                        "evidence_object_ids": ["ev_outside_fact"],
                     }
                 ],
             }
         )
-        provider = OpenAICompatibleLLMProvider(
-            base_url="http://llm.internal/v1",
-            api_key=None,
-            model="thinking-model",
-            max_attempts=1,
+        provider = OpenAICompatibleLLMProvider(client=client)
+
+        with self.assertRaises(AgentProviderError) as raised:
+            provider.explain(explanation)
+
+        self.assertEqual(raised.exception.code, "invalid_citation")
+        self.assertEqual(len(client.calls), 1)
+
+    def test_agentd_failure_maps_once_without_leaking_details(self) -> None:
+        client = FakeAgentdClient(
+            error=AgentdClientError(
+                "upstream leaked api-key=secret",
+                code="provider_auth",
+                retryable=False,
+                provider_status=401,
+            )
+        )
+        observer = CapturingLLMObserver()
+        provider = OpenAICompatibleLLMProvider(client=client, observer=observer)
+        explanation = AgentExplanation(
+            run_id="run_auth",
+            provider="none",
+            status="explained",
+            summary="Auth test.",
+            facts=(),
+            diagnoses=(),
         )
 
-        with patch(
-            "pilot107.core.agent.urllib.request.urlopen",
-            return_value=FakeHttpResponse(_chat_response(content)),
-        ):
-            result = provider.explain(explanation)
+        with self.assertRaises(AgentProviderError) as raised:
+            provider.explain(explanation)
 
-        self.assertEqual(result.citations[0].fact_id, "fact_thinking")
+        rendered = "".join(
+            traceback.format_exception(
+                type(raised.exception),
+                raised.exception,
+                raised.exception.__traceback__,
+            )
+        )
+        self.assertEqual(raised.exception.code, "http_401")
+        self.assertNotIn("api-key=secret", rendered)
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(observer.calls[0]["outcome"], "http_401")
+
+    def test_agentd_error_codes_map_to_existing_provider_codes(self) -> None:
+        expected_codes = {
+            "provider_rate_limited": "http_429",
+            "provider_timeout": "http_408",
+            "provider_unavailable": "transport_error",
+            "provider_invalid_response": "invalid_response",
+            "output_contract_violation": "invalid_schema_fields",
+            "aborted": "transport_error",
+            "internal_error": "provider_error",
+            "transport_error": "transport_error",
+            "protocol_error": "invalid_response",
+        }
+        explanation = AgentExplanation(
+            run_id="run_error_map",
+            provider="none",
+            status="explained",
+            summary="Error map test.",
+            facts=(),
+            diagnoses=(),
+        )
+
+        for agentd_code, provider_code in expected_codes.items():
+            with self.subTest(agentd_code=agentd_code):
+                client = FakeAgentdClient(
+                    error=AgentdClientError(
+                        "pilot-agentd failed",
+                        code=agentd_code,
+                    )
+                )
+                provider = OpenAICompatibleLLMProvider(client=client)
+                with self.assertRaises(AgentProviderError) as raised:
+                    provider.explain(explanation)
+                self.assertEqual(raised.exception.code, provider_code)
+                self.assertEqual(len(client.calls), 1)
+
+    def test_from_env_uses_only_agentd_configuration(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "PILOT107_AGENTD_URL": "http://pilot-agentd:8091",
+                "PILOT107_AGENTD_TOKEN": "internal-secret",
+                "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
+                "PILOT107_LLM_BASE_URL": "ftp://must-not-be-read",
+                "PILOT107_LLM_API_KEY": "must-not-be-read",
+                "PILOT107_LLM_MODEL": "must-not-be-read",
+            },
+            clear=True,
+        ):
+            provider = OpenAICompatibleLLMProvider.from_env()
+
+        self.assertEqual(provider.client.config.base_url, "http://pilot-agentd:8091")
+        self.assertEqual(provider.model, "campus-default")
 
     def _register_stderr(self, run_id: str) -> str:
         artifact = self.evidence_store.write_text(
@@ -460,18 +417,46 @@ class InvalidCitationProvider(FakeCampusProvider):
         )
 
 
-class FakeHttpResponse:
-    def __init__(self, body: bytes) -> None:
-        self.body = body
+class FakeAgentdClient:
+    def __init__(
+        self,
+        *,
+        result: dict[str, Any] | None = None,
+        error: AgentdClientError | None = None,
+        model: str = "campus-model",
+        input_tokens: int | None = 12,
+        output_tokens: int | None = 8,
+    ) -> None:
+        self.config = AgentdClientConfig(
+            base_url="http://pilot-agentd:8091",
+            token="internal-secret",
+            model_profile_id="campus-default",
+        )
+        self.result = result or {}
+        self.error = error
+        self.model = model
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.calls: list[dict[str, Any]] = []
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        return None
-
-    def read(self, limit: int = -1) -> bytes:
-        return self.body if limit < 0 else self.body[:limit]
+    def run_turn(self, **kwargs: Any) -> AgentdTurnResult:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return AgentdTurnResult(
+            result=self.result,
+            provider="campus-openai-compatible",
+            model=self.model,
+            model_profile_id="campus-default",
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cache_read_tokens=None,
+            cache_write_tokens=None,
+            provider_calls=1,
+            checkpoint_digest="c" * 64,
+            duration_ms=42,
+            checkpoint=None,
+        )
 
 
 class CapturingLLMObserver:
@@ -480,11 +465,5 @@ class CapturingLLMObserver:
 
     def observe_llm_call(self, **values: object) -> None:
         self.calls.append(values)
-
-
-def _chat_response(content: str) -> bytes:
-    return json.dumps({"choices": [{"message": {"content": content}}]}).encode()
-
-
 if __name__ == "__main__":
     unittest.main()

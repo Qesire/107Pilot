@@ -6,16 +6,16 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any
 
+from pilot107.agent.config import AgentdClientConfig
+from pilot107.agent.protocol import AgentdClientError, AgentdTurnResult
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.api.http_types import ApiResponse
 from pilot107.core.advice import _PATCHABLE_FIELDS
 from pilot107.core.agent import (
     _CONTRACT_PATCH_ALLOWED_FIELDS,
-    _THINKING_CLOSE,
-    _THINKING_OPEN,
     AgentProviderError,
     OpenAICompatibleLLMProvider,
     _parse_contract_patch_json,
@@ -26,22 +26,40 @@ from pilot107.core.run_store import RunStore
 from pilot107.worker.evidence import EvidenceStore
 
 
-class _FakeHttpResponse:
-    def __init__(self, body: bytes) -> None:
-        self._body = body
+class _FakeAgentdClient:
+    def __init__(
+        self,
+        *,
+        result: Any = None,
+        error: AgentdClientError | None = None,
+    ) -> None:
+        self.config = AgentdClientConfig(
+            base_url="http://pilot-agentd:8091",
+            token="internal-secret",
+            model_profile_id="campus-default",
+        )
+        self.result = {} if result is None else result
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
 
-    def __enter__(self) -> _FakeHttpResponse:
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        return None
-
-    def read(self, limit: int = -1) -> bytes:
-        return self._body if limit < 0 else self._body[:limit]
-
-
-def _chat_response(content: str) -> bytes:
-    return json.dumps({"choices": [{"message": {"content": content}}]}).encode("utf-8")
+    def run_turn(self, **kwargs: Any) -> AgentdTurnResult:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return AgentdTurnResult(
+            result=self.result,
+            provider="campus-openai-compatible",
+            model="campus-model",
+            model_profile_id="campus-default",
+            input_tokens=12,
+            output_tokens=8,
+            cache_read_tokens=None,
+            cache_write_tokens=None,
+            provider_calls=1,
+            checkpoint_digest="d" * 64,
+            duration_ms=42,
+            checkpoint=None,
+        )
 
 
 _VALID_CONTRACT = {
@@ -51,38 +69,25 @@ _VALID_CONTRACT = {
 
 
 class SuggestContractPatchTests(unittest.TestCase):
-    def test_returns_patch_and_explanation_from_llm(self) -> None:
-        provider = OpenAICompatibleLLMProvider(
-            base_url="http://llm.internal/v1",
-            api_key="test-key",
-            model="local-model",
-            max_attempts=2,
-        )
-        body = _chat_response(
-            json.dumps(
-                {
-                    "suggested_patch": {
-                        "entry.command": "python3 train.py",
-                        "resources.cpus_per_task": 2,
-                        "resources.memory": "4G",
-                    },
-                    "explanation_zh": "把命令改成 python3 train.py，资源调整为 2 CPU 4G 内存。",
+    def test_returns_validated_patch_from_agentd_and_forces_confirmation(self) -> None:
+        client = _FakeAgentdClient(
+            result={
+                "suggested_patch": {
+                    "entry.command": "python3 train.py",
+                    "resources.cpus_per_task": 2,
+                    "resources.memory": "4G",
                 },
-                ensure_ascii=False,
-            )
+                "explanation_zh": "把命令改成 python3 train.py，资源调整为 2 CPU 4G 内存。",
+            }
+        )
+        provider = OpenAICompatibleLLMProvider(client=client)
+
+        result = provider.suggest_contract_patch(
+            current_contract=_VALID_CONTRACT,
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            user_intent="我要跑一个 python 训练脚本，需要 2 个 CPU 和 4G 内存",
         )
 
-        with patch(
-            "pilot107.core.agent.urllib.request.urlopen",
-            return_value=_FakeHttpResponse(body),
-        ) as urlopen:
-            result = provider.suggest_contract_patch(
-                current_contract=_VALID_CONTRACT,
-                recipe_version_id="recipe_python_cpu@1.0.0",
-                user_intent="我要跑一个 python 训练脚本，需要 2 个 CPU 和 4G 内存",
-            )
-
-        self.assertEqual(urlopen.call_count, 1)
         self.assertEqual(
             result["suggested_patch"],
             {
@@ -92,89 +97,66 @@ class SuggestContractPatchTests(unittest.TestCase):
             },
         )
         self.assertIn("python3 train.py", result["explanation_zh"])
-
-    def test_retries_when_first_response_is_invalid_json(self) -> None:
-        provider = OpenAICompatibleLLMProvider(
-            base_url="http://llm.internal/v1",
-            api_key=None,
-            model="local-model",
-            max_attempts=2,
+        self.assertTrue(result["needs_user_confirmation"])
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(client.calls[0]["task_kind"], "contract_patch")
+        self.assertEqual(
+            client.calls[0]["input_payload"],
+            {
+                "recipe_version_id": "recipe_python_cpu@1.0.0",
+                "user_intent": "我要跑一个 python 训练脚本，需要 2 个 CPU 和 4G 内存",
+                "current_contract": _VALID_CONTRACT,
+                "required_output": {
+                    "suggested_patch": (
+                        "object mapping Contract dot-path (e.g. entry.command, "
+                        "resources.cpus_per_task, resources.memory) to new values; "
+                        "empty object if the intent is unclear or unsafe"
+                    ),
+                    "explanation_zh": "简短的中文说明，解释这次建议的改动",
+                },
+            },
         )
-        invalid = _chat_response("not-json")
-        valid = _chat_response(
-            json.dumps(
-                {
-                    "suggested_patch": {"entry.command": "python3 train.py"},
-                    "explanation_zh": "已调整命令。",
-                }
-            )
-        )
 
-        with patch(
-            "pilot107.core.agent.urllib.request.urlopen",
-            side_effect=[_FakeHttpResponse(invalid), _FakeHttpResponse(valid)],
-        ) as urlopen:
-            result = provider.suggest_contract_patch(
+    def test_does_not_retry_an_invalid_agentd_result_in_python(self) -> None:
+        client = _FakeAgentdClient(
+            result={
+                "suggested_patch": {"entry.command": "python3 train.py"},
+                "explanation_zh": "已调整命令。",
+                "extra_field": "not allowed",
+            }
+        )
+        provider = OpenAICompatibleLLMProvider(client=client)
+
+        with self.assertRaises(AgentProviderError) as raised:
+            provider.suggest_contract_patch(
                 current_contract=_VALID_CONTRACT,
                 recipe_version_id="recipe_python_cpu@1.0.0",
                 user_intent="改一下命令",
             )
 
-        self.assertEqual(urlopen.call_count, 2)
-        self.assertEqual(result["suggested_patch"], {"entry.command": "python3 train.py"})
+        self.assertEqual(raised.exception.code, "invalid_schema_fields")
+        self.assertEqual(len(client.calls), 1)
 
-    def test_rejects_payload_with_extra_fields(self) -> None:
-        provider = OpenAICompatibleLLMProvider(
-            base_url="http://llm.internal/v1",
-            api_key=None,
-            model="local-model",
-            max_attempts=1,
-        )
-        body = _chat_response(
-            json.dumps(
-                {
-                    "suggested_patch": {"entry.command": "python3 train.py"},
-                    "explanation_zh": "ok",
-                    "extra_field": "should not be here",
-                }
+    def test_agentd_timeout_maps_to_the_existing_provider_timeout_code(self) -> None:
+        client = _FakeAgentdClient(
+            error=AgentdClientError(
+                "pilot-agentd Turn failed",
+                code="provider_timeout",
+                retryable=True,
+                provider_status=408,
             )
         )
+        provider = OpenAICompatibleLLMProvider(client=client)
 
-        with (
-            patch(
-                "pilot107.core.agent.urllib.request.urlopen",
-                return_value=_FakeHttpResponse(body),
-            ),
-            self.assertRaises(AgentProviderError),
-        ):
+        with self.assertRaises(AgentProviderError) as raised:
             provider.suggest_contract_patch(
                 current_contract=_VALID_CONTRACT,
                 recipe_version_id="recipe_python_cpu@1.0.0",
                 user_intent="改一下",
             )
 
-    def test_transport_error_raises_agent_provider_error(self) -> None:
-        provider = OpenAICompatibleLLMProvider(
-            base_url="http://llm.internal/v1",
-            api_key=None,
-            model="local-model",
-            max_attempts=1,
-        )
-
-        with (
-            patch(
-                "pilot107.core.agent.urllib.request.urlopen",
-                side_effect=TimeoutError("read timed out"),
-            ),
-            self.assertRaises(AgentProviderError) as raised,
-        ):
-            provider.suggest_contract_patch(
-                current_contract=_VALID_CONTRACT,
-                recipe_version_id="recipe_python_cpu@1.0.0",
-                user_intent="改一下",
-            )
-
-        self.assertEqual(raised.exception.code, "transport_error")
+        self.assertEqual(raised.exception.code, "http_408")
+        self.assertEqual(len(client.calls), 1)
 
     def test_without_llm_fallback_returns_empty_patch(self) -> None:
         result = suggest_contract_patch_without_llm()
@@ -197,11 +179,15 @@ class ContractAgentSuggestRouteTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def _api_with_llm(self) -> Pilot107HttpApi:
+    def _api_with_llm(self, client: _FakeAgentdClient | None = None) -> Pilot107HttpApi:
         api = Pilot107HttpApi(
             store=self.store,
             evidence_query=self.evidence_query,
-            agent_explain_service=_build_explain_service(self.store, self.evidence_store),
+            agent_explain_service=_build_explain_service(
+                self.store,
+                self.evidence_store,
+                client=client,
+            ),
         )
         return api
 
@@ -232,31 +218,15 @@ class ContractAgentSuggestRouteTests(unittest.TestCase):
 
     def test_route_returns_patch_from_llm(self) -> None:
         api = self._api_with_llm()
-        body = _chat_response(
-            json.dumps(
-                {
-                    "suggested_patch": {
-                        "entry.command": "python3 train.py",
-                        "resources.cpus_per_task": 2,
-                        "resources.memory": "4G",
-                    },
-                    "explanation_zh": "已根据描述调整命令和资源。",
-                }
-            )
+        response = self._post(
+            api,
+            {
+                "current_contract": _VALID_CONTRACT,
+                "recipe_version_id": "recipe_python_cpu@1.0.0",
+                "user_intent": "需要 2 个 CPU 和 4G 内存",
+                "provider": "local",
+            },
         )
-        with patch(
-            "pilot107.core.agent.urllib.request.urlopen",
-            return_value=_FakeHttpResponse(body),
-        ):
-            response = self._post(
-                api,
-                {
-                    "current_contract": _VALID_CONTRACT,
-                    "recipe_version_id": "recipe_python_cpu@1.0.0",
-                    "user_intent": "需要 2 个 CPU 和 4G 内存",
-                    "provider": "local",
-                },
-            )
 
         self.assertEqual(response.status, 200)
         payload = response.payload
@@ -306,88 +276,71 @@ class ContractAgentSuggestRouteTests(unittest.TestCase):
         self.assertFalse(response.payload["needs_user_confirmation"])
 
     def test_route_transport_error_returns_degraded(self) -> None:
-        api = self._api_with_llm()
-        with patch(
-            "pilot107.core.agent.urllib.request.urlopen",
-            side_effect=TimeoutError("read timed out"),
-        ):
-            response = self._post(
-                api,
-                {
-                    "current_contract": _VALID_CONTRACT,
-                    "recipe_version_id": "recipe_python_cpu@1.0.0",
-                    "user_intent": "改一下",
-                    "provider": "local",
-                },
+        api = self._api_with_llm(
+            _FakeAgentdClient(
+                error=AgentdClientError(
+                    "pilot-agentd Turn failed",
+                    code="provider_timeout",
+                    retryable=True,
+                )
             )
+        )
+        response = self._post(
+            api,
+            {
+                "current_contract": _VALID_CONTRACT,
+                "recipe_version_id": "recipe_python_cpu@1.0.0",
+                "user_intent": "改一下",
+                "provider": "local",
+            },
+        )
         self.assertEqual(response.status, 200)
         self.assertEqual(response.payload["status"], "degraded")
         self.assertEqual(response.payload["reason"], "provider_timeout")
         self.assertEqual(response.payload["suggested_patch"], {})
 
     def test_route_invalid_json_returns_degraded(self) -> None:
-        api = self._api_with_llm()
-        # max_attempts=1 so a single invalid-JSON response surfaces as degraded
-        # instead of retrying into a success.
-        from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
-
-        provider = OpenAICompatibleLLMProvider(
-            base_url="http://llm.internal/v1",
-            api_key="test-key",
-            model="local-model",
-            max_attempts=1,
-        )
-        api.agent_explain_service = AgentExplainService(
-            store=self.store,
-            llm_provider=provider,
-            evidence_binder=EvidenceBinder(
-                store=self.store,
-                evidence_root=self.evidence_store.root,
-            ),
-        )
-        invalid = _chat_response("not-json")
-        with patch(
-            "pilot107.core.agent.urllib.request.urlopen",
-            return_value=_FakeHttpResponse(invalid),
-        ):
-            response = self._post(
-                api,
-                {
-                    "current_contract": _VALID_CONTRACT,
-                    "recipe_version_id": "recipe_python_cpu@1.0.0",
-                    "user_intent": "改一下",
-                    "provider": "local",
-                },
+        api = self._api_with_llm(
+            _FakeAgentdClient(
+                error=AgentdClientError(
+                    "pilot-agentd protocol error",
+                    code="provider_invalid_response",
+                )
             )
+        )
+        response = self._post(
+            api,
+            {
+                "current_contract": _VALID_CONTRACT,
+                "recipe_version_id": "recipe_python_cpu@1.0.0",
+                "user_intent": "改一下",
+                "provider": "local",
+            },
+        )
         self.assertEqual(response.status, 200)
         self.assertEqual(response.payload["status"], "degraded")
         self.assertEqual(response.payload["reason"], "provider_parse_error")
         self.assertEqual(response.payload["suggested_patch"], {})
 
     def test_route_invalid_key_returns_degraded(self) -> None:
-        import urllib.error
-        from email.message import Message
-
-        api = self._api_with_llm()
-        with patch(
-            "pilot107.core.agent.urllib.request.urlopen",
-            side_effect=urllib.error.HTTPError(
-                url="http://llm.internal/v1/chat/completions",
-                code=401,
-                msg="Unauthorized",
-                hdrs=Message(),
-                fp=None,
-            ),
-        ):
-            response = self._post(
-                api,
-                {
-                    "current_contract": _VALID_CONTRACT,
-                    "recipe_version_id": "recipe_python_cpu@1.0.0",
-                    "user_intent": "改一下",
-                    "provider": "local",
-                },
+        api = self._api_with_llm(
+            _FakeAgentdClient(
+                error=AgentdClientError(
+                    "pilot-agentd Turn failed",
+                    code="provider_auth",
+                    provider_status=401,
+                )
             )
+        )
+        response = self._post(
+            api,
+            {
+                "current_contract": _VALID_CONTRACT,
+                "recipe_version_id": "recipe_python_cpu@1.0.0",
+                "user_intent": "改一下",
+                "provider": "local",
+            },
+        )
         self.assertEqual(response.status, 200)
         self.assertEqual(response.payload["status"], "degraded")
         self.assertEqual(response.payload["reason"], "provider_invalid_key")
@@ -403,53 +356,28 @@ class ContractAgentSuggestRouteTests(unittest.TestCase):
 
 
 class ParseContractPatchJsonTests(unittest.TestCase):
-    """Direct unit tests for the _parse_contract_patch_json helper.
+    """Python revalidates Agentd's typed result against domain policy."""
 
-    Mirrors the reasoning-block format exercised by tests/test_agent.py
-    for _parse_llm_json, but targets the contract-patch parser. The
-    thinking prefix/terminator are imported from agent.py (built via
-    chr()) so source tooling cannot mangle the literal tags.
-    """
+    def _patch_payload(self, patch: dict, explanation: str = "已调整。") -> dict:
+        return {"suggested_patch": patch, "explanation_zh": explanation}
 
-    def _patch_payload(self, patch: dict, explanation: str = "已调整。") -> str:
-        return json.dumps(
-            {"suggested_patch": patch, "explanation_zh": explanation},
-            ensure_ascii=False,
-        )
-
-    def test_accepts_closed_thinking_prefix_before_json(self) -> None:
-        content = f"{_THINKING_OPEN}internal reasoning{_THINKING_CLOSE}\n" + self._patch_payload(
-            {"entry.command": "python3 train.py"}
-        )
-        result = _parse_contract_patch_json(content)
-        self.assertEqual(
-            result["suggested_patch"], {"entry.command": "python3 train.py"}
-        )
-        self.assertEqual(result["explanation_zh"], "已调整。")
-
-    def test_rejects_unclosed_thinking_prefix(self) -> None:
-        content = f"{_THINKING_OPEN}internal reasoning\n" + self._patch_payload(
-            {"entry.command": "python3 train.py"}
-        )
+    def test_rejects_raw_text_because_agentd_owns_format_repair(self) -> None:
         with self.assertRaises(AgentProviderError) as raised:
-            _parse_contract_patch_json(content)
-        self.assertEqual(raised.exception.code, "invalid_json")
+            _parse_contract_patch_json("model returned prose")
+        self.assertEqual(raised.exception.code, "invalid_schema_object")
 
-    def test_accepts_markdown_fence_around_json(self) -> None:
-        content = "```json\n" + self._patch_payload({"project.workdir": "/tmp/x"}) + "\n```"
-        result = _parse_contract_patch_json(content)
-        self.assertEqual(result["suggested_patch"], {"project.workdir": "/tmp/x"})
-
-    def test_pure_json_happy_path(self) -> None:
+    def test_typed_result_happy_path(self) -> None:
         result = _parse_contract_patch_json(
             self._patch_payload({"resources.cpus_per_task": 4})
         )
         self.assertEqual(result["suggested_patch"], {"resources.cpus_per_task": 4})
 
-    def test_rejects_non_json(self) -> None:
+    def test_rejects_additional_result_fields(self) -> None:
+        payload = self._patch_payload({"resources.cpus_per_task": 4})
+        payload["unexpected"] = True
         with self.assertRaises(AgentProviderError) as raised:
-            _parse_contract_patch_json("not-json")
-        self.assertEqual(raised.exception.code, "invalid_json")
+            _parse_contract_patch_json(payload)
+        self.assertEqual(raised.exception.code, "invalid_schema_fields")
 
     def test_rejects_proto_pollution_field(self) -> None:
         with self.assertRaises(AgentProviderError) as raised:
@@ -492,15 +420,25 @@ class ParseContractPatchJsonTests(unittest.TestCase):
         self.assertEqual(_CONTRACT_PATCH_ALLOWED_FIELDS, _PATCHABLE_FIELDS)
 
 
-def _build_explain_service(store: RunStore, evidence_store: EvidenceStore):
+def _build_explain_service(
+    store: RunStore,
+    evidence_store: EvidenceStore,
+    *,
+    client: _FakeAgentdClient | None = None,
+):
     from pilot107.core.agent import AgentExplainService
 
-    provider = OpenAICompatibleLLMProvider(
-        base_url="http://llm.internal/v1",
-        api_key="test-key",
-        model="local-model",
-        max_attempts=2,
+    actual_client = client or _FakeAgentdClient(
+        result={
+            "suggested_patch": {
+                "entry.command": "python3 train.py",
+                "resources.cpus_per_task": 2,
+                "resources.memory": "4G",
+            },
+            "explanation_zh": "已根据描述调整命令和资源。",
+        }
     )
+    provider = OpenAICompatibleLLMProvider(client=actual_client)
     return AgentExplainService(
         store=store,
         llm_provider=provider,
