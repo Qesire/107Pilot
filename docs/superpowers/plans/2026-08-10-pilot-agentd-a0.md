@@ -1339,7 +1339,7 @@ git commit -m "feat: add strict pilot-agentd python client"
 - Consumes: `AgentdClient.run_turn()` and domain payload/schema parsers already in `core.agent`.
 - Produces: generic `AgentdConstrainedProvider.invoke()` and compatible `OpenAICompatibleLLMProvider` methods without direct LLM HTTP.
 
-- [ ] **Step 1: Write failing generic provider and explain compatibility tests**
+- [x] **Step 1: Write failing generic provider and explain compatibility tests**
 
 ```python
 def test_constrained_provider_invokes_named_agentd_task() -> None:
@@ -1360,7 +1360,7 @@ def test_llm_explain_preserves_domain_result_and_metrics() -> None:
     assert observer.calls[0]["output_tokens"] == 8
 ```
 
-- [ ] **Step 2: Run RED against only the migrated surface**
+- [x] **Step 2: Run RED against only the migrated surface**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/agent/test_providers.py tests/test_agent.py tests/core/test_agent_suggest.py -q
@@ -1368,7 +1368,7 @@ PYTHONPATH=src uv run --extra dev pytest tests/agent/test_providers.py tests/tes
 
 Expected: new provider test fails; existing direct-HTTP tests still identify the old implementation.
 
-- [ ] **Step 3: Implement the provider-neutral constrained adapter**
+- [x] **Step 3: Implement the provider-neutral constrained adapter**
 
 ```python
 _TASK_PROFILES = {
@@ -1392,7 +1392,7 @@ class AgentdConstrainedProvider:
         )
 ```
 
-- [ ] **Step 4: Replace the direct client in `core.agent` with a thin domain adapter**
+- [x] **Step 4: Replace the direct client in `core.agent` with a thin domain adapter**
 
 Keep `provider_name = "local"`, `from_env()`, `explain()`, `suggest_contract_patch()`, citation validation, format parsing, and observer behavior visible to existing callers. Change construction to accept `client: AgentdClient`; `from_env()` builds `AgentdClientConfig`. Map `AgentdClientError.code` to `AgentProviderError` without another network retry loop because Agentd owns provider retries/repair.
 
@@ -1413,7 +1413,7 @@ class OpenAICompatibleLLMProvider:
 
 On success, use the terminal event's actual `model`. Force `needs_user_confirmation=True`. Delete `_ChatCompletion`, `_chat_completion()`, `urllib` imports, response-format branching, and LLM gateway response limits from `core.agent`.
 
-- [ ] **Step 5: Rewrite legacy tests around fake Agentd terminal streams and run GREEN**
+- [x] **Step 5: Rewrite legacy tests around fake Agentd terminal streams and run GREEN**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/agent/test_providers.py tests/test_agent.py tests/core/test_agent_suggest.py -q
@@ -1421,7 +1421,7 @@ uv run --extra dev ruff check src/pilot107/core/agent.py src/pilot107/agent test
 uv run --extra dev mypy src/pilot107/core/agent.py src/pilot107/agent
 ```
 
-- [ ] **Step 6: Commit explain/contract migration**
+- [x] **Step 6: Commit explain/contract migration**
 
 ```bash
 git add src/pilot107/agent/providers.py src/pilot107/core/agent.py tests/agent/test_providers.py tests/test_agent.py tests/core/test_agent_suggest.py
