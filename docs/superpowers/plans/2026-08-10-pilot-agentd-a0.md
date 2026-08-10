@@ -1444,7 +1444,7 @@ git commit -m "refactor: route agent explanations through pilot-agentd"
 - Consumes: `AgentdConstrainedProvider` and Agentd config from Tasks 8–9.
 - Produces: Agentd-backed remediation provider plus API/Worker bootstrap that no longer consumes LLM secrets.
 
-- [ ] **Step 1: Write failing remediation error-map and config-isolation tests**
+- [x] **Step 1: Write failing remediation error-map and config-isolation tests**
 
 ```python
 def test_remediation_provider_maps_agentd_contract_failure() -> None:
@@ -1466,13 +1466,13 @@ def test_api_config_reads_agentd_without_reading_llm_secret() -> None:
     assert not hasattr(config, "llm_api_key")
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/test_remediation_llm.py tests/test_api_service.py tests/test_worker_service.py -q
 ```
 
-- [ ] **Step 3: Replace remediation HTTP with Agentd output serialization**
+- [x] **Step 3: Replace remediation HTTP with Agentd output serialization**
 
 ```python
 class OpenAICompatibleRemediationPlanProvider:
@@ -1496,11 +1496,11 @@ class OpenAICompatibleRemediationPlanProvider:
 
 Add `owns_format_repair: bool` to `RemediationPlanProvider`; set it to `False` on `ReplayRemediationPlanProvider`. `RemediationPlanService.plan()` uses one Python attempt when `provider.owns_format_repair` is true and retains its existing one-or-two attempts for replay/legacy fixtures. This prevents a Python parse retry from multiplying Agentd's provider retries and single repair attempt. Keep `parse_remediation_plan()` and `validate_remediation_plan()` unchanged. Delete `urllib` imports and request construction.
 
-- [ ] **Step 4: Replace API/Worker config fields and builders**
+- [x] **Step 4: Replace API/Worker config fields and builders**
 
 `ApiServiceConfig` and `WorkerServiceConfig` must contain `agentd_url`, `agentd_token`, and `agentd_model_profile`. `_build_llm_provider()` and `_worker_llm_provider_from_env()` build the migrated provider only when all three are configured. The contract-suggest fallback in `http_app.py` calls the same `from_env()` and retains its current 200 degraded response.
 
-- [ ] **Step 5: Run GREEN and the focused service regressions**
+- [x] **Step 5: Run GREEN and the focused service regressions**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/test_remediation_llm.py tests/test_api_service.py tests/test_worker_service.py tests/test_http_api.py tests/test_remediation_api.py -q
@@ -1508,7 +1508,7 @@ uv run --extra dev ruff check src tests
 uv run --extra dev mypy src
 ```
 
-- [ ] **Step 6: Commit remediation/config migration**
+- [x] **Step 6: Commit remediation/config migration**
 
 ```bash
 git add src/pilot107/core/remediation_llm.py src/pilot107/api/service.py src/pilot107/worker/service.py src/pilot107/api/http_app.py tests/test_remediation_llm.py tests/test_api_service.py tests/test_worker_service.py tests/api/conftest.py
