@@ -1158,7 +1158,7 @@ git commit -m "feat: serve authenticated pilot agent turns"
 - Consumes: the v1 JSON protocol from Tasks 2 and 7.
 - Produces: `AgentdClient`, `AgentdClientConfig`, `AgentdTurnResult`, `AgentdClientError`, `stream_turn()`, `run_turn()`, and `cancel_turn()`.
 
-- [ ] **Step 1: Write failing protocol sequence and truncation tests**
+- [x] **Step 1: Write failing protocol sequence and truncation tests**
 
 ```python
 def test_parse_event_stream_requires_contiguous_sequence_and_one_terminal() -> None:
@@ -1177,7 +1177,7 @@ def test_parse_event_stream_rejects_eof_without_terminal() -> None:
     assert caught.value.code == "protocol_error"
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/agent/test_protocol.py tests/agent/test_client.py -q
@@ -1185,7 +1185,7 @@ PYTHONPATH=src uv run --extra dev pytest tests/agent/test_protocol.py tests/agen
 
 Expected: FAIL because `pilot107.agent` is absent.
 
-- [ ] **Step 3: Implement Python wire types and strict parsing**
+- [x] **Step 3: Implement Python wire types and strict parsing**
 
 ```python
 @dataclass(frozen=True)
@@ -1217,7 +1217,7 @@ class AgentdClientError(RuntimeError):
 
 `parse_event_lines(turn_id, lines)` must decode UTF-8, enforce a 1 MiB line limit and 8 MiB cumulative limit, reject unknown top-level fields/schema/type, enforce exact Turn ID and contiguous sequence, permit one terminal only, reject data after terminal, and reject EOF before terminal.
 
-- [ ] **Step 4: Write failing HTTP/error/cancel tests**
+- [x] **Step 4: Write failing HTTP/error/cancel tests**
 
 ```python
 def test_run_turn_sends_only_agentd_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1248,7 +1248,7 @@ def test_cancel_turn_posts_the_explicit_turn_id() -> None:
     assert client.cancel_turn("turn-to-cancel") == "accepted"
 ```
 
-- [ ] **Step 5: Implement the standard-library client**
+- [x] **Step 5: Implement the standard-library client**
 
 ```python
 class AgentdClient:
@@ -1311,7 +1311,7 @@ class AgentdClient:
 
 The config loader reads only `PILOT107_AGENTD_URL`, `PILOT107_AGENTD_TOKEN`, and `PILOT107_AGENTD_MODEL_PROFILE`; validation errors mention names, never values.
 
-- [ ] **Step 6: Run GREEN, Ruff, and mypy**
+- [x] **Step 6: Run GREEN, Ruff, and mypy**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/agent/test_protocol.py tests/agent/test_client.py -q
@@ -1319,7 +1319,7 @@ uv run --extra dev ruff check src/pilot107/agent tests/agent
 uv run --extra dev mypy src/pilot107/agent
 ```
 
-- [ ] **Step 7: Commit the Python client**
+- [x] **Step 7: Commit the Python client**
 
 ```bash
 git add src/pilot107/agent tests/agent
