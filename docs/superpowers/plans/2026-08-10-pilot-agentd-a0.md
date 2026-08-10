@@ -856,7 +856,7 @@ git commit -m "feat: normalize pilot agent events and checkpoints"
 - Consumes: `ModelRuntime`, `PreparedTask`, `TurnEventSink`, checkpoint helpers, and errors from Tasks 3–5.
 - Produces: `TurnExecutor`, `execute(request, write, signal)`, and deterministic Turn behavior used by the HTTP server.
 
-- [ ] **Step 1: Write failing faux text and constrained tool tests**
+- [x] **Step 1: Write failing faux text and constrained tool tests**
 
 ```ts
 async function executeCollect(
@@ -897,7 +897,7 @@ it("returns validated contract patch arguments from emit_result", async () => {
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -905,7 +905,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node:22.19.0-bookworm-slim npm test -- tests/turn-executor.test.ts
 ```
 
-- [ ] **Step 3: Implement one short-lived Pi `Agent` per execution**
+- [x] **Step 3: Implement one short-lived Pi `Agent` per execution**
 
 ```ts
 import { Agent, type AgentEvent } from "@earendil-works/pi-agent-core";
@@ -952,7 +952,7 @@ export class TurnExecutor {
 
 `bindAbortToAgent()` installs an `outerSignal` listener and a deadline timer; either calls `agent.abort()`. Its `dispose()` removes the listener and timer. Do not serialize Pi tools/functions into checkpoints. Map `message_update.text_delta`, tool execution start/update/end, and final usage; ignore raw thinking deltas.
 
-- [ ] **Step 4: Add RED tests for retry, repair, partial no-replay, abort, and restore**
+- [x] **Step 4: Add RED tests for retry, repair, partial no-replay, abort, and restore**
 
 ```ts
 it("uses one format-repair attempt and then fails closed", async () => {
@@ -997,11 +997,11 @@ it("restores a sanitized checkpoint into a new Agent instance", async () => {
 });
 ```
 
-- [ ] **Step 5: Implement bounded retries and single repair**
+- [x] **Step 5: Implement bounded retries and single repair**
 
 Export `shouldRetry({ taskKind, error, publicOutputEmitted, attempt, maxAttempts })` and use it in the outer attempt loop. Interactive attempts stop once a public text/tool event has been emitted. Constrained attempts may restart because `emit_result` is side-effect free. Use backoffs `[100, 400]` ms through the injected sleeper. A format repair is a second Pi prompt that states the expected `emit_result` contract; it does not increase the provider transport retry ceiling beyond three calls.
 
-- [ ] **Step 6: Run GREEN**
+- [x] **Step 6: Run GREEN**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -1009,7 +1009,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node:22.19.0-bookworm-slim npm run check
 ```
 
-- [ ] **Step 7: Commit the executor**
+- [x] **Step 7: Commit the executor**
 
 ```bash
 git add services/pilot-agentd/src/turn-executor.ts services/pilot-agentd/tests/turn-executor.test.ts
