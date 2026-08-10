@@ -21,7 +21,7 @@ def cpu_rc_env(tmp_path, monkeypatch):
     monkeypatch.setenv("PILOT107_JWT_SECRET", "test-secret")
     monkeypatch.setenv("PILOT107_GATEWAY_HMAC_SECRET", "test-gateway-secret")
     monkeypatch.setenv("PILOT107_REST_TOKEN_PROVIDER", "0")
-    monkeypatch.setenv("PILOT107_LLM_BASE_URL", "")
-    monkeypatch.setenv("PILOT107_LLM_API_KEY", "")
-    monkeypatch.setenv("PILOT107_LLM_MODEL", "")
+    monkeypatch.setenv("PILOT107_AGENTD_URL", "")
+    monkeypatch.setenv("PILOT107_AGENTD_TOKEN", "")
+    monkeypatch.setenv("PILOT107_AGENTD_MODEL_PROFILE", "")
     yield

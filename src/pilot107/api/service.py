@@ -43,6 +43,8 @@ from pilot107.adapters.ssh_relay import (
     SshRelayExecutor,
     SubprocessSshRelayClient,
 )
+from pilot107.agent.client import AgentdClient
+from pilot107.agent.config import AgentdClientConfig
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.file_routes import FileRoutes
 from pilot107.api.http_app import Pilot107HttpApi
@@ -153,13 +155,9 @@ class ApiServiceConfig:
     contract_profile: str = "capability"
     capability_profile_path: Path | None = None
     allow_gpu_recipes: bool = True
-    llm_base_url: str | None = None
-    llm_api_key: str | None = None
-    llm_model: str | None = None
-    llm_timeout_seconds: float = 20.0
-    llm_max_tokens: int = 700
-    llm_structured_output_mode: str = "prompt_json"
-    llm_max_attempts: int = 2
+    agentd_url: str | None = None
+    agentd_token: str | None = field(default=None, repr=False)
+    agentd_model_profile: str | None = None
     # Code context is fail-closed.  A deployment must explicitly select a
     # transport and exact read roots; ``workdir`` alone never grants source
     # access to the Agent.
@@ -267,13 +265,9 @@ def config_from_env(
         contract_profile=values.get("PILOT107_CONTRACT_PROFILE", "capability"),
         capability_profile_path=_optional_path(values, "PILOT107_CAPABILITY_PROFILE_PATH"),
         allow_gpu_recipes=_bool(values, "PILOT107_ALLOW_GPU_RECIPES", True),
-        llm_base_url=values.get("PILOT107_LLM_BASE_URL") or None,
-        llm_api_key=values.get("PILOT107_LLM_API_KEY") or None,
-        llm_model=values.get("PILOT107_LLM_MODEL") or None,
-        llm_timeout_seconds=_float(values, "PILOT107_LLM_TIMEOUT_SECONDS", 20.0),
-        llm_max_tokens=_int(values, "PILOT107_LLM_MAX_TOKENS", 700),
-        llm_structured_output_mode=values.get("PILOT107_LLM_STRUCTURED_OUTPUT_MODE", "prompt_json"),
-        llm_max_attempts=_int(values, "PILOT107_LLM_MAX_ATTEMPTS", 2),
+        agentd_url=values.get("PILOT107_AGENTD_URL") or None,
+        agentd_token=values.get("PILOT107_AGENTD_TOKEN") or None,
+        agentd_model_profile=values.get("PILOT107_AGENTD_MODEL_PROFILE") or None,
         code_context_transport=values.get("PILOT107_CODE_CONTEXT_TRANSPORT", "none"),
         code_context_allowed_roots=tuple(
             _split_csv(values.get("PILOT107_CODE_CONTEXT_ALLOWED_ROOTS", ""))
@@ -1100,16 +1094,16 @@ def _build_llm_provider(
     *,
     observer: ControlPlaneMetrics | None = None,
 ) -> OpenAICompatibleLLMProvider | None:
-    if not (config.llm_base_url and config.llm_model):
+    if not (config.agentd_url and config.agentd_token and config.agentd_model_profile):
         return None
     return OpenAICompatibleLLMProvider(
-        base_url=config.llm_base_url,
-        api_key=config.llm_api_key,
-        model=config.llm_model,
-        timeout_seconds=config.llm_timeout_seconds,
-        max_tokens=config.llm_max_tokens,
-        structured_output_mode=config.llm_structured_output_mode,
-        max_attempts=config.llm_max_attempts,
+        client=AgentdClient(
+            AgentdClientConfig(
+                base_url=config.agentd_url,
+                token=config.agentd_token,
+                model_profile_id=config.agentd_model_profile,
+            )
+        ),
         observer=observer,
     )
 

@@ -1994,7 +1994,6 @@ class Pilot107HttpApi:
     ) -> ApiResponse:
         from pilot107.core.agent import (
             AgentProviderError,
-            OpenAICompatibleLLMProvider,
             suggest_contract_patch_without_llm,
         )
         payload, error = _json_body(body)
@@ -2038,14 +2037,13 @@ class Pilot107HttpApi:
         # Prefer the injected LLM provider from agent_explain_service; fall back to env.
         llm_provider = getattr(self.agent_explain_service, "llm_provider", None)
         if llm_provider is None:
-            try:
-                llm_provider = OpenAICompatibleLLMProvider.from_env()
-            except ValueError:
+            llm_provider = _llm_provider_from_env(observer=self.metrics)
+            if llm_provider is None:
                 return ApiResponse(
                     status=200,
                     payload=_agent_suggest_degraded(
                         "provider_unconfigured",
-                        "未配置 LLM 网关，无法生成建议。请选择确定性模式或配置 LLM。",
+                        "未配置智能体服务，无法生成建议。请选择确定性模式或配置 Agentd。",
                     ),
                 )
         try:
@@ -4082,7 +4080,7 @@ def _agent_suggest_degraded(reason: str, explanation_zh: str) -> dict[str, Any]:
 
 def _agent_suggest_degraded_explanation_zh(reason: str) -> str:
     messages = {
-        "provider_unconfigured": "未配置 LLM 网关，无法生成建议。",
+        "provider_unconfigured": "未配置智能体服务，无法生成建议。",
         "provider_invalid_key": "LLM 网关认证失败，请检查 API Key 配置。",
         "provider_timeout": "LLM 网关请求超时，请稍后重试。",
         "provider_transport_error": "LLM 网关连接失败，请检查网络或网关状态。",

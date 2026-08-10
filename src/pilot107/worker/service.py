@@ -41,6 +41,8 @@ from pilot107.adapters.ssh_relay import (
     SshRelayExecutor,
     SubprocessSshRelayClient,
 )
+from pilot107.agent.client import AgentdClient
+from pilot107.agent.config import AgentdClientConfig
 from pilot107.core.advice import AgentAdviceService, AgentPolicyEngine
 from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
 from pilot107.core.code_context import (
@@ -137,6 +139,9 @@ class WorkerServiceConfig:
     auto_capsule_enabled: bool = True
     capsule_root: Path | None = None
     capability_profile_path: Path | None = None
+    agentd_url: str | None = None
+    agentd_token: str | None = field(default=None, repr=False)
+    agentd_model_profile: str | None = None
     # Code context mirrors the API container's configuration so remediation
     # planning (which runs in the Worker) can emit create_repair_ticket actions
     # for code-level diagnoses. Without this the Worker's explain service has
@@ -431,6 +436,9 @@ def config_from_env(
             "PILOT107_CAPABILITY_PROFILE_PATH",
             None,
         ),
+        agentd_url=values.get("PILOT107_AGENTD_URL") or None,
+        agentd_token=values.get("PILOT107_AGENTD_TOKEN") or None,
+        agentd_model_profile=values.get("PILOT107_AGENTD_MODEL_PROFILE") or None,
         code_context_transport=values.get("PILOT107_CODE_CONTEXT_TRANSPORT", "none"),
         code_context_allowed_roots=tuple(
             _split_csv(values.get("PILOT107_CODE_CONTEXT_ALLOWED_ROOTS", ""))
@@ -518,7 +526,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     )
     explain_service = AgentExplainService(
         store=store,
-        llm_provider=_worker_llm_provider_from_env(),
+        llm_provider=_worker_llm_provider_from_env(config),
         evidence_binder=EvidenceBinder(
             store=store,
             evidence_root=config.evidence_root,
@@ -914,19 +922,28 @@ def _build_evidence_transport(config: WorkerServiceConfig) -> EvidenceTransport 
     return AuthorizedFilesystemEvidenceTransport(allowed_roots=allowed_roots)
 
 
-def _worker_llm_provider_from_env() -> OpenAICompatibleLLMProvider | None:
+def _worker_llm_provider_from_env(
+    config: WorkerServiceConfig,
+) -> OpenAICompatibleLLMProvider | None:
     """Best-effort LLM provider for the worker's remediation auto-advance.
 
-    Returns ``None`` when the LLM gateway is not configured, in which case
+    Returns ``None`` when pilot-agentd is not configured, in which case
     ``AgentExplainService`` falls back to deterministic explanations and the
     rule-based policy engine still generates ``suggested_patch``. When the
-    user selects an LLM provider on a remediation session, the persisted
+    user selects an Agent provider on a remediation session, the persisted
     choice is honored here instead of being silently downgraded to ``none``.
     """
-    try:
-        return OpenAICompatibleLLMProvider.from_env()
-    except ValueError:
+    if not (config.agentd_url and config.agentd_token and config.agentd_model_profile):
         return None
+    return OpenAICompatibleLLMProvider(
+        client=AgentdClient(
+            AgentdClientConfig(
+                base_url=config.agentd_url,
+                token=config.agentd_token,
+                model_profile_id=config.agentd_model_profile,
+            )
+        )
+    )
 
 
 def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> WorkerTickResult:

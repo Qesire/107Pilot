@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import traceback
 import unittest
+from typing import Any
 
+from pilot107.agent.config import AgentdClientConfig
+from pilot107.agent.protocol import AgentdClientError, AgentdTurnResult
 from pilot107.core.agent import AgentFact
 from pilot107.core.remediation_llm import (
     REMEDIATION_PLAN_SCHEMA_VERSION,
+    OpenAICompatibleRemediationPlanProvider,
     RemediationPlanError,
     RemediationPlanningContext,
     RemediationPlanService,
@@ -49,6 +54,16 @@ class RemediationPlanTests(unittest.TestCase):
         )
 
         plan = RemediationPlanService(provider=provider).plan(self.context)
+
+        self.assertEqual(plan.proposals[0].action_type, "runtime_probe")
+        self.assertEqual(provider.calls, 2)
+
+    def test_legacy_provider_without_repair_capability_keeps_python_retry(self) -> None:
+        provider = _LegacyRemediationProvider(
+            ["not-json", _plan(action_type="runtime_probe", parameters={"probe_kind": "cuda"})]
+        )
+
+        plan = RemediationPlanService(provider=provider).plan(self.context)  # type: ignore[arg-type]
 
         self.assertEqual(plan.proposals[0].action_type, "runtime_probe")
         self.assertEqual(provider.calls, 2)
@@ -112,6 +127,78 @@ class RemediationPlanTests(unittest.TestCase):
         self.assertEqual(plan.proposals[0].action_type, "retry_run")
         self.assertEqual(throttled.calls, 2)
 
+    def test_agentd_provider_returns_a_serialized_remediation_result(self) -> None:
+        client = _FakeAgentdClient(result=json.loads(_plan(action_type="retry_run", parameters={})))
+        provider = OpenAICompatibleRemediationPlanProvider(client=client)  # type: ignore[arg-type]
+
+        plan = RemediationPlanService(provider=provider).plan(self.context)
+
+        self.assertEqual(plan.proposals[0].action_type, "retry_run")
+        self.assertEqual(provider.model, "campus-model")
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(client.calls[0]["task_kind"], "remediation_plan")
+        self.assertEqual(client.calls[0]["input_payload"], self.context.prompt_payload())
+
+    def test_agentd_provider_owns_format_repair_so_python_does_not_retry(self) -> None:
+        client = _FakeAgentdClient(result={"unexpected": "shape"})
+        provider = OpenAICompatibleRemediationPlanProvider(client=client)  # type: ignore[arg-type]
+
+        with self.assertRaises(RemediationPlanError) as captured:
+            RemediationPlanService(provider=provider).plan(self.context)
+
+        self.assertEqual(captured.exception.code, "invalid_schema")
+        self.assertEqual(len(client.calls), 1)
+
+    def test_agentd_contract_failure_maps_once_without_leaking_details(self) -> None:
+        client = _FakeAgentdClient(
+            error=AgentdClientError(
+                "upstream included Authorization=Bearer secret-token",
+                code="output_contract_violation",
+            )
+        )
+        provider = OpenAICompatibleRemediationPlanProvider(client=client)  # type: ignore[arg-type]
+
+        with self.assertRaises(RemediationPlanError) as captured:
+            provider.propose(self.context)
+
+        rendered = "".join(
+            traceback.format_exception(
+                type(captured.exception),
+                captured.exception,
+                captured.exception.__traceback__,
+            )
+        )
+        self.assertEqual(captured.exception.code, "invalid_schema")
+        self.assertNotIn("secret-token", rendered)
+        self.assertEqual(len(client.calls), 1)
+
+    def test_agentd_error_codes_map_to_stable_remediation_codes(self) -> None:
+        expected_codes = {
+            "provider_auth": "http_401",
+            "provider_rate_limited": "http_429",
+            "provider_timeout": "http_408",
+            "provider_unavailable": "transport_error",
+            "provider_invalid_response": "invalid_response",
+            "output_contract_violation": "invalid_schema",
+            "aborted": "transport_error",
+            "internal_error": "provider_error",
+            "transport_error": "transport_error",
+            "protocol_error": "invalid_response",
+        }
+
+        for agentd_code, remediation_code in expected_codes.items():
+            with self.subTest(agentd_code=agentd_code):
+                client = _FakeAgentdClient(
+                    error=AgentdClientError("pilot-agentd failed", code=agentd_code)
+                )
+                provider = OpenAICompatibleRemediationPlanProvider(  # type: ignore[arg-type]
+                    client=client
+                )
+                with self.assertRaises(RemediationPlanError) as captured:
+                    provider.propose(self.context)
+                self.assertEqual(captured.exception.code, remediation_code)
+                self.assertEqual(len(client.calls), 1)
+
 
 def _plan(*, action_type: str, parameters: dict[str, object]) -> str:
     return json.dumps(
@@ -132,6 +219,62 @@ def _plan(*, action_type: str, parameters: dict[str, object]) -> str:
             "stop_conditions": ["policy or preflight rejects the action"],
         }
     )
+
+
+class _FakeAgentdClient:
+    def __init__(
+        self,
+        *,
+        result: dict[str, Any] | None = None,
+        error: AgentdClientError | None = None,
+    ) -> None:
+        self.config = AgentdClientConfig(
+            base_url="http://pilot-agentd:8091",
+            token="internal-secret",
+            model_profile_id="campus-default",
+        )
+        self.result = {} if result is None else result
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    def run_turn(self, **kwargs: Any) -> AgentdTurnResult:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return AgentdTurnResult(
+            result=self.result,
+            provider="campus-openai-compatible",
+            model="campus-model",
+            model_profile_id="campus-default",
+            input_tokens=12,
+            output_tokens=8,
+            cache_read_tokens=None,
+            cache_write_tokens=None,
+            provider_calls=1,
+            checkpoint_digest="c" * 64,
+            duration_ms=42,
+            checkpoint=None,
+        )
+
+
+class _LegacyRemediationProvider:
+    provider_name = "legacy"
+    model = "fixture"
+
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = responses
+        self.calls = 0
+
+    def propose(
+        self,
+        context: RemediationPlanningContext,
+        *,
+        format_repair: bool = False,
+    ) -> str:
+        del context, format_repair
+        response = self.responses[min(self.calls, len(self.responses) - 1)]
+        self.calls += 1
+        return response
 
 
 if __name__ == "__main__":

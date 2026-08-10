@@ -64,6 +64,9 @@ class WorkerServiceTests(unittest.TestCase):
                 "PILOT107_WORKER_HEALTH_PATH": "",
                 "PILOT107_WORKER_METRICS_ROOT": "",
                 "PILOT107_CONTROL_POSTGRES_DSN": "postgresql://control.example/pilot107",
+                "PILOT107_AGENTD_URL": "http://pilot-agentd:8091",
+                "PILOT107_AGENTD_TOKEN": "internal-agentd-token",
+                "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
             },
             project_root=self.root,
         )
@@ -89,6 +92,54 @@ class WorkerServiceTests(unittest.TestCase):
             "postgresql://control.example/pilot107",
         )
         self.assertFalse(config.enable_docker_volume_evidence_transport)
+        self.assertEqual(config.agentd_url, "http://pilot-agentd:8091")
+        self.assertEqual(config.agentd_token, "internal-agentd-token")
+        self.assertEqual(config.agentd_model_profile, "campus-default")
+        self.assertNotIn("internal-agentd-token", repr(config))
+
+    def test_worker_config_loader_never_reads_legacy_llm_settings(self) -> None:
+        config = config_from_env(
+            _RejectLegacyLlmReads(
+                {
+                    "PILOT107_AGENTD_URL": "http://pilot-agentd:8091",
+                    "PILOT107_AGENTD_TOKEN": "internal-agentd-token",
+                    "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
+                }
+            ),
+            project_root=self.root,
+        )
+
+        self.assertEqual(config.agentd_model_profile, "campus-default")
+
+    def test_build_worker_service_enables_agentd_only_with_complete_config(self) -> None:
+        configured = build_worker_service(
+            config_from_env(
+                {
+                    "PILOT107_WORKER_BACKEND": "in-memory",
+                    "PILOT107_AGENTD_URL": "http://pilot-agentd:8091",
+                    "PILOT107_AGENTD_TOKEN": "internal-agentd-token",
+                    "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
+                },
+                project_root=self.root,
+            )
+        )
+        partial = build_worker_service(
+            config_from_env(
+                {
+                    "PILOT107_WORKER_BACKEND": "in-memory",
+                    "PILOT107_AGENTD_URL": "http://pilot-agentd:8091",
+                },
+                project_root=self.root / "partial",
+            )
+        )
+
+        provider = configured.stack.remediation_service.advice_service.explain_service.llm_provider
+        self.assertIsNotNone(provider)
+        assert provider is not None
+        self.assertEqual(provider.client.config.model_profile_id, "campus-default")
+        self.assertIsNone(
+            partial.stack.remediation_service.advice_service.explain_service.llm_provider
+        )
 
     def test_postgres_domain_dsn_also_selects_the_control_plane_database(self) -> None:
         dsn = "postgresql://pilot107.example/pilot107"
@@ -343,6 +394,13 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(final.collection_state, CollectionState.SUCCEEDED)
         self.assertIn("derived/result_summary.v1.json", paths)
         self.assertIn("outputs/inventory.json", paths)
+
+
+class _RejectLegacyLlmReads(dict[str, str]):
+    def get(self, key: str, default=None):
+        if key.startswith("PILOT107_LLM_"):
+            raise AssertionError(f"legacy LLM setting was read: {key}")
+        return super().get(key, default)
 
 
 class _ReceiptBackend:

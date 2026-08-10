@@ -63,13 +63,10 @@ class ApiServiceTests(unittest.TestCase):
                 "PILOT107_CONTRACT_PROFILE": "real107-sim",
                 "PILOT107_CAPABILITY_PROFILE_PATH": str(self.root / "probe"),
                 "PILOT107_ALLOW_GPU_RECIPES": "false",
-                "PILOT107_LLM_BASE_URL": "https://api.llm.example.edu.cn/v1",
-                "PILOT107_LLM_API_KEY": "test-key",
-                "PILOT107_LLM_MODEL": "ustc-deepseek/deepseek-v4-pro",
-                "PILOT107_LLM_TIMEOUT_SECONDS": "3.5",
-                "PILOT107_LLM_MAX_TOKENS": "512",
-                "PILOT107_LLM_STRUCTURED_OUTPUT_MODE": "json_schema",
-                "PILOT107_LLM_MAX_ATTEMPTS": "3",
+                "PILOT107_AGENTD_URL": "http://pilot-agentd:8091",
+                "PILOT107_AGENTD_TOKEN": "internal-agentd-token",
+                "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
+                "PILOT107_LLM_API_KEY": "must-not-enter-python-config",
                 "PILOT107_TEMPLATE_REVIEWERS": "reviewer,reviewer2",
                 "PILOT107_TEMPLATE_ADMINS": "admin",
                 "PILOT107_TEMPLATE_COURSE_INSTRUCTORS": "course-107=teacher",
@@ -98,13 +95,12 @@ class ApiServiceTests(unittest.TestCase):
         self.assertEqual(config.contract_profile, "real107-sim")
         self.assertEqual(config.capability_profile_path, self.root / "probe")
         self.assertFalse(config.allow_gpu_recipes)
-        self.assertEqual(config.llm_base_url, "https://api.llm.example.edu.cn/v1")
-        self.assertEqual(config.llm_api_key, "test-key")
-        self.assertEqual(config.llm_model, "ustc-deepseek/deepseek-v4-pro")
-        self.assertEqual(config.llm_timeout_seconds, 3.5)
-        self.assertEqual(config.llm_max_tokens, 512)
-        self.assertEqual(config.llm_structured_output_mode, "json_schema")
-        self.assertEqual(config.llm_max_attempts, 3)
+        self.assertEqual(config.agentd_url, "http://pilot-agentd:8091")
+        self.assertEqual(config.agentd_token, "internal-agentd-token")
+        self.assertEqual(config.agentd_model_profile, "campus-default")
+        self.assertNotIn("internal-agentd-token", repr(config))
+        self.assertNotIn("must-not-enter-python-config", repr(config))
+        self.assertFalse(hasattr(config, "llm_api_key"))
         self.assertEqual(config.template_reviewers, frozenset({"reviewer", "reviewer2"}))
         self.assertEqual(config.template_admins, frozenset({"admin"}))
         self.assertEqual(
@@ -121,6 +117,44 @@ class ApiServiceTests(unittest.TestCase):
             frozenset({f"sha256:{'a' * 64}"}),
         )
         self.assertEqual(config.template_verification_environment, "docker")
+
+    def test_config_loader_never_reads_legacy_llm_settings(self) -> None:
+        config = config_from_env(
+            _RejectLegacyLlmReads(
+                {
+                    "PILOT107_AGENTD_URL": "http://pilot-agentd:8091",
+                    "PILOT107_AGENTD_TOKEN": "internal-agentd-token",
+                    "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
+                }
+            ),
+            project_root=self.root,
+        )
+
+        self.assertEqual(config.agentd_model_profile, "campus-default")
+
+    def test_build_api_service_enables_agentd_only_with_complete_config(self) -> None:
+        configured = build_api_service(
+            config_from_env(
+                {
+                    "PILOT107_AGENTD_URL": "http://pilot-agentd:8091",
+                    "PILOT107_AGENTD_TOKEN": "internal-agentd-token",
+                    "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
+                },
+                project_root=self.root,
+            )
+        )
+        partial = build_api_service(
+            config_from_env(
+                {"PILOT107_AGENTD_URL": "http://pilot-agentd:8091"},
+                project_root=self.root / "partial",
+            )
+        )
+
+        provider = configured.agent_explain_service.llm_provider
+        self.assertIsNotNone(provider)
+        assert provider is not None
+        self.assertEqual(provider.client.config.model_profile_id, "campus-default")
+        self.assertIsNone(partial.agent_explain_service.llm_provider)
 
     def test_postgres_domain_dsn_also_selects_the_control_plane_database(self) -> None:
         dsn = "postgresql://pilot107.example/pilot107"
@@ -514,6 +548,13 @@ def _contract_payload() -> dict:
 
 def _json(payload: dict) -> bytes:
     return json.dumps(payload).encode("utf-8")
+
+
+class _RejectLegacyLlmReads(dict[str, str]):
+    def get(self, key: str, default=None):
+        if key.startswith("PILOT107_LLM_"):
+            raise AssertionError(f"legacy LLM setting was read: {key}")
+        return super().get(key, default)
 
 
 if __name__ == "__main__":
