@@ -99,7 +99,7 @@
 - Consumes: no earlier task interfaces.
 - Produces: `AGENTD_VERSION`, `TURN_PROTOCOL_VERSION`, `EVENT_PROTOCOL_VERSION`, and a Node 22 test/build command used by every later task.
 
-- [ ] **Step 1: Write the failing version/runtime test**
+- [x] **Step 1: Write the failing version/runtime test**
 
 ```ts
 // services/pilot-agentd/tests/version.test.ts
@@ -120,7 +120,7 @@ describe("pilot-agentd runtime baseline", () => {
 });
 ```
 
-- [ ] **Step 2: Create the exact package metadata, then run RED before `version.ts` exists**
+- [x] **Step 2: Create the exact package metadata, then run RED before `version.ts` exists**
 
 ```json
 {
@@ -162,7 +162,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 Expected: FAIL because `src/version.ts` cannot be resolved.
 
-- [ ] **Step 3: Add strict compiler/test configuration and minimal implementation**
+- [x] **Step 3: Add strict compiler/test configuration and minimal implementation**
 
 ```json
 // services/pilot-agentd/tsconfig.json
@@ -224,7 +224,7 @@ USER 10701:10701
 CMD ["node", "dist/main.js"]
 ```
 
-- [ ] **Step 4: Run GREEN and verify exact resolved versions**
+- [x] **Step 4: Run GREEN and verify exact resolved versions**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -235,7 +235,7 @@ npm --prefix services/pilot-agentd ls --depth=0
 
 Expected: tests/typecheck/build pass; both Pi packages resolve to `0.84.1`; no old Pi scope appears.
 
-- [ ] **Step 5: Commit the baseline**
+- [x] **Step 5: Commit the baseline**
 
 ```bash
 git add services/pilot-agentd
