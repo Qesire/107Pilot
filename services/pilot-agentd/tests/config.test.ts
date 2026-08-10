@@ -1,0 +1,145 @@
+import { describe, expect, it } from "vitest";
+
+import { configFromEnv } from "../src/config.js";
+
+const campusEnv: NodeJS.ProcessEnv = {
+  NODE_ENV: "production",
+  PILOT107_AGENTD_TOKEN: "internal-secret",
+  PILOT107_AGENTD_MODEL_PROFILE: "campus-default",
+  PILOT107_LLM_BASE_URL: "http://127.0.0.1:4111/v1",
+  PILOT107_LLM_API_KEY: "llm-secret",
+  PILOT107_LLM_MODEL: "campus-model",
+  PILOT107_LLM_TIMEOUT_SECONDS: "60",
+  PILOT107_LLM_MAX_TOKENS: "1200",
+  PILOT107_LLM_MAX_ATTEMPTS: "2",
+};
+
+describe("pilot-agentd configuration", () => {
+  it("builds a bounded campus profile and exposes only a redacted summary", () => {
+    const config = configFromEnv(campusEnv);
+
+    expect(config).toMatchObject({
+      host: "0.0.0.0",
+      port: 8091,
+      internalToken: "internal-secret",
+      configured: true,
+      modelProfile: {
+        id: "campus-default",
+        provider: "campus-openai-compatible",
+        baseUrl: "http://127.0.0.1:4111/v1",
+        model: "campus-model",
+        apiKey: "llm-secret",
+        timeoutMs: 60_000,
+        maxOutputTokens: 1200,
+        maxAttempts: 2,
+        contextWindow: 32_768,
+      },
+    });
+    expect(config.publicSummary()).toEqual({
+      version: "0.1.0",
+      model_profile_id: "campus-default",
+      configured: true,
+    });
+
+    const publicJson = JSON.stringify(config.publicSummary());
+    expect(publicJson).not.toContain("llm-secret");
+    expect(publicJson).not.toContain("internal-secret");
+    expect(publicJson).not.toContain("127.0.0.1");
+  });
+
+  it.each([
+    { PILOT107_LLM_BASE_URL: undefined },
+    { PILOT107_LLM_MODEL: undefined },
+  ])("starts with a degraded campus capability when %s is missing", (override) => {
+    const config = configFromEnv({ ...campusEnv, ...override });
+
+    expect(config.configured).toBe(false);
+    expect(config.publicSummary().configured).toBe(false);
+  });
+
+  it("allows a keyless campus gateway and preserves configured readiness", () => {
+    const config = configFromEnv({ ...campusEnv, PILOT107_LLM_API_KEY: undefined });
+
+    expect(config.configured).toBe(true);
+    expect(config.modelProfile.apiKey).toBeUndefined();
+  });
+
+  it.each([
+    ["PILOT107_AGENTD_LISTEN_PORT", "0"],
+    ["PILOT107_AGENTD_LISTEN_PORT", "8091.5"],
+    ["PILOT107_LLM_TIMEOUT_SECONDS", "301"],
+    ["PILOT107_LLM_MAX_TOKENS", "32001"],
+    ["PILOT107_LLM_MAX_ATTEMPTS", "4"],
+  ])("rejects an out-of-range %s without echoing its value", (name, value) => {
+    const invalid = { ...campusEnv, [name]: value };
+
+    expect(() => configFromEnv(invalid)).toThrow(name);
+    try {
+      configFromEnv(invalid);
+    } catch (error) {
+      expect(String(error)).not.toContain(value);
+    }
+  });
+
+  it.each([
+    "ftp://gateway.example.edu/v1",
+    "https://student:password@gateway.example.edu/v1",
+  ])("rejects unsafe campus URL %s without disclosing it", (baseUrl) => {
+    const invalid = { ...campusEnv, PILOT107_LLM_BASE_URL: baseUrl };
+
+    expect(() => configFromEnv(invalid)).toThrow("PILOT107_LLM_BASE_URL");
+    try {
+      configFromEnv(invalid);
+    } catch (error) {
+      expect(String(error)).not.toContain(baseUrl);
+      expect(String(error)).not.toContain("password");
+    }
+  });
+
+  it("requires the internal token outside tests without exposing other config", () => {
+    const invalid = { ...campusEnv, PILOT107_AGENTD_TOKEN: "" };
+
+    expect(() => configFromEnv(invalid)).toThrow("PILOT107_AGENTD_TOKEN");
+    try {
+      configFromEnv(invalid);
+    } catch (error) {
+      expect(String(error)).not.toContain("llm-secret");
+      expect(String(error)).not.toContain("127.0.0.1");
+    }
+  });
+
+  it("allows faux-default only for tests or the fixed a0-smoke scenario", () => {
+    const testConfig = configFromEnv({
+      NODE_ENV: "test",
+      PILOT107_AGENTD_MODEL_PROFILE: "faux-default",
+    });
+    expect(testConfig).toMatchObject({
+      configured: true,
+      modelProfile: { provider: "faux" },
+    });
+    expect(testConfig.modelProfile.fauxScenario).toBeUndefined();
+
+    const smokeConfig = configFromEnv({
+      NODE_ENV: "production",
+      PILOT107_AGENTD_TOKEN: "smoke-token",
+      PILOT107_AGENTD_MODEL_PROFILE: "faux-default",
+      PILOT107_AGENTD_FAUX_SCENARIO: "a0-smoke",
+    });
+    expect(smokeConfig.modelProfile.fauxScenario).toBe("a0-smoke");
+
+    expect(() =>
+      configFromEnv({
+        NODE_ENV: "production",
+        PILOT107_AGENTD_TOKEN: "smoke-token",
+        PILOT107_AGENTD_MODEL_PROFILE: "faux-default",
+      }),
+    ).toThrow("PILOT107_AGENTD_FAUX_SCENARIO");
+    expect(() =>
+      configFromEnv({
+        NODE_ENV: "test",
+        PILOT107_AGENTD_MODEL_PROFILE: "faux-default",
+        PILOT107_AGENTD_FAUX_SCENARIO: "arbitrary-json",
+      }),
+    ).toThrow("PILOT107_AGENTD_FAUX_SCENARIO");
+  });
+});
