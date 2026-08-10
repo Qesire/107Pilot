@@ -33,7 +33,21 @@ function completed(sequence = 2) {
     sequence,
     timestamp: "2026-08-10T00:00:00.000Z",
     type: "turn_completed" as const,
-    payload: { result: { text: "done" } },
+    payload: {
+      result: { text: "done" },
+      provider: "faux",
+      model: "faux-model",
+      model_profile_id: "faux-default",
+      usage: {
+        input_tokens: null,
+        output_tokens: null,
+        cache_read_tokens: null,
+        cache_write_tokens: null,
+      },
+      provider_calls: 1,
+      checkpoint_digest: "a".repeat(64),
+      duration_ms: 5,
+    },
   };
 }
 
@@ -44,7 +58,10 @@ function started(sequence = 1) {
     sequence,
     timestamp: "2026-08-10T00:00:00.000Z",
     type: "turn_started" as const,
-    payload: {},
+    payload: {
+      model_profile_id: "faux-default",
+      task_kind: "interactive" as const,
+    },
   };
 }
 
@@ -105,6 +122,19 @@ describe("AgentTurnRequest", () => {
         },
       }),
     ).toThrow(/forbidden input field.*Authorization/i);
+  });
+
+  it("the language-neutral schema rejects uppercase injection keys", () => {
+    const request = contractPatchRequest();
+    expect(
+      Value.Check(AgentTurnRequestSchema, {
+        ...request,
+        input: {
+          ...request.input,
+          current_contract: { Authorization: "Bearer secret" },
+        },
+      }),
+    ).toBe(false);
   });
 
   it.each([
@@ -213,6 +243,19 @@ describe("terminal event invariant", () => {
         { ...completed(), schema_version: "pilot107.agent-turn-event/v2" } as never,
       ]),
     ).toThrow(/invalid turn event/i);
+  });
+
+  it("requires model and task metadata on turn_started", () => {
+    expect(Value.Check(AgentTurnEventSchema, { ...started(), payload: {} })).toBe(false);
+  });
+
+  it("requires observability metadata on turn_completed", () => {
+    expect(
+      Value.Check(AgentTurnEventSchema, {
+        ...completed(),
+        payload: { result: { text: "done" } },
+      }),
+    ).toBe(false);
   });
 });
 

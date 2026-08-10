@@ -45,6 +45,12 @@ For one Turn stream:
 5. EOF without a terminal event, an unknown event type, a duplicate/gap, or an
    event after terminal is a protocol failure and must fail closed.
 
+`turn_started` always identifies `model_profile_id` and `task_kind`.
+`turn_completed` always carries `result`, provider/model/profile identifiers,
+nullable usage counts, provider call count, checkpoint digest, and duration.
+These observability fields are required even when the upstream provider cannot
+report token usage.
+
 `message_delta` contains only public answer text. Provider reasoning is not a
 wire event. Token counts are nullable when the provider does not report them;
 absence must never be converted to a fabricated zero.

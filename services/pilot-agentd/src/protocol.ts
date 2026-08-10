@@ -9,6 +9,8 @@ import {
 
 const JSON_SCHEMA_DRAFT = "https://json-schema.org/draft/2020-12/schema";
 const SCHEMA_BASE = "https://107pilot.local/schemas/agent/v1/";
+const FORBIDDEN_INPUT_PATTERN =
+  "^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$";
 const FORBIDDEN_INPUT_FIELDS = new Set([
   "api_key",
   "authorization",
@@ -35,8 +37,7 @@ const JsonDefinitions = {
         maxProperties: 4_096,
         propertyNames: {
           not: {
-            pattern:
-              "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$",
+            pattern: FORBIDDEN_INPUT_PATTERN,
           },
         },
         additionalProperties: { $ref: "#/$defs/jsonValue" },
@@ -55,7 +56,7 @@ const JsonObjectSchema = Type.Unsafe<JsonObject>({
   maxProperties: 4_096,
   propertyNames: {
     not: {
-      pattern: "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$",
+      pattern: FORBIDDEN_INPUT_PATTERN,
     },
   },
   additionalProperties: { $ref: "#/$defs/jsonValue" },
@@ -426,15 +427,13 @@ const EventVariants = [
     "turn_started",
     Type.Object(
       {
-        model_profile_id: Type.Optional(Id),
-        task_kind: Type.Optional(
-          Type.Union([
-            Type.Literal("interactive"),
-            Type.Literal("explain"),
-            Type.Literal("contract_patch"),
-            Type.Literal("remediation_plan"),
-          ]),
-        ),
+        model_profile_id: Id,
+        task_kind: Type.Union([
+          Type.Literal("interactive"),
+          Type.Literal("explain"),
+          Type.Literal("contract_patch"),
+          Type.Literal("remediation_plan"),
+        ]),
       },
       { additionalProperties: false },
     ),
@@ -480,15 +479,13 @@ const EventVariants = [
     Type.Object(
       {
         result: JsonValueSchema,
-        provider: Type.Optional(Id),
-        model: Type.Optional(Text),
-        model_profile_id: Type.Optional(Id),
-        usage: Type.Optional(UsageSchema),
-        provider_calls: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
-        checkpoint_digest: Type.Optional(
-          Type.String({ pattern: "^[a-f0-9]{64}$" }),
-        ),
-        duration_ms: Type.Optional(Type.Integer({ minimum: 0, maximum: 3_600_000 })),
+        provider: Id,
+        model: Type.String({ minLength: 1, maxLength: 512 }),
+        model_profile_id: Id,
+        usage: UsageSchema,
+        provider_calls: Type.Integer({ minimum: 1, maximum: 100 }),
+        checkpoint_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+        duration_ms: Type.Integer({ minimum: 0, maximum: 3_600_000 }),
         checkpoint: Type.Optional(AgentCheckpointBodySchema),
       },
       { additionalProperties: false },

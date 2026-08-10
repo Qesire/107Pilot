@@ -36,6 +36,10 @@
         },
         "payload": {
           "type": "object",
+          "required": [
+            "model_profile_id",
+            "task_kind"
+          ],
           "properties": {
             "model_profile_id": {
               "type": "string",
@@ -178,7 +182,7 @@
               "maxProperties": 4096,
               "propertyNames": {
                 "not": {
-                  "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                  "pattern": "^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$"
                 }
               },
               "additionalProperties": {
@@ -569,7 +573,7 @@
                         "maxProperties": 4096,
                         "propertyNames": {
                           "not": {
-                            "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                            "pattern": "^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$"
                           }
                         },
                         "additionalProperties": {
@@ -697,7 +701,14 @@
         "payload": {
           "type": "object",
           "required": [
-            "result"
+            "result",
+            "provider",
+            "model",
+            "model_profile_id",
+            "usage",
+            "provider_calls",
+            "checkpoint_digest",
+            "duration_ms"
           ],
           "properties": {
             "result": {
@@ -711,7 +722,8 @@
             },
             "model": {
               "type": "string",
-              "maxLength": 256000
+              "minLength": 1,
+              "maxLength": 512
             },
             "model_profile_id": {
               "type": "string",
@@ -781,7 +793,7 @@
             },
             "provider_calls": {
               "type": "integer",
-              "minimum": 0,
+              "minimum": 1,
               "maximum": 100
             },
             "checkpoint_digest": {
@@ -941,7 +953,7 @@
                         "maxProperties": 4096,
                         "propertyNames": {
                           "not": {
-                            "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                            "pattern": "^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$"
                           }
                         },
                         "additionalProperties": {
@@ -1280,7 +1292,7 @@
                         "maxProperties": 4096,
                         "propertyNames": {
                           "not": {
-                            "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                            "pattern": "^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$"
                           }
                         },
                         "additionalProperties": {
@@ -1402,7 +1414,7 @@
           "maxProperties": 4096,
           "propertyNames": {
             "not": {
-              "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+              "pattern": "^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$"
             }
           },
           "additionalProperties": {

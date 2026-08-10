@@ -146,7 +146,7 @@
             "maxProperties": 4096,
             "propertyNames": {
               "not": {
-                "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                "pattern": "^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$"
               }
             },
             "additionalProperties": {
@@ -259,7 +259,7 @@
           "maxProperties": 4096,
           "propertyNames": {
             "not": {
-              "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+              "pattern": "^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$"
             }
           },
           "additionalProperties": {
