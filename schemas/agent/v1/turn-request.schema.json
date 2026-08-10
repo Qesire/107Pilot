@@ -1,0 +1,1946 @@
+{
+  "anyOf": [
+    {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "turn_id",
+        "task_kind",
+        "model_profile_id",
+        "prompt_profile_id",
+        "toolset_id",
+        "input",
+        "checkpoint",
+        "limits",
+        "trace"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "pilot107.agent-turn-request/v1"
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "task_kind": {
+          "type": "string",
+          "const": "interactive"
+        },
+        "model_profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "prompt_profile_id": {
+          "type": "string",
+          "const": "hpc-assistant-v1"
+        },
+        "toolset_id": {
+          "type": "string",
+          "const": "a0-none"
+        },
+        "input": {
+          "type": "object",
+          "required": [
+            "message",
+            "context_blocks"
+          ],
+          "properties": {
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64000
+            },
+            "context_blocks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "trust",
+                  "content"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "trust": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "trusted"
+                      },
+                      {
+                        "type": "string",
+                        "const": "untrusted"
+                      }
+                    ]
+                  },
+                  "content": {
+                    "type": "string",
+                    "maxLength": 256000
+                  }
+                },
+                "additionalProperties": false
+              },
+              "maxItems": 64
+            }
+          },
+          "additionalProperties": false
+        },
+        "checkpoint": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "schema_version",
+                "turn_id",
+                "lineage",
+                "model_profile_id",
+                "prompt_profile_id",
+                "messages",
+                "completed_tools",
+                "usage",
+                "digest"
+              ],
+              "properties": {
+                "schema_version": {
+                  "type": "string",
+                  "const": "pilot107.agent-checkpoint/v1"
+                },
+                "turn_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "lineage": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "maxItems": 256
+                },
+                "model_profile_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "prompt_profile_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "messages": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "role",
+                      "content",
+                      "tool_call_id",
+                      "tool_name",
+                      "is_error"
+                    ],
+                    "properties": {
+                      "role": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "const": "user"
+                          },
+                          {
+                            "type": "string",
+                            "const": "assistant"
+                          },
+                          {
+                            "type": "string",
+                            "const": "tool_result"
+                          }
+                        ]
+                      },
+                      "content": {
+                        "type": "string",
+                        "maxLength": 256000
+                      },
+                      "tool_call_id": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9._:-]+$"
+                          }
+                        ]
+                      },
+                      "tool_name": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9._:-]+$"
+                          }
+                        ]
+                      },
+                      "is_error": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 4096
+                },
+                "completed_tools": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "tool_call_id",
+                      "tool_name",
+                      "arguments",
+                      "result",
+                      "is_error"
+                    ],
+                    "properties": {
+                      "tool_call_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9._:-]+$"
+                      },
+                      "tool_name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9._:-]+$"
+                      },
+                      "arguments": {
+                        "type": "object",
+                        "maxProperties": 4096,
+                        "propertyNames": {
+                          "not": {
+                            "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                          }
+                        },
+                        "additionalProperties": {
+                          "$ref": "#/$defs/jsonValue"
+                        }
+                      },
+                      "result": {
+                        "$ref": "#/$defs/jsonValue"
+                      },
+                      "is_error": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 4096
+                },
+                "usage": {
+                  "type": "object",
+                  "required": [
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_read_tokens",
+                    "cache_write_tokens"
+                  ],
+                  "properties": {
+                    "input_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "output_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "cache_read_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "cache_write_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "limits": {
+          "type": "object",
+          "required": [
+            "timeout_ms",
+            "max_output_tokens"
+          ],
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 300000
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32000
+            }
+          },
+          "additionalProperties": false
+        },
+        "trace": {
+          "type": "object",
+          "required": [
+            "correlation_id"
+          ],
+          "properties": {
+            "correlation_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "turn_id",
+        "task_kind",
+        "model_profile_id",
+        "prompt_profile_id",
+        "toolset_id",
+        "input",
+        "checkpoint",
+        "limits",
+        "trace"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "pilot107.agent-turn-request/v1"
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "task_kind": {
+          "type": "string",
+          "const": "explain"
+        },
+        "model_profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "prompt_profile_id": {
+          "type": "string",
+          "const": "agent-explain-v1"
+        },
+        "toolset_id": {
+          "type": "string",
+          "const": "emit-explanation-v1"
+        },
+        "input": {
+          "type": "object",
+          "required": [
+            "run_id",
+            "status",
+            "deterministic_summary",
+            "facts",
+            "bound_evidence",
+            "code_context",
+            "diagnoses",
+            "required_output"
+          ],
+          "properties": {
+            "run_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            },
+            "status": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            },
+            "deterministic_summary": {
+              "type": "string",
+              "maxLength": 256000
+            },
+            "facts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "fact_id",
+                  "statement",
+                  "evidence_refs",
+                  "evidence_object_ids",
+                  "confidence"
+                ],
+                "properties": {
+                  "fact_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "statement": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64000
+                  },
+                  "evidence_refs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "maxItems": 4096
+                  },
+                  "evidence_object_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9._:-]+$"
+                    },
+                    "maxItems": 4096
+                  },
+                  "confidence": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "maxItems": 4096
+            },
+            "bound_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "object_id",
+                  "evidence_ref",
+                  "logical_path",
+                  "sha256",
+                  "mime_type",
+                  "trust",
+                  "snippet",
+                  "truncated",
+                  "redactions"
+                ],
+                "properties": {
+                  "object_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "evidence_ref": {
+                    "type": "string",
+                    "maxLength": 256000
+                  },
+                  "logical_path": {
+                    "type": "string",
+                    "maxLength": 256000
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "mime_type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "trust": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "snippet": {
+                    "type": "string",
+                    "maxLength": 256000
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  },
+                  "redactions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "maxItems": 4096
+                  }
+                },
+                "additionalProperties": false
+              },
+              "maxItems": 4096
+            },
+            "code_context": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "run_id",
+                    "snapshot_id",
+                    "workspace",
+                    "revision",
+                    "dirty",
+                    "worktree_fingerprint",
+                    "chunks",
+                    "evidence_snippets",
+                    "warnings"
+                  ],
+                  "properties": {
+                    "run_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9._:-]+$"
+                    },
+                    "snapshot_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9._:-]+$"
+                    },
+                    "workspace": {
+                      "type": "string",
+                      "maxLength": 256000
+                    },
+                    "revision": {
+                      "type": "string",
+                      "maxLength": 256000
+                    },
+                    "dirty": {
+                      "type": "boolean"
+                    },
+                    "worktree_fingerprint": {
+                      "type": "string",
+                      "maxLength": 256000
+                    },
+                    "chunks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "chunk_id",
+                          "source_ref",
+                          "path",
+                          "start_line",
+                          "end_line",
+                          "content",
+                          "sha256",
+                          "redactions"
+                        ],
+                        "properties": {
+                          "chunk_id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9._:-]+$"
+                          },
+                          "source_ref": {
+                            "type": "string",
+                            "maxLength": 256000
+                          },
+                          "path": {
+                            "type": "string",
+                            "maxLength": 256000
+                          },
+                          "start_line": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "end_line": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "content": {
+                            "type": "string",
+                            "maxLength": 256000
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[a-f0-9]{64}$"
+                          },
+                          "redactions": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "maxLength": 4096
+                            },
+                            "maxItems": 4096
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "maxItems": 256
+                    },
+                    "evidence_snippets": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      "maxItems": 4096
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 4096
+                      },
+                      "maxItems": 4096
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ]
+            },
+            "diagnoses": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "diagnosis_id",
+                  "rule_id",
+                  "severity",
+                  "summary",
+                  "evidence_refs",
+                  "suggested_patch",
+                  "retryable",
+                  "confidence",
+                  "category",
+                  "stage",
+                  "fix_guide"
+                ],
+                "properties": {
+                  "diagnosis_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "rule_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "severity": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "maxLength": 256000
+                  },
+                  "evidence_refs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 4096
+                    },
+                    "maxItems": 4096
+                  },
+                  "suggested_patch": {
+                    "type": "object",
+                    "maxProperties": 4096,
+                    "propertyNames": {
+                      "not": {
+                        "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                      }
+                    },
+                    "additionalProperties": {
+                      "$ref": "#/$defs/jsonValue"
+                    }
+                  },
+                  "retryable": {
+                    "type": "boolean"
+                  },
+                  "confidence": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "category": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 256
+                      }
+                    ]
+                  },
+                  "stage": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 256
+                      }
+                    ]
+                  },
+                  "fix_guide": {
+                    "type": "object",
+                    "maxProperties": 4096,
+                    "propertyNames": {
+                      "not": {
+                        "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                      }
+                    },
+                    "additionalProperties": {
+                      "$ref": "#/$defs/jsonValue"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
+              "maxItems": 4096
+            },
+            "required_output": {
+              "type": "object",
+              "required": [
+                "summary",
+                "narrative",
+                "recommendations",
+                "warnings",
+                "citations"
+              ],
+              "properties": {
+                "summary": {
+                  "type": "string",
+                  "maxLength": 256000
+                },
+                "narrative": {
+                  "type": "string",
+                  "maxLength": 256000
+                },
+                "recommendations": {
+                  "type": "string",
+                  "maxLength": 256000
+                },
+                "warnings": {
+                  "type": "string",
+                  "maxLength": 256000
+                },
+                "citations": {
+                  "type": "string",
+                  "maxLength": 256000
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "checkpoint": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "schema_version",
+                "turn_id",
+                "lineage",
+                "model_profile_id",
+                "prompt_profile_id",
+                "messages",
+                "completed_tools",
+                "usage",
+                "digest"
+              ],
+              "properties": {
+                "schema_version": {
+                  "type": "string",
+                  "const": "pilot107.agent-checkpoint/v1"
+                },
+                "turn_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "lineage": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "maxItems": 256
+                },
+                "model_profile_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "prompt_profile_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "messages": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "role",
+                      "content",
+                      "tool_call_id",
+                      "tool_name",
+                      "is_error"
+                    ],
+                    "properties": {
+                      "role": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "const": "user"
+                          },
+                          {
+                            "type": "string",
+                            "const": "assistant"
+                          },
+                          {
+                            "type": "string",
+                            "const": "tool_result"
+                          }
+                        ]
+                      },
+                      "content": {
+                        "type": "string",
+                        "maxLength": 256000
+                      },
+                      "tool_call_id": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9._:-]+$"
+                          }
+                        ]
+                      },
+                      "tool_name": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9._:-]+$"
+                          }
+                        ]
+                      },
+                      "is_error": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 4096
+                },
+                "completed_tools": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "tool_call_id",
+                      "tool_name",
+                      "arguments",
+                      "result",
+                      "is_error"
+                    ],
+                    "properties": {
+                      "tool_call_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9._:-]+$"
+                      },
+                      "tool_name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9._:-]+$"
+                      },
+                      "arguments": {
+                        "type": "object",
+                        "maxProperties": 4096,
+                        "propertyNames": {
+                          "not": {
+                            "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                          }
+                        },
+                        "additionalProperties": {
+                          "$ref": "#/$defs/jsonValue"
+                        }
+                      },
+                      "result": {
+                        "$ref": "#/$defs/jsonValue"
+                      },
+                      "is_error": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 4096
+                },
+                "usage": {
+                  "type": "object",
+                  "required": [
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_read_tokens",
+                    "cache_write_tokens"
+                  ],
+                  "properties": {
+                    "input_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "output_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "cache_read_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "cache_write_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "limits": {
+          "type": "object",
+          "required": [
+            "timeout_ms",
+            "max_output_tokens"
+          ],
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 300000
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32000
+            }
+          },
+          "additionalProperties": false
+        },
+        "trace": {
+          "type": "object",
+          "required": [
+            "correlation_id"
+          ],
+          "properties": {
+            "correlation_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "turn_id",
+        "task_kind",
+        "model_profile_id",
+        "prompt_profile_id",
+        "toolset_id",
+        "input",
+        "checkpoint",
+        "limits",
+        "trace"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "pilot107.agent-turn-request/v1"
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "task_kind": {
+          "type": "string",
+          "const": "contract_patch"
+        },
+        "model_profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "prompt_profile_id": {
+          "type": "string",
+          "const": "contract-patch-v1"
+        },
+        "toolset_id": {
+          "type": "string",
+          "const": "emit-contract-patch-v1"
+        },
+        "input": {
+          "type": "object",
+          "required": [
+            "recipe_version_id",
+            "user_intent",
+            "current_contract",
+            "required_output"
+          ],
+          "properties": {
+            "recipe_version_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            },
+            "user_intent": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64000
+            },
+            "current_contract": {
+              "type": "object",
+              "maxProperties": 4096,
+              "propertyNames": {
+                "not": {
+                  "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                }
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/jsonValue"
+              }
+            },
+            "required_output": {
+              "type": "object",
+              "required": [
+                "suggested_patch",
+                "explanation_zh"
+              ],
+              "properties": {
+                "suggested_patch": {
+                  "type": "string",
+                  "maxLength": 256000
+                },
+                "explanation_zh": {
+                  "type": "string",
+                  "maxLength": 256000
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "checkpoint": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "schema_version",
+                "turn_id",
+                "lineage",
+                "model_profile_id",
+                "prompt_profile_id",
+                "messages",
+                "completed_tools",
+                "usage",
+                "digest"
+              ],
+              "properties": {
+                "schema_version": {
+                  "type": "string",
+                  "const": "pilot107.agent-checkpoint/v1"
+                },
+                "turn_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "lineage": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "maxItems": 256
+                },
+                "model_profile_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "prompt_profile_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "messages": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "role",
+                      "content",
+                      "tool_call_id",
+                      "tool_name",
+                      "is_error"
+                    ],
+                    "properties": {
+                      "role": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "const": "user"
+                          },
+                          {
+                            "type": "string",
+                            "const": "assistant"
+                          },
+                          {
+                            "type": "string",
+                            "const": "tool_result"
+                          }
+                        ]
+                      },
+                      "content": {
+                        "type": "string",
+                        "maxLength": 256000
+                      },
+                      "tool_call_id": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9._:-]+$"
+                          }
+                        ]
+                      },
+                      "tool_name": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9._:-]+$"
+                          }
+                        ]
+                      },
+                      "is_error": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 4096
+                },
+                "completed_tools": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "tool_call_id",
+                      "tool_name",
+                      "arguments",
+                      "result",
+                      "is_error"
+                    ],
+                    "properties": {
+                      "tool_call_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9._:-]+$"
+                      },
+                      "tool_name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9._:-]+$"
+                      },
+                      "arguments": {
+                        "type": "object",
+                        "maxProperties": 4096,
+                        "propertyNames": {
+                          "not": {
+                            "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                          }
+                        },
+                        "additionalProperties": {
+                          "$ref": "#/$defs/jsonValue"
+                        }
+                      },
+                      "result": {
+                        "$ref": "#/$defs/jsonValue"
+                      },
+                      "is_error": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 4096
+                },
+                "usage": {
+                  "type": "object",
+                  "required": [
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_read_tokens",
+                    "cache_write_tokens"
+                  ],
+                  "properties": {
+                    "input_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "output_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "cache_read_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "cache_write_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "limits": {
+          "type": "object",
+          "required": [
+            "timeout_ms",
+            "max_output_tokens"
+          ],
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 300000
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32000
+            }
+          },
+          "additionalProperties": false
+        },
+        "trace": {
+          "type": "object",
+          "required": [
+            "correlation_id"
+          ],
+          "properties": {
+            "correlation_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "turn_id",
+        "task_kind",
+        "model_profile_id",
+        "prompt_profile_id",
+        "toolset_id",
+        "input",
+        "checkpoint",
+        "limits",
+        "trace"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "pilot107.agent-turn-request/v1"
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "task_kind": {
+          "type": "string",
+          "const": "remediation_plan"
+        },
+        "model_profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "prompt_profile_id": {
+          "type": "string",
+          "const": "remediation-plan-v1"
+        },
+        "toolset_id": {
+          "type": "string",
+          "const": "emit-remediation-plan-v1"
+        },
+        "input": {
+          "type": "object",
+          "required": [
+            "run_id",
+            "facts",
+            "policy"
+          ],
+          "properties": {
+            "run_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            },
+            "facts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "fact_id",
+                  "statement",
+                  "evidence_object_ids",
+                  "confidence"
+                ],
+                "properties": {
+                  "fact_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "statement": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64000
+                  },
+                  "evidence_object_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9._:-]+$"
+                    },
+                    "maxItems": 4096
+                  },
+                  "confidence": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "maxItems": 4096
+            },
+            "policy": {
+              "type": "object",
+              "required": [
+                "allowed_action_types",
+                "allowed_contract_patch_fields",
+                "arbitrary_shell",
+                "proposal_is_execution_authority"
+              ],
+              "properties": {
+                "allowed_action_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "maxItems": 256
+                },
+                "allowed_contract_patch_fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 256000
+                  },
+                  "maxItems": 4096
+                },
+                "arbitrary_shell": {
+                  "type": "boolean",
+                  "const": false
+                },
+                "proposal_is_execution_authority": {
+                  "type": "boolean",
+                  "const": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "checkpoint": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "schema_version",
+                "turn_id",
+                "lineage",
+                "model_profile_id",
+                "prompt_profile_id",
+                "messages",
+                "completed_tools",
+                "usage",
+                "digest"
+              ],
+              "properties": {
+                "schema_version": {
+                  "type": "string",
+                  "const": "pilot107.agent-checkpoint/v1"
+                },
+                "turn_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "lineage": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9._:-]+$"
+                  },
+                  "maxItems": 256
+                },
+                "model_profile_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "prompt_profile_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "messages": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "role",
+                      "content",
+                      "tool_call_id",
+                      "tool_name",
+                      "is_error"
+                    ],
+                    "properties": {
+                      "role": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "const": "user"
+                          },
+                          {
+                            "type": "string",
+                            "const": "assistant"
+                          },
+                          {
+                            "type": "string",
+                            "const": "tool_result"
+                          }
+                        ]
+                      },
+                      "content": {
+                        "type": "string",
+                        "maxLength": 256000
+                      },
+                      "tool_call_id": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9._:-]+$"
+                          }
+                        ]
+                      },
+                      "tool_name": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9._:-]+$"
+                          }
+                        ]
+                      },
+                      "is_error": {
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 4096
+                },
+                "completed_tools": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "tool_call_id",
+                      "tool_name",
+                      "arguments",
+                      "result",
+                      "is_error"
+                    ],
+                    "properties": {
+                      "tool_call_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9._:-]+$"
+                      },
+                      "tool_name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9._:-]+$"
+                      },
+                      "arguments": {
+                        "type": "object",
+                        "maxProperties": 4096,
+                        "propertyNames": {
+                          "not": {
+                            "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+                          }
+                        },
+                        "additionalProperties": {
+                          "$ref": "#/$defs/jsonValue"
+                        }
+                      },
+                      "result": {
+                        "$ref": "#/$defs/jsonValue"
+                      },
+                      "is_error": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "maxItems": 4096
+                },
+                "usage": {
+                  "type": "object",
+                  "required": [
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_read_tokens",
+                    "cache_write_tokens"
+                  ],
+                  "properties": {
+                    "input_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "output_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "cache_read_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    },
+                    "cache_write_tokens": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "limits": {
+          "type": "object",
+          "required": [
+            "timeout_ms",
+            "max_output_tokens"
+          ],
+          "properties": {
+            "timeout_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 300000
+            },
+            "max_output_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32000
+            }
+          },
+          "additionalProperties": false
+        },
+        "trace": {
+          "type": "object",
+          "required": [
+            "correlation_id"
+          ],
+          "properties": {
+            "correlation_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://107pilot.local/schemas/agent/v1/turn-request.schema.json",
+  "$defs": {
+    "jsonValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "maxLength": 256000
+        },
+        {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 4096,
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:api_key|authorization|base_url|system_prompt|schema|tools)$"
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    }
+  }
+}
