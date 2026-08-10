@@ -1027,7 +1027,7 @@ git commit -m "feat: execute recoverable pi agent turns"
 - Consumes: `configFromEnv()`, `parseTurnRequest()`, and `TurnExecutor.execute()`.
 - Produces: `createAgentdServer(config, executor)`, request-bound backpressure, active Turn registry, and process entrypoint.
 
-- [ ] **Step 1: Write failing HTTP boundary tests**
+- [x] **Step 1: Write failing HTTP boundary tests**
 
 ```ts
 it("streams ordered NDJSON and authenticates before starting the stream", async () => {
@@ -1056,7 +1056,7 @@ it("cancels an active turn idempotently", async () => {
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -1064,7 +1064,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node:22.19.0-bookworm-slim npm test -- tests/server.test.ts
 ```
 
-- [ ] **Step 3: Implement the standard-library Node HTTP server**
+- [x] **Step 3: Implement the standard-library Node HTTP server**
 
 ```ts
 export function createAgentdServer(config: AgentdConfig, executor: TurnExecutor): http.Server {
@@ -1108,7 +1108,7 @@ export function createAgentdServer(config: AgentdConfig, executor: TurnExecutor)
 
 `writeNdjson()` must await `drain` when `response.write()` returns false. `readJsonBody()` must reject transfer bodies over 2 MiB with HTTP 413. `constantTimeBearerMatches()` must compare fixed-length SHA-256 digests with `timingSafeEqual`.
 
-- [ ] **Step 4: Add `main.ts` signal-safe bootstrap**
+- [x] **Step 4: Add `main.ts` signal-safe bootstrap**
 
 ```ts
 const config = configFromEnv(process.env);
@@ -1128,7 +1128,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 }
 ```
 
-- [ ] **Step 5: Run GREEN and a local health smoke**
+- [x] **Step 5: Run GREEN and a local health smoke**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" \
@@ -1136,7 +1136,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node:22.19.0-bookworm-slim npm run check
 ```
 
-- [ ] **Step 6: Commit the service boundary**
+- [x] **Step 6: Commit the service boundary**
 
 ```bash
 git add services/pilot-agentd/src/server.ts services/pilot-agentd/src/main.ts services/pilot-agentd/tests/server.test.ts
