@@ -77,7 +77,11 @@ describe("pilot-agentd configuration", () => {
     try {
       configFromEnv(invalid);
     } catch (error) {
-      expect(String(error)).not.toContain(value);
+      expect((error as Error).message).toMatch(
+        new RegExp(
+          `^${name} (?:must be an integer|is outside the supported range)$`,
+        ),
+      );
     }
   });
 
