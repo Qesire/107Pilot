@@ -205,7 +205,7 @@ export default defineConfig({
 Use the verified amd64 Node image digest in both build and runtime stages:
 
 ```dockerfile
-FROM node:22.19.0-bookworm-slim@sha256:61ce227cc4f901a63d8328dc5fe676e6854ab48bcbba3614a213a2b9847535eb AS build
+FROM node:22.19.0-bookworm-slim@sha256:cff78eb5aa1cf27dc2b6aeea9d31366415a43e9a9ea0ddec00d780b2b66fad0f AS build
 WORKDIR /opt/pilot-agentd
 COPY services/pilot-agentd/package.json services/pilot-agentd/package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -213,7 +213,7 @@ COPY services/pilot-agentd/tsconfig.json ./
 COPY services/pilot-agentd/src ./src
 RUN npm run build && npm prune --omit=dev
 
-FROM node:22.19.0-bookworm-slim@sha256:61ce227cc4f901a63d8328dc5fe676e6854ab48bcbba3614a213a2b9847535eb
+FROM node:22.19.0-bookworm-slim@sha256:cff78eb5aa1cf27dc2b6aeea9d31366415a43e9a9ea0ddec00d780b2b66fad0f
 ENV NODE_ENV=production
 WORKDIR /opt/pilot-agentd
 RUN groupadd --gid 10701 pilot-agentd && useradd --uid 10701 --gid 10701 --no-create-home --shell /usr/sbin/nologin pilot-agentd
