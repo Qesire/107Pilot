@@ -7,6 +7,8 @@ from typing import Any
 
 import pytest
 
+from .test_store_contract import exercise_agent_store_contract
+
 
 class MutableClock:
     def __init__(self) -> None:
@@ -412,3 +414,13 @@ def test_list_sessions_has_stable_descending_cursor(tmp_path: Path) -> None:
     )
     assert second_page == [first]
     assert cursor is None
+
+
+def test_sqlite_store_satisfies_backend_contract(tmp_path: Path) -> None:
+    clock = MutableClock()
+    store = _new_store(tmp_path / "agent-contract.db", clock)
+
+    exercise_agent_store_contract(
+        store,
+        advance_clock=lambda delta: clock.advance(int(delta.total_seconds())),
+    )

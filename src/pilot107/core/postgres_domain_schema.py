@@ -699,11 +699,114 @@ _UPLOAD_SESSION_TUS_SCHEMA = _statements(
     "DELETE FROM upload_sessions"
 )
 
+_AGENT_SESSION_SCHEMA = _statements(
+    """
+    CREATE TABLE agent_sessions (
+        session_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        request_key TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        model_profile_id TEXT NOT NULL,
+        source_json JSONB NOT NULL,
+        state TEXT NOT NULL,
+        state_version INTEGER NOT NULL,
+        context_checkpoint_json JSONB,
+        resource_usage_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        outcome_json JSONB,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        UNIQUE (owner, request_key),
+        CHECK (state IN ('idle', 'queued', 'running')),
+        CHECK (state_version > 0)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_sessions_owner_updated ON agent_sessions(owner, updated_at DESC, session_id DESC)"
+    "\n-- statement\n"
+    """
+    CREATE TABLE agent_turns (
+        turn_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES agent_sessions(session_id),
+        owner TEXT NOT NULL,
+        request_key TEXT NOT NULL,
+        input_digest TEXT NOT NULL,
+        message TEXT NOT NULL,
+        state_version INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        cancel_requested SMALLINT NOT NULL DEFAULT 0,
+        lease_owner TEXT,
+        lease_expires_at TIMESTAMPTZ,
+        fencing_token INTEGER NOT NULL DEFAULT 0,
+        event_sequence INTEGER NOT NULL DEFAULT 0,
+        final_checkpoint_json JSONB,
+        error_json JSONB,
+        created_at TIMESTAMPTZ NOT NULL,
+        started_at TIMESTAMPTZ,
+        finished_at TIMESTAMPTZ,
+        UNIQUE (session_id, request_key),
+        CHECK (state IN (
+            'queued', 'running', 'interrupted', 'completed', 'cancelled', 'failed'
+        )),
+        CHECK (state_version > 0),
+        CHECK (cancel_requested IN (0, 1)),
+        CHECK (fencing_token >= 0),
+        CHECK (event_sequence >= 0)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_turns_recoverable ON agent_turns(state, lease_expires_at, created_at, turn_id)"
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_turns_owner_session ON agent_turns(owner, session_id, created_at, turn_id)"
+    "\n-- statement\n"
+    "CREATE UNIQUE INDEX uq_agent_turns_running_owner ON agent_turns(owner) WHERE state = 'running'"
+    "\n-- statement\n"
+    """
+    CREATE TABLE agent_turn_events (
+        event_id BIGSERIAL PRIMARY KEY,
+        turn_id TEXT NOT NULL REFERENCES agent_turns(turn_id),
+        session_id TEXT NOT NULL REFERENCES agent_sessions(session_id),
+        owner TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        payload_json JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        UNIQUE (turn_id, sequence),
+        CHECK (sequence > 0)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_turn_events_owner_session ON agent_turn_events(owner, session_id, event_id)"
+    "\n-- statement\n"
+    """
+    CREATE TABLE agent_tool_invocations (
+        invocation_id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL,
+        turn_id TEXT NOT NULL REFERENCES agent_turns(turn_id),
+        session_id TEXT NOT NULL REFERENCES agent_sessions(session_id),
+        owner TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        arguments_digest TEXT NOT NULL,
+        state TEXT NOT NULL,
+        result_json JSONB,
+        error_json JSONB,
+        bytes_returned BIGINT NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        UNIQUE (turn_id, idempotency_key),
+        CHECK (state IN ('running', 'completed', 'failed')),
+        CHECK (bytes_returned >= 0)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_tool_invocations_owner_turn ON agent_tool_invocations(owner, turn_id, created_at, invocation_id)"
+)
+
 _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.001.postgres_domain_schema", _DOMAIN_SCHEMA),
     ("004a.002.run_publications", _RUN_PUBLICATION_SCHEMA),
     ("004a.003.upload_sessions", _UPLOAD_SESSION_SCHEMA),
     ("004a.004.upload_sessions_tus", _UPLOAD_SESSION_TUS_SCHEMA),
+    ("004a.005.agent_sessions", _AGENT_SESSION_SCHEMA),
 )
 
 
@@ -777,6 +880,10 @@ def domain_table_names() -> tuple[str, ...]:
         "remediation_evaluations",
         "remediation_session_events",
         "upload_sessions",
+        "agent_sessions",
+        "agent_turns",
+        "agent_turn_events",
+        "agent_tool_invocations",
     )
 
 
@@ -798,6 +905,7 @@ def serial_primary_keys() -> tuple[tuple[str, str], ...]:
         ("collection_tasks", "task_id"),
         ("agent_decisions", "decision_id"),
         ("remediation_session_events", "event_id"),
+        ("agent_turn_events", "event_id"),
     )
 
 

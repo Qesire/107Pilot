@@ -1,1 +1,1 @@
-"""Tests for the pilot-agentd Python boundary."""
+"""Agent subsystem tests and shared backend contract scenarios."""

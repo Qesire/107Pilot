@@ -32,6 +32,27 @@ _TIMESTAMPTZ_COLUMNS: dict[str, frozenset[str]] = {
         {"available_at", "lease_expires_at", "created_at", "updated_at"}
     ),
     "control_traces": frozenset({"created_at"}),
+    "agent_sessions": frozenset({"created_at", "updated_at"}),
+    "agent_turns": frozenset(
+        {"lease_expires_at", "created_at", "started_at", "finished_at"}
+    ),
+    "agent_turn_events": frozenset({"created_at"}),
+    "agent_tool_invocations": frozenset({"created_at", "updated_at"}),
+}
+
+_JSONB_COLUMNS: dict[str, frozenset[str]] = {
+    "control_outbox": frozenset({"payload_json"}),
+    "agent_sessions": frozenset(
+        {
+            "source_json",
+            "context_checkpoint_json",
+            "resource_usage_json",
+            "outcome_json",
+        }
+    ),
+    "agent_turns": frozenset({"final_checkpoint_json", "error_json"}),
+    "agent_turn_events": frozenset({"payload_json"}),
+    "agent_tool_invocations": frozenset({"result_json", "error_json"}),
 }
 
 
@@ -289,14 +310,15 @@ def _canonical_json(value: object) -> str:
 
 def _canonical_row(table: str, row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
-    # SQLite stores outbox JSON as text while psycopg returns JSONB as a dict.
-    # Canonicalize the one cross-engine physical representation difference
-    # before deciding whether the transfer is complete.
-    if table == "control_outbox" and isinstance(normalized.get("payload_json"), str):
-        try:
-            normalized["payload_json"] = json.loads(normalized["payload_json"])
-        except json.JSONDecodeError as exc:
-            raise DomainDataMigrationError("control_outbox payload_json is invalid") from exc
+    # SQLite stores JSON as text while psycopg returns JSONB as Python values.
+    for column in _JSONB_COLUMNS.get(table, frozenset()):
+        if isinstance(normalized.get(column), str):
+            try:
+                normalized[column] = json.loads(normalized[column])
+            except json.JSONDecodeError as exc:
+                raise DomainDataMigrationError(
+                    f"{table}.{column} is invalid JSON"
+                ) from exc
     for column in _TIMESTAMPTZ_COLUMNS.get(table, frozenset()):
         if normalized.get(column) is not None:
             normalized[column] = _canonical_timestamptz(normalized[column], column=column)

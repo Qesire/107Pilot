@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from pilot107.agent.store import SQLiteAgentSessionStore
 from pilot107.core.contracts import ContractStore
 from pilot107.core.control_repository import SQLiteControlRepository
 from pilot107.core.file_uploads import UploadSessionStore
@@ -61,6 +62,10 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
                 "run_publications",
                 "run_publication_adoptions",
                 "remediation_sessions",
+                "agent_sessions",
+                "agent_turns",
+                "agent_turn_events",
+                "agent_tool_invocations",
             }.issubset(names)
         )
         self.assertEqual(len(names), len(domain_table_names()))
@@ -79,6 +84,7 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
             RunPublicationStore(database, run_store=run_store)
             RemediationStore(database)
             UploadSessionStore(database)
+            SQLiteAgentSessionStore(database)
             SQLiteControlRepository(database)
             with sqlite3.connect(database) as connection:
                 sqlite_tables = {
@@ -120,6 +126,24 @@ class PostgresDomainSqlTranslationTests(unittest.TestCase):
         self.assertIn("jsonb_array_elements_text", translated)
         self.assertIn("THEN 1 ELSE 0", translated)
         self.assertEqual(translated.count("%s"), 2)
+
+
+class PostgresAgentSessionSchemaTests(unittest.TestCase):
+    def test_agent_migration_uses_native_postgres_types_and_fencing_index(self) -> None:
+        from pilot107.core.postgres_domain_schema import _MIGRATIONS
+
+        migration_id, statements = _MIGRATIONS[-1]
+        schema = "\n".join(statements)
+
+        self.assertEqual(migration_id, "004a.005.agent_sessions")
+        self.assertIn("CREATE TABLE agent_sessions", schema)
+        self.assertIn("CREATE TABLE agent_turns", schema)
+        self.assertIn("CREATE TABLE agent_turn_events", schema)
+        self.assertIn("CREATE TABLE agent_tool_invocations", schema)
+        self.assertIn("JSONB", schema)
+        self.assertIn("BIGSERIAL", schema)
+        self.assertIn("TIMESTAMPTZ", schema)
+        self.assertIn("WHERE state = 'running'", schema)
 
 
 class PostgresDomainCopyTests(unittest.TestCase):

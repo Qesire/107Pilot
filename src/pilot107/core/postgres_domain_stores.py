@@ -18,6 +18,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, cast
 
+from pilot107.agent.postgres_store import PostgresAgentSessionStore
 from pilot107.core.contracts import ContractService, ContractStore
 from pilot107.core.file_uploads import UploadSessionStore
 from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
@@ -190,6 +191,20 @@ class PostgresUploadSessionStore(_PostgresDomainStore, UploadSessionStore):
 
     def connect(self) -> sqlite3.Connection:
         return cast(sqlite3.Connection, self._postgres_connect())
+
+
+__all__ = [
+    "PostgresAgentSessionStore",
+    "PostgresContractStore",
+    "PostgresDomainStoreError",
+    "PostgresPlatformSnapshotStore",
+    "PostgresRemediationStore",
+    "PostgresRunPublicationStore",
+    "PostgresRunStore",
+    "PostgresTemplateMarketStore",
+    "PostgresUploadSessionStore",
+    "PostgresUserEntitlementStore",
+]
 
 
 def _translate_sql(query: str) -> str:

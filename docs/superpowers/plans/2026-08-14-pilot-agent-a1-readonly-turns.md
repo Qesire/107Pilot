@@ -396,7 +396,7 @@ git commit -m "feat: persist agent sessions and turns"
 - Consumes: the Task 2 Store contract.
 - Produces: `PostgresAgentSessionStore` and `build_agent_session_store(sqlite_path, postgres_dsn)`.
 
-- [ ] **Step 1: Extract a backend-neutral Store contract suite**
+- [x] **Step 1: Extract a backend-neutral Store contract suite**
 
 Make `tests/agent/test_store_contract.py` expose a concrete backend-neutral
 scenario (continue the same function with cancellation, interruption, and
@@ -463,7 +463,7 @@ The SQLite test must call this suite before the PostgreSQL adapter exists. The
 same suite must also cover invocation reservation/replay, same-key/different-
 digest conflict, byte aggregation, and rejection after the Turn fence changes.
 
-- [ ] **Step 2: Run the PostgreSQL tests and verify RED**
+- [x] **Step 2: Run the PostgreSQL tests and verify RED**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest \
@@ -472,14 +472,14 @@ PYTHONPATH=src uv run --extra dev pytest \
 
 Expected with the integration DSN configured: missing Agent tables and adapter failures. Without the DSN, only the marked integration cases skip; migration-shape tests still fail.
 
-- [ ] **Step 3: Add migration `004a.005.agent_sessions` and the PostgreSQL Store**
+- [x] **Step 3: Add migration `004a.005.agent_sessions` and the PostgreSQL Store**
 
 Use native `JSONB`, `BIGSERIAL` event IDs, `TIMESTAMPTZ`, row locks, and an
 atomic `UPDATE` whose equality predicate includes `fencing_token` and whose
 `RETURNING` clause yields the updated record. Do not inherit SQLite SQL or
 translate `?` placeholders.
 
-- [ ] **Step 4: Wire runtime selection**
+- [x] **Step 4: Wire runtime selection**
 
 ```python
 def build_agent_session_store(
@@ -492,7 +492,7 @@ def build_agent_session_store(
 
 Add Agent tables to `expected_postgres_domain_tables()` and the checksum migration test.
 
-- [ ] **Step 5: Run both backends and commit**
+- [x] **Step 5: Run both backends and commit**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/agent/test_store.py \
