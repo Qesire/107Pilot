@@ -35,6 +35,10 @@ services:
     volumes:
       - ./slurm-cpu-rc/slurm.conf:/etc/slurm/slurm.conf:ro
 
+  pilot-agentd:
+    cpus: 0.50
+    mem_limit: 768m
+
   pilot107-api:
     cpus: 0.50
     mem_limit: 768m

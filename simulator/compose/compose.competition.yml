@@ -35,6 +35,9 @@ services:
       timeout: 5s
       retries: 10
 
+  pilot-agentd:
+    profiles: ["competition"]
+
   pilot107-api:
     profiles: ["competition"]
     restart: unless-stopped
@@ -54,7 +57,10 @@ services:
       PILOT107_CODE_CONTEXT_AFTER_LINES: ${PILOT107_CODE_CONTEXT_AFTER_LINES:-60}
       PILOT107_CODE_CONTEXT_MAX_FILE_BYTES: ${PILOT107_CODE_CONTEXT_MAX_FILE_BYTES:-65536}
     depends_on:
-      - pilot107-command-gateway
+      pilot107-command-gateway:
+        condition: service_started
+      pilot-agentd:
+        condition: service_healthy
 
   pilot107-worker:
     profiles: ["competition"]
@@ -65,15 +71,11 @@ services:
       PILOT107_COMMAND_GATEWAY_TOKEN: ${PILOT107_COMMAND_GATEWAY_TOKEN:-competition-dev-token}
       PILOT107_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/{user}}
       PILOT107_CAPSULE_ROOT: /var/lib/pilot107/capsules
-      PILOT107_LLM_BASE_URL: ${PILOT107_LLM_BASE_URL:-}
-      PILOT107_LLM_API_KEY: ${PILOT107_LLM_API_KEY:-}
-      PILOT107_LLM_MODEL: ${PILOT107_LLM_MODEL:-}
-      PILOT107_LLM_TIMEOUT_SECONDS: ${PILOT107_LLM_TIMEOUT_SECONDS:-20}
-      PILOT107_LLM_MAX_TOKENS: ${PILOT107_LLM_MAX_TOKENS:-700}
-      PILOT107_LLM_STRUCTURED_OUTPUT_MODE: ${PILOT107_LLM_STRUCTURED_OUTPUT_MODE:-prompt_json}
-      PILOT107_LLM_MAX_ATTEMPTS: ${PILOT107_LLM_MAX_ATTEMPTS:-2}
     depends_on:
-      - pilot107-command-gateway
+      pilot107-command-gateway:
+        condition: service_started
+      pilot-agentd:
+        condition: service_healthy
 
   pilot107-web:
     profiles: ["competition"]

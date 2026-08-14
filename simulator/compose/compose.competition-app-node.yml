@@ -1,6 +1,41 @@
 name: pilot107-app-node
 
 services:
+  pilot-agentd:
+    image: ${PILOT107_AGENTD_IMAGE:-pilot107/agentd:local}
+    restart: unless-stopped
+    user: "10701:10701"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - app
+    environment:
+      PILOT107_AGENTD_LISTEN_HOST: 0.0.0.0
+      PILOT107_AGENTD_LISTEN_PORT: 8091
+      PILOT107_AGENTD_TOKEN: ${PILOT107_AGENTD_TOKEN:-competition-agentd-token}
+      PILOT107_AGENTD_MODEL_PROFILE: ${PILOT107_AGENTD_MODEL_PROFILE:-campus-default}
+      PILOT107_AGENTD_FAUX_SCENARIO: ${PILOT107_AGENTD_FAUX_SCENARIO:-}
+      PILOT107_LLM_BASE_URL: ${PILOT107_LLM_BASE_URL:-}
+      PILOT107_LLM_API_KEY: ${PILOT107_LLM_API_KEY:-}
+      PILOT107_LLM_MODEL: ${PILOT107_LLM_MODEL:-}
+      PILOT107_LLM_TIMEOUT_SECONDS: ${PILOT107_LLM_TIMEOUT_SECONDS:-60}
+      PILOT107_LLM_MAX_TOKENS: ${PILOT107_LLM_MAX_TOKENS:-1200}
+      PILOT107_LLM_MAX_ATTEMPTS: ${PILOT107_LLM_MAX_ATTEMPTS:-2}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:8091/readyz')
+          .then(response=>{if(!response.ok)process.exit(1)})
+          .catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
   pilot107-api:
     image: ${PILOT107_API_IMAGE:-pilot107/api:local}
     restart: unless-stopped
@@ -42,18 +77,17 @@ services:
       PILOT107_AUTH_REQUIRED: "true"
       PILOT107_PROXY_HMAC_SECRET_FILE: /run/secrets/pilot107-proxy-hmac
       PILOT107_CONTRACT_PROFILE: ${PILOT107_CONTRACT_PROFILE:-real107-sim}
-      PILOT107_LLM_BASE_URL: ${PILOT107_LLM_BASE_URL:-}
-      PILOT107_LLM_API_KEY: ${PILOT107_LLM_API_KEY:-}
-      PILOT107_LLM_MODEL: ${PILOT107_LLM_MODEL:-}
-      PILOT107_LLM_TIMEOUT_SECONDS: ${PILOT107_LLM_TIMEOUT_SECONDS:-20}
-      PILOT107_LLM_MAX_TOKENS: ${PILOT107_LLM_MAX_TOKENS:-700}
-      PILOT107_LLM_STRUCTURED_OUTPUT_MODE: ${PILOT107_LLM_STRUCTURED_OUTPUT_MODE:-prompt_json}
-      PILOT107_LLM_MAX_ATTEMPTS: ${PILOT107_LLM_MAX_ATTEMPTS:-2}
+      PILOT107_AGENTD_URL: http://pilot-agentd:8091
+      PILOT107_AGENTD_TOKEN: ${PILOT107_AGENTD_TOKEN:-competition-agentd-token}
+      PILOT107_AGENTD_MODEL_PROFILE: ${PILOT107_AGENTD_MODEL_PROFILE:-campus-default}
     volumes:
       - public:/public:ro
       - pilot107-data:/var/lib/pilot107
     secrets:
       - pilot107-proxy-hmac
+    depends_on:
+      pilot-agentd:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=2).read()\nPY"]
       interval: 10s
@@ -81,11 +115,17 @@ services:
       PILOT107_COMMAND_GATEWAY_TOKEN: ${PILOT107_COMMAND_GATEWAY_TOKEN:-competition-dev-token}
       PILOT107_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/{user}}
       PILOT107_WORKER_HEALTH_PATH: /var/lib/pilot107/worker-health.json
+      PILOT107_AGENTD_URL: http://pilot-agentd:8091
+      PILOT107_AGENTD_TOKEN: ${PILOT107_AGENTD_TOKEN:-competition-agentd-token}
+      PILOT107_AGENTD_MODEL_PROFILE: ${PILOT107_AGENTD_MODEL_PROFILE:-campus-default}
     volumes:
       - public:/public:ro
       - pilot107-data:/var/lib/pilot107
     depends_on:
-      - pilot107-api
+      pilot107-api:
+        condition: service_started
+      pilot-agentd:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD-SHELL

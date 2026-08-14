@@ -4,6 +4,7 @@ set -euo pipefail
 api_image="${PILOT107_API_IMAGE:-pilot107/api:local}"
 worker_image="${PILOT107_WORKER_IMAGE:-pilot107/worker:local}"
 web_image="${PILOT107_WEB_IMAGE:-pilot107/web:local}"
+agentd_image="${PILOT107_AGENTD_IMAGE:-pilot107/agentd:local}"
 
 for image in "$api_image" "$worker_image" "$web_image"; do
   docker run --rm "$image" python3 - <<'PY'
@@ -36,5 +37,9 @@ assert fixed_web.fixed_user == "alice"
 assert WebConfig(api_base_url="http://api:8080").demo_user == "alice"
 PY
 done
+
+docker run --rm "$agentd_image" node --version
+docker run --rm "$agentd_image" node -e \
+  "import('@earendil-works/pi-agent-core').then(module => { if (typeof module.Agent !== 'function') process.exit(1); })"
 
 echo "pilot107 app images ok"
