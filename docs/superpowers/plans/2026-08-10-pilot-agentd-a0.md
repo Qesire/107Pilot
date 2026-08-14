@@ -1525,7 +1525,7 @@ git commit -m "refactor: migrate remediation llm to pilot-agentd"
 - Consumes: the real campus provider registration and Turn executor from Tasks 3 and 6.
 - Produces: deterministic proof of wire compatibility, error mapping, retry boundaries, and secret redaction without a real key.
 
-- [ ] **Step 1: Implement a controllable mock only after writing its first failing integration test**
+- [x] **Step 1: Implement a controllable mock only after writing its first failing integration test**
 
 ```ts
 it("handles arbitrarily fragmented OpenAI SSE without streaming usage", async () => {
@@ -1549,7 +1549,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node:22.19.0-bookworm-slim npm test -- tests/campus-provider.integration.test.ts
 ```
 
-- [ ] **Step 2: Build `startMockOpenAI()` on `node:http`**
+- [x] **Step 2: Build `startMockOpenAI()` on `node:http`**
 
 The helper records method, URL, headers, and JSON body; replies with scripted status, headers, byte chunks, delay, or socket destruction. It binds only `127.0.0.1` on an ephemeral port and always closes in `afterEach`.
 
@@ -1568,7 +1568,7 @@ export interface MockGateway {
 }
 ```
 
-- [ ] **Step 3: Add the complete RED failure matrix**
+- [x] **Step 3: Add the complete RED failure matrix**
 
 ```ts
 it.each([
@@ -1600,7 +1600,7 @@ it("does not retry after public interactive text", async () => {
 
 Also assert the outgoing payload uses `system`, `max_tokens`, `stream: true`, omits `store`, `reasoning_effort`, strict tool flags, and streaming usage options; Authorization reaches the mock but does not appear in any returned event or captured error string.
 
-- [ ] **Step 4: Adjust only the campus adapter/error mapper until the matrix is GREEN**
+- [x] **Step 4: Adjust only the campus adapter/error mapper until the matrix is GREEN**
 
 Do not add a second manual OpenAI client. All requests must continue through Pi AI's `openAICompletionsApi()` and `models.streamSimple`.
 
@@ -1610,7 +1610,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   node:22.19.0-bookworm-slim npm test -- tests/campus-provider.integration.test.ts
 ```
 
-- [ ] **Step 5: Commit the compatibility harness**
+- [x] **Step 5: Commit the compatibility harness**
 
 ```bash
 git add services/pilot-agentd/tests/support/mock-openai.ts services/pilot-agentd/tests/campus-provider.integration.test.ts services/pilot-agentd/src/models.ts services/pilot-agentd/src/errors.ts services/pilot-agentd/src/turn-executor.ts
@@ -1635,7 +1635,7 @@ git commit -m "test: verify campus llm streaming compatibility"
 - Consumes: built Agentd image and Python Agentd config.
 - Produces: simulator/competition topology where only Agentd sees `PILOT107_LLM_API_KEY`.
 
-- [ ] **Step 1: Write failing static Compose isolation tests**
+- [x] **Step 1: Write failing static Compose isolation tests**
 
 ```python
 @pytest.mark.parametrize(
@@ -1662,13 +1662,13 @@ def test_only_agentd_receives_llm_key(compose_path: str) -> None:
     assert agentd["cap_drop"] == ["ALL"]
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/test_agentd_compose.py -q
 ```
 
-- [ ] **Step 3: Add the hardened Agentd service and rewire Python services**
+- [x] **Step 3: Add the hardened Agentd service and rewire Python services**
 
 Each Compose file uses this shape, adapted only for existing network/profile names:
 
@@ -1704,7 +1704,7 @@ pilot-agentd:
 
 API and Worker receive only the three `PILOT107_AGENTD_*` variables and depend on `pilot-agentd: condition: service_healthy`. Remove every `PILOT107_LLM_*` entry from their environments.
 
-- [ ] **Step 4: Build/check Agentd with the app images**
+- [x] **Step 4: Build/check Agentd with the app images**
 
 Extend scripts with:
 
@@ -1715,7 +1715,7 @@ docker run --rm "$agentd_image" node --version
 docker run --rm "$agentd_image" node -e "import('@earendil-works/pi-agent-core').then(m=>{if(!m.Agent)process.exit(1)})"
 ```
 
-- [ ] **Step 5: Run GREEN, rendered Compose validation, and image checks**
+- [x] **Step 5: Run GREEN, rendered Compose validation, and image checks**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/test_agentd_compose.py -q
@@ -1724,7 +1724,7 @@ bash scripts/build-app-images.sh
 bash scripts/check-app-images.sh
 ```
 
-- [ ] **Step 6: Commit the deployment topology**
+- [x] **Step 6: Commit the deployment topology**
 
 ```bash
 git add services/pilot-agentd/Dockerfile scripts/build-app-images.sh scripts/check-app-images.sh simulator/compose tests/test_agentd_compose.py
@@ -1749,7 +1749,7 @@ git commit -m "feat: deploy pilot-agentd in local compose"
 - Consumes: the complete Agentd/Python/Compose path.
 - Produces: one-command local evidence for faux vertical behavior, safe campus skip, no-direct-LLM architecture, and completion audit.
 
-- [ ] **Step 1: Write failing architecture gates**
+- [x] **Step 1: Write failing architecture gates**
 
 ```python
 def test_python_production_code_does_not_call_llm_chat_completions() -> None:
@@ -1767,7 +1767,7 @@ def test_agentd_has_no_cluster_or_workspace_mount_contract() -> None:
     assert "slurm" not in dockerfile.lower()
 ```
 
-- [ ] **Step 2: Run RED and remove remaining direct-client/config references**
+- [x] **Step 2: Run RED and remove remaining direct-client/config references**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/test_architecture_boundaries.py -q
@@ -1776,7 +1776,7 @@ rg -n '/chat/completions|PILOT107_LLM_API_KEY' src/pilot107
 
 Expected before cleanup: the scan lists remaining old direct-client or configuration references; after cleanup it prints nothing and the test passes.
 
-- [ ] **Step 3: Add a faux vertical smoke that exercises all four task kinds**
+- [x] **Step 3: Add a faux vertical smoke that exercises all four task kinds**
 
 `smoke-pilot-agentd-faux.sh` starts only Agentd in a temporary Compose project, waits for readiness, and runs the Python smoke. The Python smoke verifies:
 
@@ -1805,11 +1805,11 @@ assert run_cancel_restore_fixture(client).result["text"]
 
 The faux server configuration must use deterministic scripted responses committed under the test code; it must never require a campus key.
 
-- [ ] **Step 4: Migrate the campus smoke to the internal service**
+- [x] **Step 4: Migrate the campus smoke to the internal service**
 
 The script reads `PILOT107_AGENTD_URL`, `PILOT107_AGENTD_TOKEN`, and `PILOT107_AGENTD_MODEL_PROFILE`. It exits 0 with `SKIP: pilot-agentd or campus profile is not configured` when absent. When configured, it submits an explain fixture through Agentd, checks non-empty structured fields, provider/model metadata, citations, and usage availability semantics. It never reads or prints `PILOT107_LLM_API_KEY`.
 
-- [ ] **Step 5: Add the consolidated check script and docs**
+- [x] **Step 5: Add the consolidated check script and docs**
 
 ```bash
 #!/usr/bin/env bash
@@ -1827,7 +1827,7 @@ PYTHONPATH=src uv run --extra dev pytest tests/agent tests/test_agent.py tests/c
 
 Document the old-to-new environment mapping, secret placement, safe skip, faux smoke, campus smoke, health/readiness meanings, and the fact that Agentd carries no cluster credentials.
 
-- [ ] **Step 6: Run the full completion verification**
+- [x] **Step 6: Run the full completion verification**
 
 ```bash
 bash scripts/check-pilot-agentd.sh
@@ -1850,7 +1850,7 @@ Expected:
 - `git diff --check` is silent;
 - `git status --short` contains only the known user-owned `?? 300` before the final commit.
 
-- [ ] **Step 7: Commit verification and documentation**
+- [x] **Step 7: Commit verification and documentation**
 
 ```bash
 git add tests/test_architecture_boundaries.py tests/test_pilot_agentd_vertical.py scripts/check-pilot-agentd.sh scripts/smoke-pilot-agentd-faux.py scripts/smoke-pilot-agentd-faux.sh scripts/smoke-campus-llm.py scripts/smoke-campus-llm.sh scripts/check-ci-local.sh apps/api/README.md simulator/compose/README.md
