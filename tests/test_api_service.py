@@ -42,6 +42,80 @@ class ApiServiceTests(unittest.TestCase):
         )
         self.assertEqual(config.allowed_roots, ())
         self.assertFalse(config.auth_required)
+        self.assertFalse(config.agent_a1_enabled)
+        self.assertIsNone(config.agent_capability_hmac_secret)
+        self.assertIsNone(config.agent_capability_hmac_secret_file)
+
+    def test_agent_a1_config_keeps_capability_secret_out_of_repr(self) -> None:
+        secret_file = self.root / "agent-capability.key"
+        config = config_from_env(
+            {
+                "PILOT107_AGENT_CAPABILITY_HMAC_SECRET": "s" * 32,
+                "PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE": str(secret_file),
+            },
+            project_root=self.root,
+        )
+
+        self.assertTrue(config.agent_a1_enabled)
+        self.assertEqual(config.agent_capability_hmac_secret, b"s" * 32)
+        self.assertEqual(config.agent_capability_hmac_secret_file, secret_file)
+        self.assertNotIn("s" * 32, repr(config))
+
+    def test_build_api_service_requires_agent_capability_secret_when_enabled(self) -> None:
+        with self.assertRaisesRegex(ValueError, "capability HMAC secret"):
+            build_api_service(
+                config_from_env(
+                    {"PILOT107_AGENT_A1_ENABLED": "true"},
+                    project_root=self.root,
+                )
+            )
+
+    def test_build_api_service_rejects_inline_and_file_agent_secrets(self) -> None:
+        secret_file = self.root / "agent-capability.key"
+        secret_file.write_bytes(b"f" * 32)
+
+        with self.assertRaisesRegex(ValueError, "both inline and file"):
+            build_api_service(
+                config_from_env(
+                    {
+                        "PILOT107_AGENT_A1_ENABLED": "true",
+                        "PILOT107_AGENT_CAPABILITY_HMAC_SECRET": "s" * 32,
+                        "PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE": str(secret_file),
+                    },
+                    project_root=self.root,
+                )
+            )
+
+    def test_build_api_service_rejects_short_agent_capability_secret_file(self) -> None:
+        secret_file = self.root / "agent-capability.key"
+        secret_file.write_bytes(b"too-short")
+
+        with self.assertRaisesRegex(ValueError, "at least 32 bytes"):
+            build_api_service(
+                config_from_env(
+                    {
+                        "PILOT107_AGENT_A1_ENABLED": "true",
+                        "PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE": str(secret_file),
+                    },
+                    project_root=self.root,
+                )
+            )
+
+    def test_build_api_service_wires_agent_tool_gateway_from_secret_file(self) -> None:
+        secret_file = self.root / "agent-capability.key"
+        secret_file.write_bytes(b"f" * 32)
+
+        api = build_api_service(
+            config_from_env(
+                {
+                    "PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE": str(secret_file),
+                },
+                project_root=self.root,
+            )
+        )
+
+        self.assertIsNotNone(api.agent_tool_routes)
+        self.assertNotIn("f" * 32, repr(api))
 
     def test_config_from_env_accepts_backend_and_auth_overrides(self) -> None:
         config = config_from_env(

@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from uuid import uuid4
 
 from pilot107.adapters.slurm import SlurmBackendError
+from pilot107.api.agent_tool_routes import AgentToolRoutes
 from pilot107.api.evidence_query import EvidencePreviewUnavailable, EvidenceQueryService
 from pilot107.api.file_routes import FileRoutes
 from pilot107.api.health import ApiHealthService
@@ -169,6 +170,7 @@ class Pilot107HttpApi:
         terminal_service: TerminalCommandService | None = None,
         ssh_connection_service: SshConnectionService | None = None,
         file_routes: FileRoutes | None = None,
+        agent_tool_routes: AgentToolRoutes | None = None,
         auth_required: bool = False,
         trusted_user_header: str = "X-Pilot107-User",
         proxy_hmac_secret: bytes | None = None,
@@ -231,6 +233,7 @@ class Pilot107HttpApi:
         self.terminal_service = terminal_service
         self.ssh_connection_service = ssh_connection_service
         self.file_routes = file_routes
+        self.agent_tool_routes = agent_tool_routes
         self.platform_snapshot_store = platform_snapshot_store
         self.user_entitlement_store = user_entitlement_store
         self.template_market_store = template_market_store
@@ -693,7 +696,8 @@ class Pilot107HttpApi:
         headers: Mapping[str, str] | None = None,
     ) -> ApiResponse:
         request_id = _request_id(headers)
-        response = self._proxy_auth_error("POST", path, body, headers)
+        is_agent_tool = urlparse(path).path == "/internal/v1/agent-tools/invoke"
+        response = None if is_agent_tool else self._proxy_auth_error("POST", path, body, headers)
         if response is None:
             response = self._handle_post(path, body=body, headers=headers)
         return self._finalize_and_trace(
@@ -905,6 +909,14 @@ class Pilot107HttpApi:
     ) -> ApiResponse:
         parsed = urlparse(path)
         parts = _route_parts(parsed.path)
+        if self.agent_tool_routes is not None:
+            agent_tool_response = self.agent_tool_routes.handle_post(
+                parts,
+                body=body,
+                headers=headers,
+            )
+            if agent_tool_response is not None:
+                return agent_tool_response
         identity, auth_error = self._resolve_identity(headers)
         if auth_error is not None:
             return auth_error

@@ -555,6 +555,13 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
             openapi_extra={"parameters": [_REMEDIATION_SESSION_PATH_PARAMETER]},
         )
 
+    app.add_api_route(
+        "/internal/v1/agent-tools/invoke",
+        forward_post,
+        methods=["POST"],
+        include_in_schema=False,
+    )
+
     # Routes migrate to explicit OpenAPI operations incrementally while sharing
     # the same domain adapter and contract tests throughout the transition.
     app.add_api_route(

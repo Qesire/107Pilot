@@ -1,0 +1,300 @@
+"""Authoritative reservation, authorization, and budgets for Agent read tools."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
+from pilot107.agent.capabilities import (
+    AgentCapabilityClaims,
+    AgentCapabilityError,
+    AgentCapabilitySigner,
+)
+from pilot107.agent.protocol import TOOL_RESULT_PROTOCOL_VERSION, ToolInvocation, ToolResult
+from pilot107.agent.session import AgentSessionConflict
+from pilot107.agent.store import AgentSessionStore
+
+
+class AgentToolGatewayError(RuntimeError):
+    """Stable, redacted Tool Gateway failure suitable for API mapping."""
+
+    def __init__(self, message: str, *, code: str, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+
+
+@dataclass(frozen=True)
+class AgentReadResult:
+    result: dict[str, Any]
+    evidence_refs: tuple[str, ...]
+
+
+type AgentReadHandler = Callable[[str, Mapping[str, object]], AgentReadResult]
+
+
+class AgentToolGateway:
+    def __init__(
+        self,
+        *,
+        store: AgentSessionStore,
+        signer: AgentCapabilitySigner,
+        handlers: Mapping[str, AgentReadHandler],
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self.store = store
+        self.signer = signer
+        self.handlers = dict(handlers)
+        self._clock = clock or (lambda: datetime.now(UTC))
+
+    def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult:
+        claims = self._verify(token)
+        self._validate_binding(claims, invocation)
+        arguments_digest = hashlib.sha256(_canonical(invocation.arguments)).hexdigest()
+        try:
+            reserved, created = self.store.reserve_tool_invocation(
+                invocation_id=invocation.invocation_id,
+                idempotency_key=invocation.idempotency_key,
+                owner=invocation.owner,
+                session_id=invocation.session_id,
+                turn_id=invocation.turn_id,
+                expected_state_version=invocation.state_version,
+                expected_fencing_token=claims.fencing_token,
+                tool_name=invocation.tool_name,
+                arguments_digest=arguments_digest,
+            )
+        except AgentSessionConflict as exc:
+            self._raise_store_conflict(claims, invocation, exc)
+
+        if not created:
+            return self._replay(reserved, invocation.invocation_id)
+
+        usage = self.store.get_turn_tool_usage(
+            turn_id=invocation.turn_id,
+            owner=invocation.owner,
+            expected_state_version=invocation.state_version,
+            expected_fencing_token=claims.fencing_token,
+        )
+        if usage.invocations > claims.max_invocations:
+            self._persist_failure(
+                invocation,
+                claims,
+                code="AGENT.TOOL.INVOCATION_BUDGET_EXCEEDED",
+                message="Agent tool invocation budget exceeded",
+            )
+            raise AgentToolGatewayError(
+                "Agent tool invocation budget exceeded",
+                code="AGENT.TOOL.INVOCATION_BUDGET_EXCEEDED",
+            )
+
+        handler = self.handlers.get(invocation.tool_name)
+        if handler is None:
+            self._persist_failure(
+                invocation,
+                claims,
+                code="AGENT.TOOL.UNAVAILABLE",
+                message="Agent tool is unavailable",
+            )
+            raise AgentToolGatewayError(
+                "Agent tool is unavailable", code="AGENT.TOOL.UNAVAILABLE"
+            )
+        try:
+            read_result = handler(invocation.owner, invocation.arguments)
+        except AgentToolGatewayError as exc:
+            self._persist_failure(
+                invocation, claims, code=exc.code, message=str(exc), retryable=exc.retryable
+            )
+            raise
+        except Exception:
+            self._persist_failure(
+                invocation,
+                claims,
+                code="AGENT.TOOL.READ_FAILED",
+                message="Agent read tool failed",
+            )
+            raise AgentToolGatewayError(
+                "Agent read tool failed", code="AGENT.TOOL.READ_FAILED"
+            ) from None
+        if not isinstance(read_result, AgentReadResult):
+            self._persist_failure(
+                invocation,
+                claims,
+                code="AGENT.TOOL.INVALID_RESULT",
+                message="Agent read tool returned an invalid result",
+            )
+            raise AgentToolGatewayError(
+                "Agent read tool returned an invalid result",
+                code="AGENT.TOOL.INVALID_RESULT",
+            )
+        bytes_returned = len(_canonical(read_result.result))
+        if usage.bytes_returned + bytes_returned > claims.max_bytes:
+            self._persist_failure(
+                invocation,
+                claims,
+                code="AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
+                message="Agent tool byte budget exceeded",
+            )
+            raise AgentToolGatewayError(
+                "Agent tool byte budget exceeded",
+                code="AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
+            )
+        stored_result = {
+            "result": read_result.result,
+            "evidence_refs": list(read_result.evidence_refs),
+        }
+        self.store.finish_tool_invocation(
+            invocation_id=invocation.invocation_id,
+            owner=invocation.owner,
+            expected_state_version=invocation.state_version,
+            expected_fencing_token=claims.fencing_token,
+            result=stored_result,
+            error=None,
+            bytes_returned=bytes_returned,
+        )
+        return ToolResult(
+            schema_version=TOOL_RESULT_PROTOCOL_VERSION,
+            invocation_id=invocation.invocation_id,
+            result=read_result.result,
+            error=None,
+            evidence_refs=read_result.evidence_refs,
+            bytes_returned=bytes_returned,
+        )
+
+    def _verify(self, token: str) -> AgentCapabilityClaims:
+        try:
+            return self.signer.verify(token)
+        except AgentCapabilityError as exc:
+            raise AgentToolGatewayError(str(exc), code=exc.code) from None
+
+    def _validate_binding(
+        self, claims: AgentCapabilityClaims, invocation: ToolInvocation
+    ) -> None:
+        if (
+            invocation.owner != claims.owner
+            or invocation.session_id != claims.session_id
+            or invocation.turn_id != claims.turn_id
+            or invocation.state_version != claims.state_version
+            or invocation.profile_id != claims.profile_id
+            or invocation.tool_name not in claims.tools
+        ):
+            raise AgentToolGatewayError(
+                "Agent tool invocation is not authorized",
+                code="AGENT.TOOL.UNAUTHORIZED",
+            )
+        now = self._now()
+        try:
+            deadline = datetime.fromisoformat(invocation.deadline.replace("Z", "+00:00"))
+        except ValueError:
+            raise AgentToolGatewayError(
+                "Agent tool invocation deadline is invalid",
+                code="AGENT.TOOL.INVALID",
+            ) from None
+        if deadline.tzinfo is None or deadline.astimezone(UTC) < now:
+            raise AgentToolGatewayError(
+                "Agent tool invocation deadline has expired",
+                code="AGENT.TOOL.DEADLINE_EXPIRED",
+            )
+
+    def _raise_store_conflict(
+        self,
+        claims: AgentCapabilityClaims,
+        invocation: ToolInvocation,
+        cause: AgentSessionConflict,
+    ) -> None:
+        del cause
+        try:
+            self.store.get_turn_tool_usage(
+                turn_id=invocation.turn_id,
+                owner=invocation.owner,
+                expected_state_version=invocation.state_version,
+                expected_fencing_token=claims.fencing_token,
+            )
+        except AgentSessionConflict:
+            raise AgentToolGatewayError(
+                "Agent Turn capability is stale or fenced", code="AGENT.TOOL.FENCED"
+            ) from None
+        raise AgentToolGatewayError(
+            "Agent tool idempotency key conflicts with different content",
+            code="AGENT.TOOL.IDEMPOTENCY_CONFLICT",
+        ) from None
+
+    def _replay(self, record: Any, invocation_id: str) -> ToolResult:
+        if record.state == "running":
+            raise AgentToolGatewayError(
+                "Agent tool invocation is already in progress",
+                code="AGENT.TOOL.INVOCATION_IN_PROGRESS",
+                retryable=True,
+            )
+        if record.state == "failed":
+            error = record.error or {
+                "code": "AGENT.TOOL.READ_FAILED",
+                "message": "Agent read tool failed",
+                "retryable": False,
+            }
+            raise AgentToolGatewayError(
+                str(error.get("message", "Agent read tool failed")),
+                code=str(error.get("code", "AGENT.TOOL.READ_FAILED")),
+                retryable=bool(error.get("retryable", False)),
+            )
+        stored = record.result
+        if (
+            not isinstance(stored, dict)
+            or not isinstance(stored.get("result"), dict)
+            or not isinstance(stored.get("evidence_refs"), list)
+            or not all(isinstance(item, str) for item in stored["evidence_refs"])
+        ):
+            raise AgentToolGatewayError(
+                "Stored Agent tool result is invalid", code="AGENT.TOOL.INVALID_RESULT"
+            )
+        return ToolResult(
+            schema_version=TOOL_RESULT_PROTOCOL_VERSION,
+            invocation_id=invocation_id,
+            result=stored["result"],
+            error=None,
+            evidence_refs=tuple(stored["evidence_refs"]),
+            bytes_returned=record.bytes_returned,
+        )
+
+    def _persist_failure(
+        self,
+        invocation: ToolInvocation,
+        claims: AgentCapabilityClaims,
+        *,
+        code: str,
+        message: str,
+        retryable: bool = False,
+    ) -> None:
+        self.store.finish_tool_invocation(
+            invocation_id=invocation.invocation_id,
+            owner=invocation.owner,
+            expected_state_version=invocation.state_version,
+            expected_fencing_token=claims.fencing_token,
+            result=None,
+            error={"code": code, "message": message, "retryable": retryable},
+            bytes_returned=0,
+        )
+
+    def _now(self) -> datetime:
+        current = self._clock()
+        if current.tzinfo is None:
+            raise ValueError("Tool Gateway clock must be timezone-aware")
+        return current.astimezone(UTC)
+
+
+def _canonical(value: object) -> bytes:
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise AgentToolGatewayError(
+            "Agent tool payload is invalid", code="AGENT.TOOL.INVALID"
+        ) from exc

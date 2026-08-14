@@ -43,8 +43,13 @@ from pilot107.adapters.ssh_relay import (
     SshRelayExecutor,
     SubprocessSshRelayClient,
 )
+from pilot107.agent.capabilities import AgentCapabilitySigner
 from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig
+from pilot107.agent.read_tools import AgentReadContext, build_a1_read_handlers
+from pilot107.agent.store_factory import build_agent_session_store
+from pilot107.agent.tool_gateway import AgentToolGateway
+from pilot107.api.agent_tool_routes import AgentToolRoutes
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.file_routes import FileRoutes
 from pilot107.api.http_app import Pilot107HttpApi
@@ -56,6 +61,7 @@ from pilot107.core.code_context import (
     LocalWorkspaceReader,
     SshWorkspaceConfig,
     SshWorkspaceReader,
+    WorkspaceReader,
 )
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
 from pilot107.core.control_repository import ControlRepository
@@ -158,6 +164,9 @@ class ApiServiceConfig:
     agentd_url: str | None = None
     agentd_token: str | None = field(default=None, repr=False)
     agentd_model_profile: str | None = None
+    agent_a1_enabled: bool = False
+    agent_capability_hmac_secret: bytes | None = field(default=None, repr=False)
+    agent_capability_hmac_secret_file: Path | None = field(default=None, repr=False)
     # Code context is fail-closed.  A deployment must explicitly select a
     # transport and exact read roots; ``workdir`` alone never grants source
     # access to the Agent.
@@ -268,6 +277,19 @@ def config_from_env(
         agentd_url=values.get("PILOT107_AGENTD_URL") or None,
         agentd_token=values.get("PILOT107_AGENTD_TOKEN") or None,
         agentd_model_profile=values.get("PILOT107_AGENTD_MODEL_PROFILE") or None,
+        agent_a1_enabled=(
+            _bool(values, "PILOT107_AGENT_A1_ENABLED", False)
+            or bool(values.get("PILOT107_AGENT_CAPABILITY_HMAC_SECRET"))
+            or bool(values.get("PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE"))
+        ),
+        agent_capability_hmac_secret=(
+            None
+            if not values.get("PILOT107_AGENT_CAPABILITY_HMAC_SECRET")
+            else values["PILOT107_AGENT_CAPABILITY_HMAC_SECRET"].encode("utf-8")
+        ),
+        agent_capability_hmac_secret_file=_optional_path(
+            values, "PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE"
+        ),
         code_context_transport=values.get("PILOT107_CODE_CONTEXT_TRANSPORT", "none"),
         code_context_allowed_roots=tuple(
             _split_csv(values.get("PILOT107_CODE_CONTEXT_ALLOWED_ROOTS", ""))
@@ -359,6 +381,7 @@ def _build_file_routes(
 
 
 def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
+    agent_capability_secret = _load_agent_capability_secret(config)
     if config.postgres_dsn is None:
         store = RunStore(config.db_path)
         contract_store = ContractStore(config.db_path)
@@ -623,6 +646,31 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     # EvidenceStore instance for evidence_query, capsule_service, and the
     # remediation path to avoid divergent roots.
     shared_evidence_store = EvidenceStore(config.evidence_root)
+    evidence_query = EvidenceQueryService(
+        store=store,
+        evidence_store=shared_evidence_store,
+    )
+    workspace_reader = _build_workspace_reader(config)
+    agent_tool_routes: AgentToolRoutes | None = None
+    if agent_capability_secret is not None:
+        agent_session_store = build_agent_session_store(
+            sqlite_path=config.db_path,
+            postgres_dsn=config.postgres_dsn,
+        )
+        read_context = AgentReadContext(
+            platform_snapshot_store=platform_snapshot_store,
+            run_store=store,
+            evidence_query=evidence_query,
+            workspace_reader=workspace_reader,
+            workspace_root_templates=config.code_context_allowed_roots,
+        )
+        agent_tool_routes = AgentToolRoutes(
+            gateway=AgentToolGateway(
+                store=agent_session_store,
+                signer=AgentCapabilitySigner(agent_capability_secret),
+                handlers=build_a1_read_handlers(read_context),
+            )
+        )
     terminal_service = (
         TerminalCommandService(
             executor=HttpCommandGatewayExecutor(
@@ -643,10 +691,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         control_repository=control_repository,
         worker_metrics_root=config.worker_metrics_root,
         metrics=metrics,
-        evidence_query=EvidenceQueryService(
-            store=store,
-            evidence_store=shared_evidence_store,
-        ),
+        evidence_query=evidence_query,
         capsule_service=RawCapsuleService(
             store=store,
             evidence_store=shared_evidence_store,
@@ -684,8 +729,11 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 store=store,
                 evidence_root=config.evidence_root,
             ),
-            code_context_service=_build_code_context_service(config),
+            code_context_service=_build_code_context_service(
+                config, reader=workspace_reader
+            ),
         ),
+        agent_tool_routes=agent_tool_routes,
         auth_required=config.auth_required,
         trusted_user_header=config.trusted_user_header,
         proxy_hmac_secret=config.proxy_hmac_secret,
@@ -697,7 +745,28 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     )
 
 
-def _build_code_context_service(config: ApiServiceConfig) -> CodeContextService | None:
+def _load_agent_capability_secret(config: ApiServiceConfig) -> bytes | None:
+    inline = config.agent_capability_hmac_secret
+    secret_file = config.agent_capability_hmac_secret_file
+    if inline is not None and secret_file is not None:
+        raise ValueError("Agent capability HMAC secret cannot use both inline and file sources")
+    if not config.agent_a1_enabled:
+        return None
+    if secret_file is not None:
+        try:
+            secret = secret_file.read_bytes()
+        except OSError as exc:
+            raise ValueError("Agent capability HMAC secret file cannot be read") from exc
+    elif inline is not None:
+        secret = inline
+    else:
+        raise ValueError("Agent capability HMAC secret is required when A1 is enabled")
+    if len(secret) < 32:
+        raise ValueError("Agent capability HMAC secret must contain at least 32 bytes")
+    return secret
+
+
+def _build_workspace_reader(config: ApiServiceConfig) -> WorkspaceReader | None:
     transport = config.code_context_transport.strip().lower()
     if transport in {"", "none"}:
         return None
@@ -705,35 +774,41 @@ def _build_code_context_service(config: ApiServiceConfig) -> CodeContextService 
         raise ValueError("PILOT107_CODE_CONTEXT_TRANSPORT must be none, local, or ssh")
     if not config.code_context_allowed_roots:
         raise ValueError("code context requires PILOT107_CODE_CONTEXT_ALLOWED_ROOTS")
-    policy = CodeContextPolicy(
-        max_chunks=config.code_context_max_chunks,
-        context_before_lines=config.code_context_before_lines,
-        context_after_lines=config.code_context_after_lines,
-        max_file_bytes=config.code_context_max_file_bytes,
-    )
     if transport == "local":
-        return CodeContextService(
-            reader=LocalWorkspaceReader(
-                allowed_roots=config.code_context_allowed_roots,
-                timeout_seconds=config.command_timeout_seconds,
-            ),
-            policy=policy,
+        return LocalWorkspaceReader(
+            allowed_roots=config.code_context_allowed_roots,
+            timeout_seconds=config.command_timeout_seconds,
         )
     if config.code_context_ssh_target is None or config.code_context_ssh_control_path is None:
         raise ValueError(
             "ssh code context requires PILOT107_CODE_CONTEXT_SSH_TARGET and "
             "PILOT107_CODE_CONTEXT_SSH_CONTROL_PATH"
         )
-    return CodeContextService(
-        reader=SshWorkspaceReader(
-            config=SshWorkspaceConfig(
-                target=config.code_context_ssh_target,
-                control_path=config.code_context_ssh_control_path,
-                port=config.code_context_ssh_port,
-                timeout_seconds=config.command_timeout_seconds,
-            ),
-            allowed_roots=config.code_context_allowed_roots,
+    return SshWorkspaceReader(
+        config=SshWorkspaceConfig(
+            target=config.code_context_ssh_target,
+            control_path=config.code_context_ssh_control_path,
+            port=config.code_context_ssh_port,
+            timeout_seconds=config.command_timeout_seconds,
         ),
+        allowed_roots=config.code_context_allowed_roots,
+    )
+
+
+def _build_code_context_service(
+    config: ApiServiceConfig, *, reader: WorkspaceReader | None = None
+) -> CodeContextService | None:
+    workspace_reader = reader if reader is not None else _build_workspace_reader(config)
+    if workspace_reader is None:
+        return None
+    policy = CodeContextPolicy(
+        max_chunks=config.code_context_max_chunks,
+        context_before_lines=config.code_context_before_lines,
+        context_after_lines=config.code_context_after_lines,
+        max_file_bytes=config.code_context_max_file_bytes,
+    )
+    return CodeContextService(
+        reader=workspace_reader,
         policy=policy,
     )
 

@@ -527,7 +527,7 @@ git commit -m "feat: add postgres agent session parity"
   `AgentReadContext`, seven A1 handlers, and private endpoint
   `POST /internal/v1/agent-tools/invoke`.
 
-- [ ] **Step 1: Write failing token and Tool Gateway tests**
+- [x] **Step 1: Write failing token and Tool Gateway tests**
 
 Test a capability bound to:
 
@@ -551,7 +551,7 @@ version/fencing token, an unlisted tool, excess invocation count, excess
 cumulative bytes, path traversal, foreign-owner run/evidence/workspace access,
 and changed idempotency content all fail closed without returning private data.
 
-- [ ] **Step 2: Run the tests and verify RED**
+- [x] **Step 2: Run the tests and verify RED**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest \
@@ -561,7 +561,7 @@ PYTHONPATH=src uv run --extra dev pytest \
 
 Expected: missing capability and Tool Gateway modules.
 
-- [ ] **Step 3: Implement an opaque HMAC-SHA256 capability**
+- [x] **Step 3: Implement an opaque HMAC-SHA256 capability**
 
 Encode canonical JSON claims with unpadded base64url and sign
 `b"pilot107-agent-capability-v1." + payload`. Claims include `owner`, Session,
@@ -570,7 +570,7 @@ budgets, issue time, and expiry. Verification must use `hmac.compare_digest`,
 accept at most 120 seconds of lifetime, allow at most 5 seconds of clock skew,
 and never include the signing secret in exceptions or reprs.
 
-- [ ] **Step 4: Implement the seven read handlers with hard bounds**
+- [x] **Step 4: Implement the seven read handlers with hard bounds**
 
 Use these request maxima:
 
@@ -586,11 +586,11 @@ Use these request maxima:
 
 Return `ToolResult` with stable evidence references and `bytes_returned`; never return raw command argv, provider keys, secrets, or unbounded log/file content.
 
-- [ ] **Step 5: Persist invocation idempotency and budgets**
+- [x] **Step 5: Persist invocation idempotency and budgets**
 
 `AgentToolGateway.invoke(token, invocation)` must reserve the invocation in `agent_tool_invocations` before reading. A retry with the same `(turn_id, idempotency_key, arguments_digest)` returns the stored result; different arguments raise `AGENT.TOOL.IDEMPOTENCY_CONFLICT`.
 
-- [ ] **Step 6: Expose only the private Tool Gateway endpoint**
+- [x] **Step 6: Expose only the private Tool Gateway endpoint**
 
 `AgentToolRoutes` accepts exactly one JSON `ToolInvocation`, reads the
 capability only from `Authorization: Bearer`, invokes `AgentToolGateway`, and
@@ -605,7 +605,7 @@ bytes when A1 is enabled, rejects simultaneous inline/file sources, and passes
 the secret only to `AgentCapabilitySigner`. Compose deployments use the file
 source only.
 
-- [ ] **Step 7: Run GREEN and commit**
+- [x] **Step 7: Run GREEN and commit**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest \
