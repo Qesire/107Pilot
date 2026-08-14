@@ -490,7 +490,7 @@ function errorFromStoppedMessage(
     );
   }
   if (/timeout|timed out/i.test(detail)) return timeoutTurnError();
-  if (/fetch|network|socket|connection|unavailable/i.test(detail)) {
+  if (/fetch|network|socket|connection|unavailable|terminated/i.test(detail)) {
     return new AgentdTurnError(
       "provider_unavailable",
       true,

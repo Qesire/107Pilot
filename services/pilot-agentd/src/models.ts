@@ -5,7 +5,11 @@ import {
   fauxProvider,
   fauxText,
   fauxToolCall,
+  type FetchFunction,
   type Model,
+  type ProviderStreams,
+  type SimpleStreamOptions,
+  type StreamOptions,
 } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 
@@ -176,9 +180,109 @@ export function createCampusModelRuntime(profile: ModelProfile): ModelRuntime {
       },
     },
     models: [model],
-    api: openAICompletionsApi(),
+    api: requireOpenAISseDone(openAICompletionsApi()),
   });
   const models = createModels();
   models.setProvider(provider);
   return Object.freeze({ profile, models, model });
+}
+
+function requireOpenAISseDone(api: ProviderStreams): ProviderStreams {
+  return {
+    ...api,
+    stream: (model, context, options) =>
+      api.stream(model, context, withValidatedSse(options)),
+    streamSimple: (model, context, options) =>
+      api.streamSimple(model, context, withValidatedSse(options)),
+  };
+}
+
+function withValidatedSse<T extends StreamOptions | SimpleStreamOptions>(
+  options: T | undefined,
+): T {
+  const baseFetch = options?.fetch ?? globalThis.fetch.bind(globalThis);
+  return {
+    ...options,
+    fetch: validatingOpenAISseFetch(baseFetch),
+  } as T;
+}
+
+function validatingOpenAISseFetch(baseFetch: FetchFunction): FetchFunction {
+  return async (input, init) => {
+    const response = await baseFetch(input, init);
+    if (
+      !response.ok ||
+      response.body === null ||
+      !response.headers.get("content-type")?.toLowerCase().startsWith("text/event-stream")
+    ) {
+      return response;
+    }
+
+    const detector = new OpenAISseDoneDetector();
+    const body = response.body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          detector.push(chunk);
+          controller.enqueue(chunk);
+        },
+        flush() {
+          detector.finish();
+        },
+      }),
+    );
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  };
+}
+
+class OpenAISseDoneDetector {
+  readonly #decoder = new TextDecoder();
+  #pending = "";
+  #dataLines: string[] = [];
+  #sawDone = false;
+
+  push(chunk: Uint8Array): void {
+    this.#pending += this.#decoder.decode(chunk, { stream: true });
+    this.#consumeCompleteLines();
+  }
+
+  finish(): void {
+    this.#pending += this.#decoder.decode();
+    this.#consumeCompleteLines();
+    if (this.#pending !== "") {
+      this.#consumeLine(this.#pending);
+      this.#pending = "";
+    }
+    if (!this.#sawDone) {
+      throw new SyntaxError("OpenAI SSE stream ended without a [DONE] event.");
+    }
+  }
+
+  #consumeCompleteLines(): void {
+    while (true) {
+      const newline = this.#pending.indexOf("\n");
+      if (newline < 0) return;
+      const rawLine = this.#pending.slice(0, newline);
+      this.#pending = this.#pending.slice(newline + 1);
+      this.#consumeLine(rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine);
+    }
+  }
+
+  #consumeLine(line: string): void {
+    if (line === "") {
+      if (this.#dataLines.join("\n") === "[DONE]") this.#sawDone = true;
+      this.#dataLines = [];
+      return;
+    }
+    if (line.startsWith(":")) return;
+    const separator = line.indexOf(":");
+    const field = separator < 0 ? line : line.slice(0, separator);
+    if (field !== "data") return;
+    let value = separator < 0 ? "" : line.slice(separator + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    this.#dataLines.push(value);
+  }
 }
