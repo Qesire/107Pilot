@@ -7,6 +7,7 @@ cd "$root"
 uv run --extra dev ruff check src tests scripts
 uv run --extra dev mypy src
 uv run --extra dev pytest -q
+bash scripts/check-pilot-agentd.sh
 
 npm run typecheck
 npm test -- --run

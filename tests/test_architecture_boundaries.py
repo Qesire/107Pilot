@@ -22,6 +22,23 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
         self.assertEqual(offenders, [])
 
+    def test_python_production_code_does_not_call_llm_chat_completions(self) -> None:
+        offenders: list[str] = []
+        for path in sorted(_SRC_ROOT.rglob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            if "/chat/completions" in text or "PILOT107_LLM_API_KEY" in text:
+                offenders.append(str(path.relative_to(_PROJECT_ROOT)))
+
+        self.assertEqual(offenders, [])
+
+    def test_agentd_has_no_cluster_or_workspace_mount_contract(self) -> None:
+        dockerfile = (
+            _PROJECT_ROOT / "services" / "pilot-agentd" / "Dockerfile"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("openssh", dockerfile.lower())
+        self.assertNotIn("slurm", dockerfile.lower())
+
 
 def _is_subprocess_run(node: ast.Call) -> bool:
     func = node.func

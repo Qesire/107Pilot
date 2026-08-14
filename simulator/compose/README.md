@@ -17,6 +17,7 @@ worker-2
 pilot107-api
 pilot107-worker
 pilot107-web
+pilot-agentd
 ```
 
 The simulator must model:
@@ -65,6 +66,8 @@ bash scripts/build-slurm-sim-25-image.sh
 bash scripts/check-slurm-sim-25-image.sh
 bash scripts/build-app-images.sh
 bash scripts/check-app-images.sh
+bash scripts/check-pilot-agentd.sh
+bash scripts/smoke-pilot-agentd-faux.sh
 bash scripts/start-sim-core.sh
 bash scripts/smoke-sim-real107-profile.sh
 bash scripts/report-sim-behavior-fidelity.sh
@@ -91,6 +94,48 @@ bash scripts/smoke-sim-evidence-transitions.sh
 bash scripts/smoke-sim-capsule.sh
 bash scripts/stop-sim.sh
 ```
+
+## Internal Agent service
+
+`pilot-agentd` is an independent, private-network TypeScript service built on
+Pi Agent Core. It exposes no host port and mounts neither `/public` nor cluster
+credentials. The API and Worker receive only its internal URL, bearer token,
+and model-profile ID. Campus provider URL/model/key settings are present only
+in Agentd's environment.
+
+Set a non-default token in each deployed environment:
+
+```bash
+PILOT107_AGENTD_TOKEN=REPLACE_WITH_RANDOM_AGENTD_TOKEN
+PILOT107_AGENTD_MODEL_PROFILE=campus-default
+```
+
+Keep the matching token in the deployment secret store and inject it into
+Agentd, API, and Worker. Inject `PILOT107_LLM_API_KEY` into Agentd alone. Do not
+place either secret in committed `.env` files. `/healthz` indicates process
+liveness. `/readyz` reports configuration readiness without contacting the
+model endpoint; a running but unconfigured campus profile is therefore visible
+as degraded rather than preventing deterministic features from starting.
+
+For local evidence without campus or remote-VM access, build the images and run
+the fixed server-side faux scenario:
+
+```bash
+bash scripts/build-app-images.sh
+bash scripts/smoke-pilot-agentd-faux.sh
+```
+
+The smoke starts only Agentd in a temporary Compose project, exercises
+interactive, explain, Contract patch, and remediation Turn kinds from the
+Python client, then cancels and restores an interactive Turn. The project is
+removed on exit. For an optional configured campus profile, run:
+
+```bash
+bash scripts/smoke-campus-llm.sh
+```
+
+Missing `PILOT107_AGENTD_URL`, token, or campus profile is a safe zero-exit
+skip. The campus smoke never needs direct access to the provider key.
 
 The first runnable version depends on a local Slurm simulator image named by
 `SLURM_SIM_IMAGE`. This lets the project use either a later local Dockerfile or

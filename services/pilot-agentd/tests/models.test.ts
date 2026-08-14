@@ -108,6 +108,38 @@ describe("Pi model registry", () => {
     ]);
     expect(JSON.stringify(answer)).not.toContain("attacker supplied");
     expect(runtime.faux.getPendingResponseCount()).toBe(5);
+
+    const explain = await runtime.models.completeSimple(runtime.model, {
+      messages: [{ role: "user", content: "explain", timestamp: 2 }],
+    });
+    expect(explain.content).toContainEqual(
+      expect.objectContaining({
+        type: "toolCall",
+        name: "emit_result",
+        arguments: expect.objectContaining({
+          citations: [
+            {
+              fact_id: "fact-smoke",
+              evidence_object_ids: ["object-smoke"],
+            },
+          ],
+        }),
+      }),
+    );
+
+    await runtime.models.completeSimple(runtime.model, {
+      messages: [{ role: "user", content: "patch", timestamp: 3 }],
+    });
+    const remediation = await runtime.models.completeSimple(runtime.model, {
+      messages: [{ role: "user", content: "remediate", timestamp: 4 }],
+    });
+    expect(remediation.content).toContainEqual(
+      expect.objectContaining({
+        type: "toolCall",
+        name: "emit_result",
+        arguments: expect.objectContaining({ fact_ids: ["fact-smoke"] }),
+      }),
+    );
   });
 
   it("rejects invalid faux throughput", () => {

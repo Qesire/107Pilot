@@ -44,7 +44,12 @@ function smokeResponses() {
             narrative: "该结论来自本地 faux 场景中的证据。",
             recommendations: ["检查作业日志与资源请求。"],
             warnings: [],
-            citations: [],
+            citations: [
+              {
+                fact_id: "fact-smoke",
+                evidence_object_ids: ["object-smoke"],
+              },
+            ],
           },
           { id: "a0-smoke-explain" },
         ),
@@ -71,7 +76,7 @@ function smokeResponses() {
           {
             schema_version: "pilot107.remediation-plan/v1",
             summary: "使用受限的本地诊断步骤。",
-            fact_ids: [],
+            fact_ids: ["fact-smoke"],
             required_inputs: [],
             proposals: [],
             stop_conditions: ["证据不足时停止。"],
@@ -102,6 +107,8 @@ export function createFauxModelRuntime(
     throw new RangeError("tokensPerSecond must be a positive finite number");
   }
 
+  const tokensPerSecond =
+    options.tokensPerSecond ?? (options.scenario === "a0-smoke" ? 20 : undefined);
   const faux = fauxProvider({
     api: "faux",
     provider: "faux-default",
@@ -115,9 +122,7 @@ export function createFauxModelRuntime(
         maxTokens: 1200,
       },
     ],
-    ...(options.tokensPerSecond === undefined
-      ? {}
-      : { tokensPerSecond: options.tokensPerSecond }),
+    ...(tokensPerSecond === undefined ? {} : { tokensPerSecond }),
   });
   const models = createModels();
   models.setProvider(faux.provider);
