@@ -167,7 +167,7 @@ git commit -m "feat: define durable agent turn contracts"
 - Consumes: `SchemaMigration` and the existing checksum migration runner.
 - Produces: `AgentSessionStore`, `AgentSessionRecord`, `AgentTurnRecord`, `AgentTurnEventRecord`, and `AgentToolInvocationRecord`.
 
-- [ ] **Step 1: Write failing state, idempotency, owner, and fencing tests**
+- [x] **Step 1: Write failing state, idempotency, owner, and fencing tests**
 
 Cover these exact transitions:
 
@@ -192,7 +192,7 @@ store.append_event(turn.turn_id, claim=claim, sequence=1, event_type="turn_start
 
 Assert stable request-key replay, rejection of same key/different content, cross-owner 404 semantics, contiguous event sequence, lease reclaim incrementing `fencing_token`, stale writer rejection, cancel-request persistence, and terminal Session state updates.
 
-- [ ] **Step 2: Run the Store tests and verify RED**
+- [x] **Step 2: Run the Store tests and verify RED**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/agent/test_store.py -q
@@ -200,7 +200,7 @@ PYTHONPATH=src uv run --extra dev pytest tests/agent/test_store.py -q
 
 Expected: import failure for `pilot107.agent.store`.
 
-- [ ] **Step 3: Add migration `006a.001.agent_sessions`**
+- [x] **Step 3: Add migration `006a.001.agent_sessions`**
 
 Create four tables with closed state checks and owner-scoped indexes:
 
@@ -225,7 +225,7 @@ idempotency_key)` for tool invocations. Add a partial unique index on `owner` fo
 Turns in `running` state so two Workers cannot run concurrent Turns for the
 same owner; a claim that loses this constraint race remains queued.
 
-- [ ] **Step 4: Implement CAS and lease-aware Store methods**
+- [x] **Step 4: Implement CAS and lease-aware Store methods**
 
 Define `AgentSessionStore` as a `Protocol`, implement it as
 `SQLiteAgentSessionStore`, and expose these exact methods:
@@ -368,7 +368,7 @@ class AgentSessionStore(Protocol):
 
 Every mutating statement must include the current fencing token or expected state version in its `WHERE` clause and raise `AgentSessionConflict` when `rowcount != 1`.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/agent/test_store.py -q
