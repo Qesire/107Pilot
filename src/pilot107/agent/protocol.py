@@ -6,12 +6,15 @@ import json
 import math
 import re
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 TURN_PROTOCOL_VERSION = "pilot107.agent-turn-request/v1"
+DURABLE_TURN_PROTOCOL_VERSION = "pilot107.agent-turn-request/v2"
 EVENT_PROTOCOL_VERSION = "pilot107.agent-turn-event/v1"
 CHECKPOINT_PROTOCOL_VERSION = "pilot107.agent-checkpoint/v1"
+TOOL_INVOCATION_PROTOCOL_VERSION = "pilot107.agent-tool-invocation/v1"
+TOOL_RESULT_PROTOCOL_VERSION = "pilot107.agent-tool-result/v1"
 
 MAX_NDJSON_LINE_BYTES = 1024 * 1024
 MAX_NDJSON_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -22,6 +25,9 @@ type JsonValue = JsonPrimitive | list[JsonValue] | dict[str, JsonValue]
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _DIGEST_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+_RFC3339_UTC_PATTERN = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z$"
+)
 _FORBIDDEN_JSON_KEYS = {
     "api_key",
     "authorization",
@@ -53,6 +59,53 @@ _EVENT_TYPES = {
     "turn_failed",
 }
 _TERMINAL_TYPES = {"turn_completed", "turn_failed"}
+_A1_READ_TOOLS = {
+    "platform_get_snapshot",
+    "workspace_list",
+    "workspace_search",
+    "workspace_read",
+    "run_get",
+    "run_log_read",
+    "evidence_read",
+}
+
+
+@dataclass(frozen=True)
+class DurableAgentTurnRequest:
+    session_id: str
+    turn_id: str
+    owner: str
+    state_version: int
+    model_profile_id: str
+    message: str
+    context_refs: tuple[str, ...]
+    capability_token: str = field(repr=False)
+    checkpoint: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ToolInvocation:
+    schema_version: str
+    invocation_id: str
+    idempotency_key: str
+    owner: str
+    session_id: str
+    turn_id: str
+    state_version: int
+    profile_id: str
+    tool_name: str
+    arguments: dict[str, Any]
+    deadline: str
+
+
+@dataclass(frozen=True)
+class ToolResult:
+    schema_version: str
+    invocation_id: str
+    result: dict[str, Any] | None
+    error: dict[str, Any] | None
+    evidence_refs: tuple[str, ...]
+    bytes_returned: int
 
 
 @dataclass(frozen=True)
@@ -99,6 +152,192 @@ class AgentdClientError(RuntimeError):
         self.provider_status = provider_status
         self.http_status = http_status
         self.checkpoint = checkpoint
+
+
+def parse_durable_turn_request(value: object) -> DurableAgentTurnRequest:
+    try:
+        request = _closed_object(
+            value,
+            required={
+                "schema_version",
+                "session_id",
+                "turn_id",
+                "owner",
+                "state_version",
+                "task_kind",
+                "model_profile_id",
+                "prompt_profile_id",
+                "toolset_id",
+                "input",
+                "capability_token",
+                "checkpoint",
+                "limits",
+                "trace",
+            },
+            label="durable Turn request",
+        )
+        if request["schema_version"] != DURABLE_TURN_PROTOCOL_VERSION:
+            raise ValueError("unsupported durable Turn request version")
+        if (
+            request["task_kind"] != "interactive_readonly"
+            or request["prompt_profile_id"] != "hpc-readonly-v1"
+            or request["toolset_id"] != "a1-readonly"
+        ):
+            raise ValueError("invalid durable Turn request pairing")
+        session_id = _validate_id(request["session_id"], "session_id")
+        turn_id = _validate_id(request["turn_id"], "turn_id")
+        owner = _validate_id(request["owner"], "owner")
+        state_version = _validate_integer(
+            request["state_version"], "state_version", minimum=0, maximum=MAX_SAFE_INTEGER
+        )
+        model_profile_id = _validate_id(request["model_profile_id"], "model_profile_id")
+        turn_input = _closed_object(
+            request["input"], required={"message", "context_refs"}, label="durable Turn input"
+        )
+        message = _validate_text(turn_input["message"], "message", minimum=1, maximum=64_000)
+        context_refs = tuple(
+            _validate_text(item, "context_ref", minimum=1, maximum=4_096)
+            for item in _as_list(turn_input["context_refs"], "context_refs", maximum=256)
+        )
+        capability_token = _validate_text(
+            request["capability_token"], "capability_token", minimum=1, maximum=8_192
+        )
+        checkpoint = request["checkpoint"]
+        if checkpoint is not None:
+            checkpoint = validate_checkpoint(checkpoint)
+        limits = _closed_object(
+            request["limits"], required={"timeout_ms", "max_output_tokens"}, label="limits"
+        )
+        _validate_integer(limits["timeout_ms"], "timeout_ms", minimum=100, maximum=300_000)
+        _validate_integer(
+            limits["max_output_tokens"], "max_output_tokens", minimum=1, maximum=32_000
+        )
+        trace = _closed_object(
+            request["trace"], required={"correlation_id"}, label="trace"
+        )
+        _validate_id(trace["correlation_id"], "correlation_id")
+        return DurableAgentTurnRequest(
+            session_id=session_id,
+            turn_id=turn_id,
+            owner=owner,
+            state_version=state_version,
+            model_profile_id=model_profile_id,
+            message=message,
+            context_refs=context_refs,
+            capability_token=capability_token,
+            checkpoint=checkpoint,
+        )
+    except (TypeError, ValueError, RecursionError, UnicodeError):
+        raise ValueError("invalid durable Turn request") from None
+
+
+def parse_tool_invocation(value: object) -> ToolInvocation:
+    try:
+        invocation = _closed_object(
+            value,
+            required={
+                "schema_version",
+                "invocation_id",
+                "idempotency_key",
+                "owner",
+                "session_id",
+                "turn_id",
+                "state_version",
+                "profile_id",
+                "tool_name",
+                "arguments",
+                "deadline",
+            },
+            label="tool invocation",
+        )
+        if invocation["schema_version"] != TOOL_INVOCATION_PROTOCOL_VERSION:
+            raise ValueError("unsupported tool invocation version")
+        tool_name = _as_string(invocation["tool_name"], "tool_name")
+        if tool_name not in _A1_READ_TOOLS:
+            raise ValueError("unknown A1 tool")
+        profile_id = _as_string(invocation["profile_id"], "profile_id")
+        if profile_id != "hpc-readonly-v1":
+            raise ValueError("invalid tool profile")
+        arguments = _as_object(invocation["arguments"], "arguments")
+        _validate_json_object(arguments)
+        deadline = _as_string(invocation["deadline"], "deadline")
+        if _RFC3339_UTC_PATTERN.fullmatch(deadline) is None:
+            raise ValueError("invalid deadline")
+        return ToolInvocation(
+            schema_version=TOOL_INVOCATION_PROTOCOL_VERSION,
+            invocation_id=_validate_id(invocation["invocation_id"], "invocation_id"),
+            idempotency_key=_validate_id(invocation["idempotency_key"], "idempotency_key"),
+            owner=_validate_id(invocation["owner"], "owner"),
+            session_id=_validate_id(invocation["session_id"], "session_id"),
+            turn_id=_validate_id(invocation["turn_id"], "turn_id"),
+            state_version=_validate_integer(
+                invocation["state_version"],
+                "state_version",
+                minimum=0,
+                maximum=MAX_SAFE_INTEGER,
+            ),
+            profile_id=profile_id,
+            tool_name=tool_name,
+            arguments=arguments,
+            deadline=deadline,
+        )
+    except (TypeError, ValueError, RecursionError, UnicodeError):
+        raise ValueError("invalid tool invocation") from None
+
+
+def parse_tool_result(value: object) -> ToolResult:
+    try:
+        tool_result = _closed_object(
+            value,
+            required={
+                "schema_version",
+                "invocation_id",
+                "result",
+                "error",
+                "evidence_refs",
+                "bytes_returned",
+            },
+            label="tool result",
+        )
+        if tool_result["schema_version"] != TOOL_RESULT_PROTOCOL_VERSION:
+            raise ValueError("unsupported tool result version")
+        result = tool_result["result"]
+        error = tool_result["error"]
+        if (result is None) == (error is None):
+            raise ValueError("tool result must contain exactly one branch")
+        if result is not None:
+            result = _as_object(result, "tool result payload")
+            _validate_json_object(result)
+        if error is not None:
+            error = _closed_object(
+                error,
+                required={"code", "message", "retryable"},
+                label="tool result error",
+            )
+            _validate_id(error["code"], "tool error code")
+            _validate_text(error["message"], "tool error message", minimum=1, maximum=4_096)
+            _as_bool(error["retryable"], "tool error retryable")
+        evidence_refs = tuple(
+            _validate_text(item, "evidence_ref", minimum=1, maximum=4_096)
+            for item in _as_list(
+                tool_result["evidence_refs"], "evidence_refs", maximum=256
+            )
+        )
+        return ToolResult(
+            schema_version=TOOL_RESULT_PROTOCOL_VERSION,
+            invocation_id=_validate_id(tool_result["invocation_id"], "invocation_id"),
+            result=result,
+            error=error,
+            evidence_refs=evidence_refs,
+            bytes_returned=_validate_integer(
+                tool_result["bytes_returned"],
+                "bytes_returned",
+                minimum=0,
+                maximum=1_048_576,
+            ),
+        )
+    except (TypeError, ValueError, RecursionError, UnicodeError):
+        raise ValueError("invalid tool result") from None
 
 
 def parse_event_lines(
@@ -400,10 +639,20 @@ def _validate_usage(value: object, label: str) -> dict[str, Any]:
         },
         label=label,
     )
-    for field in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
-        count = usage[field]
+    for usage_field in (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+    ):
+        count = usage[usage_field]
         if count is not None:
-            _validate_integer(count, f"{label}.{field}", minimum=0, maximum=MAX_SAFE_INTEGER)
+            _validate_integer(
+                count,
+                f"{label}.{usage_field}",
+                minimum=0,
+                maximum=MAX_SAFE_INTEGER,
+            )
     return usage
 
 

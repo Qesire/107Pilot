@@ -53,7 +53,7 @@ Resource-observability collection and Runtime Watch remain independent provider 
 - Consumes: the existing v1 event and checkpoint formats.
 - Produces: `DurableAgentTurnRequest`, `ToolInvocation`, `ToolResult`, `AgentdClient.stream_durable_turn()`, and the `a1-readonly` task/profile/toolset pairing.
 
-- [ ] **Step 1: Write failing cross-language contract tests**
+- [x] **Step 1: Write failing cross-language contract tests**
 
 Add a Python fixture and the equivalent TypeScript fixture:
 
@@ -78,7 +78,7 @@ A1_REQUEST = {
 
 Assert that both runtimes accept this closed object, reject an added field, reject the v2 fields on a v1 request, and reject any pairing other than `interactive_readonly / hpc-readonly-v1 / a1-readonly`.
 
-- [ ] **Step 2: Run the contract tests and verify RED**
+- [x] **Step 2: Run the contract tests and verify RED**
 
 Run:
 
@@ -91,7 +91,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" \
 
 Expected: the v2 fixtures fail because no v2 parser or client method exists; all existing v1 cases remain green.
 
-- [ ] **Step 3: Implement the closed v2 request and tool schemas**
+- [x] **Step 3: Implement the closed v2 request and tool schemas**
 
 Add these Python types and matching TypeBox schemas:
 
@@ -136,11 +136,11 @@ class ToolResult:
 
 `AgentdClient.stream_durable_turn(request, on_event=None)` must serialize only the defined fields and reuse the existing bounded NDJSON parser for the response.
 
-- [ ] **Step 4: Generate and compare checked-in schemas**
+- [x] **Step 4: Generate and compare checked-in schemas**
 
 Extend the existing schema-generation test so TypeBox output is semantically equal to all JSON files under `schemas/agent/v2/`. Keep v1 golden files unchanged.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/agent -q

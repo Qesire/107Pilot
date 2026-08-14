@@ -18,6 +18,8 @@ from pilot107.agent.protocol import (
     AgentdClientError,
     AgentdTurnResult,
     AgentTurnEvent,
+    DurableAgentTurnRequest,
+    parse_durable_turn_request,
     parse_event_lines,
     result_from_terminal,
     validate_checkpoint,
@@ -93,7 +95,24 @@ class AgentdClient:
             input_payload,
             checkpoint,
         )
-        request = urllib.request.Request(
+        yield from self._stream_payload(actual_turn_id, payload, on_event=on_event)
+
+    def stream_durable_turn(
+        self,
+        request: DurableAgentTurnRequest,
+        on_event: EventCallback | None = None,
+    ) -> Iterator[AgentTurnEvent]:
+        payload = _build_durable_turn_request(self.config, request)
+        yield from self._stream_payload(request.turn_id, payload, on_event=on_event)
+
+    def _stream_payload(
+        self,
+        turn_id: str,
+        payload: dict[str, Any],
+        *,
+        on_event: EventCallback | None,
+    ) -> Iterator[AgentTurnEvent]:
+        http_request = urllib.request.Request(
             f"{self.config.base_url}/internal/v1/turns",
             data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
             headers={
@@ -103,10 +122,12 @@ class AgentdClient:
             method="POST",
         )
         try:
-            with self._opener(request, timeout=float(self.config.timeout_seconds)) as response:
+            with self._opener(
+                http_request, timeout=float(self.config.timeout_seconds)
+            ) as response:
                 if not _is_content_type(response, "application/x-ndjson"):
                     raise _protocol_error("Turn response content type is invalid")
-                for event in parse_event_lines(actual_turn_id, _bounded_lines(response)):
+                for event in parse_event_lines(turn_id, _bounded_lines(response)):
                     if on_event is not None:
                         on_event(event)
                     yield event
@@ -219,6 +240,44 @@ def _build_turn_request(
         },
         "trace": {"correlation_id": turn_id},
     }
+
+
+def _build_durable_turn_request(
+    config: AgentdClientConfig,
+    request: DurableAgentTurnRequest,
+) -> dict[str, Any]:
+    payload = {
+        "schema_version": "pilot107.agent-turn-request/v2",
+        "session_id": request.session_id,
+        "turn_id": request.turn_id,
+        "owner": request.owner,
+        "state_version": request.state_version,
+        "task_kind": "interactive_readonly",
+        "model_profile_id": request.model_profile_id,
+        "prompt_profile_id": "hpc-readonly-v1",
+        "toolset_id": "a1-readonly",
+        "input": {
+            "message": request.message,
+            "context_refs": list(request.context_refs),
+        },
+        "capability_token": request.capability_token,
+        "checkpoint": request.checkpoint,
+        "limits": {
+            "timeout_ms": round(float(config.timeout_seconds) * 1_000),
+            "max_output_tokens": config.max_output_tokens,
+        },
+        "trace": {"correlation_id": request.turn_id},
+    }
+    try:
+        if request.model_profile_id != config.model_profile_id:
+            raise ValueError("model profile mismatch")
+        parse_durable_turn_request(payload)
+    except (TypeError, ValueError, RecursionError, UnicodeError):
+        raise AgentdClientError(
+            "pilot-agentd durable Turn request is invalid",
+            code="invalid_request",
+        ) from None
+    return payload
 
 
 def _bounded_lines(response: _ReadableResponse) -> Iterator[bytes]:

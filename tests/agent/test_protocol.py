@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+import pilot107.agent.protocol as agent_protocol
 from pilot107.agent.protocol import (
     MAX_NDJSON_LINE_BYTES,
     AgentdClientError,
@@ -14,6 +15,113 @@ from pilot107.agent.protocol import (
 )
 
 _DIGEST = "a" * 64
+
+
+def _durable_request() -> dict[str, Any]:
+    return {
+        "schema_version": "pilot107.agent-turn-request/v2",
+        "session_id": "session-1",
+        "turn_id": "turn-1",
+        "owner": "alice",
+        "state_version": 3,
+        "task_kind": "interactive_readonly",
+        "model_profile_id": "faux-default",
+        "prompt_profile_id": "hpc-readonly-v1",
+        "toolset_id": "a1-readonly",
+        "input": {
+            "message": "why is run-1 pending?",
+            "context_refs": ["run:run-1"],
+        },
+        "capability_token": "opaque.test.token",
+        "checkpoint": None,
+        "limits": {"timeout_ms": 60_000, "max_output_tokens": 1_200},
+        "trace": {"correlation_id": "turn-1"},
+    }
+
+
+def _tool_invocation() -> dict[str, Any]:
+    return {
+        "schema_version": "pilot107.agent-tool-invocation/v1",
+        "invocation_id": "invocation-1",
+        "idempotency_key": "turn-1:call-1",
+        "owner": "alice",
+        "session_id": "session-1",
+        "turn_id": "turn-1",
+        "state_version": 3,
+        "profile_id": "hpc-readonly-v1",
+        "tool_name": "run_get",
+        "arguments": {"run_id": "run-1"},
+        "deadline": "2026-08-14T12:00:00Z",
+    }
+
+
+def test_durable_turn_request_accepts_only_the_a1_readonly_pairing() -> None:
+    parsed = agent_protocol.parse_durable_turn_request(_durable_request())
+
+    assert parsed.session_id == "session-1"
+    assert parsed.message == "why is run-1 pending?"
+    assert parsed.context_refs == ("run:run-1",)
+    assert "opaque.test.token" not in repr(parsed)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda request: request.__setitem__("extra", True),
+        lambda request: request.__setitem__("prompt_profile_id", "hpc-assistant-v1"),
+        lambda request: request.__setitem__("toolset_id", "a0-none"),
+        lambda request: request["input"].__setitem__("extra", True),
+    ],
+)
+def test_durable_turn_request_rejects_open_or_mismatched_shapes(
+    mutate: Callable[[dict[str, Any]], None],
+) -> None:
+    request = _durable_request()
+    mutate(request)
+
+    with pytest.raises(ValueError, match="durable Turn request"):
+        agent_protocol.parse_durable_turn_request(request)
+
+
+def test_tool_invocation_and_result_envelopes_are_closed_and_mutually_exclusive() -> None:
+    invocation = agent_protocol.parse_tool_invocation(_tool_invocation())
+    success = agent_protocol.parse_tool_result(
+        {
+            "schema_version": "pilot107.agent-tool-result/v1",
+            "invocation_id": "invocation-1",
+            "result": {"run_id": "run-1", "state": "PENDING"},
+            "error": None,
+            "evidence_refs": ["run:run-1"],
+            "bytes_returned": 45,
+        }
+    )
+
+    assert invocation.tool_name == "run_get"
+    assert success.result == {"run_id": "run-1", "state": "PENDING"}
+
+    with pytest.raises(ValueError, match="tool result"):
+        agent_protocol.parse_tool_result(
+            {
+                "schema_version": "pilot107.agent-tool-result/v1",
+                "invocation_id": "invocation-1",
+                "result": {},
+                "error": {"code": "forbidden", "message": "denied", "retryable": False},
+                "evidence_refs": [],
+                "bytes_returned": 0,
+            }
+        )
+
+
+def test_tool_invocation_rejects_unknown_tools_and_authority_fields() -> None:
+    unknown_tool = _tool_invocation()
+    unknown_tool["tool_name"] = "shell_exec"
+    authority = _tool_invocation()
+    authority["capability_token"] = "must-be-in-the-header"
+
+    with pytest.raises(ValueError, match="tool invocation"):
+        agent_protocol.parse_tool_invocation(unknown_tool)
+    with pytest.raises(ValueError, match="tool invocation"):
+        agent_protocol.parse_tool_invocation(authority)
 
 
 def _usage() -> dict[str, int | None]:

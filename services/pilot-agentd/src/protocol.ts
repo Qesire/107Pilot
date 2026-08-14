@@ -3,12 +3,16 @@ import { Value } from "typebox/value";
 
 import {
   CHECKPOINT_PROTOCOL_VERSION,
+  DURABLE_TURN_PROTOCOL_VERSION,
   EVENT_PROTOCOL_VERSION,
+  TOOL_INVOCATION_PROTOCOL_VERSION,
+  TOOL_RESULT_PROTOCOL_VERSION,
   TURN_PROTOCOL_VERSION,
 } from "./version.js";
 
 const JSON_SCHEMA_DRAFT = "https://json-schema.org/draft/2020-12/schema";
 const SCHEMA_BASE = "https://107pilot.local/schemas/agent/v1/";
+const V2_SCHEMA_BASE = "https://107pilot.local/schemas/agent/v2/";
 const FORBIDDEN_INPUT_PATTERN =
   "^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$";
 const FORBIDDEN_INPUT_FIELDS = new Set([
@@ -366,6 +370,123 @@ export const AgentTurnRequestSchema = Type.Union([...RequestVariants], {
 
 export type AgentTurnRequest = Static<typeof AgentTurnRequestSchema>;
 
+const DurableTurnInputSchema = Type.Object(
+  {
+    message: NonEmptyText,
+    context_refs: Type.Array(Type.String({ minLength: 1, maxLength: 4_096 }), {
+      maxItems: 256,
+    }),
+  },
+  { additionalProperties: false },
+);
+
+export const DurableAgentTurnRequestSchema = Type.Object(
+  {
+    schema_version: Type.Literal(DURABLE_TURN_PROTOCOL_VERSION),
+    session_id: Id,
+    turn_id: Id,
+    owner: Id,
+    state_version: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    task_kind: Type.Literal("interactive_readonly"),
+    model_profile_id: Id,
+    prompt_profile_id: Type.Literal("hpc-readonly-v1"),
+    toolset_id: Type.Literal("a1-readonly"),
+    input: DurableTurnInputSchema,
+    capability_token: Type.String({ minLength: 1, maxLength: 8_192 }),
+    checkpoint: Type.Union([Type.Null(), AgentCheckpointBodySchema]),
+    limits: LimitsSchema,
+    trace: TraceSchema,
+  },
+  {
+    $schema: JSON_SCHEMA_DRAFT,
+    $id: `${V2_SCHEMA_BASE}turn-request.schema.json`,
+    $defs: JsonDefinitions,
+    additionalProperties: false,
+  },
+);
+
+export type DurableAgentTurnRequest = Static<typeof DurableAgentTurnRequestSchema>;
+
+export const A1_READ_TOOL_NAMES = [
+  "platform_get_snapshot",
+  "workspace_list",
+  "workspace_search",
+  "workspace_read",
+  "run_get",
+  "run_log_read",
+  "evidence_read",
+] as const;
+
+const ReadToolNameSchema = Type.Union(
+  A1_READ_TOOL_NAMES.map((name) => Type.Literal(name)),
+);
+
+export const ToolInvocationSchema = Type.Object(
+  {
+    schema_version: Type.Literal(TOOL_INVOCATION_PROTOCOL_VERSION),
+    invocation_id: Id,
+    idempotency_key: Id,
+    owner: Id,
+    session_id: Id,
+    turn_id: Id,
+    state_version: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    profile_id: Type.Literal("hpc-readonly-v1"),
+    tool_name: ReadToolNameSchema,
+    arguments: JsonObjectSchema,
+    deadline: Type.String({
+      minLength: 20,
+      maxLength: 32,
+      pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$",
+    }),
+  },
+  {
+    $schema: JSON_SCHEMA_DRAFT,
+    $id: `${V2_SCHEMA_BASE}tool-invocation.schema.json`,
+    $defs: JsonDefinitions,
+    additionalProperties: false,
+  },
+);
+
+export type ToolInvocation = Static<typeof ToolInvocationSchema>;
+
+const ToolResultBase = {
+  schema_version: Type.Literal(TOOL_RESULT_PROTOCOL_VERSION),
+  invocation_id: Id,
+  evidence_refs: Type.Array(Type.String({ minLength: 1, maxLength: 4_096 }), {
+    maxItems: 256,
+  }),
+  bytes_returned: Type.Integer({ minimum: 0, maximum: 1_048_576 }),
+};
+
+const ToolErrorSchema = Type.Object(
+  {
+    code: Id,
+    message: Type.String({ minLength: 1, maxLength: 4_096 }),
+    retryable: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolResultSchema = Type.Union(
+  [
+    Type.Object(
+      { ...ToolResultBase, result: JsonObjectSchema, error: Type.Null() },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      { ...ToolResultBase, result: Type.Null(), error: ToolErrorSchema },
+      { additionalProperties: false },
+    ),
+  ],
+  {
+    $schema: JSON_SCHEMA_DRAFT,
+    $id: `${V2_SCHEMA_BASE}tool-result.schema.json`,
+    $defs: JsonDefinitions,
+  },
+);
+
+export type ToolResult = Static<typeof ToolResultSchema>;
+
 const ErrorCodeSchema = Type.Union([
   Type.Literal("provider_auth"),
   Type.Literal("provider_rate_limited"),
@@ -523,6 +644,33 @@ export function parseTurnRequest(value: unknown): AgentTurnRequest {
   rejectInvalidTaskPairing(value);
   if (!Value.Check(AgentTurnRequestSchema, value)) {
     throw new TypeError(validationMessage("turn request", AgentTurnRequestSchema, value));
+  }
+  return value;
+}
+
+export function parseDurableTurnRequest(value: unknown): DurableAgentTurnRequest {
+  rejectInputInjection(value);
+  if (!Value.Check(DurableAgentTurnRequestSchema, value)) {
+    throw new TypeError(
+      validationMessage("durable turn request", DurableAgentTurnRequestSchema, value),
+    );
+  }
+  return value;
+}
+
+export function parseToolInvocation(value: unknown): ToolInvocation {
+  if (isObject(value) && "arguments" in value) {
+    visitInput(value.arguments, "arguments", new Set<object>());
+  }
+  if (!Value.Check(ToolInvocationSchema, value)) {
+    throw new TypeError(validationMessage("tool invocation", ToolInvocationSchema, value));
+  }
+  return value;
+}
+
+export function parseToolResult(value: unknown): ToolResult {
+  if (!Value.Check(ToolResultSchema, value)) {
+    throw new TypeError(validationMessage("tool result", ToolResultSchema, value));
   }
   return value;
 }

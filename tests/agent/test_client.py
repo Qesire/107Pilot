@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+import pilot107.agent.protocol as agent_protocol
 from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig, config_from_env
 from pilot107.agent.protocol import AgentdClientError, AgentTurnEvent
@@ -234,6 +235,79 @@ def test_run_turn_sends_bearer_only_in_the_header_and_a_closed_v1_request() -> N
     assert result.model == "campus-model"
     assert result.input_tokens == 12
     assert result.output_tokens == 8
+
+
+def test_stream_durable_turn_sends_the_exact_v2_authority_envelope() -> None:
+    captured: dict[str, Any] = {}
+
+    def opener(request: urllib.request.Request, *, timeout: float) -> _Response:
+        captured["request"] = request
+        captured["timeout"] = timeout
+        captured["json"] = json.loads(request.data or b"")
+        return _Response(_success_body())
+
+    request = agent_protocol.DurableAgentTurnRequest(
+        session_id="session-1",
+        turn_id="turn-1",
+        owner="alice",
+        state_version=3,
+        model_profile_id="campus-default",
+        message="why is run-1 pending?",
+        context_refs=("run:run-1",),
+        capability_token="opaque.capability.token",
+    )
+
+    events = list(
+        AgentdClient(_config(), opener=opener).stream_durable_turn(request)
+    )
+
+    assert [event.type for event in events] == ["turn_started", "turn_completed"]
+    assert captured["timeout"] == 30.0
+    assert captured["request"].full_url == "http://pilot-agentd:8091/internal/v1/turns"
+    assert captured["json"] == {
+        "schema_version": "pilot107.agent-turn-request/v2",
+        "session_id": "session-1",
+        "turn_id": "turn-1",
+        "owner": "alice",
+        "state_version": 3,
+        "task_kind": "interactive_readonly",
+        "model_profile_id": "campus-default",
+        "prompt_profile_id": "hpc-readonly-v1",
+        "toolset_id": "a1-readonly",
+        "input": {
+            "message": "why is run-1 pending?",
+            "context_refs": ["run:run-1"],
+        },
+        "capability_token": "opaque.capability.token",
+        "checkpoint": None,
+        "limits": {"timeout_ms": 30_000, "max_output_tokens": 1_200},
+        "trace": {"correlation_id": "turn-1"},
+    }
+    assert captured["request"].get_header("Authorization") == "Bearer internal-secret"
+
+
+def test_stream_durable_turn_rejects_an_invalid_request_before_http() -> None:
+    client = AgentdClient(
+        _config(),
+        opener=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("HTTP must not be called")
+        ),
+    )
+    request = agent_protocol.DurableAgentTurnRequest(
+        session_id="session-1",
+        turn_id="turn-1",
+        owner="alice",
+        state_version=-1,
+        model_profile_id="campus-default",
+        message="why pending?",
+        context_refs=(),
+        capability_token="opaque.capability.token",
+    )
+
+    with pytest.raises(AgentdClientError) as caught:
+        list(client.stream_durable_turn(request))
+
+    assert caught.value.code == "invalid_request"
 
 
 def test_default_opener_is_resolved_at_client_construction(monkeypatch: pytest.MonkeyPatch) -> None:
