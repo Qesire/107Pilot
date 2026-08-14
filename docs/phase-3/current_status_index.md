@@ -1,8 +1,18 @@
 # 107Pilot 当前状态索引
 
-快照日期：2026-07-20
+快照日期：2026-08-14
+
+## 2026-08-14 增量重基线
+
+- `pilot-agentd` A0 已完成：独立 Node 22.19.0 / Pi 0.84.1 服务、campus OpenAI-compatible streaming、deterministic faux、严格 Python↔TypeScript Turn/事件/错误合同、abort/checkpoint restore，以及 explain/Contract patch/remediation 统一调用链。
+- A0 本地证据：Agentd 168 tests、Python 全仓 1049 passed / 16 skipped / 30 subtests、Ruff、100 个 mypy 源文件、四套 Compose 渲染和 faux 四任务/取消恢复纵向 smoke 全绿。
+- 当前下一主线重排为 Pi 总体设计的 **A1 只读持久 Agent Turn**；实施计划：[`../superpowers/plans/2026-08-14-pilot-agent-a1-readonly-turns.md`](../superpowers/plans/2026-08-14-pilot-agent-a1-readonly-turns.md)。
+- A1 完成后依次进入 A2 隔离工作区编辑、A3 异步 Slurm 验证、A4 安全发布/正式运行、A5 修复与市场 Agent。每个阶段单独写实施计划并通过 D0/D1 review gate。
+- Runtime Watch 与资源观测作为独立事实提供者推进；A1 只消费已有 Store，不夹带新 Slurm 采集。全领域 PostgreSQL parity、真实身份和真实 107 继续作为生产门禁，不冒充本地 A1 完成条件。
+
 当前环境：本机 D0/D1
-当前主线：模拟 Slurm 阶段封版候选。已验证发布 revision：`d3ceb4cd43b77c7cee9d10768db7ada324b02ed0`；验收证据：source acceptance 12/12 PASS + runtime acceptance 10/10 PASS（同一 SHA，seal mode）。round-4..7 P1 已闭环；round-8 P1（baseline attribution fail-closed / lease-aware baseline 预算）已闭环；round-8 P2-1..P2-4 已闭环；round-11 P1-1（baseline stat/OSError 区分 ENOENT，其他错误 → status=error + error_code）/ P1-2（提交阶段 renew_outbox + 续租，unparseable lease → fail-closed）/ P1-3（build 脚本真正构建 Slurm Dockerfile + 移除 /dev/urandom + 锁定 uv/slurm-wlm + 双 clean-build rootfs content hash 对比）已闭环。当前判定：d3ceb4c 已构建 bundle GO；模拟 Slurm 功能闭环 GO；baseline 异常归因与多 dispatcher 租约 GO；app 镜像跨 build 可复现性 GO（rootfs content hash 双 build 一致）；slurm 镜像非 slurm-wlm apt 包仍有残余漂移（base digest + slurm-wlm 版本已锁，文档化为 practical-vs-mathematical 权衡）。
+当前主线：A1 只读持久 Agent Turn，以上述新计划为执行入口。
+已封版历史基线：模拟 Slurm 阶段已验证发布 revision `d3ceb4cd43b77c7cee9d10768db7ada324b02ed0`；验收证据：source acceptance 12/12 PASS + runtime acceptance 10/10 PASS（同一 SHA，seal mode）。round-4..7 P1 已闭环；round-8 P1（baseline attribution fail-closed / lease-aware baseline 预算）已闭环；round-8 P2-1..P2-4 已闭环；round-11 P1-1（baseline stat/OSError 区分 ENOENT，其他错误 → status=error + error_code）/ P1-2（提交阶段 renew_outbox + 续租，unparseable lease → fail-closed）/ P1-3（build 脚本真正构建 Slurm Dockerfile + 移除 /dev/urandom + 锁定 uv/slurm-wlm + 双 clean-build rootfs content hash 对比）已闭环。当前判定：d3ceb4c 已构建 bundle GO；模拟 Slurm 功能闭环 GO；baseline 异常归因与多 dispatcher 租约 GO；app 镜像跨 build 可复现性 GO（rootfs content hash 双 build 一致）；slurm 镜像非 slurm-wlm apt 包仍有残余漂移（base digest + slurm-wlm 版本已锁，文档化为 practical-vs-mathematical 权衡）。
 
 ## 权威入口
 
