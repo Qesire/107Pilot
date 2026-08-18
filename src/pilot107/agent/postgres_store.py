@@ -251,6 +251,17 @@ class PostgresAgentSessionStore:
             raise KeyError(turn_id)
         return _row_to_turn(row)
 
+    def get_turn_for_dispatch(self, turn_id: str) -> AgentTurnRecord:
+        """Read a Turn from the trusted worker path without weakening owner APIs."""
+        _key(turn_id, "turn_id")
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM agent_turns WHERE turn_id = %s", (turn_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError(turn_id)
+        return _row_to_turn(row)
+
     def claim_turn(
         self, turn_id: str, *, worker_id: str, lease_seconds: int
     ) -> AgentTurnLease | None:

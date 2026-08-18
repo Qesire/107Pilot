@@ -702,7 +702,7 @@ git commit -m "feat: execute readonly agent tools"
 - Consumes: AgentSessionStore, ControlRepository, AgentdClient, AgentCapabilitySigner, and AgentToolGateway configuration.
 - Produces: `AgentSessionService`, `AgentTurnWorker.dispatch_due()`, outbox topic `agent.turn.execute.v1`, and durable retry/cancel recovery.
 
-- [ ] **Step 1: Write failing orchestration and crash-window tests**
+- [x] **Step 1: Write failing orchestration and crash-window tests**
 
 Cover these failure windows:
 
@@ -719,7 +719,7 @@ Cover these failure windows:
 Assert exactly one durable event sequence, no duplicate tool invocation, at
 most one running Turn for Alice, and no head-of-line blocking for Bob.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest \
@@ -729,7 +729,7 @@ PYTHONPATH=src uv run --extra dev pytest \
 
 Expected: missing service and worker modules.
 
-- [ ] **Step 3: Implement create/enqueue/recovery semantics**
+- [x] **Step 3: Implement create/enqueue/recovery semantics**
 
 `AgentSessionService.submit_message()` must persist the Turn first, then idempotently enqueue:
 
@@ -750,7 +750,7 @@ token or publishes it as an event. Worker configuration reads the same
 `PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE`; startup fails closed when A1 is
 enabled and the file is absent or too short.
 
-- [ ] **Step 4: Persist each Agentd event before progress publication**
+- [x] **Step 4: Persist each Agentd event before progress publication**
 
 The callback order must be:
 
@@ -762,11 +762,11 @@ publish_event_hint(session_id, event.sequence)
 
 Hints may be lost; Store events may not. On replay after interruption, pass only the last validated checkpoint. A1 read tools make the Turn retry-safe, but invocation idempotency still prevents duplicate reads from consuming budget twice.
 
-- [ ] **Step 5: Implement durable cancellation**
+- [x] **Step 5: Implement durable cancellation**
 
 The API sets `cancel_requested`. The active Worker checks before Agentd invocation and after every event; it calls `AgentdClient.cancel_turn(turn_id)` once, persists the terminal `aborted` event/checkpoint, and maps the Session back to `idle` unless the user cancelled the whole Session.
 
-- [ ] **Step 6: Run GREEN and commit**
+- [x] **Step 6: Run GREEN and commit**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest \

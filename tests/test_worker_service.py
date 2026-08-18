@@ -95,7 +95,56 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(config.agentd_url, "http://pilot-agentd:8091")
         self.assertEqual(config.agentd_token, "internal-agentd-token")
         self.assertEqual(config.agentd_model_profile, "campus-default")
+        self.assertFalse(config.agent_a1_enabled)
+        self.assertIsNone(config.agent_capability_hmac_secret_file)
         self.assertNotIn("internal-agentd-token", repr(config))
+
+    def test_build_worker_service_requires_agent_capability_secret_when_enabled(self) -> None:
+        with self.assertRaisesRegex(ValueError, "capability HMAC secret"):
+            build_worker_service(
+                config_from_env(
+                    {"PILOT107_WORKER_BACKEND": "in-memory", "PILOT107_AGENT_A1_ENABLED": "true"},
+                    project_root=self.root,
+                )
+            )
+
+    def test_build_worker_service_rejects_short_agent_capability_secret_file(self) -> None:
+        secret_file = self.root / "agent-capability.key"
+        secret_file.write_bytes(b"too-short")
+
+        with self.assertRaisesRegex(ValueError, "at least 32 bytes"):
+            build_worker_service(
+                config_from_env(
+                    {
+                        "PILOT107_WORKER_BACKEND": "in-memory",
+                        "PILOT107_AGENT_A1_ENABLED": "true",
+                        "PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE": str(secret_file),
+                    },
+                    project_root=self.root,
+                )
+            )
+
+    def test_build_worker_service_wires_a1_turn_worker_from_secret_file(self) -> None:
+        secret_file = self.root / "agent-capability.key"
+        secret_file.write_bytes(b"f" * 32)
+
+        service = build_worker_service(
+            config_from_env(
+                {
+                    "PILOT107_WORKER_BACKEND": "in-memory",
+                    "PILOT107_AGENTD_URL": "http://pilot-agentd:8091",
+                    "PILOT107_AGENTD_TOKEN": "internal-agentd-token",
+                    "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
+                    "PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE": str(secret_file),
+                },
+                project_root=self.root,
+            )
+        )
+
+        self.assertTrue(service.config.agent_a1_enabled)
+        self.assertIsNotNone(service.stack.worker.agent_turn_worker)
+        self.assertIsNotNone(service.stack.agent_session_service)
+        self.assertNotIn("f" * 32, repr(service.config))
 
     def test_worker_config_loader_never_reads_legacy_llm_settings(self) -> None:
         config = config_from_env(

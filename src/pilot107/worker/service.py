@@ -41,8 +41,10 @@ from pilot107.adapters.ssh_relay import (
     SshRelayExecutor,
     SubprocessSshRelayClient,
 )
+from pilot107.agent.capabilities import AgentCapabilitySigner
 from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig
+from pilot107.agent.store_factory import build_agent_session_store
 from pilot107.core.advice import AgentAdviceService, AgentPolicyEngine
 from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
 from pilot107.core.code_context import (
@@ -72,7 +74,9 @@ from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
 from pilot107.core.submission_reconcile import ReconcileBackend
+from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.services.remediation_service import RemediationService
+from pilot107.worker.agent_turn_worker import AgentTurnWorker
 from pilot107.worker.capsule import RawCapsuleService
 from pilot107.worker.evidence import (
     AuthorizedFilesystemEvidenceTransport,
@@ -142,6 +146,9 @@ class WorkerServiceConfig:
     agentd_url: str | None = None
     agentd_token: str | None = field(default=None, repr=False)
     agentd_model_profile: str | None = None
+    agent_a1_enabled: bool = False
+    agent_capability_hmac_secret: bytes | None = field(default=None, repr=False)
+    agent_capability_hmac_secret_file: Path | None = field(default=None, repr=False)
     # Code context mirrors the API container's configuration so remediation
     # planning (which runs in the Worker) can emit create_repair_ticket actions
     # for code-level diagnoses. Without this the Worker's explain service has
@@ -163,6 +170,7 @@ class WorkerServiceStack:
     service: RunService
     worker: RuntimeReconcileWorker
     remediation_service: RemediationService
+    agent_session_service: AgentSessionService | None = None
 
 
 class WorkerService:
@@ -204,6 +212,7 @@ class WorkerService:
                 and result.diagnoses_checked == 0
                 and result.submissions_checked == 0
                 and result.agent_executions_checked == 0
+                and result.agent_turns_checked == 0
                 and self.last_remediation_advanced == 0
             ):
                 break
@@ -230,6 +239,7 @@ class WorkerService:
                 or result.diagnosis_errors
                 or result.submission_errors
                 or result.agent_execution_errors
+                or result.agent_turn_errors
                 or result.capsule_errors
                 or self.last_remediation_errors
                 or self.last_telemetry_error
@@ -260,6 +270,11 @@ class WorkerService:
             "agent_executions_succeeded": result.agent_executions_succeeded,
             "agent_execution_errors": redact_sensitive_structure(
                 [error.__dict__ for error in result.agent_execution_errors]
+            ),
+            "agent_turns_checked": result.agent_turns_checked,
+            "agent_turns_succeeded": result.agent_turns_succeeded,
+            "agent_turn_errors": redact_sensitive_structure(
+                [error.__dict__ for error in result.agent_turn_errors]
             ),
             "capsule_builds_attempted": result.capsule_builds_attempted,
             "capsule_builds_succeeded": result.capsule_builds_succeeded,
@@ -296,6 +311,9 @@ class WorkerService:
             "agent_execution_checked_total": result.agent_executions_checked,
             "agent_execution_succeeded_total": result.agent_executions_succeeded,
             "agent_execution_errors_total": len(result.agent_execution_errors),
+            "agent_turn_checked_total": result.agent_turns_checked,
+            "agent_turn_succeeded_total": result.agent_turns_succeeded,
+            "agent_turn_errors_total": len(result.agent_turn_errors),
             "capsule_builds_attempted_total": result.capsule_builds_attempted,
             "capsule_builds_succeeded_total": result.capsule_builds_succeeded,
             "capsule_errors_total": len(result.capsule_errors),
@@ -439,6 +457,19 @@ def config_from_env(
         agentd_url=values.get("PILOT107_AGENTD_URL") or None,
         agentd_token=values.get("PILOT107_AGENTD_TOKEN") or None,
         agentd_model_profile=values.get("PILOT107_AGENTD_MODEL_PROFILE") or None,
+        agent_a1_enabled=(
+            _bool(values, "PILOT107_AGENT_A1_ENABLED", False)
+            or bool(values.get("PILOT107_AGENT_CAPABILITY_HMAC_SECRET"))
+            or bool(values.get("PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE"))
+        ),
+        agent_capability_hmac_secret=(
+            None
+            if not values.get("PILOT107_AGENT_CAPABILITY_HMAC_SECRET")
+            else values["PILOT107_AGENT_CAPABILITY_HMAC_SECRET"].encode("utf-8")
+        ),
+        agent_capability_hmac_secret_file=_optional_path(
+            values, "PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE"
+        ),
         code_context_transport=values.get("PILOT107_CODE_CONTEXT_TRANSPORT", "none"),
         code_context_allowed_roots=tuple(
             _split_csv(values.get("PILOT107_CODE_CONTEXT_ALLOWED_ROOTS", ""))
@@ -466,6 +497,7 @@ def config_from_env(
 
 
 def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
+    agent_capability_secret = _load_agent_capability_secret(config)
     if config.postgres_dsn is None:
         store = RunStore(config.db_path)
         contract_store = ContractStore(config.db_path)
@@ -484,6 +516,33 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         sqlite_path=config.db_path,
         postgres_dsn=config.control_postgres_dsn,
     )
+    agent_session_service: AgentSessionService | None = None
+    agent_turn_worker: AgentTurnWorker | None = None
+    if agent_capability_secret is not None:
+        if not (config.agentd_url and config.agentd_token and config.agentd_model_profile):
+            raise ValueError("complete pilot-agentd configuration is required when A1 is enabled")
+        agent_session_store = build_agent_session_store(
+            sqlite_path=config.db_path,
+            postgres_dsn=config.postgres_dsn,
+        )
+        agent_session_service = AgentSessionService(
+            store=agent_session_store,
+            control_repository=control_repository,
+        )
+        agent_turn_worker = AgentTurnWorker(
+            store=agent_session_store,
+            control_repository=control_repository,
+            agentd_client=AgentdClient(
+                AgentdClientConfig(
+                    base_url=config.agentd_url,
+                    token=config.agentd_token,
+                    model_profile_id=config.agentd_model_profile,
+                )
+            ),
+            capability_signer=AgentCapabilitySigner(agent_capability_secret),
+            worker_id=config.worker_id,
+            lease_seconds=max(120, config.task_lease_seconds),
+        )
     evidence_store = EvidenceStore(config.evidence_root)
     backend, task_handler, reconcile_backend, baseline_executor = _build_backend_and_task_handler(
         config, store, evidence_store, contract_store
@@ -570,6 +629,8 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         worker_id=config.worker_id,
         task_lease_seconds=config.task_lease_seconds,
         agent_advice_service=advice_service,
+        agent_session_service=agent_session_service,
+        agent_turn_worker=agent_turn_worker,
         capsule_service=capsule_service,
     )
     return WorkerService(
@@ -579,6 +640,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             service=run_service,
             worker=worker,
             remediation_service=remediation_service,
+            agent_session_service=agent_session_service,
         ),
     )
 
@@ -968,6 +1030,9 @@ def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> Work
             *left.agent_execution_errors,
             *right.agent_execution_errors,
         ],
+        agent_turns_checked=left.agent_turns_checked + right.agent_turns_checked,
+        agent_turns_succeeded=left.agent_turns_succeeded + right.agent_turns_succeeded,
+        agent_turn_errors=[*left.agent_turn_errors, *right.agent_turn_errors],
         capsule_builds_attempted=(
             left.capsule_builds_attempted + right.capsule_builds_attempted
         ),
@@ -991,9 +1056,32 @@ def _tick_summary(result: WorkerTickResult) -> str:
         f" agent_executions={result.agent_executions_succeeded}/"
         f"{result.agent_executions_checked} "
         f"agent_execution_errors={len(result.agent_execution_errors)} "
+        f"agent_turns={result.agent_turns_succeeded}/{result.agent_turns_checked} "
+        f"agent_turn_errors={len(result.agent_turn_errors)} "
         f"capsules={result.capsule_builds_succeeded}/{result.capsule_builds_attempted} "
         f"capsule_errors={len(result.capsule_errors)}"
     )
+
+
+def _load_agent_capability_secret(config: WorkerServiceConfig) -> bytes | None:
+    inline = config.agent_capability_hmac_secret
+    secret_file = config.agent_capability_hmac_secret_file
+    if inline is not None and secret_file is not None:
+        raise ValueError("Agent capability HMAC secret cannot use both inline and file sources")
+    if not config.agent_a1_enabled:
+        return None
+    if secret_file is not None:
+        try:
+            secret = secret_file.read_bytes()
+        except OSError as exc:
+            raise ValueError("Agent capability HMAC secret file cannot be read") from exc
+    elif inline is not None:
+        secret = inline
+    else:
+        raise ValueError("Agent capability HMAC secret is required when A1 is enabled")
+    if len(secret) < 32:
+        raise ValueError("Agent capability HMAC secret must contain at least 32 bytes")
+    return secret
 
 
 def _path(values: Mapping[str, str], name: str, default: Path) -> Path:

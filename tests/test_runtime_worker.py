@@ -21,6 +21,33 @@ from pilot107.worker.runtime_worker import (
 )
 
 
+class FakeAgentSessionService:
+    def __init__(self) -> None:
+        self.recoveries = 0
+
+    def recover_pending_turns(self, *, limit: int = 100) -> int:
+        self.recoveries += 1
+        return 1
+
+
+class FakeAgentTurnWorker:
+    def __init__(self) -> None:
+        self.dispatches = 0
+
+    def dispatch_due(self, *, limit: int):
+        from pilot107.worker.agent_turn_worker import (
+            AgentTurnDispatchError,
+            AgentTurnDispatchResult,
+        )
+
+        self.dispatches += 1
+        return AgentTurnDispatchResult(
+            checked=2,
+            succeeded=1,
+            errors=[AgentTurnDispatchError(turn_id="turn-2", message="retry")],
+        )
+
+
 def _plan() -> ResourcePlan:
     return ResourcePlan(
         partition="debug",
@@ -144,6 +171,21 @@ class RuntimeReconcileWorkerTests(unittest.TestCase):
         self.assertEqual(result.terminal, 1)
         self.assertEqual(result.errors, [])
         self.assertEqual(self.store.get_run(run.run_id).state, RunState.SUCCEEDED)
+
+    def test_tick_recovers_and_dispatches_durable_agent_turns(self) -> None:
+        session_service = FakeAgentSessionService()
+        turn_worker = FakeAgentTurnWorker()
+        result = RuntimeReconcileWorker(
+            service=RunService(store=self.store, backend=InMemorySlurmBackend()),
+            agent_session_service=session_service,
+            agent_turn_worker=turn_worker,
+        ).tick()
+
+        self.assertEqual(session_service.recoveries, 1)
+        self.assertEqual(turn_worker.dispatches, 1)
+        self.assertEqual(result.agent_turns_checked, 2)
+        self.assertEqual(result.agent_turns_succeeded, 1)
+        self.assertEqual(result.agent_turn_errors[0].run_id, "turn-2")
 
     def test_terminal_runs_are_not_reprocessed(self) -> None:
         backend = InMemorySlurmBackend()

@@ -24,6 +24,8 @@ from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import CollectionTaskFenceConflict, CollectionTaskRecord
 from pilot107.core.states import TERMINAL_RUN_STATES, CapsuleState, CollectionState
+from pilot107.services.agent_session_service import AgentSessionService
+from pilot107.worker.agent_turn_worker import AgentTurnWorker
 from pilot107.worker.capsule import CapsuleError, RawCapsuleService
 from pilot107.worker.evidence import CollectionTaskHandler
 
@@ -90,6 +92,9 @@ class WorkerTickResult:
     agent_executions_checked: int = 0
     agent_executions_succeeded: int = 0
     agent_execution_errors: list[WorkerRunError] = field(default_factory=list)
+    agent_turns_checked: int = 0
+    agent_turns_succeeded: int = 0
+    agent_turn_errors: list[WorkerRunError] = field(default_factory=list)
     capsule_builds_attempted: int = 0
     capsule_builds_succeeded: int = 0
     capsule_errors: list[WorkerRunError] = field(default_factory=list)
@@ -116,6 +121,8 @@ class RuntimeReconcileWorker:
         task_lease_seconds: int = 300,
         collection_max_attempts: int = 5,
         agent_advice_service: AgentAdviceService | None = None,
+        agent_session_service: AgentSessionService | None = None,
+        agent_turn_worker: AgentTurnWorker | None = None,
         capsule_service: RawCapsuleService | None = None,
     ) -> None:
         if batch_size <= 0:
@@ -132,6 +139,8 @@ class RuntimeReconcileWorker:
         self.task_lease_seconds = task_lease_seconds
         self.collection_max_attempts = collection_max_attempts
         self.agent_advice_service = agent_advice_service
+        self.agent_session_service = agent_session_service
+        self.agent_turn_worker = agent_turn_worker
         self.capsule_service = capsule_service
 
     def tick(self) -> WorkerTickResult:
@@ -159,6 +168,31 @@ class RuntimeReconcileWorker:
             )
             for error in (agent_batch.errors if agent_batch is not None else [])
         ]
+        agent_turn_batch = None
+        agent_turn_errors: list[WorkerRunError] = []
+        if self.agent_session_service is not None and self.agent_turn_worker is not None:
+            try:
+                self.agent_session_service.recover_pending_turns(limit=self.batch_size)
+                agent_turn_batch = self.agent_turn_worker.dispatch_due(limit=self.batch_size)
+            except Exception:
+                agent_turn_errors.append(
+                    WorkerRunError(
+                        run_id="agent-turn-recovery",
+                        message="Agent Turn recovery failed",
+                        code="AGENT.TURN_RECOVERY_ERROR",
+                        retryable=True,
+                    )
+                )
+            else:
+                agent_turn_errors.extend(
+                    WorkerRunError(
+                        run_id=error.turn_id,
+                        message=error.message,
+                        code=error.code,
+                        retryable=error.retryable,
+                    )
+                    for error in agent_turn_batch.errors
+                )
         runs = self.service.store.list_active_job_runs(limit=self.batch_size)
         terminal = 0
         errors: list[WorkerRunError] = []
@@ -288,6 +322,11 @@ class RuntimeReconcileWorker:
                 len(agent_batch.succeeded) if agent_batch is not None else 0
             ),
             agent_execution_errors=agent_execution_errors,
+            agent_turns_checked=(agent_turn_batch.checked if agent_turn_batch is not None else 0),
+            agent_turns_succeeded=(
+                agent_turn_batch.succeeded if agent_turn_batch is not None else 0
+            ),
+            agent_turn_errors=agent_turn_errors,
             capsule_builds_attempted=capsule_stats.attempted,
             capsule_builds_succeeded=capsule_stats.succeeded,
             capsule_errors=capsule_stats.errors,
