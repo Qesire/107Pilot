@@ -6,6 +6,7 @@ cd "$root"
 
 uv run --extra dev ruff check src tests scripts
 uv run --extra dev mypy src
+PYTHONPATH=src uv run --extra dev pytest tests/test_pilot_agent_a1_vertical.py -q
 uv run --extra dev pytest -q
 bash scripts/check-pilot-agentd.sh
 

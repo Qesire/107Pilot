@@ -85,3 +85,40 @@ The campus script reads only the three `PILOT107_AGENTD_*` client variables. It
 prints `SKIP: pilot-agentd or campus profile is not configured` and exits zero
 when they are absent, so remote-VM or campus credentials are not a local
 completion prerequisite. It never reads or prints the campus API key.
+
+## A1 durable read-only Agent Sessions
+
+A1 exposes owner-scoped durable Sessions and Turns at
+`/api/v1/agent-sessions`. A Session is `idle` while it can accept a message,
+`running` while its current Turn is claimed, and returns to `idle` after a
+terminal Turn. Turns move through `queued`, `running`, `interrupted`, and a
+terminal `completed`, `failed`, or `cancelled` state. Message submission is
+idempotent by owner, Session, and `request_key`; an interrupted Turn remains
+recoverable after API, Worker, or Agentd restart. Cancellation is idempotent
+and targets the Agent Turn only—it never cancels a Slurm Run.
+
+Events are persisted before they are returned. Clients can page with
+`after_event_id` or reconnect to the event stream with `Last-Event-ID`; replay
+therefore resumes from durable state without gaps or duplicates. API responses
+do not expose capability tokens, leases, fencing tokens, or checkpoints.
+
+The private Tool Gateway accepts only the seven bounded `hpc-readonly-v1`
+tools: platform snapshot read; workspace list, search, and file read; Run and
+Run-log read; and Evidence read. It has no shell, SSH, file-write, job-submit,
+Run-cancel, or publish capability. The API and Worker read the separate
+`PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE`; Agentd receives only the signed
+per-Turn capability and the private Gateway URL. The capability secret must
+never be mounted into Agentd or the web container.
+
+Build and verify the complete local A1 path with:
+
+```bash
+bash scripts/build-app-images.sh
+bash scripts/smoke-pilot-agent-a1.sh
+bash scripts/fault-pilot-agent-a1.sh
+```
+
+The smoke covers HTTP submission, outbox dispatch, Agentd, three real bounded
+read tools, durable replay, invocation idempotency, budgets, and Alice/Bob
+isolation. The fault command adds deterministic API, Worker, Agentd, and browser
+restart/reconnect barriers.

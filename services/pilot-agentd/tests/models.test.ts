@@ -147,4 +147,20 @@ describe("Pi model registry", () => {
       "tokensPerSecond",
     );
   });
+
+  it("queues the fixed A1 read trajectory without injected responses", async () => {
+    const runtime = createFauxModelRuntime({ scenario: "a1-smoke" });
+
+    expect(runtime.faux.getPendingResponseCount()).toBe(4);
+    const first = await runtime.models.completeSimple(runtime.model, {
+      messages: [{ role: "user", content: "inspect run-1", timestamp: 1 }],
+    });
+    expect(first.content).toContainEqual(
+      expect.objectContaining({
+        type: "toolCall",
+        name: "run_get",
+        arguments: { run_id: "run-a1-smoke" },
+      }),
+    );
+  });
 });

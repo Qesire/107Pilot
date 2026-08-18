@@ -25,6 +25,7 @@ PYTHONPATH=src uv run --extra dev pytest \
   tests/test_agentd_compose.py \
   tests/test_architecture_boundaries.py \
   tests/test_pilot_agentd_vertical.py \
+  tests/test_pilot_agent_a1_vertical.py \
   -q
 
 sh simulator/compose/scripts/check-compose-config.sh

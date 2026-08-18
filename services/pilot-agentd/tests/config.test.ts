@@ -170,6 +170,14 @@ describe("pilot-agentd configuration", () => {
     });
     expect(smokeConfig.modelProfile.fauxScenario).toBe("a0-smoke");
 
+    const a1SmokeConfig = configFromEnv({
+      NODE_ENV: "production",
+      PILOT107_AGENTD_TOKEN: "smoke-token",
+      PILOT107_AGENTD_MODEL_PROFILE: "faux-default",
+      PILOT107_AGENTD_FAUX_SCENARIO: "a1-smoke",
+    });
+    expect(a1SmokeConfig.modelProfile.fauxScenario).toBe("a1-smoke");
+
     expect(() =>
       configFromEnv({
         NODE_ENV: "production",

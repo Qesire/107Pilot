@@ -17,7 +17,7 @@ export interface ModelProfile {
   readonly maxOutputTokens: number;
   readonly maxAttempts: 1 | 2 | 3;
   readonly contextWindow: number;
-  readonly fauxScenario?: "a0-smoke";
+  readonly fauxScenario?: "a0-smoke" | "a1-smoke";
 }
 
 export interface PublicAgentdConfig {
@@ -153,12 +153,20 @@ function campusProfile(env: NodeJS.ProcessEnv, id: string): ModelProfile {
 
 function fauxProfile(env: NodeJS.ProcessEnv): ModelProfile {
   const rawScenario = optionalNonEmpty(env.PILOT107_AGENTD_FAUX_SCENARIO);
-  if (rawScenario !== undefined && rawScenario !== "a0-smoke") {
+  if (
+    rawScenario !== undefined &&
+    rawScenario !== "a0-smoke" &&
+    rawScenario !== "a1-smoke"
+  ) {
     throw new TypeError(
       "PILOT107_AGENTD_FAUX_SCENARIO must name a supported server-side scenario",
     );
   }
-  if (env.NODE_ENV !== "test" && rawScenario !== "a0-smoke") {
+  if (
+    env.NODE_ENV !== "test" &&
+    rawScenario !== "a0-smoke" &&
+    rawScenario !== "a1-smoke"
+  ) {
     throw new TypeError(
       "PILOT107_AGENTD_FAUX_SCENARIO is required for faux-default outside tests",
     );
@@ -172,7 +180,9 @@ function fauxProfile(env: NodeJS.ProcessEnv): ModelProfile {
     maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
     maxAttempts: DEFAULT_MAX_ATTEMPTS,
     contextWindow: 128_000,
-    ...(rawScenario === "a0-smoke" ? { fauxScenario: rawScenario } : {}),
+    ...(rawScenario === "a0-smoke" || rawScenario === "a1-smoke"
+      ? { fauxScenario: rawScenario }
+      : {}),
   });
 }
 

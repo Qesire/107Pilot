@@ -915,11 +915,11 @@ git commit -m "feat: isolate the agent tool gateway"
 - Consumes: the complete Python API→outbox Worker→Agentd→Tool Gateway→Store path.
 - Produces: one-command D1 evidence for A1 and an updated authoritative status baseline.
 
-- [ ] **Step 1: Write failing vertical tests**
+- [x] **Step 1: Write failing vertical tests**
 
 The test must seed owner-scoped platform/run/log/evidence/workspace fixtures, create an Alice Session over HTTP, submit a message, and assert the faux trajectory calls at least `run_get`, `run_log_read`, and `evidence_read`. A Bob read of the Session and any Alice fixture must return 404/forbidden without content leakage.
 
-- [ ] **Step 2: Add restart and fault injection**
+- [x] **Step 2: Add restart and fault injection**
 
 `fault-pilot-agent-a1.sh` must stop and restart each component at a deterministic barrier:
 
@@ -932,7 +932,7 @@ browser connection after event N
 
 For every barrier, assert one Turn, contiguous durable events, one logical tool invocation per idempotency key, no stale-fence write, and a terminal or explicitly interrupted recoverable state.
 
-- [ ] **Step 3: Add performance and budget assertions**
+- [x] **Step 3: Add performance and budget assertions**
 
 With 100 persisted idle Sessions and 10 concurrent faux Turns, record Agentd
 RSS/CPU, queue wait, event lag, tool invocation count, and returned bytes.
@@ -942,7 +942,7 @@ invocations and 1 MiB cumulative tool output, and no log/file read exceeds its
 per-tool bound. Record the measured shared-Agentd RSS delta as the baseline for
 later capacity policy rather than inventing a production threshold in D1.
 
-- [ ] **Step 4: Add the one-command smoke and docs**
+- [x] **Step 4: Add the one-command smoke and docs**
 
 ```bash
 bash scripts/build-app-images.sh
@@ -952,7 +952,7 @@ bash scripts/fault-pilot-agent-a1.sh
 
 Document Session states, retry/cancel semantics, Tool Gateway security, capability-secret placement, durable event replay, and the explicit absence of write/submit capabilities in A1.
 
-- [ ] **Step 5: Run the full completion gate**
+- [x] **Step 5: Run the full completion gate**
 
 ```bash
 bash scripts/check-pilot-agentd.sh
@@ -968,7 +968,7 @@ git status --short
 
 Expected: all commands pass; only explicitly preserved user-owned untracked files may remain.
 
-- [ ] **Step 6: Commit A1 evidence and status**
+- [x] **Step 6: Commit A1 evidence and status**
 
 ```bash
 git add scripts/smoke-pilot-agent-a1.py scripts/smoke-pilot-agent-a1.sh \

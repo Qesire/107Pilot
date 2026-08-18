@@ -137,6 +137,38 @@ bash scripts/smoke-campus-llm.sh
 Missing `PILOT107_AGENTD_URL`, token, or campus profile is a safe zero-exit
 skip. The campus smoke never needs direct access to the provider key.
 
+### A1 Tool Gateway and durable Turns
+
+The A1 path is API → durable outbox → Worker → Agentd → private API Tool
+Gateway → durable Store. Agentd calls
+`http://pilot107-api:8080/internal/v1/agent-tools/invoke` over the private app
+network; neither endpoint receives a host port. A separate
+`pilot107-agent-capability-hmac` Compose secret is mounted read-only into API
+and Worker only. Agentd and web must not receive that secret. For local use,
+`scripts/init-local-secrets.sh` creates the ignored
+`secrets/agent-capability-hmac.local`; deployments must replace it through
+`PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE` with secret-store material.
+
+The `hpc-readonly-v1` profile permits only bounded platform, Run, log,
+Evidence, workspace-list/search/file reads. It deliberately provides no write,
+shell, SSH, Slurm submit/cancel, or publish authority. Durable event
+replay accepts `after_event_id`/`Last-Event-ID`, and retries use request and tool
+idempotency keys plus state-version and lease fencing.
+
+After building the app images, run the local vertical and deterministic
+restart matrix:
+
+```bash
+bash scripts/build-app-images.sh
+bash scripts/smoke-pilot-agent-a1.sh
+bash scripts/fault-pilot-agent-a1.sh
+```
+
+The smoke reports the shared Agentd CPU/memory observation as a local baseline;
+it is not a production capacity threshold. The D0 companion test exercises 100
+persisted idle Sessions and 10 concurrent faux Turns and verifies release,
+queue/event timing, invocation counts, and returned-byte bounds.
+
 The first runnable version depends on a local Slurm simulator image named by
 `SLURM_SIM_IMAGE`. This lets the project use either a later local Dockerfile or
 a school-provided/imported Slurm image without changing the Compose contract.

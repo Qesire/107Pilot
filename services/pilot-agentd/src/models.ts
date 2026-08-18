@@ -27,7 +27,7 @@ export interface FauxModelRuntime extends ModelRuntime {
 
 export interface FauxModelRuntimeOptions {
   readonly tokensPerSecond?: number;
-  readonly scenario?: "a0-smoke";
+  readonly scenario?: "a0-smoke" | "a1-smoke";
 }
 
 function smokeResponses() {
@@ -97,6 +97,39 @@ function smokeResponses() {
   ];
 }
 
+function a1SmokeResponses() {
+  return [
+    fauxAssistantMessage(
+      [fauxToolCall("run_get", { run_id: "run-a1-smoke" }, { id: "a1-run" })],
+      { stopReason: "toolUse", timestamp: 1 },
+    ),
+    fauxAssistantMessage(
+      [
+        fauxToolCall(
+          "run_log_read",
+          { run_id: "run-a1-smoke", stream: "stderr", cursor: 0 },
+          { id: "a1-log" },
+        ),
+      ],
+      { stopReason: "toolUse", timestamp: 2 },
+    ),
+    fauxAssistantMessage(
+      [
+        fauxToolCall(
+          "evidence_read",
+          { run_id: "run-a1-smoke", object_id: "object-a1-smoke" },
+          { id: "a1-evidence" },
+        ),
+      ],
+      { stopReason: "toolUse", timestamp: 3 },
+    ),
+    fauxAssistantMessage(
+      [fauxText("run-a1-smoke failed after a bounded stderr and evidence review.")],
+      { timestamp: 4 },
+    ),
+  ];
+}
+
 export function createFauxModelRuntime(
   options: FauxModelRuntimeOptions = {},
 ): FauxModelRuntime {
@@ -108,7 +141,7 @@ export function createFauxModelRuntime(
   }
 
   const tokensPerSecond =
-    options.tokensPerSecond ?? (options.scenario === "a0-smoke" ? 20 : undefined);
+    options.tokensPerSecond ?? (options.scenario !== undefined ? 20 : undefined);
   const faux = fauxProvider({
     api: "faux",
     provider: "faux-default",
@@ -128,6 +161,8 @@ export function createFauxModelRuntime(
   models.setProvider(faux.provider);
   if (options.scenario === "a0-smoke") {
     faux.setResponses(smokeResponses());
+  } else if (options.scenario === "a1-smoke") {
+    faux.setResponses(a1SmokeResponses());
   }
   const model = faux.getModel();
   const profile: ModelProfile = Object.freeze({
