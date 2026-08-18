@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pilot107.agent.session import AgentTurnRecord
+from collections.abc import Mapping
+
+from pilot107.agent.session import AgentSessionRecord, AgentTurnRecord
 from pilot107.agent.store import AgentSessionStore
 from pilot107.core.control_repository import ControlRepository, OutboxMessage
 
@@ -18,6 +20,22 @@ class AgentSessionService:
     ) -> None:
         self.store = store
         self.control_repository = control_repository
+
+    def create_session(
+        self,
+        *,
+        owner: str,
+        request_key: str,
+        model_profile_id: str,
+        source: Mapping[str, object],
+    ) -> tuple[AgentSessionRecord, bool]:
+        return self.store.create_session(
+            owner=owner,
+            request_key=request_key,
+            profile_id="hpc-readonly-v1",
+            model_profile_id=model_profile_id,
+            source=source,
+        )
 
     def submit_message(
         self,

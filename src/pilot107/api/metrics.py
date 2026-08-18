@@ -19,6 +19,7 @@ AsgiApp = Callable[[MutableMapping[str, Any], AsgiReceive, AsgiSend], Awaitable[
 
 _RESOURCE_IDENTIFIERS = {
     "advice": "advice_id",
+    "agent-sessions": "session_id",
     "contracts": "contract_id",
     "entitlements": "snapshot_id",
     "evidence": "evidence_id",
@@ -45,6 +46,7 @@ _STATIC_CHILDREN = {
 _API_ROOTS = frozenset(
     {
         "agent",
+        "agent-sessions",
         "contracts",
         "evidence",
         "files",
@@ -65,6 +67,7 @@ _STATIC_SEGMENTS = frozenset(
         "action",
         "adopt",
         "advance",
+        "agent-sessions",
         "advice",
         "approve",
         "archive",

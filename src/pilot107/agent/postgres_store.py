@@ -459,10 +459,10 @@ class PostgresAgentSessionStore:
             record = _row_to_turn(current)
             if record.state.value in _TERMINAL:
                 return record
-            if record.state_version != expected_state_version:
-                raise AgentSessionConflict("Turn state version is stale")
             if record.cancel_requested:
                 return record
+            if record.state_version != expected_state_version:
+                raise AgentSessionConflict("Turn state version is stale")
             row = conn.execute(
                 """
                 UPDATE agent_turns

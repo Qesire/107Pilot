@@ -797,7 +797,7 @@ git commit -m "feat: dispatch recoverable agent turns"
 - Consumes: AgentSessionService and durable Store pages.
 - Produces: authenticated HTTP routes and opaque-cursor event replay.
 
-- [ ] **Step 1: Write failing API, permission, idempotency, and replay tests**
+- [x] **Step 1: Write failing API, permission, idempotency, and replay tests**
 
 Add these routes:
 
@@ -812,7 +812,7 @@ GET  /api/v1/agent-sessions/{session_id}/events?after_event_id=N&limit=100
 
 Assert Alice/Bob isolation, server-derived owner, unknown-field rejection, stable request-key replay, stale state-version conflict, bounded message length, invalid cursor rejection, reconnect after event N, and cancellation idempotency.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest \
@@ -821,15 +821,15 @@ PYTHONPATH=src uv run --extra dev pytest \
 
 Expected: 404 or missing route class.
 
-- [ ] **Step 3: Implement the route module**
+- [x] **Step 3: Implement the route module**
 
 Follow `RemediationRoutes`: all owners come from `UserIdentity`, list cursors bind owner/state scope, errors use stable `AGENT.SESSION.*` and `AGENT.TURN.*` codes, and response payloads exclude capability tokens, leases, provider credentials, and raw checkpoint messages.
 
-- [ ] **Step 4: Add durable event streaming compatibility**
+- [x] **Step 4: Add durable event streaming compatibility**
 
 The existing event transport may send a lightweight `agent.session_event_available` notification, but clients must resume through the paged durable endpoint. Add `Last-Event-ID` coverage proving a browser/API restart does not lose or duplicate events.
 
-- [ ] **Step 5: Update OpenAPI and run GREEN**
+- [x] **Step 5: Update OpenAPI and run GREEN**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest \

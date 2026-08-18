@@ -575,20 +575,21 @@ class SQLiteAgentSessionStore:
             record = _row_to_turn(current)
             if record.state in _TERMINAL_TURN_STATES:
                 return record
+            if record.cancel_requested:
+                return record
             if record.state_version != expected_state_version:
                 raise AgentSessionConflict("Turn state version is stale")
-            if not record.cancel_requested:
-                updated = conn.execute(
-                    """
-                    UPDATE agent_turns
-                    SET cancel_requested = 1, state_version = state_version + 1
-                    WHERE turn_id = ? AND owner = ? AND state_version = ?
-                      AND state IN ('queued', 'running', 'interrupted')
-                    """,
-                    (turn_id, owner, expected_state_version),
-                )
-                if updated.rowcount != 1:
-                    raise AgentSessionConflict("Turn changed while requesting cancel")
+            updated = conn.execute(
+                """
+                UPDATE agent_turns
+                SET cancel_requested = 1, state_version = state_version + 1
+                WHERE turn_id = ? AND owner = ? AND state_version = ?
+                  AND state IN ('queued', 'running', 'interrupted')
+                """,
+                (turn_id, owner, expected_state_version),
+            )
+            if updated.rowcount != 1:
+                raise AgentSessionConflict("Turn changed while requesting cancel")
             row = conn.execute(
                 "SELECT * FROM agent_turns WHERE turn_id = ?", (turn_id,)
             ).fetchone()

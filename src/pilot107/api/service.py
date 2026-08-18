@@ -102,6 +102,7 @@ from pilot107.core.template_policy import (
 from pilot107.core.template_verification import TemplateVerificationService
 from pilot107.core.terminal import TerminalCommandService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
+from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.services.platform_snapshot_freshness import SnapshotCollectionMonitor
 from pilot107.services.platform_snapshot_service import PlatformSnapshotService
 from pilot107.worker.capsule import RawCapsuleService
@@ -652,6 +653,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     )
     workspace_reader = _build_workspace_reader(config)
     agent_tool_routes: AgentToolRoutes | None = None
+    agent_session_service: AgentSessionService | None = None
     if agent_capability_secret is not None:
         agent_session_store = build_agent_session_store(
             sqlite_path=config.db_path,
@@ -670,6 +672,10 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 signer=AgentCapabilitySigner(agent_capability_secret),
                 handlers=build_a1_read_handlers(read_context),
             )
+        )
+        agent_session_service = AgentSessionService(
+            store=agent_session_store,
+            control_repository=control_repository,
         )
     terminal_service = (
         TerminalCommandService(
@@ -734,6 +740,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             ),
         ),
         agent_tool_routes=agent_tool_routes,
+        agent_session_service=agent_session_service,
         auth_required=config.auth_required,
         trusted_user_header=config.trusted_user_header,
         proxy_hmac_secret=config.proxy_hmac_secret,

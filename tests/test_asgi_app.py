@@ -104,6 +104,79 @@ class AsgiAppTests(unittest.TestCase):
             "CONTRACT.RECIPE_REQUIRED",
         )
 
+    def test_agent_events_resume_through_asgi_last_event_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            api = build_api(
+                db_path=root / "pilot107.db",
+                evidence_root=root / "evidence",
+                auth_required=True,
+            )
+            app = build_asgi_app(api)
+            headers = {"x-pilot107-user": "alice", "content-type": "application/json"}
+            created = _asgi_request(
+                app,
+                "/api/v1/agent-sessions",
+                method="POST",
+                body=json.dumps(
+                    {
+                        "request_key": "asgi-session",
+                        "model_profile_id": "faux-default",
+                        "source": {"run_id": "run-1"},
+                    }
+                ).encode(),
+                headers=headers,
+            )
+            session = json.loads(created[2])
+            turn_response = _asgi_request(
+                app,
+                f"/api/v1/agent-sessions/{session['session_id']}/turns",
+                method="POST",
+                body=json.dumps(
+                    {
+                        "request_key": "asgi-turn",
+                        "message": "inspect run-1",
+                        "expected_state_version": session["state_version"],
+                    }
+                ).encode(),
+                headers=headers,
+            )
+            turn = json.loads(turn_response[2])
+            assert api.agent_session_routes is not None
+            store = api.agent_session_routes.service.store
+            claim = store.claim_turn(turn["turn_id"], worker_id="worker-1", lease_seconds=30)
+            assert claim is not None
+            for sequence in (1, 2):
+                store.append_event(
+                    turn["turn_id"],
+                    claim=claim,
+                    sequence=sequence,
+                    event_type="message_delta",
+                    payload={"delta": str(sequence)},
+                )
+
+            first = _asgi_request(
+                app,
+                f"/api/v1/agent-sessions/{session['session_id']}/events?limit=1",
+                headers={"x-pilot107-user": "alice"},
+            )
+            first_payload = json.loads(first[2])
+            resumed = _asgi_request(
+                app,
+                f"/api/v1/agent-sessions/{session['session_id']}/events",
+                headers={
+                    "x-pilot107-user": "alice",
+                    "last-event-id": str(first_payload["page"]["last_event_id"]),
+                },
+            )
+
+        self.assertEqual(created[0], 201)
+        self.assertEqual(turn_response[0], 202)
+        self.assertEqual(
+            [item["sequence"] for item in json.loads(resumed[2])["items"]],
+            [2],
+        )
+
     def test_transport_enforces_body_response_and_rate_limits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -185,6 +258,7 @@ class AsgiAppTests(unittest.TestCase):
             _asgi_request(app, "/api/v1/random-two/value-two")
             _asgi_request(app, "/api/v1/runs/run-one/random-action-one")
             _asgi_request(app, "/api/v1/runs/run-two/random-action-two")
+            _asgi_request(app, "/api/v1/agent-sessions/session-sensitive/events")
             response = _asgi_request(app, "/metrics")
 
         self.assertEqual(response[0], 200)
@@ -207,6 +281,8 @@ class AsgiAppTests(unittest.TestCase):
         )
         self.assertNotIn("random-action-one", metrics)
         self.assertNotIn("random-two", metrics)
+        self.assertIn('route="/api/v1/agent-sessions/{session_id}/events"', metrics)
+        self.assertNotIn("session-sensitive", metrics)
         self.assertIn(
             'pilot107_outbox_messages{state="pending",topic="agent.execute"} 1',
             metrics,

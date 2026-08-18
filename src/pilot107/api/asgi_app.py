@@ -146,6 +146,18 @@ _REMEDIATION_SESSION_PATH_PARAMETER = {
     "required": True,
     "schema": {"type": "string", "minLength": 1, "maxLength": 64},
 }
+_AGENT_SESSION_PATH_PARAMETER = {
+    "name": "session_id",
+    "in": "path",
+    "required": True,
+    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+}
+_AGENT_TURN_PATH_PARAMETER = {
+    "name": "turn_id",
+    "in": "path",
+    "required": True,
+    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+}
 _RUN_PATH_PARAMETER = {
     "name": "run_id",
     "in": "path",
@@ -467,6 +479,93 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
             tags=["templates"],
             openapi_extra={"parameters": _TEMPLATE_RELEASE_PARAMETERS},
         )
+
+    app.add_api_route(
+        "/api/v1/agent-sessions",
+        forward_get,
+        methods=["GET"],
+        operation_id="list_agent_sessions",
+        tags=["agent"],
+        openapi_extra={
+            "parameters": [
+                {
+                    "name": "state",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string"},
+                },
+                {
+                    "name": "limit",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+                {
+                    "name": "cursor",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string", "maxLength": 2048},
+                },
+            ]
+        },
+    )
+    app.add_api_route(
+        "/api/v1/agent-sessions",
+        forward_post,
+        methods=["POST"],
+        operation_id="create_agent_session",
+        tags=["agent"],
+    )
+    app.add_api_route(
+        "/api/v1/agent-sessions/{session_id}",
+        forward_get,
+        methods=["GET"],
+        operation_id="get_agent_session",
+        tags=["agent"],
+        openapi_extra={"parameters": [_AGENT_SESSION_PATH_PARAMETER]},
+    )
+    app.add_api_route(
+        "/api/v1/agent-sessions/{session_id}/turns",
+        forward_post,
+        methods=["POST"],
+        operation_id="create_agent_turn",
+        tags=["agent"],
+        openapi_extra={"parameters": [_AGENT_SESSION_PATH_PARAMETER]},
+    )
+    app.add_api_route(
+        "/api/v1/agent-sessions/{session_id}/turns/{turn_id}/cancel",
+        forward_post,
+        methods=["POST"],
+        operation_id="cancel_agent_turn",
+        tags=["agent"],
+        openapi_extra={
+            "parameters": [_AGENT_SESSION_PATH_PARAMETER, _AGENT_TURN_PATH_PARAMETER]
+        },
+    )
+    app.add_api_route(
+        "/api/v1/agent-sessions/{session_id}/events",
+        forward_get,
+        methods=["GET"],
+        operation_id="list_agent_session_events",
+        tags=["agent"],
+        openapi_extra={
+            "parameters": [
+                _AGENT_SESSION_PATH_PARAMETER,
+                {
+                    "name": "after_event_id",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "integer", "minimum": 0},
+                },
+                {
+                    "name": "limit",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "integer", "minimum": 1, "maximum": 100},
+                },
+            ]
+        },
+    )
 
     app.add_api_route(
         "/api/v1/remediation-sessions",

@@ -15,6 +15,8 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from uuid import uuid4
 
 from pilot107.adapters.slurm import SlurmBackendError
+from pilot107.agent.store import SQLiteAgentSessionStore
+from pilot107.api.agent_session_routes import AgentSessionRoutes
 from pilot107.api.agent_tool_routes import AgentToolRoutes
 from pilot107.api.evidence_query import EvidencePreviewUnavailable, EvidenceQueryService
 from pilot107.api.file_routes import FileRoutes
@@ -125,6 +127,7 @@ from pilot107.core.template_policy import TemplatePublicationGate, TemplateRoleD
 from pilot107.core.template_verification import TemplateVerificationService
 from pilot107.core.terminal import TerminalCommandError, TerminalCommandService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
+from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.services.remediation_service import RemediationService
 from pilot107.services.repair_ticket_service import RepairTicketService
 from pilot107.worker.capsule import CapsuleError, RawCapsuleService
@@ -171,6 +174,7 @@ class Pilot107HttpApi:
         ssh_connection_service: SshConnectionService | None = None,
         file_routes: FileRoutes | None = None,
         agent_tool_routes: AgentToolRoutes | None = None,
+        agent_session_service: AgentSessionService | None = None,
         auth_required: bool = False,
         trusted_user_header: str = "X-Pilot107-User",
         proxy_hmac_secret: bytes | None = None,
@@ -234,6 +238,9 @@ class Pilot107HttpApi:
         self.ssh_connection_service = ssh_connection_service
         self.file_routes = file_routes
         self.agent_tool_routes = agent_tool_routes
+        self.agent_session_routes = (
+            None if agent_session_service is None else AgentSessionRoutes(agent_session_service)
+        )
         self.platform_snapshot_store = platform_snapshot_store
         self.user_entitlement_store = user_entitlement_store
         self.template_market_store = template_market_store
@@ -331,6 +338,15 @@ class Pilot107HttpApi:
         parts = [unquote(part) for part in route.split("/") if part]
         if len(parts) >= 2 and parts[:2] == ["api", "v1"]:
             parts = parts[2:]
+        if self.agent_session_routes is not None:
+            agent_session_response = self.agent_session_routes.handle_get(
+                parts,
+                params=params,
+                headers=headers,
+                identity=identity,
+            )
+            if agent_session_response is not None:
+                return agent_session_response
         remediation_response = self.remediation_routes.handle_get(
             parts,
             params=params,
@@ -920,6 +936,14 @@ class Pilot107HttpApi:
         identity, auth_error = self._resolve_identity(headers)
         if auth_error is not None:
             return auth_error
+        if self.agent_session_routes is not None:
+            agent_session_response = self.agent_session_routes.handle_post(
+                parts,
+                body=body,
+                identity=identity,
+            )
+            if agent_session_response is not None:
+                return agent_session_response
         remediation_response = self.remediation_routes.handle_post(
             parts,
             body=body,
@@ -3251,9 +3275,14 @@ def build_api(
         platform_snapshot_store=platform_snapshot_store,
         user_entitlement_store=user_entitlement_store,
     )
+    control_repository = SQLiteControlRepository(db_path)
     return Pilot107HttpApi(
         store=store,
-        control_repository=SQLiteControlRepository(db_path),
+        control_repository=control_repository,
+        agent_session_service=AgentSessionService(
+            store=SQLiteAgentSessionStore(db_path),
+            control_repository=control_repository,
+        ),
         auth_required=auth_required,
         trusted_user_header=trusted_user_header,
         recipe_catalog=catalog,

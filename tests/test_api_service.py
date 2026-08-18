@@ -115,6 +115,7 @@ class ApiServiceTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(api.agent_tool_routes)
+        self.assertIsNotNone(api.agent_session_routes)
         self.assertNotIn("f" * 32, repr(api))
 
     def test_config_from_env_accepts_backend_and_auth_overrides(self) -> None:
