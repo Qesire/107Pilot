@@ -37,6 +37,8 @@ services:
 
   pilot-agentd:
     profiles: ["competition"]
+    environment:
+      PILOT107_AGENTD_TOOL_GATEWAY_URL: http://pilot107-api:8080/internal/v1/agent-tools/invoke
 
   pilot107-api:
     profiles: ["competition"]
@@ -56,6 +58,9 @@ services:
       PILOT107_CODE_CONTEXT_BEFORE_LINES: ${PILOT107_CODE_CONTEXT_BEFORE_LINES:-60}
       PILOT107_CODE_CONTEXT_AFTER_LINES: ${PILOT107_CODE_CONTEXT_AFTER_LINES:-60}
       PILOT107_CODE_CONTEXT_MAX_FILE_BYTES: ${PILOT107_CODE_CONTEXT_MAX_FILE_BYTES:-65536}
+      PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE: /run/secrets/pilot107-agent-capability-hmac
+    secrets:
+      - pilot107-agent-capability-hmac
     depends_on:
       pilot107-command-gateway:
         condition: service_started
@@ -71,6 +76,9 @@ services:
       PILOT107_COMMAND_GATEWAY_TOKEN: ${PILOT107_COMMAND_GATEWAY_TOKEN:-competition-dev-token}
       PILOT107_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/{user}}
       PILOT107_CAPSULE_ROOT: /var/lib/pilot107/capsules
+      PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE: /run/secrets/pilot107-agent-capability-hmac
+    secrets:
+      - pilot107-agent-capability-hmac
     depends_on:
       pilot107-command-gateway:
         condition: service_started
@@ -127,3 +135,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 6
+
+secrets:
+  pilot107-agent-capability-hmac:
+    file: ${PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE:-./secrets/agent-capability-hmac.local}

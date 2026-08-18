@@ -27,4 +27,6 @@ PYTHONPATH=src uv run --extra dev pytest \
   tests/test_pilot_agentd_vertical.py \
   -q
 
+sh simulator/compose/scripts/check-compose-config.sh
+
 echo "pilot-agentd checks passed"

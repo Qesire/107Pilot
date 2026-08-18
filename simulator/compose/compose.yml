@@ -164,6 +164,7 @@ services:
       PILOT107_AGENTD_TOKEN: ${PILOT107_AGENTD_TOKEN:-sim-agentd-token}
       PILOT107_AGENTD_MODEL_PROFILE: ${PILOT107_AGENTD_MODEL_PROFILE:-campus-default}
       PILOT107_AGENTD_FAUX_SCENARIO: ${PILOT107_AGENTD_FAUX_SCENARIO:-}
+      PILOT107_AGENTD_TOOL_GATEWAY_URL: http://pilot107-api:8080/internal/v1/agent-tools/invoke
       PILOT107_LLM_BASE_URL: ${PILOT107_LLM_BASE_URL:-}
       PILOT107_LLM_API_KEY: ${PILOT107_LLM_API_KEY:-}
       PILOT107_LLM_MODEL: ${PILOT107_LLM_MODEL:-}
@@ -224,6 +225,7 @@ services:
       PILOT107_ALLOWED_ROOTS: ${PILOT107_ALLOWED_ROOTS:-/public/home/{user}}
       PILOT107_AUTH_REQUIRED: "true"
       PILOT107_PROXY_HMAC_SECRET_FILE: /run/secrets/pilot107-proxy-hmac
+      PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE: /run/secrets/pilot107-agent-capability-hmac
       PILOT107_CONTRACT_PROFILE: ${PILOT107_CONTRACT_PROFILE:-real107-sim}
       PILOT107_CAPABILITY_PROFILE_PATH: ${PILOT107_CAPABILITY_PROFILE_PATH:-/opt/pilot107/config/platform_profiles/simulator-real107-behavior.yaml}
       PILOT107_SLURMRESTD_URL: http://slurmrestd:6820
@@ -270,6 +272,7 @@ services:
       - pilot107-data:/var/lib/pilot107
     secrets:
       - pilot107-proxy-hmac
+      - pilot107-agent-capability-hmac
     depends_on:
       slurmrestd:
         condition: service_started
@@ -288,6 +291,8 @@ services:
     restart: unless-stopped
     profiles: ["apps"]
     user: "10700:10700"
+    group_add:
+      - "${PILOT107_SECRET_GID:-1000}"
     read_only: true
     cap_drop: ["ALL"]
     security_opt:
@@ -338,9 +343,12 @@ services:
       PILOT107_AGENTD_URL: http://pilot-agentd:8091
       PILOT107_AGENTD_TOKEN: ${PILOT107_AGENTD_TOKEN:-sim-agentd-token}
       PILOT107_AGENTD_MODEL_PROFILE: ${PILOT107_AGENTD_MODEL_PROFILE:-campus-default}
+      PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE: /run/secrets/pilot107-agent-capability-hmac
     volumes:
       - public:/public:ro
       - pilot107-data:/var/lib/pilot107
+    secrets:
+      - pilot107-agent-capability-hmac
     depends_on:
       slurmrestd:
         condition: service_started
@@ -419,3 +427,5 @@ volumes:
 secrets:
   pilot107-proxy-hmac:
     file: ${PILOT107_PROXY_HMAC_SECRET_FILE:-./secrets/proxy-hmac.local}
+  pilot107-agent-capability-hmac:
+    file: ${PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE:-./secrets/agent-capability-hmac.local}

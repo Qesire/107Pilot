@@ -859,7 +859,7 @@ git commit -m "feat: expose durable agent sessions"
 - Consumes: Python Tool Gateway endpoint and Agentd `PILOT107_AGENTD_TOOL_GATEWAY_URL`.
 - Produces: private-network A1 deployment with signing authority retained by Python.
 
-- [ ] **Step 1: Write failing Compose isolation tests**
+- [x] **Step 1: Write failing Compose isolation tests**
 
 Assert:
 
@@ -875,7 +875,7 @@ Also assert API and Worker receive
 `PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE=/run/secrets/pilot107-agent-capability-hmac`
 through deployment secret injection, not a committed value.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/test_agentd_compose.py -q
@@ -883,11 +883,11 @@ PYTHONPATH=src uv run --extra dev pytest tests/test_agentd_compose.py -q
 
 Expected: missing Tool Gateway and capability-secret configuration.
 
-- [ ] **Step 3: Wire the private URL and capability secret**
+- [x] **Step 3: Wire the private URL and capability secret**
 
 Use a separate `pilot107-agent-capability-hmac` Compose secret file. Mount it read-only into API and Worker; pass only the Tool Gateway URL to Agentd. Do not publish the API internal route separately or add a host port to Agentd.
 
-- [ ] **Step 4: Render all profiles and commit**
+- [x] **Step 4: Render all profiles and commit**
 
 ```bash
 PYTHONPATH=src uv run --extra dev pytest tests/test_agentd_compose.py -q

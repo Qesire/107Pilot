@@ -20,6 +20,12 @@ def _services(name: str) -> dict[str, dict[str, Any]]:
     return services
 
 
+def _compose(name: str) -> dict[str, Any]:
+    payload = yaml.safe_load((COMPOSE_DIR / name).read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
+
+
 def _environment(service: dict[str, Any]) -> dict[str, Any]:
     environment = service.get("environment", {})
     assert isinstance(environment, dict)
@@ -52,6 +58,54 @@ def test_agentd_has_no_cluster_mount_or_host_port(compose_name: str) -> None:
     assert "/public" not in serialized_mounts
     assert "ssh" not in serialized_mounts
     assert "slurm" not in serialized_mounts
+
+
+@pytest.mark.parametrize("compose_name", ["compose.yml", "compose.competition-app-node.yml"])
+def test_agentd_receives_only_private_tool_gateway_location(compose_name: str) -> None:
+    environment = _environment(_services(compose_name)["pilot-agentd"])
+
+    assert environment["PILOT107_AGENTD_TOOL_GATEWAY_URL"] == (
+        "http://pilot107-api:8080/internal/v1/agent-tools/invoke"
+    )
+    for forbidden in (
+        "PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE",
+        "PILOT107_POSTGRES_DSN",
+        "PILOT107_SLURM_TOKEN",
+    ):
+        assert forbidden not in environment
+
+
+@pytest.mark.parametrize("compose_name", ["compose.yml", "compose.competition-app-node.yml"])
+@pytest.mark.parametrize("service_name", ["pilot107-api", "pilot107-worker"])
+def test_python_services_receive_agent_capability_secret_file(
+    compose_name: str,
+    service_name: str,
+) -> None:
+    compose = _compose(compose_name)
+    service = compose["services"][service_name]
+
+    assert _environment(service)["PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE"] == (
+        "/run/secrets/pilot107-agent-capability-hmac"
+    )
+    assert "pilot107-agent-capability-hmac" in service["secrets"]
+    assert compose["secrets"]["pilot107-agent-capability-hmac"]["file"] == (
+        "${PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE:-"
+        "./secrets/agent-capability-hmac.local}"
+    )
+
+
+def test_competition_overlay_keeps_a1_secret_and_gateway_boundary() -> None:
+    services = _services("compose.competition.yml")
+
+    assert _environment(services["pilot-agentd"])["PILOT107_AGENTD_TOOL_GATEWAY_URL"] == (
+        "http://pilot107-api:8080/internal/v1/agent-tools/invoke"
+    )
+    for service_name in ("pilot107-api", "pilot107-worker"):
+        service = services[service_name]
+        assert _environment(service)["PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE"] == (
+            "/run/secrets/pilot107-agent-capability-hmac"
+        )
+        assert "pilot107-agent-capability-hmac" in service["secrets"]
 
 
 @pytest.mark.parametrize("compose_name", ["compose.yml", "compose.competition-app-node.yml"])
@@ -151,4 +205,14 @@ def test_environment_templates_define_agentd_boundary(env_name: str) -> None:
     assert assignments["PILOT107_AGENTD_IMAGE"]
     assert "PILOT107_AGENTD_TOKEN" in assignments
     assert assignments["PILOT107_AGENTD_MODEL_PROFILE"] == "campus-default"
+    assert assignments["PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE"] == (
+        "./secrets/agent-capability-hmac.local"
+    )
     assert "PILOT107_LLM_STRUCTURED_OUTPUT_MODE" not in assignments
+
+
+def test_local_secret_initializer_creates_distinct_agent_capability_secret() -> None:
+    script = (ROOT / "scripts" / "init-local-secrets.sh").read_text(encoding="utf-8")
+
+    assert "agent-capability-hmac.local" in script
+    assert "proxy-hmac.local" in script
