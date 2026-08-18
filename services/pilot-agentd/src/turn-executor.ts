@@ -16,10 +16,11 @@ import type { ModelRuntime } from "./models.js";
 import type {
   AgentCheckpoint,
   AgentTurnEvent,
-  AgentTurnRequest,
+  ExecutableAgentTurnRequest,
+  ExecutableTaskKind,
   JsonValue,
-  TaskKind,
 } from "./protocol.js";
+import type { ReadToolGateway } from "./read-tools.js";
 import { prepareTask, type PreparedTask } from "./tasks.js";
 
 const RETRY_DELAYS_MS = [100, 400] as const;
@@ -36,7 +37,7 @@ export type RuntimeResolver = (profileId: string) => ModelRuntime | undefined;
 export type Sleep = (milliseconds: number, signal: AbortSignal) => Promise<void>;
 
 export interface RetryDecision {
-  readonly taskKind: TaskKind;
+  readonly taskKind: ExecutableTaskKind;
   readonly error: AgentdTurnError;
   readonly publicOutputEmitted: boolean;
   readonly attempt: number;
@@ -47,8 +48,12 @@ export function shouldRetry(decision: RetryDecision): boolean {
   return (
     decision.error.retryable &&
     decision.attempt < decision.maxAttempts &&
-    (decision.taskKind !== "interactive" || !decision.publicOutputEmitted)
+    (!isInteractiveTask(decision.taskKind) || !decision.publicOutputEmitted)
   );
+}
+
+function isInteractiveTask(taskKind: ExecutableTaskKind): boolean {
+  return taskKind === "interactive" || taskKind === "interactive_readonly";
 }
 
 interface AttemptBudget {
@@ -88,10 +93,11 @@ export class TurnExecutor {
   constructor(
     private readonly resolveRuntime: RuntimeResolver,
     private readonly sleep: Sleep = abortableSleep,
+    private readonly readToolGateway?: ReadToolGateway,
   ) {}
 
   async execute(
-    request: AgentTurnRequest,
+    request: ExecutableAgentTurnRequest,
     write: EventWrite,
     outerSignal: AbortSignal,
   ): Promise<void> {
@@ -119,7 +125,7 @@ export class TurnExecutor {
   }
 
   private async executeToSink(
-    request: AgentTurnRequest,
+    request: ExecutableAgentTurnRequest,
     sink: TurnEventSink,
     outerSignal: AbortSignal,
     publicEventCount: () => number,
@@ -127,7 +133,10 @@ export class TurnExecutor {
     const startedAt = Date.now();
     await sink.emit("turn_started", {
       model_profile_id: request.model_profile_id,
-      task_kind: request.task_kind,
+      task_kind:
+        request.task_kind === "interactive_readonly"
+          ? "interactive"
+          : request.task_kind,
     });
 
     let runtime: ModelRuntime | undefined;
@@ -210,6 +219,9 @@ export class TurnExecutor {
           maxTokens,
           restored,
           budget,
+          ...(this.readToolGateway === undefined
+            ? {}
+            : { readToolGateway: this.readToolGateway }),
         });
       } catch (error) {
         if (error instanceof EventWriterError) throw error;
@@ -294,7 +306,7 @@ export class TurnExecutor {
 }
 
 async function runAttempt(options: {
-  readonly request: AgentTurnRequest;
+  readonly request: ExecutableAgentTurnRequest;
   readonly runtime: ModelRuntime;
   readonly sink: TurnEventSink;
   readonly outerSignal: AbortSignal;
@@ -302,8 +314,14 @@ async function runAttempt(options: {
   readonly maxTokens: number;
   readonly restored: AgentMessage[];
   readonly budget: AttemptBudget;
+  readonly readToolGateway?: ReadToolGateway;
 }): Promise<AttemptOutcome> {
-  const task = prepareTask(options.request);
+  const task = prepareTask(
+    options.request,
+    options.readToolGateway === undefined
+      ? {}
+      : { readToolGateway: options.readToolGateway },
+  );
   const model = { ...options.runtime.model, maxTokens: options.maxTokens };
   const streamSimple = options.runtime.models.streamSimple.bind(
     options.runtime.models,
@@ -332,7 +350,9 @@ async function runAttempt(options: {
       } satisfies SimpleStreamOptions),
     sessionId: options.request.trace.correlation_id,
     toolExecution: "sequential",
-    shouldStopAfterTurn: () => true,
+    shouldStopAfterTurn: ({ toolResults }) =>
+      options.request.task_kind !== "interactive_readonly" ||
+      toolResults.length === 0,
   });
   const unsubscribe = agent.subscribe(async (event: AgentEvent) => {
     if (event.type === "turn_start") options.budget.providerCalls += 1;
@@ -434,7 +454,7 @@ function errorAfterPrompt(
 }
 
 function initialPrompt(
-  request: AgentTurnRequest,
+  request: ExecutableAgentTurnRequest,
   task: PreparedTask,
 ): string {
   return request.checkpoint !== null && request.checkpoint.turn_id === request.turn_id
@@ -541,7 +561,7 @@ function bindAbortToAgent(
 }
 
 function safeCheckpoint(
-  request: AgentTurnRequest,
+  request: ExecutableAgentTurnRequest,
   state: CheckpointableAgentState,
   usage?: TurnUsageAccumulator,
 ): AgentCheckpoint | undefined {

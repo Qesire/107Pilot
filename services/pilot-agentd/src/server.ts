@@ -9,9 +9,9 @@ import type { AgentdConfig } from "./config.js";
 import type { EventWrite } from "./events.js";
 import {
   isTerminalEvent,
-  parseTurnRequest,
+  parseExecutableTurnRequest,
   type AgentTurnEvent,
-  type AgentTurnRequest,
+  type ExecutableAgentTurnRequest,
 } from "./protocol.js";
 import { AGENTD_VERSION } from "./version.js";
 
@@ -24,7 +24,7 @@ const TURN_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 export interface TurnRunner {
   execute(
-    request: AgentTurnRequest,
+    request: ExecutableAgentTurnRequest,
     write: EventWrite,
     signal: AbortSignal,
   ): Promise<void>;
@@ -170,7 +170,7 @@ async function handleTurn(
 ): Promise<void> {
   if (state.closing) return sendError(response, 503, "shutting_down");
 
-  let turn: AgentTurnRequest;
+  let turn: ExecutableAgentTurnRequest;
   try {
     turn = await readTurnRequest(request);
   } catch (error) {
@@ -256,7 +256,9 @@ async function handleTurn(
   }
 }
 
-async function readTurnRequest(request: IncomingMessage): Promise<AgentTurnRequest> {
+async function readTurnRequest(
+  request: IncomingMessage,
+): Promise<ExecutableAgentTurnRequest> {
   if (!isJsonContentType(request.headers["content-type"])) {
     request.resume();
     throw new HttpBoundaryError(415, "unsupported_media_type");
@@ -306,7 +308,7 @@ async function readTurnRequest(request: IncomingMessage): Promise<AgentTurnReque
     throw new HttpBoundaryError(400, "invalid_json");
   }
   try {
-    return parseTurnRequest(value);
+    return parseExecutableTurnRequest(value);
   } catch {
     throw new HttpBoundaryError(422, "invalid_turn");
   }

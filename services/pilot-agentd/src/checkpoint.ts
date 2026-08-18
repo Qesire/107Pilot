@@ -15,7 +15,7 @@ import {
   AgentCheckpointSchema,
   parseCheckpoint,
   type AgentCheckpoint,
-  type AgentTurnRequest,
+  type ExecutableAgentTurnRequest,
   type JsonValue,
 } from "./protocol.js";
 import { CHECKPOINT_PROTOCOL_VERSION } from "./version.js";
@@ -49,7 +49,7 @@ export interface RestoreCheckpointOptions {
 }
 
 export function checkpointFromState(
-  request: AgentTurnRequest,
+  request: ExecutableAgentTurnRequest,
   state: CheckpointableAgentState,
 ): AgentCheckpoint {
   const previous =

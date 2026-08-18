@@ -8,11 +8,20 @@ import {
   type ModelRuntime,
 } from "./models.js";
 import { closeAgentdServer, createAgentdServer } from "./server.js";
+import { ToolGatewayClient } from "./tool-gateway.js";
 import { TurnExecutor } from "./turn-executor.js";
 
-export function createAgentdExecutor(config: AgentdConfig): TurnExecutor {
-  let runtime: ModelRuntime | undefined;
-  if (config.configured) {
+export interface AgentdExecutorDependencies {
+  readonly runtime?: ModelRuntime;
+  readonly toolGatewayFetch?: typeof fetch;
+}
+
+export function createAgentdExecutor(
+  config: AgentdConfig,
+  dependencies: AgentdExecutorDependencies = {},
+): TurnExecutor {
+  let runtime: ModelRuntime | undefined = dependencies.runtime;
+  if (runtime === undefined && config.configured) {
     runtime =
       config.modelProfile.provider === "faux"
         ? createFauxModelRuntime(
@@ -22,8 +31,20 @@ export function createAgentdExecutor(config: AgentdConfig): TurnExecutor {
           )
         : createCampusModelRuntime(config.modelProfile);
   }
-  return new TurnExecutor((profileId) =>
-    runtime?.profile.id === profileId ? runtime : undefined,
+  const toolGateway =
+    config.toolGatewayUrl === undefined
+      ? undefined
+      : new ToolGatewayClient({
+          url: config.toolGatewayUrl,
+          ...(dependencies.toolGatewayFetch === undefined
+            ? {}
+            : { fetch: dependencies.toolGatewayFetch }),
+        });
+  return new TurnExecutor(
+    (profileId) =>
+      runtime?.profile.id === profileId ? runtime : undefined,
+    undefined,
+    toolGateway,
   );
 }
 

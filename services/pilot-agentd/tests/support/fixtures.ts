@@ -3,6 +3,7 @@ import type {
   AgentTurnEvent,
   AgentTurnRequest,
   ConstrainedTaskKind,
+  DurableAgentTurnRequest,
 } from "../../src/protocol.js";
 
 const BASE = {
@@ -28,6 +29,31 @@ export function interactiveRequest(
     },
     checkpoint: options.checkpoint ?? null,
   } as AgentTurnRequest;
+}
+
+export function durableRequest(
+  options: Partial<DurableAgentTurnRequest> = {},
+): DurableAgentTurnRequest {
+  return {
+    schema_version: "pilot107.agent-turn-request/v2",
+    session_id: "session-1",
+    turn_id: "turn-1",
+    owner: "alice",
+    state_version: 7,
+    task_kind: "interactive_readonly",
+    model_profile_id: "faux-default",
+    prompt_profile_id: "hpc-readonly-v1",
+    toolset_id: "a1-readonly",
+    input: {
+      message: "inspect run-1",
+      context_refs: ["run:run-1"],
+    },
+    capability_token: "opaque.capability.token",
+    checkpoint: null,
+    limits: { timeout_ms: 30_000, max_output_tokens: 256 },
+    trace: { correlation_id: "turn-1" },
+    ...options,
+  };
 }
 
 export function explainRequest(fact: Record<string, unknown> = {}): AgentTurnRequest {

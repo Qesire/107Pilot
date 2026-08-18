@@ -407,6 +407,11 @@ export const DurableAgentTurnRequestSchema = Type.Object(
 
 export type DurableAgentTurnRequest = Static<typeof DurableAgentTurnRequestSchema>;
 
+export type ExecutableAgentTurnRequest =
+  | AgentTurnRequest
+  | DurableAgentTurnRequest;
+export type ExecutableTaskKind = TaskKind | "interactive_readonly";
+
 export const A1_READ_TOOL_NAMES = [
   "platform_get_snapshot",
   "workspace_list",
@@ -416,6 +421,8 @@ export const A1_READ_TOOL_NAMES = [
   "run_log_read",
   "evidence_read",
 ] as const;
+
+export type ReadToolName = (typeof A1_READ_TOOL_NAMES)[number];
 
 const ReadToolNameSchema = Type.Union(
   A1_READ_TOOL_NAMES.map((name) => Type.Literal(name)),
@@ -656,6 +663,18 @@ export function parseDurableTurnRequest(value: unknown): DurableAgentTurnRequest
     );
   }
   return value;
+}
+
+export function parseExecutableTurnRequest(
+  value: unknown,
+): ExecutableAgentTurnRequest {
+  if (
+    isObject(value) &&
+    value.schema_version === DURABLE_TURN_PROTOCOL_VERSION
+  ) {
+    return parseDurableTurnRequest(value);
+  }
+  return parseTurnRequest(value);
 }
 
 export function parseToolInvocation(value: unknown): ToolInvocation {

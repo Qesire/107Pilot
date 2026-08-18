@@ -11,6 +11,7 @@ import { createFauxModelRuntime } from "../src/models.js";
 import type {
   AgentTurnEvent,
   AgentTurnRequest,
+  ExecutableAgentTurnRequest,
   JsonValue,
 } from "../src/protocol.js";
 import {
@@ -20,7 +21,7 @@ import {
 } from "../src/server.js";
 import { TurnExecutor } from "../src/turn-executor.js";
 import { AGENTD_VERSION } from "../src/version.js";
-import { interactiveRequest } from "./support/fixtures.js";
+import { durableRequest, interactiveRequest } from "./support/fixtures.js";
 
 const TEST_TOKEN = "test-token";
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -97,7 +98,7 @@ function authHeaders(contentType = "application/json"): Record<string, string> {
 
 async function postTurn(
   url: string,
-  request: AgentTurnRequest = interactiveRequest(),
+  request: ExecutableAgentTurnRequest = interactiveRequest(),
 ): Promise<Response> {
   return fetch(`${url}/internal/v1/turns`, {
     method: "POST",
@@ -330,6 +331,31 @@ describe("Turn request and response boundaries", () => {
       type: "turn_completed",
       payload: { result: "hello over HTTP" },
     });
+  });
+
+  it("accepts a closed v2 durable Turn at the authenticated execution boundary", async () => {
+    let received: ExecutableAgentTurnRequest | undefined;
+    const { url } = await startServer({
+      async execute(request, write) {
+        received = request;
+        await write({
+          ...startedEvent(request.turn_id),
+          payload: {
+            model_profile_id: request.model_profile_id,
+            task_kind: "interactive",
+          },
+        });
+        await write(completedEvent(request.turn_id, 2));
+      },
+    });
+    const request = durableRequest();
+
+    const response = await postTurn(url, request);
+    const events = parseNdjson(await response.text());
+
+    expect(response.status).toBe(200);
+    expect(received).toEqual(request);
+    expect(events.at(-1)?.type).toBe("turn_completed");
   });
 
   it("holds a scripted executor at real socket backpressure until the client reads", async () => {

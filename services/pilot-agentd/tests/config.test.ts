@@ -64,6 +64,45 @@ describe("pilot-agentd configuration", () => {
     expect(config.modelProfile.apiKey).toBeUndefined();
   });
 
+  it("accepts an optional private Tool Gateway URL without exposing it publicly", () => {
+    const config = configFromEnv({
+      ...campusEnv,
+      PILOT107_AGENTD_TOOL_GATEWAY_URL:
+        "http://pilot107-api:8080/internal/v1/agent-tools/invoke",
+    });
+
+    expect(config.toolGatewayUrl).toBe(
+      "http://pilot107-api:8080/internal/v1/agent-tools/invoke",
+    );
+    expect(config.publicSummary()).toEqual({
+      version: "0.1.0",
+      model_profile_id: "campus-default",
+      configured: true,
+    });
+  });
+
+  it.each([
+    "ftp://pilot107-api/internal/v1/agent-tools/invoke",
+    "http://student:secret@pilot107-api/internal/v1/agent-tools/invoke",
+    "http://pilot107-api/internal/v1/agent-tools/invoke#secret",
+    "not-a-url",
+  ])("rejects unsafe Tool Gateway URL without echoing %s", (toolGatewayUrl) => {
+    const invalid = {
+      ...campusEnv,
+      PILOT107_AGENTD_TOOL_GATEWAY_URL: toolGatewayUrl,
+    };
+
+    expect(() => configFromEnv(invalid)).toThrow(
+      "PILOT107_AGENTD_TOOL_GATEWAY_URL",
+    );
+    try {
+      configFromEnv(invalid);
+    } catch (error) {
+      expect(String(error)).not.toContain(toolGatewayUrl);
+      expect(String(error)).not.toContain("student:secret");
+    }
+  });
+
   it.each([
     ["PILOT107_AGENTD_LISTEN_PORT", "0"],
     ["PILOT107_AGENTD_LISTEN_PORT", "8091.5"],

@@ -30,6 +30,7 @@ export interface AgentdConfig {
   readonly host: string;
   readonly port: number;
   readonly internalToken: string;
+  readonly toolGatewayUrl?: string;
   readonly modelProfile: ModelProfile;
   readonly configured: boolean;
   publicSummary(): PublicAgentdConfig;
@@ -73,6 +74,33 @@ function parseBaseUrl(value: string | undefined): string | undefined {
   }
   if (parsed.username !== "" || parsed.password !== "") {
     throw new TypeError("PILOT107_LLM_BASE_URL must not contain userinfo");
+  }
+  return raw;
+}
+
+function parseToolGatewayUrl(value: string | undefined): string | undefined {
+  const raw = optionalNonEmpty(value);
+  if (raw === undefined) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new TypeError("PILOT107_AGENTD_TOOL_GATEWAY_URL must be a valid URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new TypeError(
+      "PILOT107_AGENTD_TOOL_GATEWAY_URL must use HTTP or HTTPS",
+    );
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw new TypeError(
+      "PILOT107_AGENTD_TOOL_GATEWAY_URL must not contain userinfo",
+    );
+  }
+  if (parsed.hash !== "") {
+    throw new TypeError(
+      "PILOT107_AGENTD_TOOL_GATEWAY_URL must not contain a fragment",
+    );
   }
   return raw;
 }
@@ -161,6 +189,9 @@ export function configFromEnv(env: NodeJS.ProcessEnv): AgentdConfig {
   if (env.NODE_ENV !== "test" && internalToken === "") {
     throw new TypeError("PILOT107_AGENTD_TOKEN must be non-empty outside tests");
   }
+  const toolGatewayUrl = parseToolGatewayUrl(
+    env.PILOT107_AGENTD_TOOL_GATEWAY_URL,
+  );
 
   const profileId = optionalNonEmpty(env.PILOT107_AGENTD_MODEL_PROFILE) ?? "campus-default";
   let modelProfile: ModelProfile;
@@ -185,6 +216,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv): AgentdConfig {
     host,
     port,
     internalToken,
+    ...(toolGatewayUrl === undefined ? {} : { toolGatewayUrl }),
     modelProfile,
     configured,
     publicSummary,

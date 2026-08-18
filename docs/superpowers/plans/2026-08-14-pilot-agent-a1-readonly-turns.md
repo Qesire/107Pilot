@@ -639,7 +639,7 @@ git commit -m "feat: authorize readonly agent tools"
 - Consumes: v2 Turn requests, `ToolInvocation`, `ToolResult`, and `PILOT107_AGENTD_TOOL_GATEWAY_URL`.
 - Produces: `ToolGatewayClient.invoke()`, `createReadOnlyTools()`, and the `interactive_readonly` Pi task.
 
-- [ ] **Step 1: Write failing tool trajectory and hostile-gateway tests**
+- [x] **Step 1: Write failing tool trajectory and hostile-gateway tests**
 
 Use a local mock Tool Gateway and a Pi faux response containing:
 
@@ -649,7 +649,7 @@ fauxToolCall("run_get", { run_id: "run-1" }, { id: "call-run-1" })
 
 Assert exact invocation fields, bearer capability forwarding, deterministic idempotency key, ToolResult schema validation, one terminal event, and public answer continuation after the tool result. Cover timeout, 401, 403, 409, 429, 5xx, wrong content type, oversized body, malformed JSON, unknown fields, invocation ID mismatch, and response text containing secrets.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" \
@@ -659,22 +659,22 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" \
 
 Expected: missing Tool Gateway client and A1 task registration.
 
-- [ ] **Step 3: Implement the bounded Tool Gateway client**
+- [x] **Step 3: Implement the bounded Tool Gateway client**
 
 Use `fetch` with the Turn abort signal, a 10-second per-call maximum,
 `application/json; charset=utf-8`, a 1 MiB body ceiling, no redirects, and no
 proxy/provider fallback. Construct the `Authorization` value as
 `"Bearer " + capabilityToken`; redact it from all errors.
 
-- [ ] **Step 4: Register only the seven tools for the A1 pairing**
+- [x] **Step 4: Register only the seven tools for the A1 pairing**
 
 `prepareTask()` must return no read tools for A0 interactive/explain/patch/remediation requests. For `interactive_readonly`, construct seven `AgentTool` objects with closed TypeBox argument schemas and `executionMode: "sequential"`.
 
-- [ ] **Step 5: Prevent authority from entering events or checkpoints**
+- [x] **Step 5: Prevent authority from entering events or checkpoints**
 
 Extend sanitization tests so capability tokens, Tool Gateway URLs, authorization headers, and full invocation envelopes never appear in `message_delta`, checkpoint messages, terminal results, or public error messages.
 
-- [ ] **Step 6: Run GREEN and commit**
+- [x] **Step 6: Run GREEN and commit**
 
 ```bash
 cd services/pilot-agentd
