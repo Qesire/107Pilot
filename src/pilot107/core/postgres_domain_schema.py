@@ -869,6 +869,116 @@ _AGENT_WORKSPACE_CHANGESET_SCHEMA = _statements(
     "ON agent_workspace_changesets(owner, updated_at DESC, change_set_id DESC)"
 )
 
+_RUNTIME_WATCH_SCHEMA = _statements(
+    """
+    CREATE TABLE runtime_watches (
+        watch_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        version BIGINT NOT NULL,
+        next_poll_at TIMESTAMPTZ,
+        lease_owner TEXT,
+        lease_expires_at TIMESTAMPTZ,
+        fencing_token BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        stopped_at TIMESTAMPTZ,
+        last_error_code TEXT,
+        last_error_at TIMESTAMPTZ,
+        UNIQUE (owner, run_id),
+        CHECK (state IN (
+            'watching', 'waiting_for_log', 'active', 'quiet_backoff',
+            'degraded', 'finalizing', 'stopped'
+        )),
+        CHECK (version >= 0),
+        CHECK (fencing_token >= 0),
+        CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL))
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_runtime_watches_due "
+    "ON runtime_watches(state, next_poll_at, lease_expires_at, watch_id)"
+)
+
+_RUNTIME_LOG_CURSOR_SCHEMA = _statements(
+    """
+    CREATE TABLE runtime_log_cursors (
+        watch_id TEXT NOT NULL REFERENCES runtime_watches(watch_id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        stream TEXT NOT NULL,
+        generation BIGINT NOT NULL,
+        offset_value BIGINT NOT NULL,
+        source_size BIGINT NOT NULL,
+        source_mtime DOUBLE PRECISION,
+        source_file_identity TEXT,
+        source_prefix_fingerprint TEXT,
+        decoder_remainder_base64 TEXT NOT NULL,
+        last_data_at TIMESTAMPTZ,
+        last_checked_at TIMESTAMPTZ,
+        quiet_polls INTEGER NOT NULL,
+        version BIGINT NOT NULL,
+        PRIMARY KEY (watch_id, stream),
+        UNIQUE (owner, run_id, stream),
+        CHECK (stream IN ('stdout', 'stderr')),
+        CHECK (generation >= 0 AND offset_value >= 0 AND source_size >= 0),
+        CHECK (quiet_polls >= 0 AND version >= 0)
+    )
+    """
+)
+
+_RUNTIME_LOG_SEGMENT_SCHEMA = _statements(
+    """
+    CREATE TABLE runtime_log_segments (
+        segment_id TEXT PRIMARY KEY,
+        watch_id TEXT NOT NULL REFERENCES runtime_watches(watch_id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        stream TEXT NOT NULL,
+        generation BIGINT NOT NULL,
+        start_offset BIGINT NOT NULL,
+        end_offset BIGINT NOT NULL,
+        content_sha256 TEXT NOT NULL,
+        content_size BIGINT NOT NULL,
+        content_ref TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        UNIQUE (owner, run_id, stream, generation, start_offset),
+        CHECK (stream IN ('stdout', 'stderr')),
+        CHECK (generation >= 0 AND start_offset >= 0),
+        CHECK (end_offset > start_offset),
+        CHECK (content_size = end_offset - start_offset)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_runtime_log_segments_run_stream "
+    "ON runtime_log_segments(owner, run_id, stream, generation, start_offset)"
+)
+
+_RUNTIME_ALERT_SCHEMA = _statements(
+    """
+    CREATE TABLE runtime_alerts (
+        alert_id TEXT PRIMARY KEY,
+        watch_id TEXT NOT NULL REFERENCES runtime_watches(watch_id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        code TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        segment_id TEXT REFERENCES runtime_log_segments(segment_id),
+        generation BIGINT NOT NULL,
+        offset_value BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        CHECK (severity IN ('info', 'warning', 'critical')),
+        CHECK (generation >= 0 AND offset_value >= 0)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_runtime_alerts_run_created "
+    "ON runtime_alerts(owner, run_id, created_at, alert_id)"
+)
+
 _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.001.postgres_domain_schema", _DOMAIN_SCHEMA),
     ("004a.002.run_publications", _RUN_PUBLICATION_SCHEMA),
@@ -878,6 +988,10 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.006.agent_experiment_projects", _AGENT_EXPERIMENT_PROJECT_SCHEMA),
     ("004a.007.agent_workspaces", _AGENT_WORKSPACE_SCHEMA),
     ("004a.008.agent_workspace_changesets", _AGENT_WORKSPACE_CHANGESET_SCHEMA),
+    ("004a.009.runtime_watches", _RUNTIME_WATCH_SCHEMA),
+    ("004a.010.runtime_log_cursors", _RUNTIME_LOG_CURSOR_SCHEMA),
+    ("004a.011.runtime_log_segments", _RUNTIME_LOG_SEGMENT_SCHEMA),
+    ("004a.012.runtime_alerts", _RUNTIME_ALERT_SCHEMA),
 )
 
 
@@ -958,6 +1072,10 @@ def domain_table_names() -> tuple[str, ...]:
         "agent_experiment_projects",
         "agent_workspaces",
         "agent_workspace_changesets",
+        "runtime_watches",
+        "runtime_log_cursors",
+        "runtime_log_segments",
+        "runtime_alerts",
     )
 
 

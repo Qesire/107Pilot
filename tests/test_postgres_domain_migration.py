@@ -25,6 +25,7 @@ from pilot107.core.run_publications import RunPublicationStore
 from pilot107.core.run_store import RunStore
 from pilot107.core.template_market import TemplateMarketStore
 from pilot107.core.user_entitlement_store import UserEntitlementStore
+from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 
 
 class PostgresDomainMigrationSafetyTests(unittest.TestCase):
@@ -69,6 +70,10 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
                 "agent_tool_invocations",
                 "agent_experiment_projects",
                 "agent_workspaces",
+                "runtime_watches",
+                "runtime_log_cursors",
+                "runtime_log_segments",
+                "runtime_alerts",
             }.issubset(names)
         )
         self.assertEqual(len(names), len(domain_table_names()))
@@ -89,6 +94,10 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
             UploadSessionStore(database)
             SQLiteAgentSessionStore(database)
             SQLiteProjectStore(database)
+            SQLiteRuntimeWatchStore(
+                database,
+                segment_root=Path(temporary) / "runtime-segments",
+            )
             SQLiteControlRepository(database)
             with sqlite3.connect(database) as connection:
                 sqlite_tables = {
