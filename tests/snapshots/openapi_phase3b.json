@@ -1,5 +1,106 @@
 {
   "paths": {
+    "/api/v1/agent-changesets/{change_set_id}/diff": {
+      "get": {
+        "operationId": "get_agent_changeset_diff",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "change_set_id",
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "workspace_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/v1/agent-projects": {
+      "get": {
+        "operationId": "list_agent_projects",
+        "parameters": [],
+        "tags": [
+          "agent"
+        ]
+      },
+      "post": {
+        "operationId": "create_agent_project",
+        "parameters": [],
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/v1/agent-projects/{project_id}": {
+      "get": {
+        "operationId": "get_agent_project",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/v1/agent-projects/{project_id}/blueprint": {
+      "post": {
+        "operationId": "save_agent_project_blueprint",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/v1/agent-workspaces/{workspace_id}/patch": {
+      "post": {
+        "operationId": "patch_agent_workspace",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/v1/agent-workspaces/{workspace_id}/sandbox": {
+      "post": {
+        "operationId": "validate_agent_workspace",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "agent"
+        ]
+      }
+    },
     "/api/v1/agent-sessions": {
       "get": {
         "operationId": "list_agent_sessions",

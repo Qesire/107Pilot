@@ -362,6 +362,42 @@ export function useAgentSessions(user: string) {
   });
 }
 
+export function useAgentProjects(user: string) {
+  return useQuery({
+    queryKey: ["agent-projects", user],
+    queryFn: ({ signal }) => api.agentProjects(user, signal),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useAgentProject(user: string, projectId: string | null) {
+  return useQuery({
+    queryKey: ["agent-project", user, projectId],
+    queryFn: ({ signal }) => api.agentProject(user, projectId ?? "", signal),
+    enabled: Boolean(projectId),
+    refetchInterval: 5_000,
+  });
+}
+
+export function useAgentChangeSetDiff(
+  user: string,
+  projectId: string | null,
+  workspaceId: string | null,
+  changeSetId: string | null,
+) {
+  return useQuery({
+    queryKey: ["agent-changeset-diff", user, changeSetId],
+    queryFn: ({ signal }) => api.agentChangeSetDiff(
+      user,
+      projectId ?? "",
+      workspaceId ?? "",
+      changeSetId ?? "",
+      signal,
+    ),
+    enabled: Boolean(projectId && workspaceId && changeSetId),
+  });
+}
+
 export function useAgentSession(user: string, sessionId: string | null) {
   return useQuery({
     queryKey: ["agent-session", user, sessionId],

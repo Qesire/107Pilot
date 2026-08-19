@@ -1,8 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { ArrowRight, Ban, Bot, CheckCircle2, Play, Plus, RefreshCw, ShieldAlert, Wrench, XCircle } from "lucide-react";
+import { ArrowRight, Ban, Bot, CheckCircle2, FolderGit2, Play, Plus, RefreshCw, ShieldAlert, Wrench, XCircle } from "lucide-react";
 import { api, ApiRequestError } from "./api";
 import { AgentSessionPanel } from "./AgentSessionPanel";
+import { AgentProjectPanel } from "./AgentProjectPanel";
 import { QueryBoundary, SectionHeading, StatusBadge, formatTimestamp } from "./components";
 import { RepairTicketPanel } from "./RepairTicketPanel";
 import { RunPicker, type RunPickerRun } from "./RunPicker";
@@ -41,6 +42,7 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
   const switchMode = (nextMode: AgentPageMode) => navigate(withSearch("/agent", location.search, {
     mode: nextMode,
     session: null,
+    project: null,
     state: null,
   }));
 
@@ -48,12 +50,23 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
     <>
       <SectionHeading
         eyebrow="Agent"
-        title={mode === "conversation" ? "持久化只读对话" : "可审计的修复会话"}
+        title={mode === "conversation" ? "持久化只读对话" : mode === "builder" ? "隔离实验工程" : "可审计的修复会话"}
         detail={mode === "conversation"
           ? "围绕平台、Workspace、Run、日志和 Evidence 提问；事件按持久化游标重放。"
-          : "规则先提出动作；风险、预算、审批、派生 Run 和评价结果保持在同一条 lineage 中。"}
+          : mode === "builder"
+            ? "从目标和只读快照形成 Blueprint，在应用侧 Workspace 编辑、审阅 diff 并运行无网络 Sandbox。"
+            : "规则先提出动作；风险、预算、审批、派生 Run 和评价结果保持在同一条 lineage 中。"}
       />
       <nav className="agent-mode-switch segmented" aria-label="Agent 工作模式">
+        <button
+          type="button"
+          className={mode === "builder" ? "active" : undefined}
+          aria-current={mode === "builder" ? "page" : undefined}
+          onClick={() => switchMode("builder")}
+        >
+          <FolderGit2 aria-hidden="true" size={16} />
+          工程
+        </button>
         <button
           type="button"
           className={mode === "conversation" ? "active" : undefined}
@@ -75,6 +88,8 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
       </nav>
       {mode === "conversation" ? (
         <AgentSessionPanel user={user} location={location} navigate={navigate} />
+      ) : mode === "builder" ? (
+        <AgentProjectPanel user={user} location={location} navigate={navigate} />
       ) : (
         <RemediationPanel user={user} location={location} navigate={navigate} />
       )}
@@ -82,10 +97,11 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
   );
 }
 
-type AgentPageMode = "conversation" | "repair";
+type AgentPageMode = "conversation" | "builder" | "repair";
 
 export function agentPageMode(search: URLSearchParams): AgentPageMode {
-  return search.get("mode") === "repair" ? "repair" : "conversation";
+  const mode = search.get("mode");
+  return mode === "repair" || mode === "builder" ? mode : "conversation";
 }
 
 function RemediationPanel({ user, location, navigate }: AgentPageProps) {

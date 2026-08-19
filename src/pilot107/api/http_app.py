@@ -23,6 +23,7 @@ from pilot107.api.file_routes import FileRoutes
 from pilot107.api.health import ApiHealthService
 from pilot107.api.http_types import ApiResponse as ApiResponse
 from pilot107.api.metrics import ControlPlaneMetrics, normalize_http_route
+from pilot107.api.project_agent_routes import ProjectAgentRoutes
 from pilot107.api.remediation_routes import RemediationRoutes
 from pilot107.api.repair_ticket_routes import RepairTicketRoutes
 from pilot107.api.security import FixedWindowRateLimiter
@@ -128,6 +129,7 @@ from pilot107.core.template_verification import TemplateVerificationService
 from pilot107.core.terminal import TerminalCommandError, TerminalCommandService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
 from pilot107.services.agent_session_service import AgentSessionService
+from pilot107.services.project_agent_service import ProjectAgentService
 from pilot107.services.remediation_service import RemediationService
 from pilot107.services.repair_ticket_service import RepairTicketService
 from pilot107.worker.capsule import CapsuleError, RawCapsuleService
@@ -175,6 +177,7 @@ class Pilot107HttpApi:
         file_routes: FileRoutes | None = None,
         agent_tool_routes: AgentToolRoutes | None = None,
         agent_session_service: AgentSessionService | None = None,
+        project_agent_service: ProjectAgentService | None = None,
         auth_required: bool = False,
         trusted_user_header: str = "X-Pilot107-User",
         proxy_hmac_secret: bytes | None = None,
@@ -240,6 +243,9 @@ class Pilot107HttpApi:
         self.agent_tool_routes = agent_tool_routes
         self.agent_session_routes = (
             None if agent_session_service is None else AgentSessionRoutes(agent_session_service)
+        )
+        self.project_agent_routes = (
+            None if project_agent_service is None else ProjectAgentRoutes(project_agent_service)
         )
         self.platform_snapshot_store = platform_snapshot_store
         self.user_entitlement_store = user_entitlement_store
@@ -347,6 +353,14 @@ class Pilot107HttpApi:
             )
             if agent_session_response is not None:
                 return agent_session_response
+        if self.project_agent_routes is not None:
+            project_agent_response = self.project_agent_routes.handle_get(
+                parts,
+                params=params,
+                identity=identity,
+            )
+            if project_agent_response is not None:
+                return project_agent_response
         remediation_response = self.remediation_routes.handle_get(
             parts,
             params=params,
@@ -944,6 +958,14 @@ class Pilot107HttpApi:
             )
             if agent_session_response is not None:
                 return agent_session_response
+        if self.project_agent_routes is not None:
+            project_agent_response = self.project_agent_routes.handle_post(
+                parts,
+                body=body,
+                identity=identity,
+            )
+            if project_agent_response is not None:
+                return project_agent_response
         remediation_response = self.remediation_routes.handle_post(
             parts,
             body=body,

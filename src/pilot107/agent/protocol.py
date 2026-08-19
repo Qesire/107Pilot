@@ -68,6 +68,14 @@ _A1_READ_TOOLS = {
     "run_log_read",
     "evidence_read",
 }
+_A2_PROJECT_TOOLS = {
+    "project_get",
+    "workspace_list",
+    "workspace_read",
+    "workspace_patch",
+    "workspace_diff",
+    "sandbox_exec",
+}
 
 
 @dataclass(frozen=True)
@@ -81,6 +89,7 @@ class DurableAgentTurnRequest:
     context_refs: tuple[str, ...]
     capability_token: str = field(repr=False)
     checkpoint: dict[str, Any] | None = None
+    profile_id: str = "hpc-readonly-v1"
 
 
 @dataclass(frozen=True)
@@ -178,11 +187,16 @@ def parse_durable_turn_request(value: object) -> DurableAgentTurnRequest:
         )
         if request["schema_version"] != DURABLE_TURN_PROTOCOL_VERSION:
             raise ValueError("unsupported durable Turn request version")
-        if (
-            request["task_kind"] != "interactive_readonly"
-            or request["prompt_profile_id"] != "hpc-readonly-v1"
-            or request["toolset_id"] != "a1-readonly"
-        ):
+        pairing = (
+            request["task_kind"] == "interactive_readonly"
+            and request["prompt_profile_id"] in {"hpc-readonly-v1", "platform_coach"}
+            and request["toolset_id"] == "a1-readonly"
+        ) or (
+            request["task_kind"] == "experiment_builder"
+            and request["prompt_profile_id"] == "experiment_builder"
+            and request["toolset_id"] == "a2-project"
+        )
+        if not pairing:
             raise ValueError("invalid durable Turn request pairing")
         session_id = _validate_id(request["session_id"], "session_id")
         turn_id = _validate_id(request["turn_id"], "turn_id")
@@ -226,6 +240,7 @@ def parse_durable_turn_request(value: object) -> DurableAgentTurnRequest:
             context_refs=context_refs,
             capability_token=capability_token,
             checkpoint=checkpoint,
+            profile_id=_validate_id(request["prompt_profile_id"], "prompt_profile_id"),
         )
     except (TypeError, ValueError, RecursionError, UnicodeError):
         raise ValueError("invalid durable Turn request") from None
@@ -253,11 +268,16 @@ def parse_tool_invocation(value: object) -> ToolInvocation:
         if invocation["schema_version"] != TOOL_INVOCATION_PROTOCOL_VERSION:
             raise ValueError("unsupported tool invocation version")
         tool_name = _as_string(invocation["tool_name"], "tool_name")
-        if tool_name not in _A1_READ_TOOLS:
-            raise ValueError("unknown A1 tool")
         profile_id = _as_string(invocation["profile_id"], "profile_id")
-        if profile_id != "hpc-readonly-v1":
-            raise ValueError("invalid tool profile")
+        valid_tools = (
+            _A2_PROJECT_TOOLS
+            if profile_id == "experiment_builder"
+            else _A1_READ_TOOLS
+            if profile_id in {"hpc-readonly-v1", "platform_coach"}
+            else set()
+        )
+        if tool_name not in valid_tools:
+            raise ValueError("tool is invalid for profile")
         arguments = _as_object(invocation["arguments"], "arguments")
         _validate_json_object(arguments)
         deadline = _as_string(invocation["deadline"], "deadline")

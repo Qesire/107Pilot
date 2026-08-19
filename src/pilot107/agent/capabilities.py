@@ -27,6 +27,17 @@ _A1_TOOLS = frozenset(
         "evidence_read",
     }
 )
+_A2_TOOLS = frozenset(
+    {
+        "project_get",
+        "workspace_list",
+        "workspace_read",
+        "workspace_patch",
+        "workspace_diff",
+        "sandbox_exec",
+    }
+)
+_A2_OPERATIONS = frozenset({"read", "write", "validate"})
 _MAX_LIFETIME_SECONDS = 120
 _CLOCK_SKEW_SECONDS = 5
 
@@ -52,6 +63,10 @@ class AgentCapabilityClaims:
     max_bytes: int
     expires_at: int
     issued_at: int | None = None
+    project_id: str | None = None
+    workspace_id: str | None = None
+    operations: frozenset[str] = frozenset()
+    max_commands: int = 0
 
 
 class AgentCapabilitySigner:
@@ -125,13 +140,17 @@ def _canonical_payload(claims: AgentCapabilityClaims) -> bytes:
         "iat": claims.issued_at,
         "max_bytes": claims.max_bytes,
         "max_invocations": claims.max_invocations,
+        "max_commands": claims.max_commands,
+        "operations": sorted(claims.operations),
         "owner": claims.owner,
         "profile": claims.profile_id,
+        "project": claims.project_id,
         "session": claims.session_id,
         "state_version": claims.state_version,
         "tools": sorted(claims.tools),
         "turn": claims.turn_id,
         "version": 1,
+        "workspace": claims.workspace_id,
     }
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -146,16 +165,24 @@ def _parse_claims(payload: bytes) -> AgentCapabilityClaims:
         "iat",
         "max_bytes",
         "max_invocations",
+        "max_commands",
+        "operations",
         "owner",
         "profile",
+        "project",
         "session",
         "state_version",
         "tools",
         "turn",
         "version",
+        "workspace",
     }:
         raise ValueError
-    if value["version"] != 1 or not isinstance(value["tools"], list):
+    if (
+        value["version"] != 1
+        or not isinstance(value["tools"], list)
+        or not isinstance(value["operations"], list)
+    ):
         raise ValueError
     return AgentCapabilityClaims(
         owner=_string(value["owner"]),
@@ -169,6 +196,10 @@ def _parse_claims(payload: bytes) -> AgentCapabilityClaims:
         max_bytes=_integer(value["max_bytes"]),
         expires_at=_integer(value["exp"]),
         issued_at=_integer(value["iat"]),
+        project_id=_optional_string(value["project"]),
+        workspace_id=_optional_string(value["workspace"]),
+        operations=frozenset(_string(item) for item in value["operations"]),
+        max_commands=_integer(value["max_commands"]),
     )
 
 
@@ -183,10 +214,36 @@ def _validate_claims(
     ):
         if _IDENTIFIER.fullmatch(value) is None:
             raise ValueError("invalid capability binding")
-    if claims.profile_id != "hpc-readonly-v1":
+    if claims.profile_id in {"hpc-readonly-v1", "platform_coach"}:
+        if (
+            not claims.tools
+            or not claims.tools.issubset(_A1_TOOLS)
+            or claims.project_id is not None
+            or claims.workspace_id is not None
+            or claims.operations
+            or claims.max_commands != 0
+        ):
+            raise ValueError("invalid read-only capability scope")
+    elif claims.profile_id == "experiment_builder":
+        for scoped_id in (claims.project_id, claims.workspace_id):
+            if scoped_id is None or _IDENTIFIER.fullmatch(scoped_id) is None:
+                raise ValueError("invalid builder capability binding")
+        if (
+            not claims.tools
+            or not claims.tools.issubset(_A2_TOOLS)
+            or not claims.operations
+            or not claims.operations.issubset(_A2_OPERATIONS)
+            or not 0 <= claims.max_commands <= 64
+        ):
+            raise ValueError("invalid builder capability scope")
+        if "workspace_patch" in claims.tools and "write" not in claims.operations:
+            raise ValueError("builder write tool lacks write operation")
+        if "sandbox_exec" in claims.tools and (
+            "validate" not in claims.operations or claims.max_commands < 1
+        ):
+            raise ValueError("builder sandbox tool lacks command budget")
+    else:
         raise ValueError("invalid capability profile")
-    if not claims.tools or not claims.tools.issubset(_A1_TOOLS):
-        raise ValueError("invalid capability tools")
     if claims.state_version <= 0 or claims.fencing_token <= 0:
         raise ValueError("invalid capability version")
     if not 1 <= claims.max_invocations <= 1_000:
@@ -233,3 +290,9 @@ def _integer(value: Any) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise TypeError
     return value
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    return _string(value)

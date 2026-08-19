@@ -10,6 +10,8 @@ import {
   type ToolResult,
 } from "./protocol.js";
 
+type A1ToolName = (typeof A1_READ_TOOL_NAMES)[number];
+
 const BoundedId = Type.String({ minLength: 1, maxLength: 4_096 });
 const Workspace = Type.String({ minLength: 1, maxLength: 4_096 });
 
@@ -46,7 +48,7 @@ const ARGUMENT_SCHEMAS = {
     { run_id: BoundedId, object_id: BoundedId },
     { additionalProperties: false },
   ),
-} satisfies Record<ReadToolName, TSchema>;
+} satisfies Record<A1ToolName, TSchema>;
 
 const TOOL_DESCRIPTIONS = {
   platform_get_snapshot: "Read the latest safe platform snapshot for this owner.",
@@ -56,7 +58,7 @@ const TOOL_DESCRIPTIONS = {
   run_get: "Read the safe state and resource summary for one owned Run.",
   run_log_read: "Read a bounded stdout or stderr page for one owned Run.",
   evidence_read: "Read a bounded preview of one owned evidence object.",
-} satisfies Record<ReadToolName, string>;
+} satisfies Record<A1ToolName, string>;
 
 export interface ReadToolGateway {
   invoke(

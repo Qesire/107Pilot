@@ -44,11 +44,15 @@ class AgentToolGateway:
         store: AgentSessionStore,
         signer: AgentCapabilitySigner,
         handlers: Mapping[str, AgentReadHandler],
+        profile_handlers: Mapping[str, Mapping[str, AgentReadHandler]] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.store = store
         self.signer = signer
         self.handlers = dict(handlers)
+        self.profile_handlers = {
+            profile: dict(values) for profile, values in (profile_handlers or {}).items()
+        }
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult:
@@ -90,8 +94,21 @@ class AgentToolGateway:
                 "Agent tool invocation budget exceeded",
                 code="AGENT.TOOL.INVOCATION_BUDGET_EXCEEDED",
             )
+        if invocation.tool_name == "sandbox_exec" and usage.commands > claims.max_commands:
+            self._persist_failure(
+                invocation,
+                claims,
+                code="AGENT.TOOL.COMMAND_BUDGET_EXCEEDED",
+                message="Agent sandbox command budget exceeded",
+            )
+            raise AgentToolGatewayError(
+                "Agent sandbox command budget exceeded",
+                code="AGENT.TOOL.COMMAND_BUDGET_EXCEEDED",
+            )
 
-        handler = self.handlers.get(invocation.tool_name)
+        handler = self.profile_handlers.get(claims.profile_id, {}).get(
+            invocation.tool_name
+        ) or self.handlers.get(invocation.tool_name)
         if handler is None:
             self._persist_failure(
                 invocation,
@@ -185,6 +202,27 @@ class AgentToolGateway:
                 "Agent tool invocation is not authorized",
                 code="AGENT.TOOL.UNAUTHORIZED",
             )
+        if claims.profile_id == "experiment_builder":
+            required_operation = {
+                "project_get": "read",
+                "workspace_list": "read",
+                "workspace_read": "read",
+                "workspace_diff": "read",
+                "workspace_patch": "write",
+                "sandbox_exec": "validate",
+            }.get(invocation.tool_name)
+            project_id = invocation.arguments.get("project_id")
+            workspace_id = invocation.arguments.get("workspace_id")
+            if (
+                required_operation is None
+                or required_operation not in claims.operations
+                or project_id != claims.project_id
+                or workspace_id != claims.workspace_id
+            ):
+                raise AgentToolGatewayError(
+                    "Agent tool invocation exceeds its Project capability",
+                    code="AGENT.TOOL.CAPABILITY_DENIED",
+                )
         now = self._now()
         try:
             deadline = datetime.fromisoformat(invocation.deadline.replace("Z", "+00:00"))

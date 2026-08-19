@@ -1,1 +1,179 @@
-{"type":"object","required":["schema_version","invocation_id","idempotency_key","owner","session_id","turn_id","state_version","profile_id","tool_name","arguments","deadline"],"properties":{"schema_version":{"type":"string","const":"pilot107.agent-tool-invocation/v1"},"invocation_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._:-]+$"},"idempotency_key":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._:-]+$"},"owner":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._:-]+$"},"session_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._:-]+$"},"turn_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._:-]+$"},"state_version":{"type":"integer","minimum":0,"maximum":9007199254740991},"profile_id":{"type":"string","const":"hpc-readonly-v1"},"tool_name":{"anyOf":[{"type":"string","const":"platform_get_snapshot"},{"type":"string","const":"workspace_list"},{"type":"string","const":"workspace_search"},{"type":"string","const":"workspace_read"},{"type":"string","const":"run_get"},{"type":"string","const":"run_log_read"},{"type":"string","const":"evidence_read"}]},"arguments":{"type":"object","maxProperties":4096,"propertyNames":{"not":{"pattern":"^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$"}},"additionalProperties":{"$ref":"#/$defs/jsonValue"}},"deadline":{"type":"string","minLength":20,"maxLength":32,"pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$"}},"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://107pilot.local/schemas/agent/v2/tool-invocation.schema.json","$defs":{"jsonValue":{"anyOf":[{"type":"null"},{"type":"boolean"},{"type":"number"},{"type":"string","maxLength":256000},{"type":"array","maxItems":4096,"items":{"$ref":"#/$defs/jsonValue"}},{"type":"object","maxProperties":4096,"propertyNames":{"not":{"pattern":"^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$"}},"additionalProperties":{"$ref":"#/$defs/jsonValue"}}]}},"additionalProperties":false}
+{
+  "type": "object",
+  "required": [
+    "schema_version",
+    "invocation_id",
+    "idempotency_key",
+    "owner",
+    "session_id",
+    "turn_id",
+    "state_version",
+    "profile_id",
+    "tool_name",
+    "arguments",
+    "deadline"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "pilot107.agent-tool-invocation/v1"
+    },
+    "invocation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "turn_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "state_version": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "profile_id": {
+      "anyOf": [
+        {"type": "string", "const": "hpc-readonly-v1"},
+        {"type": "string", "const": "platform_coach"},
+        {"type": "string", "const": "experiment_builder"}
+      ]
+    },
+    "tool_name": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "platform_get_snapshot"
+        },
+        {
+          "type": "string",
+          "const": "workspace_list"
+        },
+        {
+          "type": "string",
+          "const": "workspace_search"
+        },
+        {
+          "type": "string",
+          "const": "workspace_read"
+        },
+        {
+          "type": "string",
+          "const": "run_get"
+        },
+        {
+          "type": "string",
+          "const": "run_log_read"
+        },
+        {
+          "type": "string",
+          "const": "evidence_read"
+        },
+        {
+          "type": "string",
+          "const": "project_get"
+        },
+        {
+          "type": "string",
+          "const": "workspace_list"
+        },
+        {
+          "type": "string",
+          "const": "workspace_read"
+        },
+        {
+          "type": "string",
+          "const": "workspace_patch"
+        },
+        {
+          "type": "string",
+          "const": "workspace_diff"
+        },
+        {
+          "type": "string",
+          "const": "sandbox_exec"
+        }
+      ]
+    },
+    "arguments": {
+      "type": "object",
+      "maxProperties": 4096,
+      "propertyNames": {
+        "not": {
+          "pattern": "^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/jsonValue"
+      }
+    },
+    "deadline": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 32,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://107pilot.local/schemas/agent/v2/tool-invocation.schema.json",
+  "$defs": {
+    "jsonValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "maxLength": 256000
+        },
+        {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 4096,
+          "propertyNames": {
+            "not": {
+              "pattern": "^(?:[aA][pP][iI]_[kK][eE][yY]|[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]|[bB][aA][sS][eE]_[uU][rR][lL]|[sS][yY][sS][tT][eE][mM]_[pP][rR][oO][mM][pP][tT]|[sS][cC][hH][eE][mM][aA]|[tT][oO][oO][lL][sS])$"
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

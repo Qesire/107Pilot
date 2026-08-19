@@ -34,10 +34,11 @@ describe("Agent remediation state presentation", () => {
 });
 
 describe("Agent page mode", () => {
-  it("defaults to durable conversations and only selects repair explicitly", () => {
+  it("defaults to durable conversations and selects builder or repair explicitly", () => {
     expect(agentPageMode(new URLSearchParams())).toBe("conversation");
     expect(agentPageMode(new URLSearchParams("mode=conversation"))).toBe("conversation");
     expect(agentPageMode(new URLSearchParams("mode=repair"))).toBe("repair");
+    expect(agentPageMode(new URLSearchParams("mode=builder"))).toBe("builder");
     expect(agentPageMode(new URLSearchParams("mode=unknown"))).toBe("conversation");
   });
 });

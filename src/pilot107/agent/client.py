@@ -246,16 +246,22 @@ def _build_durable_turn_request(
     config: AgentdClientConfig,
     request: DurableAgentTurnRequest,
 ) -> dict[str, Any]:
+    builder = request.profile_id == "experiment_builder"
+    if request.profile_id not in {"hpc-readonly-v1", "platform_coach", "experiment_builder"}:
+        raise AgentdClientError(
+            "pilot-agentd durable Turn profile is invalid",
+            code="invalid_request",
+        )
     payload = {
         "schema_version": "pilot107.agent-turn-request/v2",
         "session_id": request.session_id,
         "turn_id": request.turn_id,
         "owner": request.owner,
         "state_version": request.state_version,
-        "task_kind": "interactive_readonly",
+        "task_kind": "experiment_builder" if builder else "interactive_readonly",
         "model_profile_id": request.model_profile_id,
-        "prompt_profile_id": "hpc-readonly-v1",
-        "toolset_id": "a1-readonly",
+        "prompt_profile_id": request.profile_id,
+        "toolset_id": "a2-project" if builder else "a1-readonly",
         "input": {
             "message": request.message,
             "context_refs": list(request.context_refs),

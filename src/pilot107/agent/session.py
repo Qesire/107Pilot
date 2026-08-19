@@ -113,3 +113,4 @@ class AgentToolInvocationRecord:
 class AgentTurnToolUsage:
     invocations: int
     bytes_returned: int
+    commands: int

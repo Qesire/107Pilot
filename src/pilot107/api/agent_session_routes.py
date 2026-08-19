@@ -26,7 +26,7 @@ from pilot107.core.pagination import (
 )
 from pilot107.services.agent_session_service import AgentSessionService
 
-_SOURCE_KEYS = frozenset({"run_id", "workspace_id", "evidence_id"})
+_SOURCE_KEYS = frozenset({"run_id", "project_id", "workspace_id", "evidence_id"})
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$")
 _PROTOCOL_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _AUTHORITY_KEYS = frozenset({"authorization", "capability_token"})
@@ -141,12 +141,21 @@ class AgentSessionRoutes:
             if error is not None:
                 return error
             try:
-                _closed_body(payload, {"request_key", "model_profile_id", "source"})
+                _closed_body(
+                    payload,
+                    {"request_key", "model_profile_id", "source"},
+                    optional={"profile_id"},
+                )
                 session, created = self.service.create_session(
                     owner=owner,
                     request_key=_required_string(payload, "request_key", maximum=256),
                     model_profile_id=_required_protocol_id(payload, "model_profile_id"),
                     source=_source(payload.get("source")),
+                    profile_id=(
+                        "hpc-readonly-v1"
+                        if payload.get("profile_id") is None
+                        else _required_protocol_id(payload, "profile_id")
+                    ),
                 )
                 return ApiResponse(
                     status=201 if created else 200,
@@ -286,9 +295,12 @@ def _json_body(body: bytes, *, code: str) -> tuple[dict[str, Any], ApiResponse |
     return value, None
 
 
-def _closed_body(payload: Mapping[str, Any], required: set[str]) -> None:
+def _closed_body(
+    payload: Mapping[str, Any], required: set[str], *, optional: set[str] | None = None
+) -> None:
+    optional = optional or set()
     missing = sorted(required - set(payload))
-    unknown = sorted(set(payload) - required)
+    unknown = sorted(set(payload) - required - optional)
     if missing:
         raise ValueError(f"missing fields: {', '.join(missing)}")
     if unknown:

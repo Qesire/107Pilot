@@ -67,7 +67,11 @@ def _gateway_error(exc: AgentToolGatewayError) -> ApiResponse:
     code = exc.code
     if code in {"AGENT.CAPABILITY.INVALID", "AGENT.CAPABILITY.EXPIRED"}:
         status = 401
-    elif code in {"AGENT.TOOL.UNAUTHORIZED", "AGENT.TOOL.PATH_FORBIDDEN"}:
+    elif code in {
+        "AGENT.TOOL.UNAUTHORIZED",
+        "AGENT.TOOL.CAPABILITY_DENIED",
+        "AGENT.TOOL.PATH_FORBIDDEN",
+    }:
         status = 403
     elif code == "AGENT.TOOL.NOT_FOUND":
         status = 404
@@ -80,6 +84,7 @@ def _gateway_error(exc: AgentToolGatewayError) -> ApiResponse:
     elif code in {
         "AGENT.TOOL.INVOCATION_BUDGET_EXCEEDED",
         "AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
+        "AGENT.TOOL.COMMAND_BUDGET_EXCEEDED",
     }:
         status = 429
     elif code == "AGENT.TOOL.DEADLINE_EXPIRED":
@@ -100,6 +105,7 @@ def _public_message(code: str) -> str:
         "AGENT.CAPABILITY.INVALID": "Agent capability is invalid",
         "AGENT.CAPABILITY.EXPIRED": "Agent capability has expired",
         "AGENT.TOOL.UNAUTHORIZED": "Agent tool invocation is not authorized",
+        "AGENT.TOOL.CAPABILITY_DENIED": "Agent tool capability scope was denied",
         "AGENT.TOOL.PATH_FORBIDDEN": "Agent tool path is not authorized",
         "AGENT.TOOL.NOT_FOUND": "Agent tool resource was not found",
         "AGENT.TOOL.FENCED": "Agent Turn capability is stale or fenced",
@@ -107,6 +113,7 @@ def _public_message(code: str) -> str:
         "AGENT.TOOL.INVOCATION_IN_PROGRESS": "Agent tool invocation is in progress",
         "AGENT.TOOL.INVOCATION_BUDGET_EXCEEDED": "Agent tool invocation budget exceeded",
         "AGENT.TOOL.BYTE_BUDGET_EXCEEDED": "Agent tool byte budget exceeded",
+        "AGENT.TOOL.COMMAND_BUDGET_EXCEEDED": "Agent sandbox command budget exceeded",
         "AGENT.TOOL.DEADLINE_EXPIRED": "Agent tool invocation deadline expired",
         "AGENT.TOOL.INVALID": "Agent tool invocation is invalid",
         "AGENT.TOOL.INVALID_RESULT": "Agent tool result is invalid",

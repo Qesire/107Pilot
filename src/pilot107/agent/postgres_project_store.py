@@ -20,6 +20,7 @@ from pilot107.agent.project_store import (
     _assert_create_replay,
     _create_values,
     _key,
+    _limit,
     _row_to_project,
     _version,
 )
@@ -125,6 +126,19 @@ class PostgresProjectStore:
             raise KeyError(project_id)
         return _row_to_project(row)
 
+    def list_projects(
+        self, *, owner: str, limit: int = 100
+    ) -> list[ExperimentProjectSessionRecord]:
+        _key(owner, "owner")
+        _limit(limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM agent_experiment_projects WHERE owner = %s "
+                "ORDER BY updated_at DESC, project_id DESC LIMIT %s",
+                (owner, limit),
+            ).fetchall()
+        return [_row_to_project(row) for row in rows]
+
     def save_blueprint(
         self,
         project_id: str,
@@ -228,6 +242,27 @@ class PostgresProjectStore:
             raise TypeError("Workspace payload must be an object")
         return workspace_from_payload(payload)
 
+    def list_workspaces(
+        self, project_id: str, *, owner: str
+    ) -> list[AgentWorkspaceRecord]:
+        from pilot107.agent.workspace import workspace_from_payload
+
+        self.get_project(project_id, owner=owner)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM agent_workspaces "
+                "WHERE project_id = %s AND owner = %s "
+                "ORDER BY updated_at DESC, workspace_id DESC",
+                (project_id, owner),
+            ).fetchall()
+        records: list[AgentWorkspaceRecord] = []
+        for row in rows:
+            payload = row["payload_json"]
+            if not isinstance(payload, dict):
+                raise TypeError("Workspace payload must be an object")
+            records.append(workspace_from_payload(payload))
+        return records
+
     def save_change_set(
         self, change_set: WorkspaceChangeSet, *, diff_text: str
     ) -> WorkspaceChangeSet:
@@ -309,6 +344,27 @@ class PostgresProjectStore:
         if row is None:
             raise KeyError(change_set_id)
         return str(row["diff_text"])
+
+    def list_change_sets(
+        self, project_id: str, *, owner: str
+    ) -> list[WorkspaceChangeSet]:
+        from pilot107.agent.workspace import change_set_from_payload
+
+        self.get_project(project_id, owner=owner)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM agent_workspace_changesets "
+                "WHERE project_id = %s AND owner = %s "
+                "ORDER BY updated_at DESC, change_set_id DESC",
+                (project_id, owner),
+            ).fetchall()
+        records: list[WorkspaceChangeSet] = []
+        for row in rows:
+            payload = row["payload_json"]
+            if not isinstance(payload, dict):
+                raise TypeError("ChangeSet payload must be an object")
+            records.append(change_set_from_payload(payload))
+        return records
 
     def append_sandbox_result(
         self, change_set_id: str, *, owner: str, result: SandboxResultRecord

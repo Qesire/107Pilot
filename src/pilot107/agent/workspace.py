@@ -240,6 +240,16 @@ class WorkspaceChangeSet:
     schema_version: str = "pilot107.workspace-changeset/v1"
 
 
+@dataclass(frozen=True)
+class _PreparedWorkspacePatch:
+    target: Path
+    before: bytes
+    after: bytes
+    existed: bool
+    change: WorkspaceFileChange
+    unified_diff: str
+
+
 class WorkspaceEditor:
     def __init__(
         self,
@@ -262,78 +272,111 @@ class WorkspaceEditor:
         expected_source_digest: str | None,
         patch: WorkspacePatch,
     ) -> WorkspaceChangeSet:
+        return self.apply_patches(
+            workspace_id,
+            owner,
+            ((relative_path, expected_source_digest, patch),),
+        )
+
+    def apply_patches(
+        self,
+        workspace_id: str,
+        owner: str,
+        patches: tuple[tuple[str, str | None, WorkspacePatch], ...],
+    ) -> WorkspaceChangeSet:
+        if not isinstance(patches, tuple) or not 1 <= len(patches) <= 256:
+            raise WorkspacePolicyError("Workspace patch batch must contain 1 to 256 items")
         workspace = self.store.get_workspace(workspace_id, owner=owner)
-        try:
-            relative = _relative_path(relative_path)
-        except (TypeError, ValueError) as exc:
-            raise WorkspacePolicyError(str(exc)) from exc
-        if not isinstance(patch, WorkspacePatch):
-            raise TypeError("patch must be WorkspacePatch")
         root = Path(workspace.local_root).resolve(strict=True)
-        target = root.joinpath(*PurePosixPath(relative).parts)
-        if target.is_symlink():
-            raise WorkspacePolicyError("Workspace patch target cannot be a symlink")
-        existing = target.exists()
-        if existing:
-            resolved = target.resolve(strict=True)
-            if not resolved.is_relative_to(root) or not resolved.is_file():
-                raise WorkspacePolicyError("Workspace patch target is not a contained file")
-            before = resolved.read_bytes()
-        else:
-            before = b""
-        before_digest = hashlib.sha256(before).hexdigest() if existing else None
-        if patch.operation == "create":
-            if existing or expected_source_digest is not None:
-                raise WorkspaceConflict("create patch no longer matches an absent source")
-        else:
-            if not existing:
-                raise WorkspaceConflict("patch source file no longer exists")
-            if expected_source_digest != before_digest:
-                raise WorkspaceConflict("patch source digest no longer matches")
-        if not _editable_path(relative):
-            raise WorkspacePolicyError("Workspace patch target is not an editable file type")
-
-        after = b"" if patch.operation == "delete" else (patch.content or "").encode()
-        if len(after) > self.max_file_bytes:
-            raise WorkspacePolicyError("Workspace patch exceeds the file size limit")
-        try:
-            before_text = before.decode("utf-8")
-            after_text = after.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise WorkspacePolicyError("Workspace patches require UTF-8 text files") from exc
-        unified = "".join(
-            difflib.unified_diff(
-                before_text.splitlines(keepends=True),
-                after_text.splitlines(keepends=True),
-                fromfile=f"a/{relative}",
-                tofile=f"b/{relative}",
+        prepared: list[_PreparedWorkspacePatch] = []
+        seen: set[str] = set()
+        total_diff_bytes = 0
+        for relative_path, expected_source_digest, patch in patches:
+            try:
+                relative = _relative_path(relative_path)
+            except (TypeError, ValueError) as exc:
+                raise WorkspacePolicyError(str(exc)) from exc
+            if relative in seen:
+                raise WorkspacePolicyError("Workspace patch batch contains duplicate paths")
+            seen.add(relative)
+            if not isinstance(patch, WorkspacePatch):
+                raise TypeError("patch must be WorkspacePatch")
+            target = root.joinpath(*PurePosixPath(relative).parts)
+            _validate_patch_target(root, target)
+            existing = target.exists()
+            if existing:
+                resolved = target.resolve(strict=True)
+                if not resolved.is_relative_to(root) or not resolved.is_file():
+                    raise WorkspacePolicyError(
+                        "Workspace patch target is not a contained file"
+                    )
+                before = resolved.read_bytes()
+            else:
+                before = b""
+            before_digest = hashlib.sha256(before).hexdigest() if existing else None
+            if patch.operation == "create":
+                if existing or expected_source_digest is not None:
+                    raise WorkspaceConflict(
+                        "create patch no longer matches an absent source"
+                    )
+            else:
+                if not existing:
+                    raise WorkspaceConflict("patch source file no longer exists")
+                if expected_source_digest != before_digest:
+                    raise WorkspaceConflict("patch source digest no longer matches")
+            if not _editable_path(relative):
+                raise WorkspacePolicyError(
+                    "Workspace patch target is not an editable file type"
+                )
+            after = (
+                b"" if patch.operation == "delete" else (patch.content or "").encode()
             )
-        )
-        encoded_diff = unified.encode()
-        if len(encoded_diff) > self.max_diff_bytes:
-            raise WorkspacePolicyError("Workspace diff exceeds the output limit")
-
-        if patch.operation == "delete":
-            target.unlink()
-        else:
-            if not target.parent.exists():
-                parent = target.parent
-                ancestor = parent
-                while not ancestor.exists() and ancestor != root:
-                    ancestor = ancestor.parent
-                if ancestor.is_symlink() or not ancestor.resolve().is_relative_to(root):
-                    raise WorkspacePolicyError("Workspace patch parent escaped the local root")
-            _atomic_write(target, after)
-        after_digest = None if patch.operation == "delete" else hashlib.sha256(after).hexdigest()
-        file_change = WorkspaceFileChange(
-            path=relative,
-            operation=patch.operation,
-            before_sha256=before_digest,
-            after_sha256=after_digest,
-            diff_sha256=hashlib.sha256(encoded_diff).hexdigest(),
-            size_bytes=len(after),
-        )
-        digest = _change_set_digest(workspace, file_change)
+            if len(after) > self.max_file_bytes:
+                raise WorkspacePolicyError("Workspace patch exceeds the file size limit")
+            try:
+                before_text = before.decode("utf-8")
+                after_text = after.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise WorkspacePolicyError(
+                    "Workspace patches require UTF-8 text files"
+                ) from exc
+            unified = "".join(
+                difflib.unified_diff(
+                    before_text.splitlines(keepends=True),
+                    after_text.splitlines(keepends=True),
+                    fromfile=f"a/{relative}",
+                    tofile=f"b/{relative}",
+                )
+            )
+            encoded_diff = unified.encode()
+            total_diff_bytes += len(encoded_diff)
+            if total_diff_bytes > self.max_diff_bytes:
+                raise WorkspacePolicyError("Workspace diff exceeds the output limit")
+            after_digest = (
+                None
+                if patch.operation == "delete"
+                else hashlib.sha256(after).hexdigest()
+            )
+            prepared.append(
+                _PreparedWorkspacePatch(
+                    target=target,
+                    before=before,
+                    after=after,
+                    existed=existing,
+                    change=WorkspaceFileChange(
+                        path=relative,
+                        operation=patch.operation,
+                        before_sha256=before_digest,
+                        after_sha256=after_digest,
+                        diff_sha256=hashlib.sha256(encoded_diff).hexdigest(),
+                        size_bytes=len(after),
+                    ),
+                    unified_diff=unified,
+                )
+            )
+        files = tuple(item.change for item in prepared)
+        unified_diff = "".join(item.unified_diff for item in prepared)
+        digest = _change_set_digest(workspace, files)
         change_set_id = f"changeset-{digest[:24]}"
         now = _timestamp()
         change_set = WorkspaceChangeSet(
@@ -345,13 +388,28 @@ class WorkspaceEditor:
             digest=digest,
             state=WorkspaceChangeSetState.DRAFT,
             version=1,
-            files=(file_change,),
+            files=files,
             sandbox_results=(),
             approval=None,
             created_at=now,
             updated_at=now,
         )
-        return self.store.save_change_set(change_set, diff_text=unified)
+        changed: list[_PreparedWorkspacePatch] = []
+        try:
+            for item in prepared:
+                if item.change.operation == "delete":
+                    item.target.unlink()
+                else:
+                    _atomic_write(item.target, item.after)
+                changed.append(item)
+            return self.store.save_change_set(change_set, diff_text=unified_diff)
+        except Exception:
+            for item in reversed(changed):
+                if item.existed:
+                    _atomic_write(item.target, item.before)
+                else:
+                    item.target.unlink(missing_ok=True)
+            raise
 
     def diff(self, change_set_id: str, owner: str) -> str:
         return self.store.get_change_set_diff(change_set_id, owner=owner)
@@ -775,20 +833,23 @@ def _snapshot_digest(source: str, entries: tuple[WorkspaceEntry, ...]) -> str:
 
 
 def _change_set_digest(
-    workspace: AgentWorkspaceRecord, file_change: WorkspaceFileChange
+    workspace: AgentWorkspaceRecord, file_changes: tuple[WorkspaceFileChange, ...]
 ) -> str:
     payload = {
         "project_id": workspace.project_id,
         "workspace_id": workspace.workspace_id,
         "base_snapshot_digest": workspace.snapshot.digest,
-        "file": {
-            "path": file_change.path,
-            "operation": file_change.operation,
-            "before_sha256": file_change.before_sha256,
-            "after_sha256": file_change.after_sha256,
-            "diff_sha256": file_change.diff_sha256,
-            "size_bytes": file_change.size_bytes,
-        },
+        "files": [
+            {
+                "path": file_change.path,
+                "operation": file_change.operation,
+                "before_sha256": file_change.before_sha256,
+                "after_sha256": file_change.after_sha256,
+                "diff_sha256": file_change.diff_sha256,
+                "size_bytes": file_change.size_bytes,
+            }
+            for file_change in file_changes
+        ],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
@@ -823,6 +884,22 @@ def _relative_path(value: str) -> str:
     ):
         raise ValueError("Workspace path must be a contained relative path")
     return value
+
+
+def _validate_patch_target(root: Path, target: Path) -> None:
+    """Reject every symlink hop before any workspace mutation occurs."""
+    if target.is_symlink():
+        raise WorkspacePolicyError("Workspace patch target cannot be a symlink")
+    current = target.parent
+    while current != root:
+        if current.is_symlink():
+            raise WorkspacePolicyError("Workspace patch path cannot traverse a symlink")
+        if root not in current.parents:
+            raise WorkspacePolicyError("Workspace patch target escaped the workspace")
+        current = current.parent
+    resolved = target.resolve(strict=False)
+    if resolved != root and root not in resolved.parents:
+        raise WorkspacePolicyError("Workspace patch target escaped the workspace")
 
 
 def _digest(value: str, label: str) -> str:

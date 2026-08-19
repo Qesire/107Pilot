@@ -127,6 +127,10 @@ class ProjectStore(Protocol):
         self, project_id: str, *, owner: str
     ) -> ExperimentProjectSessionRecord: ...
 
+    def list_projects(
+        self, *, owner: str, limit: int = 100
+    ) -> list[ExperimentProjectSessionRecord]: ...
+
     def save_blueprint(
         self,
         project_id: str,
@@ -139,6 +143,10 @@ class ProjectStore(Protocol):
 
     def get_workspace(self, workspace_id: str, *, owner: str) -> AgentWorkspaceRecord: ...
 
+    def list_workspaces(
+        self, project_id: str, *, owner: str
+    ) -> list[AgentWorkspaceRecord]: ...
+
     def save_change_set(
         self, change_set: WorkspaceChangeSet, *, diff_text: str
     ) -> WorkspaceChangeSet: ...
@@ -148,6 +156,10 @@ class ProjectStore(Protocol):
     ) -> WorkspaceChangeSet: ...
 
     def get_change_set_diff(self, change_set_id: str, *, owner: str) -> str: ...
+
+    def list_change_sets(
+        self, project_id: str, *, owner: str
+    ) -> list[WorkspaceChangeSet]: ...
 
     def append_sandbox_result(
         self, change_set_id: str, *, owner: str, result: SandboxResultRecord
@@ -233,6 +245,19 @@ class SQLiteProjectStore:
         if row is None:
             raise KeyError(project_id)
         return _row_to_project(row)
+
+    def list_projects(
+        self, *, owner: str, limit: int = 100
+    ) -> list[ExperimentProjectSessionRecord]:
+        _key(owner, "owner")
+        _limit(limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM agent_experiment_projects WHERE owner = ? "
+                "ORDER BY updated_at DESC, project_id DESC LIMIT ?",
+                (owner, limit),
+            ).fetchall()
+        return [_row_to_project(row) for row in rows]
 
     def save_blueprint(
         self,
@@ -327,6 +352,27 @@ class SQLiteProjectStore:
             raise RuntimeError("Workspace payload disappeared")
         return workspace_from_payload(payload)
 
+    def list_workspaces(
+        self, project_id: str, *, owner: str
+    ) -> list[AgentWorkspaceRecord]:
+        from pilot107.agent.workspace import workspace_from_payload
+
+        self.get_project(project_id, owner=owner)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM agent_workspaces "
+                "WHERE project_id = ? AND owner = ? "
+                "ORDER BY updated_at DESC, workspace_id DESC",
+                (project_id, owner),
+            ).fetchall()
+        records: list[AgentWorkspaceRecord] = []
+        for row in rows:
+            payload = _json_object_or_none(row["payload_json"], "payload_json")
+            if payload is None:
+                raise RuntimeError("Workspace payload disappeared")
+            records.append(workspace_from_payload(payload))
+        return records
+
     def save_change_set(
         self, change_set: WorkspaceChangeSet, *, diff_text: str
     ) -> WorkspaceChangeSet:
@@ -406,6 +452,27 @@ class SQLiteProjectStore:
         if row is None:
             raise KeyError(change_set_id)
         return str(row["diff_text"])
+
+    def list_change_sets(
+        self, project_id: str, *, owner: str
+    ) -> list[WorkspaceChangeSet]:
+        from pilot107.agent.workspace import change_set_from_payload
+
+        self.get_project(project_id, owner=owner)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM agent_workspace_changesets "
+                "WHERE project_id = ? AND owner = ? "
+                "ORDER BY updated_at DESC, change_set_id DESC",
+                (project_id, owner),
+            ).fetchall()
+        records: list[WorkspaceChangeSet] = []
+        for row in rows:
+            payload = _json_object_or_none(row["payload_json"], "payload_json")
+            if payload is None:
+                raise RuntimeError("ChangeSet payload disappeared")
+            records.append(change_set_from_payload(payload))
+        return records
 
     def append_sandbox_result(
         self, change_set_id: str, *, owner: str, result: SandboxResultRecord
@@ -596,6 +663,12 @@ def _key(value: str, label: str) -> str:
 def _version(value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError("expected_version is invalid")
+    return value
+
+
+def _limit(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
+        raise ValueError("limit must be between 1 and 100")
     return value
 
 

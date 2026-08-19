@@ -158,6 +158,39 @@ _AGENT_TURN_PATH_PARAMETER = {
     "required": True,
     "schema": {"type": "string", "minLength": 1, "maxLength": 128},
 }
+_AGENT_PROJECT_PATH_PARAMETER = {
+    "name": "project_id",
+    "in": "path",
+    "required": True,
+    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+}
+_AGENT_WORKSPACE_PATH_PARAMETER = {
+    "name": "workspace_id",
+    "in": "path",
+    "required": True,
+    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+}
+_AGENT_CHANGESET_PATH_PARAMETER = {
+    "name": "change_set_id",
+    "in": "path",
+    "required": True,
+    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+}
+_AGENT_CHANGESET_SCOPE_PARAMETERS = [
+    _AGENT_CHANGESET_PATH_PARAMETER,
+    {
+        "name": "project_id",
+        "in": "query",
+        "required": True,
+        "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+    },
+    {
+        "name": "workspace_id",
+        "in": "query",
+        "required": True,
+        "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+    },
+]
 _RUN_PATH_PARAMETER = {
     "name": "run_id",
     "in": "path",
@@ -565,6 +598,57 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
                 },
             ]
         },
+    )
+
+    app.add_api_route(
+        "/api/v1/agent-projects",
+        forward_get,
+        methods=["GET"],
+        operation_id="list_agent_projects",
+        tags=["agent"],
+    )
+    app.add_api_route(
+        "/api/v1/agent-projects",
+        forward_post,
+        methods=["POST"],
+        operation_id="create_agent_project",
+        tags=["agent"],
+    )
+    app.add_api_route(
+        "/api/v1/agent-projects/{project_id}",
+        forward_get,
+        methods=["GET"],
+        operation_id="get_agent_project",
+        tags=["agent"],
+        openapi_extra={"parameters": [_AGENT_PROJECT_PATH_PARAMETER]},
+    )
+    app.add_api_route(
+        "/api/v1/agent-projects/{project_id}/blueprint",
+        forward_post,
+        methods=["POST"],
+        operation_id="save_agent_project_blueprint",
+        tags=["agent"],
+        openapi_extra={"parameters": [_AGENT_PROJECT_PATH_PARAMETER]},
+    )
+    for action, operation_id in (
+        ("patch", "patch_agent_workspace"),
+        ("sandbox", "validate_agent_workspace"),
+    ):
+        app.add_api_route(
+            f"/api/v1/agent-workspaces/{{workspace_id}}/{action}",
+            forward_post,
+            methods=["POST"],
+            operation_id=operation_id,
+            tags=["agent"],
+            openapi_extra={"parameters": [_AGENT_WORKSPACE_PATH_PARAMETER]},
+        )
+    app.add_api_route(
+        "/api/v1/agent-changesets/{change_set_id}/diff",
+        forward_get,
+        methods=["GET"],
+        operation_id="get_agent_changeset_diff",
+        tags=["agent"],
+        openapi_extra={"parameters": _AGENT_CHANGESET_SCOPE_PARAMETERS},
     )
 
     app.add_api_route(

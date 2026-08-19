@@ -354,7 +354,7 @@ export interface AgentSession {
   session_id: string;
   owner: string;
   request_key: string;
-  profile_id: "hpc-readonly-v1";
+  profile_id: "hpc-readonly-v1" | "platform_coach" | "experiment_builder";
   model_profile_id: string;
   source: JsonObject;
   state: AgentSessionState;
@@ -399,6 +399,123 @@ export interface AgentEventPage {
     has_more: boolean;
     next_after_event_id: number | null;
     last_event_id: number;
+  };
+}
+
+export type AgentProjectOrigin = "blank" | "template" | "existing" | "failed_run";
+export type AgentProjectState =
+  | "drafting"
+  | "editing"
+  | "validating"
+  | "awaiting_approval"
+  | "publishing"
+  | "ready"
+  | "blocked"
+  | "cancelled";
+
+export interface AgentProjectBlueprint {
+  goal: string;
+  entrypoints: string[];
+  files: Array<{
+    path: string;
+    purpose: string;
+    classification: "editable" | "read_only" | "metadata_only" | "excluded";
+  }>;
+  validations: Array<{
+    validation_id: string;
+    execution: "sandbox" | "slurm";
+    argv: string[];
+    expected_outputs: string[];
+  }>;
+  contract_intent: {
+    recipe_version_id: string | null;
+    resource_hints: Record<string, string | number>;
+  };
+  expected_outputs: Array<{
+    path: string;
+    kind: string;
+    required: boolean;
+  }>;
+  dependencies: Array<{ name: string; version: string; source: string }>;
+  open_questions: string[];
+}
+
+export interface AgentProject {
+  schema_version: "pilot107.experiment-project-session/v1";
+  project_id: string;
+  owner: string;
+  origin: AgentProjectOrigin;
+  state: AgentProjectState;
+  version: number;
+  goal: string;
+  source: JsonObject | null;
+  blueprint: AgentProjectBlueprint | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentWorkspace {
+  workspace_id: string;
+  project_id: string;
+  owner: string;
+  snapshot: {
+    digest: string;
+    captured_at: string;
+    entries: Array<{
+      path: string;
+      kind: "file" | "directory";
+      classification: "editable" | "read_only" | "metadata_only" | "excluded";
+      size_bytes: number;
+      mtime_epoch: number;
+      source_sha256: string | null;
+      content_ref: string | null;
+    }>;
+  };
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkspaceChangeSet {
+  schema_version: "pilot107.workspace-changeset/v1";
+  change_set_id: string;
+  project_id: string;
+  workspace_id: string;
+  owner: string;
+  base_snapshot_digest: string;
+  digest: string;
+  state: "draft" | "reviewable" | "approved" | "publishing" | "published" | "conflicted" | "failed";
+  version: number;
+  files: Array<{
+    path: string;
+    operation: "create" | "modify" | "delete";
+    before_sha256: string | null;
+    after_sha256: string | null;
+    diff_sha256: string;
+    size_bytes: number;
+  }>;
+  sandbox_results: Array<{
+    result_id: string;
+    argv: string[];
+    status: "succeeded" | "failed" | "timed_out" | "cancelled";
+    exit_code: number | null;
+    stdout_sha256: string;
+    stderr_sha256: string;
+  }>;
+  approval: { actor: string; approved_digest: string; approved_at: string } | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentProjectView {
+  project: AgentProject;
+  workspace: AgentWorkspace;
+  change_sets: WorkspaceChangeSet[];
+  risk_summary: {
+    level: "low" | "medium" | "high";
+    changed_files: number;
+    deletions: number;
+    sandbox_failures: number;
+    publish_available: false;
   };
 }
 

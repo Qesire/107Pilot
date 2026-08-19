@@ -387,10 +387,20 @@ export const DurableAgentTurnRequestSchema = Type.Object(
     turn_id: Id,
     owner: Id,
     state_version: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-    task_kind: Type.Literal("interactive_readonly"),
+    task_kind: Type.Union([
+      Type.Literal("interactive_readonly"),
+      Type.Literal("experiment_builder"),
+    ]),
     model_profile_id: Id,
-    prompt_profile_id: Type.Literal("hpc-readonly-v1"),
-    toolset_id: Type.Literal("a1-readonly"),
+    prompt_profile_id: Type.Union([
+      Type.Literal("hpc-readonly-v1"),
+      Type.Literal("platform_coach"),
+      Type.Literal("experiment_builder"),
+    ]),
+    toolset_id: Type.Union([
+      Type.Literal("a1-readonly"),
+      Type.Literal("a2-project"),
+    ]),
     input: DurableTurnInputSchema,
     capability_token: Type.String({ minLength: 1, maxLength: 8_192 }),
     checkpoint: Type.Union([Type.Null(), AgentCheckpointBodySchema]),
@@ -410,7 +420,7 @@ export type DurableAgentTurnRequest = Static<typeof DurableAgentTurnRequestSchem
 export type ExecutableAgentTurnRequest =
   | AgentTurnRequest
   | DurableAgentTurnRequest;
-export type ExecutableTaskKind = TaskKind | "interactive_readonly";
+export type ExecutableTaskKind = TaskKind | "interactive_readonly" | "experiment_builder";
 
 export const A1_READ_TOOL_NAMES = [
   "platform_get_snapshot",
@@ -422,10 +432,21 @@ export const A1_READ_TOOL_NAMES = [
   "evidence_read",
 ] as const;
 
-export type ReadToolName = (typeof A1_READ_TOOL_NAMES)[number];
+export const A2_PROJECT_TOOL_NAMES = [
+  "project_get",
+  "workspace_list",
+  "workspace_read",
+  "workspace_patch",
+  "workspace_diff",
+  "sandbox_exec",
+] as const;
+
+export type ReadToolName =
+  | (typeof A1_READ_TOOL_NAMES)[number]
+  | (typeof A2_PROJECT_TOOL_NAMES)[number];
 
 const ReadToolNameSchema = Type.Union(
-  A1_READ_TOOL_NAMES.map((name) => Type.Literal(name)),
+  [...A1_READ_TOOL_NAMES, ...A2_PROJECT_TOOL_NAMES].map((name) => Type.Literal(name)),
 );
 
 export const ToolInvocationSchema = Type.Object(
@@ -437,7 +458,11 @@ export const ToolInvocationSchema = Type.Object(
     session_id: Id,
     turn_id: Id,
     state_version: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-    profile_id: Type.Literal("hpc-readonly-v1"),
+    profile_id: Type.Union([
+      Type.Literal("hpc-readonly-v1"),
+      Type.Literal("platform_coach"),
+      Type.Literal("experiment_builder"),
+    ]),
     tool_name: ReadToolNameSchema,
     arguments: JsonObjectSchema,
     deadline: Type.String({
@@ -662,6 +687,15 @@ export function parseDurableTurnRequest(value: unknown): DurableAgentTurnRequest
       validationMessage("durable turn request", DurableAgentTurnRequestSchema, value),
     );
   }
+  const readonlyPair = value.task_kind === "interactive_readonly"
+    && ["hpc-readonly-v1", "platform_coach"].includes(value.prompt_profile_id)
+    && value.toolset_id === "a1-readonly";
+  const builderPair = value.task_kind === "experiment_builder"
+    && value.prompt_profile_id === "experiment_builder"
+    && value.toolset_id === "a2-project";
+  if (!readonlyPair && !builderPair) {
+    throw new TypeError("durable turn request profile/toolset pairing is invalid");
+  }
   return value;
 }
 
@@ -683,6 +717,12 @@ export function parseToolInvocation(value: unknown): ToolInvocation {
   }
   if (!Value.Check(ToolInvocationSchema, value)) {
     throw new TypeError(validationMessage("tool invocation", ToolInvocationSchema, value));
+  }
+  const allowed = value.profile_id === "experiment_builder"
+    ? A2_PROJECT_TOOL_NAMES
+    : A1_READ_TOOL_NAMES;
+  if (!(allowed as readonly string[]).includes(value.tool_name)) {
+    throw new TypeError("tool invocation profile/tool pairing is invalid");
   }
   return value;
 }

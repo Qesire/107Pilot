@@ -26,6 +26,16 @@ _A1_READ_TOOLS = frozenset(
         "evidence_read",
     }
 )
+_A2_PROJECT_TOOLS = frozenset(
+    {
+        "project_get",
+        "workspace_list",
+        "workspace_read",
+        "workspace_patch",
+        "workspace_diff",
+        "sandbox_exec",
+    }
+)
 _TERMINAL_STATES = frozenset(
     {AgentTurnState.COMPLETED, AgentTurnState.CANCELLED, AgentTurnState.FAILED}
 )
@@ -149,8 +159,9 @@ class AgentTurnWorker:
             model_profile_id=session.model_profile_id,
             message=current.message,
             context_refs=_context_refs(session.source),
-            capability_token=self._capability(claim, session.profile_id),
+            capability_token=self._capability(claim, session.profile_id, session.source),
             checkpoint=current.final_checkpoint,
+            profile_id=session.profile_id,
         )
         checkpoint = current.final_checkpoint
         terminal: AgentTurnEvent | None = None
@@ -274,8 +285,18 @@ class AgentTurnWorker:
         )
         self._retry(message, "Agent Turn was interrupted", delay_seconds=0)
 
-    def _capability(self, claim: AgentTurnLease, profile_id: str) -> str:
+    def _capability(
+        self,
+        claim: AgentTurnLease,
+        profile_id: str,
+        source: Mapping[str, object],
+    ) -> str:
         now = int(self._clock())
+        builder = profile_id == "experiment_builder"
+        project_id = source.get("project_id") if builder else None
+        workspace_id = source.get("workspace_id") if builder else None
+        if builder and (not isinstance(project_id, str) or not isinstance(workspace_id, str)):
+            raise ValueError("experiment_builder Session scope is invalid")
         return self.capability_signer.sign(
             AgentCapabilityClaims(
                 owner=claim.owner,
@@ -284,10 +305,14 @@ class AgentTurnWorker:
                 state_version=claim.state_version,
                 fencing_token=claim.fencing_token,
                 profile_id=profile_id,
-                tools=_A1_READ_TOOLS,
+                tools=_A2_PROJECT_TOOLS if builder else _A1_READ_TOOLS,
                 max_invocations=32,
                 max_bytes=1024 * 1024,
                 expires_at=now + min(self.lease_seconds, 120),
+                project_id=project_id if isinstance(project_id, str) else None,
+                workspace_id=workspace_id if isinstance(workspace_id, str) else None,
+                operations=frozenset({"read", "write", "validate"}) if builder else frozenset(),
+                max_commands=8 if builder else 0,
             )
         )
 

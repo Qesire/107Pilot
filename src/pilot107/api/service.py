@@ -47,8 +47,10 @@ from pilot107.agent.capabilities import AgentCapabilitySigner
 from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig
 from pilot107.agent.read_tools import AgentReadContext, build_a1_read_handlers
-from pilot107.agent.store_factory import build_agent_session_store
+from pilot107.agent.sandbox import SandboxExecutor
+from pilot107.agent.store_factory import build_agent_session_store, build_project_store
 from pilot107.agent.tool_gateway import AgentToolGateway
+from pilot107.agent.workspace import WorkspaceImporter
 from pilot107.api.agent_tool_routes import AgentToolRoutes
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.file_routes import FileRoutes
@@ -105,6 +107,7 @@ from pilot107.core.user_entitlement_store import UserEntitlementStore
 from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.services.platform_snapshot_freshness import SnapshotCollectionMonitor
 from pilot107.services.platform_snapshot_service import PlatformSnapshotService
+from pilot107.services.project_agent_service import ProjectAgentService
 from pilot107.worker.capsule import RawCapsuleService
 from pilot107.worker.evidence import EvidenceStore
 
@@ -654,6 +657,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     workspace_reader = _build_workspace_reader(config)
     agent_tool_routes: AgentToolRoutes | None = None
     agent_session_service: AgentSessionService | None = None
+    project_agent_service: ProjectAgentService | None = None
     if agent_capability_secret is not None:
         agent_session_store = build_agent_session_store(
             sqlite_path=config.db_path,
@@ -666,11 +670,46 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             workspace_reader=workspace_reader,
             workspace_root_templates=config.code_context_allowed_roots,
         )
+        project_store = build_project_store(
+            sqlite_path=config.db_path,
+            postgres_dsn=config.postgres_dsn,
+        )
+        workspace_source = None
+        workspace_owner_roots: tuple[str, ...] = ()
+        if config.backend == "command-gateway" and config.allowed_roots:
+            workspace_source = HttpCommandGatewayExecutor(
+                base_url=config.command_gateway_url,
+                token=config.command_gateway_token,
+                timeout_seconds=config.command_timeout_seconds,
+            )
+            workspace_owner_roots = config.allowed_roots
+        elif config.backend == "real107-ssh" and ssh_relay_client is not None:
+            workspace_source = ssh_relay_client
+            workspace_owner_roots = config.allowed_roots or ssh_relay_client.config.owner_roots
+        importer = (
+            None
+            if workspace_source is None or not workspace_owner_roots
+            else WorkspaceImporter(
+                store=project_store,
+                reader=workspace_source,
+                owner_roots=workspace_owner_roots,
+                workspace_root=config.db_path.parent / "agent-workspaces",
+            )
+        )
+        project_agent_service = ProjectAgentService(
+            store=project_store,
+            workspace_root=config.db_path.parent / "agent-workspaces",
+            sandbox=SandboxExecutor(store=project_store),
+            importer=importer,
+        )
         agent_tool_routes = AgentToolRoutes(
             gateway=AgentToolGateway(
                 store=agent_session_store,
                 signer=AgentCapabilitySigner(agent_capability_secret),
                 handlers=build_a1_read_handlers(read_context),
+                profile_handlers={
+                    "experiment_builder": project_agent_service.build_tool_handlers()
+                },
             )
         )
         agent_session_service = AgentSessionService(
@@ -741,6 +780,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         ),
         agent_tool_routes=agent_tool_routes,
         agent_session_service=agent_session_service,
+        project_agent_service=project_agent_service,
         auth_required=config.auth_required,
         trusted_user_header=config.trusted_user_header,
         proxy_hmac_secret=config.proxy_hmac_secret,

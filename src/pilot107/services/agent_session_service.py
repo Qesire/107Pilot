@@ -28,11 +28,22 @@ class AgentSessionService:
         request_key: str,
         model_profile_id: str,
         source: Mapping[str, object],
+        profile_id: str = "hpc-readonly-v1",
     ) -> tuple[AgentSessionRecord, bool]:
+        if profile_id not in {"hpc-readonly-v1", "platform_coach", "experiment_builder"}:
+            raise ValueError("Agent profile is not supported")
+        if profile_id == "experiment_builder" and (
+            set(source) != {"project_id", "workspace_id"}
+            or any(
+                not isinstance(source.get(key), str) or not source.get(key)
+                for key in ("project_id", "workspace_id")
+            )
+        ):
+            raise ValueError("experiment_builder requires Project and Workspace bindings")
         return self.store.create_session(
             owner=owner,
             request_key=request_key,
-            profile_id="hpc-readonly-v1",
+            profile_id=profile_id,
             model_profile_id=model_profile_id,
             source=source,
         )

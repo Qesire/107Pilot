@@ -1,5 +1,6 @@
 import type {
   AgentEventPage,
+  AgentProjectView,
   AgentSession,
   AgentTurn,
   AgentExplanation,
@@ -643,7 +644,12 @@ export const api = {
     getJson<PagePayload<AgentSession>>("/api/v1/agent-sessions", user, signal),
   createAgentSession: (
     user: string,
-    input: { profile: string; request_key: string },
+    input: {
+      profile: string;
+      request_key: string;
+      profile_id?: "hpc-readonly-v1" | "platform_coach" | "experiment_builder";
+      source?: JsonObject;
+    },
     signal?: AbortSignal,
   ) => sendJson<AgentSession>(
     "/api/v1/agent-sessions",
@@ -651,7 +657,8 @@ export const api = {
     {
       request_key: input.request_key,
       model_profile_id: input.profile,
-      source: {},
+      source: input.source ?? {},
+      ...(input.profile_id ? { profile_id: input.profile_id } : {}),
     },
     signal,
   ),
@@ -693,6 +700,38 @@ export const api = {
     queryPath(
       `/api/v1/agent-sessions/${encodeURIComponent(sessionId)}/events`,
       { after_event_id: String(afterEventId), limit: "100" },
+    ),
+    user,
+    signal,
+  ),
+  agentProjects: (user: string, signal?: AbortSignal) =>
+    getJson<{ items: AgentProjectView[] }>("/api/v1/agent-projects", user, signal),
+  createAgentProject: (
+    user: string,
+    input: {
+      origin: "blank" | "existing";
+      goal: string;
+      request_key: string;
+      source_ref?: string;
+    },
+    signal?: AbortSignal,
+  ) => sendJson<AgentProjectView>("/api/v1/agent-projects", user, input, signal),
+  agentProject: (user: string, projectId: string, signal?: AbortSignal) =>
+    getJson<AgentProjectView>(
+      `/api/v1/agent-projects/${encodeURIComponent(projectId)}`,
+      user,
+      signal,
+    ),
+  agentChangeSetDiff: (
+    user: string,
+    projectId: string,
+    workspaceId: string,
+    changeSetId: string,
+    signal?: AbortSignal,
+  ) => getJson<{ change_set_id: string; unified_diff: string }>(
+    queryPath(
+      `/api/v1/agent-changesets/${encodeURIComponent(changeSetId)}/diff`,
+      { project_id: projectId, workspace_id: workspaceId },
     ),
     user,
     signal,
