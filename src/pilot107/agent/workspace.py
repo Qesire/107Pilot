@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import difflib
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol
 
@@ -166,6 +168,193 @@ class AgentWorkspaceRecord:
             raise ValueError("Workspace local_root must be absolute")
         if not isinstance(self.snapshot, WorkspaceSnapshot):
             raise TypeError("snapshot must be WorkspaceSnapshot")
+
+
+class WorkspaceChangeSetState(StrEnum):
+    DRAFT = "draft"
+    REVIEWABLE = "reviewable"
+    APPROVED = "approved"
+    PUBLISHING = "publishing"
+    PUBLISHED = "published"
+    CONFLICTED = "conflicted"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class WorkspacePatch:
+    operation: Literal["create", "modify", "delete"]
+    content: str | None
+
+    def __post_init__(self) -> None:
+        if self.operation not in {"create", "modify", "delete"}:
+            raise ValueError("Workspace patch operation is invalid")
+        if self.operation == "delete" and self.content is not None:
+            raise ValueError("delete patches cannot contain content")
+        if self.operation != "delete" and not isinstance(self.content, str):
+            raise TypeError("create and modify patches require text content")
+
+
+@dataclass(frozen=True)
+class WorkspaceFileChange:
+    path: str
+    operation: Literal["create", "modify", "delete"]
+    before_sha256: str | None
+    after_sha256: str | None
+    diff_sha256: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
+class SandboxResultRecord:
+    result_id: str
+    argv: tuple[str, ...]
+    status: Literal["succeeded", "failed", "timed_out", "cancelled"]
+    exit_code: int | None
+    stdout_sha256: str
+    stderr_sha256: str
+
+
+@dataclass(frozen=True)
+class WorkspaceApproval:
+    actor: str
+    approved_digest: str
+    approved_at: str
+
+
+@dataclass(frozen=True)
+class WorkspaceChangeSet:
+    change_set_id: str
+    project_id: str
+    workspace_id: str
+    owner: str
+    base_snapshot_digest: str
+    digest: str
+    state: WorkspaceChangeSetState
+    version: int
+    files: tuple[WorkspaceFileChange, ...]
+    sandbox_results: tuple[SandboxResultRecord, ...]
+    approval: WorkspaceApproval | None
+    created_at: str
+    updated_at: str
+    schema_version: str = "pilot107.workspace-changeset/v1"
+
+
+class WorkspaceEditor:
+    def __init__(
+        self,
+        *,
+        store: ProjectStore,
+        max_file_bytes: int = 8 * 1024 * 1024,
+        max_diff_bytes: int = 1024 * 1024,
+    ) -> None:
+        if max_file_bytes < 1 or max_diff_bytes < 1:
+            raise ValueError("Workspace edit limits must be positive")
+        self.store = store
+        self.max_file_bytes = max_file_bytes
+        self.max_diff_bytes = max_diff_bytes
+
+    def apply_patch(
+        self,
+        workspace_id: str,
+        owner: str,
+        relative_path: str,
+        expected_source_digest: str | None,
+        patch: WorkspacePatch,
+    ) -> WorkspaceChangeSet:
+        workspace = self.store.get_workspace(workspace_id, owner=owner)
+        try:
+            relative = _relative_path(relative_path)
+        except (TypeError, ValueError) as exc:
+            raise WorkspacePolicyError(str(exc)) from exc
+        if not isinstance(patch, WorkspacePatch):
+            raise TypeError("patch must be WorkspacePatch")
+        root = Path(workspace.local_root).resolve(strict=True)
+        target = root.joinpath(*PurePosixPath(relative).parts)
+        if target.is_symlink():
+            raise WorkspacePolicyError("Workspace patch target cannot be a symlink")
+        existing = target.exists()
+        if existing:
+            resolved = target.resolve(strict=True)
+            if not resolved.is_relative_to(root) or not resolved.is_file():
+                raise WorkspacePolicyError("Workspace patch target is not a contained file")
+            before = resolved.read_bytes()
+        else:
+            before = b""
+        before_digest = hashlib.sha256(before).hexdigest() if existing else None
+        if patch.operation == "create":
+            if existing or expected_source_digest is not None:
+                raise WorkspaceConflict("create patch no longer matches an absent source")
+        else:
+            if not existing:
+                raise WorkspaceConflict("patch source file no longer exists")
+            if expected_source_digest != before_digest:
+                raise WorkspaceConflict("patch source digest no longer matches")
+        if not _editable_path(relative):
+            raise WorkspacePolicyError("Workspace patch target is not an editable file type")
+
+        after = b"" if patch.operation == "delete" else (patch.content or "").encode()
+        if len(after) > self.max_file_bytes:
+            raise WorkspacePolicyError("Workspace patch exceeds the file size limit")
+        try:
+            before_text = before.decode("utf-8")
+            after_text = after.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise WorkspacePolicyError("Workspace patches require UTF-8 text files") from exc
+        unified = "".join(
+            difflib.unified_diff(
+                before_text.splitlines(keepends=True),
+                after_text.splitlines(keepends=True),
+                fromfile=f"a/{relative}",
+                tofile=f"b/{relative}",
+            )
+        )
+        encoded_diff = unified.encode()
+        if len(encoded_diff) > self.max_diff_bytes:
+            raise WorkspacePolicyError("Workspace diff exceeds the output limit")
+
+        if patch.operation == "delete":
+            target.unlink()
+        else:
+            if not target.parent.exists():
+                parent = target.parent
+                ancestor = parent
+                while not ancestor.exists() and ancestor != root:
+                    ancestor = ancestor.parent
+                if ancestor.is_symlink() or not ancestor.resolve().is_relative_to(root):
+                    raise WorkspacePolicyError("Workspace patch parent escaped the local root")
+            _atomic_write(target, after)
+        after_digest = None if patch.operation == "delete" else hashlib.sha256(after).hexdigest()
+        file_change = WorkspaceFileChange(
+            path=relative,
+            operation=patch.operation,
+            before_sha256=before_digest,
+            after_sha256=after_digest,
+            diff_sha256=hashlib.sha256(encoded_diff).hexdigest(),
+            size_bytes=len(after),
+        )
+        digest = _change_set_digest(workspace, file_change)
+        change_set_id = f"changeset-{digest[:24]}"
+        now = _timestamp()
+        change_set = WorkspaceChangeSet(
+            change_set_id=change_set_id,
+            project_id=workspace.project_id,
+            workspace_id=workspace.workspace_id,
+            owner=owner,
+            base_snapshot_digest=workspace.snapshot.digest,
+            digest=digest,
+            state=WorkspaceChangeSetState.DRAFT,
+            version=1,
+            files=(file_change,),
+            sandbox_results=(),
+            approval=None,
+            created_at=now,
+            updated_at=now,
+        )
+        return self.store.save_change_set(change_set, diff_text=unified)
+
+    def diff(self, change_set_id: str, owner: str) -> str:
+        return self.store.get_change_set_diff(change_set_id, owner=owner)
 
 
 class WorkspaceImporter:
@@ -463,6 +652,109 @@ def workspace_from_payload(value: Mapping[str, Any]) -> AgentWorkspaceRecord:
     )
 
 
+def change_set_payload(change_set: WorkspaceChangeSet) -> dict[str, Any]:
+    approval = None
+    if change_set.approval is not None:
+        approval = {
+            "actor": change_set.approval.actor,
+            "approved_digest": change_set.approval.approved_digest,
+            "approved_at": change_set.approval.approved_at,
+        }
+    return {
+        "schema_version": change_set.schema_version,
+        "change_set_id": change_set.change_set_id,
+        "project_id": change_set.project_id,
+        "workspace_id": change_set.workspace_id,
+        "owner": change_set.owner,
+        "base_snapshot_digest": change_set.base_snapshot_digest,
+        "digest": change_set.digest,
+        "state": change_set.state.value,
+        "version": change_set.version,
+        "files": [
+            {
+                "path": item.path,
+                "operation": item.operation,
+                "before_sha256": item.before_sha256,
+                "after_sha256": item.after_sha256,
+                "diff_sha256": item.diff_sha256,
+                "size_bytes": item.size_bytes,
+            }
+            for item in change_set.files
+        ],
+        "sandbox_results": [
+            {
+                "result_id": item.result_id,
+                "argv": list(item.argv),
+                "status": item.status,
+                "exit_code": item.exit_code,
+                "stdout_sha256": item.stdout_sha256,
+                "stderr_sha256": item.stderr_sha256,
+            }
+            for item in change_set.sandbox_results
+        ],
+        "approval": approval,
+        "created_at": change_set.created_at,
+        "updated_at": change_set.updated_at,
+    }
+
+
+def change_set_from_payload(value: Mapping[str, Any]) -> WorkspaceChangeSet:
+    raw_files = value.get("files")
+    raw_results = value.get("sandbox_results")
+    if not isinstance(raw_files, list) or not isinstance(raw_results, list):
+        raise TypeError("ChangeSet files and sandbox_results must be arrays")
+    raw_approval = value.get("approval")
+    approval = None
+    if raw_approval is not None:
+        approval_value = _object(raw_approval, "approval")
+        approval = WorkspaceApproval(
+            actor=_text(approval_value.get("actor"), "approval actor"),
+            approved_digest=_text(
+                approval_value.get("approved_digest"), "approved_digest"
+            ),
+            approved_at=_text(approval_value.get("approved_at"), "approved_at"),
+        )
+    return WorkspaceChangeSet(
+        change_set_id=_text(value.get("change_set_id"), "change_set_id"),
+        project_id=_text(value.get("project_id"), "project_id"),
+        workspace_id=_text(value.get("workspace_id"), "workspace_id"),
+        owner=_text(value.get("owner"), "owner"),
+        base_snapshot_digest=_text(
+            value.get("base_snapshot_digest"), "base_snapshot_digest"
+        ),
+        digest=_text(value.get("digest"), "digest"),
+        state=WorkspaceChangeSetState(_text(value.get("state"), "state")),
+        version=_integer(value.get("version"), "version"),
+        files=tuple(
+            WorkspaceFileChange(
+                path=_text(item.get("path"), "file path"),
+                operation=_text(item.get("operation"), "operation"),  # type: ignore[arg-type]
+                before_sha256=_optional_text(item.get("before_sha256")),
+                after_sha256=_optional_text(item.get("after_sha256")),
+                diff_sha256=_text(item.get("diff_sha256"), "diff_sha256"),
+                size_bytes=_integer(item.get("size_bytes"), "size_bytes"),
+            )
+            for item in (_object(item, "file change") for item in raw_files)
+        ),
+        sandbox_results=tuple(
+            SandboxResultRecord(
+                result_id=_text(item.get("result_id"), "result_id"),
+                argv=tuple(
+                    _text(argument, "argument")
+                    for argument in _array(item.get("argv"), "argv")
+                ),
+                status=_text(item.get("status"), "status"),  # type: ignore[arg-type]
+                exit_code=_optional_integer(item.get("exit_code"), "exit_code"),
+                stdout_sha256=_text(item.get("stdout_sha256"), "stdout_sha256"),
+                stderr_sha256=_text(item.get("stderr_sha256"), "stderr_sha256"),
+            )
+            for item in (_object(item, "sandbox result") for item in raw_results)
+        ),
+        approval=approval,
+        created_at=_text(value.get("created_at"), "created_at"),
+        updated_at=_text(value.get("updated_at"), "updated_at"),
+        schema_version=_text(value.get("schema_version"), "schema_version"),
+    )
 def _snapshot_digest(source: str, entries: tuple[WorkspaceEntry, ...]) -> str:
     payload = {
         "source_ref": source,
@@ -480,6 +772,31 @@ def _snapshot_digest(source: str, entries: tuple[WorkspaceEntry, ...]) -> str:
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _change_set_digest(
+    workspace: AgentWorkspaceRecord, file_change: WorkspaceFileChange
+) -> str:
+    payload = {
+        "project_id": workspace.project_id,
+        "workspace_id": workspace.workspace_id,
+        "base_snapshot_digest": workspace.snapshot.digest,
+        "file": {
+            "path": file_change.path,
+            "operation": file_change.operation,
+            "before_sha256": file_change.before_sha256,
+            "after_sha256": file_change.after_sha256,
+            "diff_sha256": file_change.diff_sha256,
+            "size_bytes": file_change.size_bytes,
+        },
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _editable_path(relative: str) -> bool:
+    path = PurePosixPath(relative)
+    return path.name in _EDITABLE_NAMES or path.suffix.lower() in _EDITABLE_SUFFIXES
 
 
 def _entry_name(value: str) -> str:
@@ -559,4 +876,14 @@ def _optional_text(value: object) -> str | None:
 def _integer(value: object, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{label} must be an integer")
+    return value
+
+
+def _optional_integer(value: object, label: str) -> int | None:
+    return None if value is None else _integer(value, label)
+
+
+def _array(value: object, label: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise TypeError(f"{label} must be an array")
     return value

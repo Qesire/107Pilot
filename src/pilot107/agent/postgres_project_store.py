@@ -27,7 +27,11 @@ from pilot107.core.postgres_control_repository import PostgresDriverUnavailable
 from pilot107.core.postgres_domain_schema import initialize_postgres_domain_schema
 
 if TYPE_CHECKING:
-    from pilot107.agent.workspace import AgentWorkspaceRecord
+    from pilot107.agent.workspace import (
+        AgentWorkspaceRecord,
+        SandboxResultRecord,
+        WorkspaceChangeSet,
+    )
 
 
 class PostgresProjectStore:
@@ -223,6 +227,156 @@ class PostgresProjectStore:
         if not isinstance(payload, dict):
             raise TypeError("Workspace payload must be an object")
         return workspace_from_payload(payload)
+
+    def save_change_set(
+        self, change_set: WorkspaceChangeSet, *, diff_text: str
+    ) -> WorkspaceChangeSet:
+        from pilot107.agent.workspace import change_set_from_payload, change_set_payload
+
+        if not isinstance(diff_text, str) or len(diff_text.encode()) > 1024 * 1024:
+            raise ValueError("ChangeSet diff is invalid or exceeds the storage limit")
+        workspace = self.get_workspace(change_set.workspace_id, owner=change_set.owner)
+        if workspace.project_id != change_set.project_id:
+            raise ProjectConflict("ChangeSet project does not own the Workspace")
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO agent_workspace_changesets (
+                    change_set_id, project_id, workspace_id, owner, digest,
+                    state, version, payload_json, diff_text, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (change_set_id) DO NOTHING
+                RETURNING *
+                """,
+                (
+                    change_set.change_set_id,
+                    change_set.project_id,
+                    change_set.workspace_id,
+                    change_set.owner,
+                    change_set.digest,
+                    change_set.state.value,
+                    change_set.version,
+                    self._jsonb(change_set_payload(change_set)),
+                    diff_text,
+                    change_set.created_at,
+                    change_set.updated_at,
+                ),
+            ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    "SELECT * FROM agent_workspace_changesets "
+                    "WHERE change_set_id = %s AND owner = %s",
+                    (change_set.change_set_id, change_set.owner),
+                ).fetchone()
+        if row is None:
+            raise RuntimeError("ChangeSet insert did not produce a row")
+        if str(row["digest"]) != change_set.digest or str(row["diff_text"]) != diff_text:
+            raise ProjectConflict("change_set_id refers to different content")
+        payload = row["payload_json"]
+        if not isinstance(payload, dict):
+            raise TypeError("ChangeSet payload must be an object")
+        return change_set_from_payload(payload)
+
+    def get_change_set(
+        self, change_set_id: str, *, owner: str
+    ) -> WorkspaceChangeSet:
+        from pilot107.agent.workspace import change_set_from_payload
+
+        _key(change_set_id, "change_set_id")
+        _key(owner, "owner")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM agent_workspace_changesets "
+                "WHERE change_set_id = %s AND owner = %s",
+                (change_set_id, owner),
+            ).fetchone()
+        if row is None:
+            raise KeyError(change_set_id)
+        payload = row["payload_json"]
+        if not isinstance(payload, dict):
+            raise TypeError("ChangeSet payload must be an object")
+        return change_set_from_payload(payload)
+
+    def get_change_set_diff(self, change_set_id: str, *, owner: str) -> str:
+        _key(change_set_id, "change_set_id")
+        _key(owner, "owner")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT diff_text FROM agent_workspace_changesets "
+                "WHERE change_set_id = %s AND owner = %s",
+                (change_set_id, owner),
+            ).fetchone()
+        if row is None:
+            raise KeyError(change_set_id)
+        return str(row["diff_text"])
+
+    def append_sandbox_result(
+        self, change_set_id: str, *, owner: str, result: SandboxResultRecord
+    ) -> WorkspaceChangeSet:
+        from pilot107.agent.workspace import (
+            SandboxResultRecord,
+            WorkspaceChangeSetState,
+            change_set_from_payload,
+            change_set_payload,
+        )
+
+        if not isinstance(result, SandboxResultRecord):
+            raise TypeError("result must be SandboxResultRecord")
+        _key(change_set_id, "change_set_id")
+        _key(owner, "owner")
+        with self.connect() as connection, connection.transaction():
+            row = connection.execute(
+                "SELECT payload_json FROM agent_workspace_changesets "
+                "WHERE change_set_id = %s AND owner = %s FOR UPDATE",
+                (change_set_id, owner),
+            ).fetchone()
+            if row is None:
+                raise KeyError(change_set_id)
+            payload_value = row["payload_json"]
+            if not isinstance(payload_value, dict):
+                raise TypeError("ChangeSet payload must be an object")
+            current = change_set_from_payload(payload_value)
+            if any(item.result_id == result.result_id for item in current.sandbox_results):
+                return current
+            if len(current.sandbox_results) >= 256:
+                raise ProjectConflict("ChangeSet sandbox result limit reached")
+            payload = change_set_payload(current)
+            payload["sandbox_results"] = [
+                *payload["sandbox_results"],
+                {
+                    "result_id": result.result_id,
+                    "argv": list(result.argv),
+                    "status": result.status,
+                    "exit_code": result.exit_code,
+                    "stdout_sha256": result.stdout_sha256,
+                    "stderr_sha256": result.stderr_sha256,
+                },
+            ]
+            payload["version"] = current.version + 1
+            payload["state"] = (
+                WorkspaceChangeSetState.REVIEWABLE.value
+                if result.status == "succeeded"
+                else WorkspaceChangeSetState.FAILED.value
+            )
+            now = self._now()
+            payload["updated_at"] = now.isoformat().replace("+00:00", "Z")
+            connection.execute(
+                """
+                UPDATE agent_workspace_changesets
+                SET state = %s, version = %s, payload_json = %s, updated_at = %s
+                WHERE change_set_id = %s AND owner = %s AND version = %s
+                """,
+                (
+                    payload["state"],
+                    payload["version"],
+                    self._jsonb(payload),
+                    now,
+                    change_set_id,
+                    owner,
+                    current.version,
+                ),
+            )
+        return change_set_from_payload(payload)
 
     def _now(self) -> datetime:
         value = self._clock()

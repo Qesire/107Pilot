@@ -40,6 +40,7 @@ _TIMESTAMPTZ_COLUMNS: dict[str, frozenset[str]] = {
     "agent_tool_invocations": frozenset({"created_at", "updated_at"}),
     "agent_experiment_projects": frozenset({"created_at", "updated_at"}),
     "agent_workspaces": frozenset({"created_at", "updated_at"}),
+    "agent_workspace_changesets": frozenset({"created_at", "updated_at"}),
 }
 
 _JSONB_COLUMNS: dict[str, frozenset[str]] = {
@@ -57,6 +58,7 @@ _JSONB_COLUMNS: dict[str, frozenset[str]] = {
     "agent_tool_invocations": frozenset({"result_json", "error_json"}),
     "agent_experiment_projects": frozenset({"source_json", "blueprint_json"}),
     "agent_workspaces": frozenset({"payload_json"}),
+    "agent_workspace_changesets": frozenset({"payload_json"}),
 }
 
 
