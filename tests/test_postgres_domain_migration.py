@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from pilot107.agent.project_store import SQLiteProjectStore
 from pilot107.agent.store import SQLiteAgentSessionStore
 from pilot107.core.contracts import ContractStore
 from pilot107.core.control_repository import SQLiteControlRepository
@@ -66,6 +67,7 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
                 "agent_turns",
                 "agent_turn_events",
                 "agent_tool_invocations",
+                "agent_experiment_projects",
             }.issubset(names)
         )
         self.assertEqual(len(names), len(domain_table_names()))
@@ -85,6 +87,7 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
             RemediationStore(database)
             UploadSessionStore(database)
             SQLiteAgentSessionStore(database)
+            SQLiteProjectStore(database)
             SQLiteControlRepository(database)
             with sqlite3.connect(database) as connection:
                 sqlite_tables = {
@@ -132,7 +135,9 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
     def test_agent_migration_uses_native_postgres_types_and_fencing_index(self) -> None:
         from pilot107.core.postgres_domain_schema import _MIGRATIONS
 
-        migration_id, statements = _MIGRATIONS[-1]
+        migration_id, statements = next(
+            migration for migration in _MIGRATIONS if migration[0] == "004a.005.agent_sessions"
+        )
         schema = "\n".join(statements)
 
         self.assertEqual(migration_id, "004a.005.agent_sessions")
@@ -144,6 +149,22 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
         self.assertIn("BIGSERIAL", schema)
         self.assertIn("TIMESTAMPTZ", schema)
         self.assertIn("WHERE state = 'running'", schema)
+
+    def test_project_migration_uses_jsonb_and_optimistic_versioning(self) -> None:
+        from pilot107.core.postgres_domain_schema import _MIGRATIONS
+
+        migration_id, statements = next(
+            migration
+            for migration in _MIGRATIONS
+            if migration[0] == "004a.006.agent_experiment_projects"
+        )
+        schema = "\n".join(statements)
+
+        self.assertEqual(migration_id, "004a.006.agent_experiment_projects")
+        self.assertIn("CREATE TABLE agent_experiment_projects", schema)
+        self.assertIn("blueprint_json JSONB", schema)
+        self.assertIn("version INTEGER NOT NULL", schema)
+        self.assertIn("UNIQUE (owner, request_key)", schema)
 
 
 class PostgresDomainCopyTests(unittest.TestCase):

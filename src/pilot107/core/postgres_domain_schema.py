@@ -801,12 +801,41 @@ _AGENT_SESSION_SCHEMA = _statements(
     "CREATE INDEX idx_agent_tool_invocations_owner_turn ON agent_tool_invocations(owner, turn_id, created_at, invocation_id)"
 )
 
+_AGENT_EXPERIMENT_PROJECT_SCHEMA = _statements(
+    """
+    CREATE TABLE agent_experiment_projects (
+        project_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        request_key TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        state TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        goal TEXT NOT NULL,
+        source_json JSONB,
+        blueprint_json JSONB,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        UNIQUE (owner, request_key),
+        CHECK (origin IN ('blank', 'template', 'existing', 'failed_run')),
+        CHECK (state IN (
+            'drafting', 'editing', 'validating', 'awaiting_approval',
+            'publishing', 'ready', 'blocked', 'cancelled'
+        )),
+        CHECK (version > 0)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_experiment_projects_owner_updated "
+    "ON agent_experiment_projects(owner, updated_at DESC, project_id DESC)"
+)
+
 _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.001.postgres_domain_schema", _DOMAIN_SCHEMA),
     ("004a.002.run_publications", _RUN_PUBLICATION_SCHEMA),
     ("004a.003.upload_sessions", _UPLOAD_SESSION_SCHEMA),
     ("004a.004.upload_sessions_tus", _UPLOAD_SESSION_TUS_SCHEMA),
     ("004a.005.agent_sessions", _AGENT_SESSION_SCHEMA),
+    ("004a.006.agent_experiment_projects", _AGENT_EXPERIMENT_PROJECT_SCHEMA),
 )
 
 
@@ -884,6 +913,7 @@ def domain_table_names() -> tuple[str, ...]:
         "agent_turns",
         "agent_turn_events",
         "agent_tool_invocations",
+        "agent_experiment_projects",
     )
 
 
