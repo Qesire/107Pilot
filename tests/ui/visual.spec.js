@@ -159,6 +159,24 @@ test("persisted contract requires object-level confirmation before submit", asyn
   await expect(page).toHaveURL(/\/runs\/run_studio_prepared/);
 });
 
+test("Agent separates durable read-only conversation from controlled repair", async ({ page }) => {
+  await page.goto("/agent?user=alice");
+
+  await expect(page.getByRole("heading", { name: "持久化只读对话" })).toBeVisible();
+  await expect(page.getByText("只读边界", { exact: true })).toBeVisible();
+  await expect(page.getByText("排队原因是 Students 分区当前资源不足。", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("事件 3")).toBeVisible();
+
+  await page.getByRole("button", { name: "修复" }).click();
+  await expect(page).toHaveURL(/mode=repair/);
+  await expect(page.getByRole("heading", { name: "可审计的修复会话" })).toBeVisible();
+  await expect(page.getByLabel("Agent 会话筛选")).toBeVisible();
+
+  await page.getByRole("button", { name: "对话" }).click();
+  await expect(page).toHaveURL(/mode=conversation/);
+  await capture(page, "agent-durable-conversation.png");
+});
+
 async function capture(page, filename) {
   await page.screenshot({
     path: path.join(screenshotDir, filename),
@@ -168,6 +186,8 @@ async function capture(page, filename) {
 
 async function installMockApi(page, options = {}) {
   await page.unrouteAll({ behavior: "ignoreErrors" });
+  const agentSession = agentSessionPayload();
+  const agentEvents = agentEventPayloads();
   await page.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -245,6 +265,32 @@ async function installMockApi(page, options = {}) {
     if (url.pathname === "/api/v1/platform/entitlements/latest") {
       return json(route, entitlementPayload(url.searchParams.get("owner") || "alice"));
     }
+    if (url.pathname === "/api/v1/agent-sessions" && request.method() === "GET") {
+      return json(route, {
+        items: [agentSession],
+        page: { limit: 100, has_more: false, next_cursor: null },
+      });
+    }
+    if (url.pathname === "/api/v1/agent-sessions/session_visual_001") {
+      return json(route, agentSession);
+    }
+    if (url.pathname === "/api/v1/agent-sessions/session_visual_001/events") {
+      const after = Number(url.searchParams.get("after_event_id") || "0");
+      const items = agentEvents.filter((item) => item.event_id > after);
+      return json(route, {
+        session_id: agentSession.session_id,
+        items,
+        page: {
+          limit: 100,
+          has_more: false,
+          next_after_event_id: null,
+          last_event_id: items.at(-1)?.event_id ?? after,
+        },
+      });
+    }
+    if (url.pathname === "/api/v1/remediation-sessions") {
+      return json(route, { items: [] });
+    }
     if (url.pathname === "/api/v1/runs") {
       const owner = url.searchParams.get("owner") || "alice";
       const state = url.searchParams.get("state");
@@ -293,6 +339,55 @@ async function installMockApi(page, options = {}) {
 
     return route.continue();
   });
+}
+
+function agentSessionPayload() {
+  return {
+    session_id: "session_visual_001",
+    owner: "alice",
+    request_key: "visual-session-1",
+    profile_id: "hpc-readonly-v1",
+    model_profile_id: "campus-default",
+    source: { run_id: "run_alice_failed" },
+    state: "idle",
+    state_version: 4,
+    resource_usage: { input_tokens: 128, output_tokens: 42 },
+    outcome: { status: "completed" },
+    created_at: "2026-07-16T02:00:00Z",
+    updated_at: "2026-07-16T02:05:00Z",
+  };
+}
+
+function agentEventPayloads() {
+  return [
+    {
+      event_id: 1,
+      turn_id: "turn_visual_001",
+      session_id: "session_visual_001",
+      sequence: 1,
+      event_type: "turn_started",
+      payload: { model_profile_id: "campus-default", task_kind: "interactive_readonly" },
+      created_at: "2026-07-16T02:03:00Z",
+    },
+    {
+      event_id: 2,
+      turn_id: "turn_visual_001",
+      session_id: "session_visual_001",
+      sequence: 2,
+      event_type: "tool_call_completed",
+      payload: { tool_call_id: "tool-1", tool_name: "run_get", result: {}, is_error: false },
+      created_at: "2026-07-16T02:03:01Z",
+    },
+    {
+      event_id: 3,
+      turn_id: "turn_visual_001",
+      session_id: "session_visual_001",
+      sequence: 3,
+      event_type: "message_delta",
+      payload: { delta: "排队原因是 Students 分区当前资源不足。" },
+      created_at: "2026-07-16T02:03:02Z",
+    },
+  ];
 }
 
 function runsFor(owner) {

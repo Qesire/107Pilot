@@ -340,6 +340,68 @@ export interface HealthCheck {
 
 export type JsonObject = Record<string, unknown>;
 
+export type AgentSessionState = "idle" | "queued" | "running";
+
+export type AgentTurnState =
+  | "queued"
+  | "running"
+  | "interrupted"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export interface AgentSession {
+  session_id: string;
+  owner: string;
+  request_key: string;
+  profile_id: "hpc-readonly-v1";
+  model_profile_id: string;
+  source: JsonObject;
+  state: AgentSessionState;
+  state_version: number;
+  resource_usage: JsonObject;
+  outcome: JsonObject | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentTurn {
+  turn_id: string;
+  session_id: string;
+  owner: string;
+  request_key: string;
+  message: string;
+  state_version: number;
+  state: AgentTurnState;
+  cancel_requested: boolean;
+  event_sequence: number;
+  error: JsonObject | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface AgentTurnEvent {
+  event_id: number;
+  turn_id: string;
+  session_id: string;
+  sequence: number;
+  event_type: string;
+  payload: JsonObject;
+  created_at: string;
+}
+
+export interface AgentEventPage {
+  session_id: string;
+  items: AgentTurnEvent[];
+  page: {
+    limit: number;
+    has_more: boolean;
+    next_after_event_id: number | null;
+    last_event_id: number;
+  };
+}
+
 export type RemediationState =
   | "waiting_evidence"
   | "diagnosing"

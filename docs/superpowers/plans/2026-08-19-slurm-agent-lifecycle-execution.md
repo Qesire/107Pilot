@@ -190,15 +190,15 @@ git commit -m "docs: freeze agent lifecycle schemas"
 - [ ] **Step 1: Add failing API and event-replay tests**
 
 ```ts
-it("replays durable events after the last rendered sequence", async () => {
-  server.expectGet("/api/v1/agent-sessions/s1/events?after_sequence=7");
+it("replays durable events after the last rendered event id", async () => {
+  server.expectGet("/api/v1/agent-sessions/s1/events?after_event_id=7");
   await api.agentSessionEvents("alice", "s1", 7);
 });
 ```
 
 - [ ] **Step 2: Run the focused Web tests**
 
-Run: `npm --prefix apps/web test -- --run AgentSessionPanel api`
+Run: `npm test -- AgentSessionPanel api`
 
 Expected: FAIL because `agentSessionEvents` and `AgentSessionPanel` do not exist.
 
@@ -210,18 +210,18 @@ Expose exactly:
 agentSessions(user, signal?)
 createAgentSession(user, { profile, request_key })
 agentSession(user, sessionId, signal?)
-createAgentTurn(user, sessionId, { message, request_key })
-cancelAgentTurn(user, sessionId, turnId, requestKey)
-agentSessionEvents(user, sessionId, afterSequence, signal?)
+createAgentTurn(user, sessionId, { message, request_key, expected_state_version })
+cancelAgentTurn(user, sessionId, turnId, expectedStateVersion)
+agentSessionEvents(user, sessionId, afterEventId, signal?)
 ```
 
 `AgentPage` must show two explicit modes: `Conversation` uses the A1 APIs; `Repair` retains the existing Remediation UI and contracts.
 
 - [ ] **Step 4: Verify reconnect, owner isolation error, and current remediation regression**
 
-Run: `npm --prefix apps/web test -- --run && npm --prefix apps/web run typecheck`
+Run: `npm test -- --run && npm run typecheck`
 
-Expected: PASS with duplicate event sequences ignored and the existing Remediation tests unchanged.
+Expected: PASS with duplicate global event IDs ignored, equal per-Turn sequences retained, and the existing Remediation tests unchanged.
 
 - [ ] **Step 5: Commit the A1 product surface**
 

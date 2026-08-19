@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ArrowRight, Ban, Bot, CheckCircle2, Play, Plus, RefreshCw, ShieldAlert, Wrench, XCircle } from "lucide-react";
 import { api, ApiRequestError } from "./api";
+import { AgentSessionPanel } from "./AgentSessionPanel";
 import { QueryBoundary, SectionHeading, StatusBadge, formatTimestamp } from "./components";
 import { RepairTicketPanel } from "./RepairTicketPanel";
 import { RunPicker, type RunPickerRun } from "./RunPicker";
@@ -36,6 +37,58 @@ const terminalStates = new Set<RemediationState>([
 const remediationCandidateStates = ["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED", "ORPHANED"] as const;
 
 export function AgentPage({ user, location, navigate }: AgentPageProps) {
+  const mode = agentPageMode(location.search);
+  const switchMode = (nextMode: AgentPageMode) => navigate(withSearch("/agent", location.search, {
+    mode: nextMode,
+    session: null,
+    state: null,
+  }));
+
+  return (
+    <>
+      <SectionHeading
+        eyebrow="Agent"
+        title={mode === "conversation" ? "持久化只读对话" : "可审计的修复会话"}
+        detail={mode === "conversation"
+          ? "围绕平台、Workspace、Run、日志和 Evidence 提问；事件按持久化游标重放。"
+          : "规则先提出动作；风险、预算、审批、派生 Run 和评价结果保持在同一条 lineage 中。"}
+      />
+      <nav className="agent-mode-switch segmented" aria-label="Agent 工作模式">
+        <button
+          type="button"
+          className={mode === "conversation" ? "active" : undefined}
+          aria-current={mode === "conversation" ? "page" : undefined}
+          onClick={() => switchMode("conversation")}
+        >
+          <Bot aria-hidden="true" size={16} />
+          对话
+        </button>
+        <button
+          type="button"
+          className={mode === "repair" ? "active" : undefined}
+          aria-current={mode === "repair" ? "page" : undefined}
+          onClick={() => switchMode("repair")}
+        >
+          <Wrench aria-hidden="true" size={16} />
+          修复
+        </button>
+      </nav>
+      {mode === "conversation" ? (
+        <AgentSessionPanel user={user} location={location} navigate={navigate} />
+      ) : (
+        <RemediationPanel user={user} location={location} navigate={navigate} />
+      )}
+    </>
+  );
+}
+
+type AgentPageMode = "conversation" | "repair";
+
+export function agentPageMode(search: URLSearchParams): AgentPageMode {
+  return search.get("mode") === "repair" ? "repair" : "conversation";
+}
+
+function RemediationPanel({ user, location, navigate }: AgentPageProps) {
   const queryClient = useQueryClient();
   const state = location.search.get("state") ?? "";
   const requestedSession = location.search.get("session");
@@ -91,11 +144,6 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
 
   return (
     <>
-      <SectionHeading
-        eyebrow="Agent / Remediation"
-        title="可审计的修复会话"
-        detail="规则先提出动作；风险、预算、审批、派生 Run 和评价结果保持在同一条 lineage 中。"
-      />
       <section className="filter-bar" aria-label="Agent 会话筛选">
         <label className="select-field">
           <Bot aria-hidden="true" size={16} />

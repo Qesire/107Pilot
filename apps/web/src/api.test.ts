@@ -253,6 +253,94 @@ describe("API transport", () => {
     );
   });
 
+  it("uses the durable Agent Session contract and resumes by event id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [], page: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.agentSessions("alice");
+    await api.createAgentSession("alice", {
+      profile: "campus-default",
+      request_key: "ui:session:1",
+    });
+    await api.agentSession("alice", "session/1");
+    await api.createAgentTurn("alice", "session/1", {
+      message: "解释 run-1 为什么排队",
+      request_key: "ui:turn:1",
+      expected_state_version: 3,
+    });
+    await api.cancelAgentTurn("alice", "session/1", "turn/1", 4);
+    await api.agentSessionEvents("alice", "session/1", 7);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/agent-sessions",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/agent-sessions",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          request_key: "ui:session:1",
+          model_profile_id: "campus-default",
+          source: {},
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/agent-sessions/session%2F1",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/v1/agent-sessions/session%2F1/turns",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          message: "解释 run-1 为什么排队",
+          request_key: "ui:turn:1",
+          expected_state_version: 3,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/v1/agent-sessions/session%2F1/turns/turn%2F1/cancel",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ expected_state_version: 4 }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      6,
+      "/api/v1/agent-sessions/session%2F1/events?after_event_id=7&limit=100",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("surfaces owner-scoped Agent Session misses without adding an owner override", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      error: { code: "AGENT.SESSION.NOT_FOUND", message: "Agent Session not found" },
+    }, 404));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.agentSession("bob", "session-alice")).rejects.toMatchObject({
+      status: 404,
+      code: "AGENT.SESSION.NOT_FOUND",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/agent-sessions/session-alice",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Pilot107-User": "bob" }),
+      }),
+    );
+  });
+
   it("keeps Run lineage reads and retry mutations owner scoped", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [], page: {} }));
     vi.stubGlobal("fetch", fetchMock);

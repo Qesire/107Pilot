@@ -820,6 +820,44 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 .agent-new-session { display: grid; gap: 10px; border: 1px dashed var(--line-strong); border-radius: 10px; background: var(--surface-soft); padding: 12px; margin-bottom: 10px; }
 .agent-new-session .agent-create-controls { margin: 0; }
 .agent-new-session + .agent-session-list { margin-top: 0; }
+.agent-mode-switch { margin: -4px 0 18px; background: var(--surface-soft); }
+.agent-mode-switch button { display: inline-flex; align-items: center; gap: 7px; }
+.agent-mode-switch button:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.agent-readonly-note { display: flex; align-items: flex-start; gap: 9px; border-left: 3px solid var(--teal); margin: 0 0 13px; background: var(--teal-soft); padding: 10px 11px; color: var(--ink-soft); }
+.agent-readonly-note svg { flex: none; color: var(--teal); }
+.agent-readonly-note p { margin: 0; font-size: 12px; line-height: 1.55; }
+.agent-readonly-note strong { display: block; color: var(--ink); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.agent-conversation { display: grid; gap: 14px; }
+.agent-conversation-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.agent-conversation-heading > div { min-width: 0; }
+.agent-conversation-heading p { margin: 7px 0 0; font-size: 11px; }
+.agent-conversation-heading > small { color: var(--ink-faint); font-size: 11px; white-space: nowrap; }
+.agent-event-stream { display: grid; max-height: 540px; overflow: auto; border-block: 1px solid var(--line); scrollbar-gutter: stable; }
+.agent-event { display: grid; grid-template-columns: 56px minmax(0, 1fr); min-width: 0; border-bottom: 1px solid var(--line); background: var(--surface); }
+.agent-event:last-child { border-bottom: 0; }
+.agent-event-sequence { display: grid; align-content: start; gap: 3px; border-right: 1px solid var(--line); background: var(--surface-soft); padding: 13px 9px; color: var(--ink-faint); text-align: right; }
+.agent-event-sequence strong { color: var(--teal); font-family: ui-monospace, monospace; font-size: 11px; }
+.agent-event-sequence span { font-family: ui-monospace, monospace; font-size: 10px; }
+.agent-event > div:last-child { min-width: 0; padding: 12px 14px; }
+.agent-event header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.agent-event header strong { color: var(--ink); font-size: 12px; }
+.agent-event header small { overflow: hidden; color: var(--ink-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-event p { margin: 8px 0 0; color: var(--ink-soft); font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-event-message_delta { background: #fbfdfc; }
+.agent-event-message_delta .agent-event-sequence { background: var(--teal-soft); }
+.agent-event details { margin-top: 8px; color: var(--ink-faint); font-size: 11px; }
+.agent-event summary { cursor: pointer; }
+.agent-event pre { max-height: 180px; overflow: auto; margin: 7px 0 0; background: #14201d; color: #d8e6df; padding: 10px; font-family: ui-monospace, monospace; font-size: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-event-empty { display: grid; min-height: 210px; place-content: center; justify-items: center; gap: 6px; padding: 24px; color: var(--ink-faint); text-align: center; }
+.agent-event-empty strong { color: var(--ink); font-size: 14px; }
+.agent-event-empty p { max-width: 410px; margin: 0; font-size: 12px; line-height: 1.55; }
+.agent-composer { display: grid; gap: 8px; }
+.agent-composer > label { color: var(--ink); font-size: 12px; font-weight: 800; }
+.agent-composer textarea { width: 100%; resize: vertical; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); color: var(--ink); padding: 11px 12px; font-family: inherit; font-size: 14px; line-height: 1.55; }
+.agent-composer textarea:focus { border-color: var(--teal); outline: 3px solid rgb(22 123 105 / 10%); }
+.agent-composer textarea:disabled { background: var(--surface-soft); color: var(--ink-faint); cursor: not-allowed; }
+.agent-composer > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.agent-composer small { color: var(--ink-faint); font-size: 11px; line-height: 1.45; }
 
 /* M2: Repair Tickets */
 .agent-repair-tickets { border-top: 1px solid var(--line); padding-top: 14px; display: grid; gap: 10px; }

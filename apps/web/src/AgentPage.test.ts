@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentPageMode,
   defaultProvider,
   llmConfiguredFromHealth,
   proposalPatchRows,
@@ -29,6 +30,15 @@ describe("Agent remediation state presentation", () => {
   ])("maps %s to %s/%s", (state, label, tone) => {
     expect(remediationStateLabel(state)).toBe(label);
     expect(remediationStateTone(state)).toBe(tone);
+  });
+});
+
+describe("Agent page mode", () => {
+  it("defaults to durable conversations and only selects repair explicitly", () => {
+    expect(agentPageMode(new URLSearchParams())).toBe("conversation");
+    expect(agentPageMode(new URLSearchParams("mode=conversation"))).toBe("conversation");
+    expect(agentPageMode(new URLSearchParams("mode=repair"))).toBe("repair");
+    expect(agentPageMode(new URLSearchParams("mode=unknown"))).toBe("conversation");
   });
 });
 

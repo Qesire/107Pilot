@@ -354,6 +354,41 @@ export function useRemediationSessions(user: string, state?: string) {
   });
 }
 
+export function useAgentSessions(user: string) {
+  return useQuery({
+    queryKey: ["agent-sessions", user],
+    queryFn: ({ signal }) => api.agentSessions(user, signal),
+    refetchInterval: 10_000,
+  });
+}
+
+export function useAgentSession(user: string, sessionId: string | null) {
+  return useQuery({
+    queryKey: ["agent-session", user, sessionId],
+    queryFn: ({ signal }) => api.agentSession(user, sessionId ?? "", signal),
+    enabled: Boolean(sessionId),
+    refetchInterval: 3_000,
+  });
+}
+
+export function useAgentSessionEvents(
+  user: string,
+  sessionId: string | null,
+  afterEventId: number,
+) {
+  return useQuery({
+    queryKey: ["agent-session-events", user, sessionId, afterEventId],
+    queryFn: ({ signal }) => api.agentSessionEvents(
+      user,
+      sessionId ?? "",
+      afterEventId,
+      signal,
+    ),
+    enabled: Boolean(sessionId),
+    refetchInterval: 2_000,
+  });
+}
+
 export function useRemediationSession(user: string, sessionId: string | null) {
   return useQuery({
     queryKey: ["remediation-session", user, sessionId],

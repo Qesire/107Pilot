@@ -1,4 +1,7 @@
 import type {
+  AgentEventPage,
+  AgentSession,
+  AgentTurn,
   AgentExplanation,
   ArchiveResponse,
   ArtifactManifest,
@@ -634,6 +637,64 @@ export const api = {
       lineage_reason: ["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED", "CANCELLED"]
         .includes(run.state) ? "manual_retry" : "manual_clone",
     },
+    signal,
+  ),
+  agentSessions: (user: string, signal?: AbortSignal) =>
+    getJson<PagePayload<AgentSession>>("/api/v1/agent-sessions", user, signal),
+  createAgentSession: (
+    user: string,
+    input: { profile: string; request_key: string },
+    signal?: AbortSignal,
+  ) => sendJson<AgentSession>(
+    "/api/v1/agent-sessions",
+    user,
+    {
+      request_key: input.request_key,
+      model_profile_id: input.profile,
+      source: {},
+    },
+    signal,
+  ),
+  agentSession: (user: string, sessionId: string, signal?: AbortSignal) =>
+    getJson<AgentSession>(
+      `/api/v1/agent-sessions/${encodeURIComponent(sessionId)}`,
+      user,
+      signal,
+    ),
+  createAgentTurn: (
+    user: string,
+    sessionId: string,
+    input: { message: string; request_key: string; expected_state_version: number },
+    signal?: AbortSignal,
+  ) => sendJson<AgentTurn>(
+    `/api/v1/agent-sessions/${encodeURIComponent(sessionId)}/turns`,
+    user,
+    input,
+    signal,
+  ),
+  cancelAgentTurn: (
+    user: string,
+    sessionId: string,
+    turnId: string,
+    expectedStateVersion: number,
+    signal?: AbortSignal,
+  ) => sendJson<AgentTurn>(
+    `/api/v1/agent-sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/cancel`,
+    user,
+    { expected_state_version: expectedStateVersion },
+    signal,
+  ),
+  agentSessionEvents: (
+    user: string,
+    sessionId: string,
+    afterEventId: number,
+    signal?: AbortSignal,
+  ) => getJson<AgentEventPage>(
+    queryPath(
+      `/api/v1/agent-sessions/${encodeURIComponent(sessionId)}/events`,
+      { after_event_id: String(afterEventId), limit: "100" },
+    ),
+    user,
     signal,
   ),
   remediationSessions: (user: string, state?: string, signal?: AbortSignal) =>
