@@ -25,6 +25,7 @@ from pilot107.core.run_publications import RunPublicationStore
 from pilot107.core.run_store import RunStore
 from pilot107.core.template_market import TemplateMarketStore
 from pilot107.core.user_entitlement_store import UserEntitlementStore
+from pilot107.observability.store import SQLiteObservabilityStore
 from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 
 
@@ -98,6 +99,7 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
                 database,
                 segment_root=Path(temporary) / "runtime-segments",
             )
+            SQLiteObservabilityStore(database)
             SQLiteControlRepository(database)
             with sqlite3.connect(database) as connection:
                 sqlite_tables = {

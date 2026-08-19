@@ -936,6 +936,38 @@ _RUNTIME_WATCH_HANDOFF_SCHEMA = _statements(
     "ON runtime_watches(state, terminal_handoff_at, stopped_at)",
 )
 
+_RESOURCE_OBSERVATION_SCHEMA = _statements(
+    """
+    CREATE TABLE resource_observations (
+        observation_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        resolution TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
+        owner TEXT,
+        run_id TEXT,
+        attempt INTEGER,
+        captured_at TIMESTAMPTZ NOT NULL,
+        expires_at TIMESTAMPTZ,
+        fencing_token BIGINT NOT NULL,
+        payload_sha256 TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        CHECK (resolution IN ('raw', 'minute', 'terminal')),
+        CHECK (fencing_token >= 0)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_resource_observations_run "
+    "ON resource_observations(owner, run_id, resolution, captured_at)"
+    "\n-- statement\n"
+    "CREATE INDEX idx_resource_observations_expiry "
+    "ON resource_observations(expires_at)"
+    "\n-- statement\n"
+    "CREATE UNIQUE INDEX idx_resource_terminal_summary_unique "
+    "ON resource_observations(owner, run_id, attempt, kind) "
+    "WHERE kind = 'run_resource_summary'"
+)
+
 _RUNTIME_LOG_SEGMENT_SCHEMA = _statements(
     """
     CREATE TABLE runtime_log_segments (
@@ -1000,6 +1032,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.011.runtime_log_segments", _RUNTIME_LOG_SEGMENT_SCHEMA),
     ("004a.012.runtime_alerts", _RUNTIME_ALERT_SCHEMA),
     ("004a.013.runtime_watch_terminal_handoff", _RUNTIME_WATCH_HANDOFF_SCHEMA),
+    ("004a.014.resource_observations", _RESOURCE_OBSERVATION_SCHEMA),
 )
 
 
@@ -1084,6 +1117,7 @@ def domain_table_names() -> tuple[str, ...]:
         "runtime_log_cursors",
         "runtime_log_segments",
         "runtime_alerts",
+        "resource_observations",
     )
 
 
