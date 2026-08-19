@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://107pilot.local/schemas/agent/v2/project-session.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "project_id",
+    "owner",
+    "origin",
+    "state",
+    "version",
+    "goal",
+    "source",
+    "blueprint",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "pilot107.experiment-project-session/v1"},
+    "project_id": {"$ref": "#/$defs/id"},
+    "owner": {"$ref": "#/$defs/id"},
+    "origin": {"enum": ["blank", "template", "existing", "failed_run"]},
+    "state": {
+      "enum": [
+        "drafting",
+        "editing",
+        "validating",
+        "awaiting_approval",
+        "publishing",
+        "ready",
+        "blocked",
+        "cancelled"
+      ]
+    },
+    "version": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "goal": {"type": "string", "minLength": 1, "maxLength": 64000},
+    "source": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["kind", "ref_id", "cluster_path"],
+          "properties": {
+            "kind": {"enum": ["template", "existing", "failed_run"]},
+            "ref_id": {"$ref": "#/$defs/id"},
+            "cluster_path": {
+              "anyOf": [{"type": "null"}, {"$ref": "#/$defs/path"}]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "blueprint": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/blueprint"}
+      ]
+    },
+    "created_at": {"$ref": "#/$defs/timestamp"},
+    "updated_at": {"$ref": "#/$defs/timestamp"}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "timestamp": {"type": "string", "minLength": 20, "maxLength": 64},
+    "versionedId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9._:@-]+$"
+    },
+    "blueprint": {
+      "type": "object",
+      "required": [
+        "goal",
+        "entrypoints",
+        "files",
+        "validations",
+        "contract_intent",
+        "expected_outputs",
+        "dependencies",
+        "open_questions"
+      ],
+      "properties": {
+        "goal": {"type": "string", "minLength": 1, "maxLength": 64000},
+        "entrypoints": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/path"}
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "required": ["path", "purpose", "classification"],
+            "properties": {
+              "path": {"$ref": "#/$defs/path"},
+              "purpose": {"type": "string", "minLength": 1, "maxLength": 4096},
+              "classification": {
+                "enum": ["editable", "read_only", "metadata_only", "excluded"]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "validations": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "required": ["validation_id", "execution", "argv", "expected_outputs"],
+            "properties": {
+              "validation_id": {"$ref": "#/$defs/id"},
+              "execution": {"enum": ["sandbox", "slurm"]},
+              "argv": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 128,
+                "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+              },
+              "expected_outputs": {
+                "type": "array",
+                "maxItems": 256,
+                "items": {"$ref": "#/$defs/path"}
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "contract_intent": {
+          "type": "object",
+          "required": ["recipe_version_id", "resource_hints"],
+          "properties": {
+            "recipe_version_id": {
+              "anyOf": [{"type": "null"}, {"$ref": "#/$defs/versionedId"}]
+            },
+            "resource_hints": {
+              "type": "object",
+              "properties": {
+                "partition": {"type": "string", "minLength": 1, "maxLength": 128},
+                "qos": {"type": "string", "minLength": 1, "maxLength": 128},
+                "cpus_per_task": {"type": "integer", "minimum": 1, "maximum": 1048576},
+                "memory_mib": {"type": "integer", "minimum": 1, "maximum": 1125899906842624},
+                "gpus": {"type": "integer", "minimum": 0, "maximum": 1048576},
+                "time_limit": {"type": "string", "minLength": 1, "maxLength": 64}
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "expected_outputs": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "required": ["path", "kind", "required"],
+            "properties": {
+              "path": {"$ref": "#/$defs/path"},
+              "kind": {"enum": ["file", "directory", "json", "table", "metric"]},
+              "required": {"type": "boolean"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "required": ["name", "version", "source"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1, "maxLength": 256},
+              "version": {"type": "string", "minLength": 1, "maxLength": 256},
+              "source": {"enum": ["runtime", "module", "conda", "project", "system"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "open_questions": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

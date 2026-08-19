@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://107pilot.local/schemas/agent/v2/workspace-changeset.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "change_set_id",
+    "project_id",
+    "workspace_id",
+    "owner",
+    "base_snapshot_digest",
+    "digest",
+    "state",
+    "version",
+    "files",
+    "sandbox_results",
+    "approval",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "pilot107.workspace-changeset/v1"},
+    "change_set_id": {"$ref": "#/$defs/id"},
+    "project_id": {"$ref": "#/$defs/id"},
+    "workspace_id": {"$ref": "#/$defs/id"},
+    "owner": {"$ref": "#/$defs/id"},
+    "base_snapshot_digest": {"$ref": "#/$defs/digest"},
+    "digest": {"$ref": "#/$defs/digest"},
+    "state": {
+      "enum": [
+        "draft",
+        "reviewable",
+        "approved",
+        "publishing",
+        "published",
+        "conflicted",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "version": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "files": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "operation",
+          "before_sha256",
+          "after_sha256",
+          "diff_sha256",
+          "size_bytes"
+        ],
+        "properties": {
+          "path": {"$ref": "#/$defs/path"},
+          "operation": {"enum": ["create", "modify", "delete"]},
+          "before_sha256": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+          "after_sha256": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+          "diff_sha256": {"$ref": "#/$defs/digest"},
+          "size_bytes": {"type": "integer", "minimum": 0, "maximum": 5368709120}
+        },
+        "additionalProperties": false
+      }
+    },
+    "sandbox_results": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "required": [
+          "result_id",
+          "argv",
+          "status",
+          "exit_code",
+          "stdout_sha256",
+          "stderr_sha256"
+        ],
+        "properties": {
+          "result_id": {"$ref": "#/$defs/id"},
+          "argv": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 128,
+            "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+          },
+          "status": {"enum": ["succeeded", "failed", "timed_out", "cancelled"]},
+          "exit_code": {
+            "anyOf": [
+              {"type": "null"},
+              {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}
+            ]
+          },
+          "stdout_sha256": {"$ref": "#/$defs/digest"},
+          "stderr_sha256": {"$ref": "#/$defs/digest"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "approval": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["actor", "approved_digest", "approved_at"],
+          "properties": {
+            "actor": {"$ref": "#/$defs/id"},
+            "approved_digest": {"$ref": "#/$defs/digest"},
+            "approved_at": {"$ref": "#/$defs/timestamp"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "created_at": {"$ref": "#/$defs/timestamp"},
+    "updated_at": {"$ref": "#/$defs/timestamp"}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "timestamp": {"type": "string", "minLength": 20, "maxLength": 64}
+  },
+  "additionalProperties": false
+}

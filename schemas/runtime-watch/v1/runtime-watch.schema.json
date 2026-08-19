@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://107pilot.local/schemas/runtime-watch/v1/runtime-watch.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "watch_id",
+    "run_id",
+    "owner",
+    "connection_id",
+    "state",
+    "version",
+    "next_poll_at",
+    "lease_owner",
+    "lease_expires_at",
+    "fencing_token",
+    "cursors",
+    "created_at",
+    "updated_at",
+    "stopped_at",
+    "last_error_code",
+    "last_error_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "pilot107.runtime-watch/v1"},
+    "watch_id": {"$ref": "#/$defs/id"},
+    "run_id": {"$ref": "#/$defs/id"},
+    "owner": {"$ref": "#/$defs/id"},
+    "connection_id": {"$ref": "#/$defs/id"},
+    "state": {
+      "enum": [
+        "watching",
+        "waiting_for_log",
+        "active",
+        "quiet_backoff",
+        "degraded",
+        "finalizing",
+        "stopped"
+      ]
+    },
+    "version": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "next_poll_at": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+    "lease_owner": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]},
+    "lease_expires_at": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+    "fencing_token": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "cursors": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {"$ref": "#/$defs/cursor"}
+    },
+    "created_at": {"$ref": "#/$defs/timestamp"},
+    "updated_at": {"$ref": "#/$defs/timestamp"},
+    "stopped_at": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+    "last_error_code": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]},
+    "last_error_at": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "timestamp": {"type": "string", "minLength": 20, "maxLength": 64},
+    "cursor": {
+      "type": "object",
+      "required": [
+        "stream",
+        "generation",
+        "offset",
+        "source_size",
+        "source_mtime",
+        "source_file_identity",
+        "source_prefix_fingerprint",
+        "decoder_remainder_base64",
+        "last_data_at",
+        "last_checked_at",
+        "quiet_polls",
+        "version"
+      ],
+      "properties": {
+        "stream": {"enum": ["stdout", "stderr"]},
+        "generation": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+        "offset": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+        "source_size": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+        "source_mtime": {
+          "anyOf": [{"type": "null"}, {"type": "number", "minimum": 0}]
+        },
+        "source_file_identity": {
+          "anyOf": [
+            {"type": "null"},
+            {"type": "string", "minLength": 1, "maxLength": 256}
+          ]
+        },
+        "source_prefix_fingerprint": {
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        },
+        "decoder_remainder_base64": {"type": "string", "maxLength": 32},
+        "last_data_at": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+        "last_checked_at": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+        "quiet_polls": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "version": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

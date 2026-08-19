@@ -14,3 +14,9 @@ object validation in `pilot107.agent.protocol`.
 The capability token belongs only to the durable Turn request and subsequent
 Tool Gateway `Authorization` header. It is intentionally forbidden in a tool
 invocation body, tool result, event, or checkpoint.
+
+The project session, workspace ChangeSet, and AgentTask schemas freeze the
+cross-process lifecycle records introduced after A1. They are domain read-model
+contracts rather than Pi Turn envelopes: Python remains authoritative for their
+state transitions, while browser and Agent consumers receive only these closed,
+owner-scoped shapes.

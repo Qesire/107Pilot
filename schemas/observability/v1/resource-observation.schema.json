@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://107pilot.local/schemas/observability/v1/resource-observation.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "observation_id",
+    "kind",
+    "connection_id",
+    "owner",
+    "run_id",
+    "attempt",
+    "cycle_id",
+    "captured_at",
+    "freshness",
+    "partial",
+    "warnings",
+    "measures",
+    "evaluations"
+  ],
+  "properties": {
+    "schema_version": {"const": "pilot107.resource-observation/v1"},
+    "observation_id": {"$ref": "#/$defs/id"},
+    "kind": {
+      "enum": ["platform_pulse", "account_pulse", "run_resource_sample", "run_resource_summary"]
+    },
+    "connection_id": {"$ref": "#/$defs/id"},
+    "owner": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]},
+    "run_id": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]},
+    "attempt": {
+      "anyOf": [
+        {"type": "null"},
+        {"type": "integer", "minimum": 0, "maximum": 1048576}
+      ]
+    },
+    "cycle_id": {"$ref": "#/$defs/id"},
+    "captured_at": {"$ref": "#/$defs/timestamp"},
+    "freshness": {"enum": ["fresh", "stale", "expired", "terminal"]},
+    "partial": {"type": "boolean"},
+    "warnings": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+    },
+    "measures": {
+      "type": "object",
+      "maxProperties": 4096,
+      "propertyNames": {"pattern": "^[a-z][a-z0-9_]{0,127}$"},
+      "additionalProperties": {"$ref": "#/$defs/measure"}
+    },
+    "evaluations": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/evaluation"}
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "timestamp": {"type": "string", "minLength": 20, "maxLength": 64},
+    "measure": {
+      "type": "object",
+      "required": [
+        "value",
+        "unit",
+        "availability",
+        "source_adapter",
+        "source_operation",
+        "captured_at",
+        "quality",
+        "coverage",
+        "warning"
+      ],
+      "properties": {
+        "value": {
+          "anyOf": [
+            {"type": "null"},
+            {"type": "number"},
+            {"type": "string", "maxLength": 4096}
+          ]
+        },
+        "unit": {"type": "string", "minLength": 1, "maxLength": 64},
+        "availability": {
+          "enum": ["available", "unsupported", "not_collected", "insufficient_coverage", "invalid"]
+        },
+        "source_adapter": {"$ref": "#/$defs/id"},
+        "source_operation": {"$ref": "#/$defs/id"},
+        "captured_at": {"$ref": "#/$defs/timestamp"},
+        "quality": {"enum": ["verified", "estimated", "partial", "unavailable", "invalid"]},
+        "coverage": {
+          "anyOf": [
+            {"type": "null"},
+            {"type": "number", "minimum": 0, "maximum": 1}
+          ]
+        },
+        "warning": {
+          "anyOf": [
+            {"type": "null"},
+            {"type": "string", "minLength": 1, "maxLength": 4096}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "evaluation": {
+      "type": "object",
+      "required": [
+        "rule_id",
+        "severity",
+        "summary",
+        "confidence",
+        "evidence_refs",
+        "suggested_contract_patch"
+      ],
+      "properties": {
+        "rule_id": {"$ref": "#/$defs/id"},
+        "severity": {"enum": ["info", "warning", "error"]},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "confidence": {"enum": ["low", "medium", "high"]},
+        "evidence_refs": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+        },
+        "suggested_contract_patch": {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": {"pattern": "^[A-Za-z0-9_.-]{1,256}$"},
+          "additionalProperties": {
+            "anyOf": [
+              {"type": "null"},
+              {"type": "boolean"},
+              {"type": "number"},
+              {"type": "string", "maxLength": 4096}
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

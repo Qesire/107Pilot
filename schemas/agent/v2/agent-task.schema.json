@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://107pilot.local/schemas/agent/v2/agent-task.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "task_id",
+    "owner",
+    "session_id",
+    "turn_id",
+    "project_id",
+    "workspace_id",
+    "task_kind",
+    "state",
+    "version",
+    "request_key",
+    "resource_envelope",
+    "linked_run_id",
+    "result",
+    "lease",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "pilot107.agent-task/v1"},
+    "task_id": {"$ref": "#/$defs/id"},
+    "owner": {"$ref": "#/$defs/id"},
+    "session_id": {"$ref": "#/$defs/id"},
+    "turn_id": {"$ref": "#/$defs/id"},
+    "project_id": {"$ref": "#/$defs/id"},
+    "workspace_id": {"$ref": "#/$defs/id"},
+    "task_kind": {"enum": ["slurm_validation"]},
+    "state": {"enum": ["pending", "running", "succeeded", "failed", "cancelled", "auth_required"]},
+    "version": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+    "request_key": {"$ref": "#/$defs/id"},
+    "resource_envelope": {"$ref": "#/$defs/resourceEnvelope"},
+    "linked_run_id": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]},
+    "result": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["status", "evidence_refs", "error_code", "message"],
+          "properties": {
+            "status": {"enum": ["succeeded", "failed", "cancelled", "auth_required"]},
+            "evidence_refs": {
+              "type": "array",
+              "maxItems": 4096,
+              "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+            },
+            "error_code": {
+              "anyOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]
+            },
+            "message": {
+              "anyOf": [
+                {"type": "null"},
+                {"type": "string", "minLength": 1, "maxLength": 4096}
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "lease": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["owner", "expires_at", "fencing_token"],
+          "properties": {
+            "owner": {"$ref": "#/$defs/id"},
+            "expires_at": {"$ref": "#/$defs/timestamp"},
+            "fencing_token": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "created_at": {"$ref": "#/$defs/timestamp"},
+    "updated_at": {"$ref": "#/$defs/timestamp"}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "timestamp": {"type": "string", "minLength": 20, "maxLength": 64},
+    "resourceEnvelope": {
+      "type": "object",
+      "required": [
+        "partition",
+        "qos",
+        "cpus",
+        "memory_mib",
+        "gpu_type",
+        "gpus",
+        "walltime_seconds",
+        "max_tasks",
+        "max_submissions",
+        "workspace_snapshot_digest",
+        "expires_at",
+        "approved_by"
+      ],
+      "properties": {
+        "partition": {"type": "string", "minLength": 1, "maxLength": 128},
+        "qos": {"type": "string", "minLength": 1, "maxLength": 128},
+        "cpus": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "memory_mib": {"type": "integer", "minimum": 1, "maximum": 1125899906842624},
+        "gpu_type": {
+          "anyOf": [
+            {"type": "null"},
+            {"type": "string", "minLength": 1, "maxLength": 128}
+          ]
+        },
+        "gpus": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "walltime_seconds": {"type": "integer", "minimum": 1, "maximum": 31536000},
+        "max_tasks": {"type": "integer", "minimum": 1, "maximum": 1024},
+        "max_submissions": {"type": "integer", "minimum": 1, "maximum": 1024},
+        "workspace_snapshot_digest": {"$ref": "#/$defs/digest"},
+        "expires_at": {"$ref": "#/$defs/timestamp"},
+        "approved_by": {"$ref": "#/$defs/id"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
