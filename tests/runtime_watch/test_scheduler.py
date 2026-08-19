@@ -121,3 +121,74 @@ def test_second_worker_cannot_process_a_watch_before_next_poll(tmp_path: Path) -
     )
 
     assert second_service.tick().watches_checked == 0
+
+
+def test_service_detects_alert_split_across_persisted_segments(tmp_path: Path) -> None:
+    clock = MutableClock()
+    store, service = _service(tmp_path, clock, budget=15)
+    log_root = tmp_path / "logs"
+    (log_root / "run1.out").write_bytes(b"")
+    (log_root / "run1.err").write_bytes(b"CUDA out of memory\n")
+    store.create_watch(run_id="run1", owner="alice", connection_id="c1")
+
+    service.tick()
+    clock.advance(5)
+    service.tick()
+
+    alerts = store.list_alerts("run1", owner="alice")
+    assert [item.code for item in alerts] == ["CUDA.OOM"]
+
+
+def test_terminal_drain_stops_watch_after_last_bytes_and_calls_handoff(
+    tmp_path: Path,
+) -> None:
+    clock = MutableClock()
+    store, base_service = _service(tmp_path, clock)
+    log_root = tmp_path / "logs"
+    final_log = b"final line\n"
+    (log_root / "run1.out").write_bytes(final_log)
+    (log_root / "run1.err").write_bytes(b"")
+    store.create_watch(run_id="run1", owner="alice", connection_id="c1")
+    drained: list[str] = []
+    service = RuntimeWatchService(
+        store=store,
+        transport_for_connection=base_service.transport_for_connection,
+        source_resolver=SourceResolver(log_root),
+        worker_id="worker1",
+        clock=clock,
+        on_terminal_drained=drained.append,
+    )
+
+    assert service.on_run_terminal(run_id="run1", owner="alice")
+    service.tick()
+
+    assert store.get_cursor("run1", "alice", "stdout").offset == len(final_log)
+    assert store.get_watch_for_run("run1", owner="alice").state.value == "stopped"
+    assert drained == ["run1"]
+
+
+def test_restart_retries_terminal_handoff_for_already_stopped_watch(
+    tmp_path: Path,
+) -> None:
+    clock = MutableClock()
+    store, service = _service(tmp_path, clock)
+    log_root = tmp_path / "logs"
+    (log_root / "run1.out").write_bytes(b"done\n")
+    (log_root / "run1.err").write_bytes(b"")
+    store.create_watch(run_id="run1", owner="alice", connection_id="c1")
+    service.on_run_terminal(run_id="run1", owner="alice")
+    service.tick()
+    handoffs: list[str] = []
+
+    restarted = RuntimeWatchService(
+        store=store,
+        transport_for_connection=service.transport_for_connection,
+        source_resolver=SourceResolver(log_root),
+        worker_id="worker2",
+        clock=clock,
+        on_terminal_drained=handoffs.append,
+    )
+    restarted.tick()
+    restarted.tick()
+
+    assert handoffs == ["run1"]

@@ -571,6 +571,66 @@
         ]
       }
     },
+    "/api/v1/runs/{run_id}/runtime-watch": {
+      "get": {
+        "operationId": "get_runtime_watch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "runtime-watch"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/runtime-watch/alerts": {
+      "get": {
+        "operationId": "list_runtime_watch_alerts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "runtime-watch"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/runtime-watch/events": {
+      "get": {
+        "operationId": "stream_runtime_watch_events",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "runtime-watch"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/runtime-watch/logs": {
+      "get": {
+        "operationId": "read_runtime_watch_logs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "runtime-watch"
+        ]
+      }
+    },
     "/api/v1/template-drafts": {
       "get": {
         "operationId": "list_template_drafts",

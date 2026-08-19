@@ -56,6 +56,7 @@ from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.file_routes import FileRoutes
 from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.api.metrics import ControlPlaneMetrics
+from pilot107.api.runtime_watch_routes import RuntimeWatchRoutes
 from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
 from pilot107.core.code_context import (
     CodeContextPolicy,
@@ -104,6 +105,8 @@ from pilot107.core.template_policy import (
 from pilot107.core.template_verification import TemplateVerificationService
 from pilot107.core.terminal import TerminalCommandService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
+from pilot107.runtime_watch.postgres_store import PostgresRuntimeWatchStore
+from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.services.platform_snapshot_freshness import SnapshotCollectionMonitor
 from pilot107.services.platform_snapshot_service import PlatformSnapshotService
@@ -730,6 +733,17 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     )
 
     file_routes = _build_file_routes(config, ssh_relay_client, metrics=metrics)
+    runtime_watch_store = (
+        SQLiteRuntimeWatchStore(
+            config.db_path,
+            segment_root=config.evidence_root / "runtime-watch-segments",
+        )
+        if config.postgres_dsn is None
+        else PostgresRuntimeWatchStore(
+            config.postgres_dsn,
+            segment_root=config.evidence_root / "runtime-watch-segments",
+        )
+    )
 
     return Pilot107HttpApi(
         store=store,
@@ -781,6 +795,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         agent_tool_routes=agent_tool_routes,
         agent_session_service=agent_session_service,
         project_agent_service=project_agent_service,
+        runtime_watch_routes=RuntimeWatchRoutes(runtime_watch_store),
         auth_required=config.auth_required,
         trusted_user_header=config.trusted_user_header,
         proxy_hmac_secret=config.proxy_hmac_secret,

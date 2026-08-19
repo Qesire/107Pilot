@@ -39,6 +39,7 @@ import {
   useRunLineage,
 } from "./query";
 import { RunExplanationPanel } from "./RunExplanationPanel";
+import { RuntimeWatchPanel } from "./RuntimeWatchPanel";
 import type {
   DiagnosisRecordPayload,
   EvidenceObject,
@@ -214,15 +215,18 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
           />
         ) : null}
         {tab === "logs" ? (
-          <ObjectPreviewView
-            title="标准输出与标准错误"
-            detail="展示采集器保存的 bounded tail；来源、digest 和截断状态保持可核验。"
-            objects={logs}
-            selected={activeObject}
-            preview={preview}
-            onSelect={(item) => setView("logs", item.object_id)}
-            contentMode="log"
-          />
+          <>
+            <RuntimeWatchPanel user={user} runId={run.run_id} />
+            <ObjectPreviewView
+              title="终态日志 Evidence"
+              detail="作业结束并完成 terminal drain 后，采集器保存可核验的 bounded tail、来源与 digest。"
+              objects={logs}
+              selected={activeObject}
+              preview={preview}
+              onSelect={(item) => setView("logs", item.object_id)}
+              contentMode="log"
+            />
+          </>
         ) : null}
         {tab === "results" ? (
           <ResultsView

@@ -1699,6 +1699,45 @@ class RunStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def defer_logs_finalize_for_runtime_watch(self, run_id: str) -> bool:
+        now = utc_now_iso()
+        with self.connect() as conn:
+            updated = conn.execute(
+                "UPDATE collection_tasks SET state = 'waiting_runtime_watch', "
+                "next_attempt_at = NULL, updated_at = ? "
+                "WHERE run_id = ? AND task_type = 'logs_finalize' "
+                "AND state IN ('pending', 'failed_retryable')",
+                (now, run_id),
+            )
+            if updated.rowcount:
+                self._append_event(
+                    conn,
+                    run_id=run_id,
+                    event_type="runtime_watch.terminal_drain_started",
+                    payload={},
+                )
+                self._refresh_collection_state(conn, run_id)
+        return updated.rowcount == 1
+
+    def release_logs_finalize_after_runtime_watch(self, run_id: str) -> bool:
+        now = utc_now_iso()
+        with self.connect() as conn:
+            updated = conn.execute(
+                "UPDATE collection_tasks SET state = 'pending', next_attempt_at = ?, "
+                "updated_at = ? WHERE run_id = ? AND task_type = 'logs_finalize' "
+                "AND state = 'waiting_runtime_watch'",
+                (now, now, run_id),
+            )
+            if updated.rowcount:
+                self._append_event(
+                    conn,
+                    run_id=run_id,
+                    event_type="runtime_watch.terminal_drain_completed",
+                    payload={},
+                )
+                self._refresh_collection_state(conn, run_id)
+        return updated.rowcount == 1
+
     def upsert_evidence_objects(
         self,
         run_id: str,

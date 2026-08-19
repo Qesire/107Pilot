@@ -395,6 +395,26 @@ class RunStoreTests(unittest.TestCase):
 
         self.assertEqual(self.store.get_run(run.run_id).collection_state, CollectionState.SUCCEEDED)
 
+    def test_runtime_watch_defers_and_releases_terminal_log_collection(self) -> None:
+        run = self._terminal_run_with_tasks()
+
+        self.assertTrue(self.store.defer_logs_finalize_for_runtime_watch(run.run_id))
+        states = {
+            task["task_type"]: task["state"]
+            for task in self.store.list_collection_tasks(run.run_id)
+        }
+        self.assertEqual(states["logs_finalize"], "waiting_runtime_watch")
+        self.assertNotIn(
+            "logs_finalize",
+            {task.task_type for task in self.store.list_due_collection_tasks()},
+        )
+
+        self.assertTrue(
+            self.store.release_logs_finalize_after_runtime_watch(run.run_id)
+        )
+        due = {task.task_type for task in self.store.list_due_collection_tasks()}
+        self.assertIn("logs_finalize", due)
+
     def test_acquire_due_collection_tasks_sets_lease_atomically(self) -> None:
         run = self._terminal_run_with_tasks()
 

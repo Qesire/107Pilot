@@ -648,6 +648,12 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
                 allowed_roots=tuple(effective_roots),
             ),
             worker_id=config.worker_id,
+            on_terminal_drained=store.release_logs_finalize_after_runtime_watch,
+            default_connection_id=(
+                config.ssh_connection_id
+                if config.backend == "real107-ssh"
+                else "default"
+            ),
         )
     worker = RuntimeReconcileWorker(
         service=run_service,

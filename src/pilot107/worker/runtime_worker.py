@@ -246,6 +246,19 @@ class RuntimeReconcileWorker:
                 continue
             if reconciled.state in TERMINAL_RUN_STATES:
                 terminal += 1
+            if self.runtime_watch_service is not None and reconciled.job_id is not None:
+                self.runtime_watch_service.ensure_run(
+                    run_id=reconciled.run_id,
+                    owner=reconciled.owner,
+                )
+                if (
+                    reconciled.state in TERMINAL_RUN_STATES
+                    and self.runtime_watch_service.on_run_terminal(
+                        run_id=reconciled.run_id,
+                        owner=reconciled.owner,
+                    )
+                ):
+                    self.service.store.defer_logs_finalize_for_runtime_watch(reconciled.run_id)
 
         retry_runs = self.service.store.list_due_workflow_retries(limit=self.batch_size)
         for retry_run in retry_runs:

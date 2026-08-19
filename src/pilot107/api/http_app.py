@@ -26,6 +26,7 @@ from pilot107.api.metrics import ControlPlaneMetrics, normalize_http_route
 from pilot107.api.project_agent_routes import ProjectAgentRoutes
 from pilot107.api.remediation_routes import RemediationRoutes
 from pilot107.api.repair_ticket_routes import RepairTicketRoutes
+from pilot107.api.runtime_watch_routes import RuntimeWatchRoutes
 from pilot107.api.security import FixedWindowRateLimiter
 from pilot107.core.advice import (
     AgentAdviceError,
@@ -178,6 +179,7 @@ class Pilot107HttpApi:
         agent_tool_routes: AgentToolRoutes | None = None,
         agent_session_service: AgentSessionService | None = None,
         project_agent_service: ProjectAgentService | None = None,
+        runtime_watch_routes: RuntimeWatchRoutes | None = None,
         auth_required: bool = False,
         trusted_user_header: str = "X-Pilot107-User",
         proxy_hmac_secret: bytes | None = None,
@@ -247,6 +249,7 @@ class Pilot107HttpApi:
         self.project_agent_routes = (
             None if project_agent_service is None else ProjectAgentRoutes(project_agent_service)
         )
+        self.runtime_watch_routes = runtime_watch_routes
         self.platform_snapshot_store = platform_snapshot_store
         self.user_entitlement_store = user_entitlement_store
         self.template_market_store = template_market_store
@@ -361,6 +364,14 @@ class Pilot107HttpApi:
             )
             if project_agent_response is not None:
                 return project_agent_response
+        if self.runtime_watch_routes is not None:
+            runtime_watch_response = self.runtime_watch_routes.handle_get(
+                parts,
+                params=params,
+                identity=identity,
+            )
+            if runtime_watch_response is not None:
+                return runtime_watch_response
         remediation_response = self.remediation_routes.handle_get(
             parts,
             params=params,

@@ -13,7 +13,9 @@ from typing import Protocol
 
 from pilot107.core.paths import SafePath
 from pilot107.core.run_store import RunStore
+from pilot107.runtime_watch.evaluator import RuntimeAlertEvaluator
 from pilot107.runtime_watch.model import (
+    RuntimeLogSegment,
     RuntimeLogSegmentDraft,
     RuntimeWatchConflict,
     RuntimeWatchRecord,
@@ -116,6 +118,9 @@ class RuntimeWatchService:
         worker_id: str,
         clock: Callable[[], datetime] | None = None,
         policy: RuntimeWatchPolicy | None = None,
+        alert_evaluator: RuntimeAlertEvaluator | None = None,
+        on_terminal_drained: Callable[[str], None] | None = None,
+        default_connection_id: str = "default",
     ) -> None:
         self.store = store
         self.transport_for_connection = transport_for_connection
@@ -123,8 +128,29 @@ class RuntimeWatchService:
         self.worker_id = worker_id
         self._clock = clock or (lambda: datetime.now(UTC))
         self.policy = policy or RuntimeWatchPolicy()
+        self.alert_evaluator = alert_evaluator or RuntimeAlertEvaluator()
+        self.on_terminal_drained = on_terminal_drained
+        self.default_connection_id = default_connection_id
+
+    def ensure_run(self, *, run_id: str, owner: str) -> RuntimeWatchRecord:
+        return self.store.create_watch(
+            run_id=run_id,
+            owner=owner,
+            connection_id=self.default_connection_id,
+        )
+
+    def on_run_terminal(self, *, run_id: str, owner: str) -> bool:
+        return self.store.schedule_terminal_drain(run_id, owner=owner)
 
     def tick(self) -> RuntimeWatchTickResult:
+        if self.on_terminal_drained is not None:
+            for stopped in self.store.list_stopped_watches(
+                limit=self.policy.max_watches_per_tick
+            ):
+                self.on_terminal_drained(stopped.run_id)
+                self.store.acknowledge_terminal_handoff(
+                    stopped.watch_id, owner=stopped.owner
+                )
         grouped: dict[str, list[RuntimeWatchRecord]] = defaultdict(list)
         for watch in self.store.list_due_watches(limit=self.policy.max_watches_per_tick):
             grouped[watch.connection_id].append(watch)
@@ -172,7 +198,7 @@ class RuntimeWatchService:
                         )
                         had_available_source = had_available_source or read.available
                         if read.content:
-                            self.store.commit_segment(
+                            committed = self.store.commit_segment(
                                 lease=lease,
                                 segment=RuntimeLogSegmentDraft(
                                     run_id=watch.run_id,
@@ -184,6 +210,7 @@ class RuntimeWatchService:
                                 ),
                                 next_cursor=read.next_cursor,
                             )
+                            self._evaluate_segment(committed, read.content)
                             amount = len(read.content)
                             budget -= amount
                             total_bytes += amount
@@ -195,23 +222,44 @@ class RuntimeWatchService:
                             )
                     if watch_bytes:
                         with_data += 1
+                    finalizing = watch.state == RuntimeWatchState.FINALIZING
+                    drained = finalizing and all(
+                        self.store.get_cursor(watch.run_id, watch.owner, stream).offset
+                        >= self.store.get_cursor(watch.run_id, watch.owner, stream).source_size
+                        for stream in ("stdout", "stderr")
+                    )
                     delay = (
                         self.policy.active_poll_seconds
                         if watch_bytes
                         else self.policy.quiet_poll_seconds
                     )
-                    state = (
-                        RuntimeWatchState.ACTIVE
-                        if watch_bytes
-                        else RuntimeWatchState.QUIET_BACKOFF
-                        if had_available_source
-                        else RuntimeWatchState.WAITING_FOR_LOG
-                    )
+                    if drained:
+                        state = RuntimeWatchState.STOPPED
+                    elif finalizing:
+                        state = RuntimeWatchState.FINALIZING
+                    elif watch_bytes:
+                        state = RuntimeWatchState.ACTIVE
+                    elif had_available_source:
+                        state = RuntimeWatchState.QUIET_BACKOFF
+                    else:
+                        state = RuntimeWatchState.WAITING_FOR_LOG
                     self.store.release_watch(
                         lease,
                         state=state,
-                        next_poll_at=timestamp(self._now() + timedelta(seconds=delay)),
+                        next_poll_at=(
+                            None
+                            if drained
+                            else timestamp(
+                                self._now()
+                                + timedelta(seconds=0 if finalizing else delay)
+                            )
+                        ),
                     )
+                    if drained and self.on_terminal_drained is not None:
+                        self.on_terminal_drained(watch.run_id)
+                        self.store.acknowledge_terminal_handoff(
+                            watch.watch_id, owner=watch.owner
+                        )
                 except RuntimeWatchConflict:
                     continue
                 except Exception as exc:
@@ -231,6 +279,27 @@ class RuntimeWatchService:
             bytes_read=total_bytes,
             errors=tuple(errors),
         )
+
+    def _evaluate_segment(self, segment: RuntimeLogSegment, content: bytes) -> None:
+        previous_tail = b""
+        previous = self.store.get_previous_segment(
+            segment.run_id,
+            owner=segment.owner,
+            stream=segment.stream,
+            generation=segment.generation,
+            start_offset=segment.start_offset,
+        )
+        if previous is not None and previous.end_offset == segment.start_offset:
+            previous_tail = self.store.read_segment_content(
+                previous.segment_id, owner=segment.owner
+            )[-self.alert_evaluator.boundary_bytes :]
+        for alert in self.alert_evaluator.evaluate_segment(
+            segment,
+            content=content,
+            previous_tail=previous_tail,
+            created_at=timestamp(self._now()),
+        ):
+            self.store.save_alert(alert)
 
     def _now(self) -> datetime:
         value = self._clock()

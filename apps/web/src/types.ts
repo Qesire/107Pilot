@@ -1067,3 +1067,52 @@ export interface ArchiveResponse {
   path: string;
   size: number;
 }
+
+export type RuntimeWatchState =
+  | "watching"
+  | "waiting_for_log"
+  | "active"
+  | "quiet_backoff"
+  | "degraded"
+  | "finalizing"
+  | "stopped";
+
+export interface RuntimeWatchStreamSummary {
+  generation: number;
+  offset: number;
+  last_data_at: string | null;
+  last_checked_at: string | null;
+  quiet_polls: number;
+}
+
+export interface RuntimeWatchSummary {
+  watch_id: string;
+  run_id: string;
+  state: RuntimeWatchState;
+  next_poll_at: string | null;
+  updated_at: string;
+  streams: Record<"stdout" | "stderr", RuntimeWatchStreamSummary>;
+  alert_count: number;
+}
+
+export interface RuntimeWatchLogPage {
+  run_id: string;
+  stream: "stdout" | "stderr";
+  content: string;
+  bytes: number;
+  next_cursor: string;
+}
+
+export interface RuntimeWatchAlert {
+  alert_id: string;
+  code: string;
+  severity: "info" | "warning" | "critical";
+  summary: string;
+  generation: number;
+  offset: number;
+  created_at: string;
+}
+
+export interface RuntimeWatchAlerts {
+  items: RuntimeWatchAlert[];
+}

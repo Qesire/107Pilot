@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from pilot107.api.http_app import ApiResponse, Pilot107HttpApi
 from pilot107.api.metrics import ApiMetricsMiddleware
@@ -743,6 +744,40 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
         forward_post,
         methods=["POST"],
         include_in_schema=False,
+    )
+
+    for suffix, operation_id in (
+        ("", "get_runtime_watch"),
+        ("/logs", "read_runtime_watch_logs"),
+        ("/alerts", "list_runtime_watch_alerts"),
+    ):
+        app.add_api_route(
+            f"/api/v1/runs/{{run_id}}/runtime-watch{suffix}",
+            forward_get,
+            methods=["GET"],
+            operation_id=operation_id,
+            tags=["runtime-watch"],
+            openapi_extra={"parameters": [_RUN_PATH_PARAMETER]},
+        )
+
+    async def runtime_watch_events(request: Request, run_id: str) -> Response:
+        target = f"/api/v1/runs/{run_id}/runtime-watch"
+        response = api.handle_get(target, headers=dict(request.headers.items()))
+        if response.status != 200:
+            return _to_fastapi_response(response, api.max_response_body_bytes)
+        encoded = json.dumps(response.payload, ensure_ascii=False, separators=(",", ":"))
+        return StreamingResponse(
+            iter([f"event: runtime_watch\ndata: {encoded}\n\n"]),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    app.add_api_route(
+        "/api/v1/runs/{run_id}/runtime-watch/events",
+        runtime_watch_events,
+        methods=["GET"],
+        operation_id="stream_runtime_watch_events",
+        tags=["runtime-watch"],
     )
 
     # Routes migrate to explicit OpenAPI operations incrementally while sharing

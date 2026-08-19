@@ -164,6 +164,40 @@ export function useRunEvidence(user: string, runId: string | null) {
   });
 }
 
+export function useRuntimeWatch(user: string, runId: string | null) {
+  return useQuery({
+    queryKey: ["runtime-watch", user, runId],
+    queryFn: ({ signal }) => api.runtimeWatch(user, runId ?? "", signal),
+    enabled: Boolean(runId),
+    retry: false,
+    refetchInterval: (query) => query.state.data?.state === "stopped" ? false : 5_000,
+  });
+}
+
+export function useRuntimeWatchLogs(
+  user: string,
+  runId: string | null,
+  stream: "stdout" | "stderr",
+) {
+  return useQuery({
+    queryKey: ["runtime-watch-logs", user, runId, stream],
+    queryFn: ({ signal }) => api.runtimeWatchLogs(user, runId ?? "", stream, signal),
+    enabled: Boolean(runId),
+    retry: false,
+    refetchInterval: 5_000,
+  });
+}
+
+export function useRuntimeWatchAlerts(user: string, runId: string | null) {
+  return useQuery({
+    queryKey: ["runtime-watch-alerts", user, runId],
+    queryFn: ({ signal }) => api.runtimeWatchAlerts(user, runId ?? "", signal),
+    enabled: Boolean(runId),
+    retry: false,
+    refetchInterval: 5_000,
+  });
+}
+
 export function useEvidenceObject(
   user: string,
   runId: string | null,

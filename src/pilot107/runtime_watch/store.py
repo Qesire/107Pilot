@@ -149,6 +149,14 @@ RUNTIME_WATCH_MIGRATIONS = (
             """,
         ),
     ),
+    SchemaMigration(
+        migration_id="007a.005.runtime_terminal_handoff",
+        statements=(
+            "ALTER TABLE runtime_watches ADD COLUMN terminal_handoff_at TEXT",
+            "CREATE INDEX idx_runtime_watches_terminal_handoff "
+            "ON runtime_watches(state, terminal_handoff_at, stopped_at)",
+        ),
+    ),
 )
 
 
@@ -158,6 +166,8 @@ class RuntimeWatchStore(Protocol):
     ) -> RuntimeWatchRecord: ...
 
     def get_watch(self, watch_id: str, *, owner: str) -> RuntimeWatchRecord: ...
+
+    def get_watch_for_run(self, run_id: str, *, owner: str) -> RuntimeWatchRecord: ...
 
     def get_cursor(self, run_id: str, owner: str, stream: RuntimeLogStream) -> RuntimeLogCursor: ...
 
@@ -172,7 +182,13 @@ class RuntimeWatchStore(Protocol):
 
     def list_due_watches(self, *, limit: int = 100) -> list[RuntimeWatchRecord]: ...
 
+    def list_stopped_watches(self, *, limit: int = 100) -> list[RuntimeWatchRecord]: ...
+
     def renew_watch(self, lease: RuntimeWatchLease, *, lease_seconds: int) -> RuntimeWatchLease: ...
+
+    def schedule_terminal_drain(self, run_id: str, *, owner: str) -> bool: ...
+
+    def acknowledge_terminal_handoff(self, watch_id: str, *, owner: str) -> bool: ...
 
     def commit_segment(
         self,
@@ -199,6 +215,27 @@ class RuntimeWatchStore(Protocol):
         stream: RuntimeLogStream,
         limit: int = 100,
     ) -> list[RuntimeLogSegment]: ...
+
+    def list_segments_from(
+        self,
+        run_id: str,
+        *,
+        owner: str,
+        stream: RuntimeLogStream,
+        generation: int,
+        offset: int,
+        limit: int = 100,
+    ) -> list[RuntimeLogSegment]: ...
+
+    def get_previous_segment(
+        self,
+        run_id: str,
+        *,
+        owner: str,
+        stream: RuntimeLogStream,
+        generation: int,
+        start_offset: int,
+    ) -> RuntimeLogSegment | None: ...
 
     def save_alert(self, alert: RuntimeAlert) -> RuntimeAlert: ...
 
@@ -298,6 +335,16 @@ class SQLiteRuntimeWatchStore:
             ).fetchall()
         return _watch_from_rows(row, cursor_rows)
 
+    def get_watch_for_run(self, run_id: str, *, owner: str) -> RuntimeWatchRecord:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT watch_id FROM runtime_watches WHERE run_id = ? AND owner = ?",
+                (run_id, owner),
+            ).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        return self.get_watch(str(row["watch_id"]), owner=owner)
+
     def get_cursor(self, run_id: str, owner: str, stream: RuntimeLogStream) -> RuntimeLogCursor:
         _validate_stream(stream)
         with self.connect() as connection:
@@ -367,6 +414,20 @@ class SQLiteRuntimeWatchStore:
             ).fetchall()
         return [self.get_watch(str(row["watch_id"]), owner=str(row["owner"])) for row in rows]
 
+    def list_stopped_watches(self, *, limit: int = 100) -> list[RuntimeWatchRecord]:
+        _limit(limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT watch_id, owner FROM runtime_watches WHERE state = 'stopped' "
+                "AND terminal_handoff_at IS NULL "
+                "ORDER BY stopped_at, watch_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            self.get_watch(str(row["watch_id"]), owner=str(row["owner"]))
+            for row in rows
+        ]
+
     def renew_watch(self, lease: RuntimeWatchLease, *, lease_seconds: int) -> RuntimeWatchLease:
         _bounded_lease(lease_seconds)
         now = self._clock_value()
@@ -393,6 +454,29 @@ class SQLiteRuntimeWatchStore:
             if updated.rowcount != 1:
                 raise RuntimeWatchConflict("Runtime Watch renewal is stale or fenced")
         return replace(lease, expires_at=expires_at)
+
+    def schedule_terminal_drain(self, run_id: str, *, owner: str) -> bool:
+        now = self._now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE runtime_watches SET state = 'finalizing', next_poll_at = ?, "
+                "version = version + 1, updated_at = ?, terminal_handoff_at = NULL "
+                "WHERE run_id = ? AND owner = ? AND state != 'stopped'",
+                (now, now, run_id, owner),
+            )
+        return updated.rowcount == 1
+
+    def acknowledge_terminal_handoff(self, watch_id: str, *, owner: str) -> bool:
+        now = self._now()
+        with self.connect() as connection:
+            updated = connection.execute(
+                "UPDATE runtime_watches SET terminal_handoff_at = ?, updated_at = ? "
+                "WHERE watch_id = ? AND owner = ? AND state = 'stopped' "
+                "AND terminal_handoff_at IS NULL",
+                (now, now, watch_id, owner),
+            )
+        return updated.rowcount == 1
 
     def commit_segment(
         self,
@@ -594,6 +678,50 @@ class SQLiteRuntimeWatchStore:
                 (run_id, owner, stream, limit),
             ).fetchall()
         return [_segment_from_row(row) for row in rows]
+
+    def list_segments_from(
+        self,
+        run_id: str,
+        *,
+        owner: str,
+        stream: RuntimeLogStream,
+        generation: int,
+        offset: int,
+        limit: int = 100,
+    ) -> list[RuntimeLogSegment]:
+        _validate_stream(stream)
+        _non_negative(generation, "generation")
+        _non_negative(offset, "offset")
+        _limit(limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM runtime_log_segments WHERE run_id = ? AND owner = ? "
+                "AND stream = ? AND (generation > ? OR (generation = ? AND end_offset > ?)) "
+                "ORDER BY generation, start_offset LIMIT ?",
+                (run_id, owner, stream, generation, generation, offset, limit),
+            ).fetchall()
+        return [_segment_from_row(row) for row in rows]
+
+    def get_previous_segment(
+        self,
+        run_id: str,
+        *,
+        owner: str,
+        stream: RuntimeLogStream,
+        generation: int,
+        start_offset: int,
+    ) -> RuntimeLogSegment | None:
+        _validate_stream(stream)
+        _non_negative(generation, "generation")
+        _non_negative(start_offset, "start_offset")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM runtime_log_segments WHERE run_id = ? AND owner = ? "
+                "AND stream = ? AND generation = ? AND end_offset <= ? "
+                "ORDER BY end_offset DESC LIMIT 1",
+                (run_id, owner, stream, generation, start_offset),
+            ).fetchone()
+        return None if row is None else _segment_from_row(row)
 
     def save_alert(self, alert: RuntimeAlert) -> RuntimeAlert:
         if not isinstance(alert, RuntimeAlert):
@@ -969,6 +1097,12 @@ def _bounded_lease(value: object) -> int:
 def _limit(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1000:
         raise ValueError("limit must be between 1 and 1000")
+    return value
+
+
+def _non_negative(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
     return value
 
 

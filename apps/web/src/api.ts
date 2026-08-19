@@ -26,6 +26,9 @@ import type {
   RunEvent,
   RunLineage,
   RunSummary,
+  RuntimeWatchAlerts,
+  RuntimeWatchLogPage,
+  RuntimeWatchSummary,
   JsonObject,
   RecipeSummaryPayload,
   PreparedRun,
@@ -246,6 +249,31 @@ export const api = {
   runEvidence: (user: string, runId: string, signal?: AbortSignal) =>
     getJson<RunEvidence>(
       `/api/v1/runs/${encodeURIComponent(runId)}/evidence`,
+      user,
+      signal,
+    ),
+  runtimeWatch: (user: string, runId: string, signal?: AbortSignal) =>
+    getJson<RuntimeWatchSummary>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/runtime-watch`,
+      user,
+      signal,
+    ),
+  runtimeWatchLogs: (
+    user: string,
+    runId: string,
+    stream: "stdout" | "stderr",
+    signal?: AbortSignal,
+  ) => getJson<RuntimeWatchLogPage>(
+    queryPath(`/api/v1/runs/${encodeURIComponent(runId)}/runtime-watch/logs`, {
+      stream,
+      max_bytes: String(256 * 1024),
+    }),
+    user,
+    signal,
+  ),
+  runtimeWatchAlerts: (user: string, runId: string, signal?: AbortSignal) =>
+    getJson<RuntimeWatchAlerts>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/runtime-watch/alerts`,
       user,
       signal,
     ),

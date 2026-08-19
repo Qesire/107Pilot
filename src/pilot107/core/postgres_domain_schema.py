@@ -929,6 +929,13 @@ _RUNTIME_LOG_CURSOR_SCHEMA = _statements(
     """
 )
 
+_RUNTIME_WATCH_HANDOFF_SCHEMA = _statements(
+    "ALTER TABLE runtime_watches ADD COLUMN terminal_handoff_at TIMESTAMPTZ"
+    "\n-- statement\n"
+    "CREATE INDEX idx_runtime_watches_terminal_handoff "
+    "ON runtime_watches(state, terminal_handoff_at, stopped_at)",
+)
+
 _RUNTIME_LOG_SEGMENT_SCHEMA = _statements(
     """
     CREATE TABLE runtime_log_segments (
@@ -992,6 +999,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.010.runtime_log_cursors", _RUNTIME_LOG_CURSOR_SCHEMA),
     ("004a.011.runtime_log_segments", _RUNTIME_LOG_SEGMENT_SCHEMA),
     ("004a.012.runtime_alerts", _RUNTIME_ALERT_SCHEMA),
+    ("004a.013.runtime_watch_terminal_handoff", _RUNTIME_WATCH_HANDOFF_SCHEMA),
 )
 
 
