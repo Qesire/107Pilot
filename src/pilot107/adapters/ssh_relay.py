@@ -536,13 +536,18 @@ class SshRelayExecutor:
         self._require_file_owner(owner)
         safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
         script = (
-            'python3 -c "import json,os,sys;p=sys.argv[1];'
+            'python3 -c "import json,os,stat,sys;p=sys.argv[1];'
             "print(json.dumps([{'name':n,"
-            "'type':'symlink' if os.path.islink(os.path.join(p,n)) "
-            "else ('dir' if os.path.isdir(os.path.join(p,n)) else 'file'),"
-            "'size':os.lstat(os.path.join(p,n)).st_size,"
-            "'mtime':int(os.lstat(os.path.join(p,n)).st_mtime)}"
-            'for n in sorted(os.listdir(p))]))" '
+            "'type':'symlink' if stat.S_ISLNK(s.st_mode) "
+            "else ('dir' if stat.S_ISDIR(s.st_mode) "
+            "else ('file' if stat.S_ISREG(s.st_mode) "
+            "else ('socket' if stat.S_ISSOCK(s.st_mode) "
+            "else ('fifo' if stat.S_ISFIFO(s.st_mode) "
+            "else ('device' if stat.S_ISCHR(s.st_mode) or stat.S_ISBLK(s.st_mode) "
+            "else 'other'))))),"
+            "'size':s.st_size,'mtime':int(s.st_mtime)}"
+            " for n in sorted(os.listdir(p)) for s in [os.lstat(os.path.join(p,n))]]))"
+            '" '
         ) + shlex.quote(safe_path)
         result = self._file_shell(script, timeout_seconds=timeout_seconds)
         if result.returncode != 0:

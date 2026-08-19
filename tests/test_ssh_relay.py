@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -165,6 +166,42 @@ class FakeRelayClient:
         timeout_seconds: float | None = None,
     ) -> CommandResult:
         raise AssertionError((program, args, portal_owner))
+
+
+class FileManifestRelayClient(FakeRelayClient):
+    def __init__(self, config: SshRelayConfig) -> None:
+        super().__init__(config)
+        self.file_shell: str | None = None
+
+    def run_file_shell(
+        self,
+        shell_command: str,
+        *,
+        stdin: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> CommandResult:
+        self.file_shell = shell_command
+        return CommandResult(
+            0,
+            '[{"name":"control.sock","type":"socket","size":0,"mtime":1}]\n',
+            "",
+        )
+
+
+def test_ssh_file_manifest_preserves_special_file_types(tmp_path: Path) -> None:
+    client = FileManifestRelayClient(relay_config(tmp_path))
+
+    entries = SshRelayExecutor(client).list_dir(
+        path="/public/home/alice/exp",
+        owner="alice",
+    )
+
+    assert entries[0].type == "socket"
+    assert client.file_shell is not None
+    assert "stat.S_ISREG" in client.file_shell
+    assert "stat.S_ISSOCK" in client.file_shell
+    command = shlex.split(client.file_shell)
+    compile(command[2], "<ssh-file-manifest>", "exec")
 
 
 def resource_plan() -> ResourcePlan:

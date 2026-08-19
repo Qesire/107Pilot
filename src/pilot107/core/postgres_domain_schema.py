@@ -829,6 +829,24 @@ _AGENT_EXPERIMENT_PROJECT_SCHEMA = _statements(
     "ON agent_experiment_projects(owner, updated_at DESC, project_id DESC)"
 )
 
+_AGENT_WORKSPACE_SCHEMA = _statements(
+    """
+    CREATE TABLE agent_workspaces (
+        workspace_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES agent_experiment_projects(project_id),
+        owner TEXT NOT NULL,
+        snapshot_digest TEXT NOT NULL,
+        payload_json JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        UNIQUE (project_id, snapshot_digest)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_workspaces_owner_updated "
+    "ON agent_workspaces(owner, updated_at DESC, workspace_id DESC)"
+)
+
 _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.001.postgres_domain_schema", _DOMAIN_SCHEMA),
     ("004a.002.run_publications", _RUN_PUBLICATION_SCHEMA),
@@ -836,6 +854,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.004.upload_sessions_tus", _UPLOAD_SESSION_TUS_SCHEMA),
     ("004a.005.agent_sessions", _AGENT_SESSION_SCHEMA),
     ("004a.006.agent_experiment_projects", _AGENT_EXPERIMENT_PROJECT_SCHEMA),
+    ("004a.007.agent_workspaces", _AGENT_WORKSPACE_SCHEMA),
 )
 
 
@@ -914,6 +933,7 @@ def domain_table_names() -> tuple[str, ...]:
         "agent_turn_events",
         "agent_tool_invocations",
         "agent_experiment_projects",
+        "agent_workspaces",
     )
 
 

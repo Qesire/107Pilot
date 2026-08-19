@@ -6,7 +6,7 @@ import importlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pilot107.agent.project import (
     ExperimentProjectOrigin,
@@ -25,6 +25,9 @@ from pilot107.agent.project_store import (
 )
 from pilot107.core.postgres_control_repository import PostgresDriverUnavailable
 from pilot107.core.postgres_domain_schema import initialize_postgres_domain_schema
+
+if TYPE_CHECKING:
+    from pilot107.agent.workspace import AgentWorkspaceRecord
 
 
 class PostgresProjectStore:
@@ -159,6 +162,67 @@ class PostgresProjectStore:
         if existing is None:
             raise KeyError(project_id)
         raise ProjectConflict("Project version or state changed while saving Blueprint")
+
+    def save_workspace(self, workspace: AgentWorkspaceRecord) -> AgentWorkspaceRecord:
+        from pilot107.agent.workspace import workspace_from_payload, workspace_payload
+
+        self.get_project(workspace.project_id, owner=workspace.owner)
+        payload = workspace_payload(workspace)
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO agent_workspaces (
+                    workspace_id, project_id, owner, snapshot_digest,
+                    payload_json, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (workspace_id) DO NOTHING
+                RETURNING *
+                """,
+                (
+                    workspace.workspace_id,
+                    workspace.project_id,
+                    workspace.owner,
+                    workspace.snapshot.digest,
+                    self._jsonb(payload),
+                    workspace.created_at,
+                    workspace.updated_at,
+                ),
+            ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    "SELECT * FROM agent_workspaces "
+                    "WHERE workspace_id = %s AND owner = %s",
+                    (workspace.workspace_id, workspace.owner),
+                ).fetchone()
+        if row is None:
+            raise RuntimeError("Workspace insert did not produce a row")
+        if (
+            str(row["project_id"]) != workspace.project_id
+            or str(row["snapshot_digest"]) != workspace.snapshot.digest
+        ):
+            raise ProjectConflict("workspace_id refers to different snapshot content")
+        payload_value = row["payload_json"]
+        if not isinstance(payload_value, dict):
+            raise TypeError("Workspace payload must be an object")
+        return workspace_from_payload(payload_value)
+
+    def get_workspace(self, workspace_id: str, *, owner: str) -> AgentWorkspaceRecord:
+        from pilot107.agent.workspace import workspace_from_payload
+
+        _key(workspace_id, "workspace_id")
+        _key(owner, "owner")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM agent_workspaces "
+                "WHERE workspace_id = %s AND owner = %s",
+                (workspace_id, owner),
+            ).fetchone()
+        if row is None:
+            raise KeyError(workspace_id)
+        payload = row["payload_json"]
+        if not isinstance(payload, dict):
+            raise TypeError("Workspace payload must be an object")
+        return workspace_from_payload(payload)
 
     def _now(self) -> datetime:
         value = self._clock()

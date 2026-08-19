@@ -463,6 +463,18 @@ class FileUploadApiTests(unittest.TestCase):
         self.assertEqual(created.status, 403)
         self.assertEqual(created.payload["error"]["code"], "UPLOAD.PATH_FORBIDDEN")
 
+    def test_tus_create_rejects_lexical_parent_traversal(self) -> None:
+        created = self._create(
+            length=1,
+            metadata=_metadata_header(
+                filename="x.bin",
+                target_path="/public/home/alice/../bob",
+            ),
+        )
+
+        self.assertEqual(created.status, 400)
+        self.assertEqual(created.payload["error"]["code"], "UPLOAD.UNSAFE_PATH")
+
     def test_tus_cross_owner_head_is_not_found(self) -> None:
         upload_id = self._tus_upload(b"I" * 16)
         self.assertEqual(self._head(upload_id, user="bob").status, 404)

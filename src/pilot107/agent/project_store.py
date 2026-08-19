@@ -8,7 +8,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pilot107.agent.project import (
     ExperimentProjectOrigin,
@@ -56,7 +56,31 @@ PROJECT_MIGRATIONS = (
             """,
         ),
     ),
+    SchemaMigration(
+        migration_id="006b.002.agent_workspaces",
+        statements=(
+            """
+            CREATE TABLE agent_workspaces (
+                workspace_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES agent_experiment_projects(project_id),
+                owner TEXT NOT NULL,
+                snapshot_digest TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (project_id, snapshot_digest)
+            )
+            """,
+            """
+            CREATE INDEX idx_agent_workspaces_owner_updated
+            ON agent_workspaces(owner, updated_at DESC, workspace_id DESC)
+            """,
+        ),
+    ),
 )
+
+if TYPE_CHECKING:
+    from pilot107.agent.workspace import AgentWorkspaceRecord
 
 
 class ProjectStore(Protocol):
@@ -81,6 +105,10 @@ class ProjectStore(Protocol):
         expected_version: int,
         blueprint: ProjectBlueprint,
     ) -> ExperimentProjectSessionRecord: ...
+
+    def save_workspace(self, workspace: AgentWorkspaceRecord) -> AgentWorkspaceRecord: ...
+
+    def get_workspace(self, workspace_id: str, *, owner: str) -> AgentWorkspaceRecord: ...
 
 
 class SQLiteProjectStore:
@@ -197,6 +225,64 @@ class SQLiteProjectStore:
         if cursor.rowcount != 1:
             raise ProjectConflict("Project version or state changed while saving Blueprint")
         return _row_to_project(row)
+
+    def save_workspace(self, workspace: AgentWorkspaceRecord) -> AgentWorkspaceRecord:
+        from pilot107.agent.workspace import workspace_from_payload, workspace_payload
+
+        self.get_project(workspace.project_id, owner=workspace.owner)
+        payload = workspace_payload(workspace)
+        encoded = _canonical_json(payload)
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO agent_workspaces (
+                    workspace_id, project_id, owner, snapshot_digest,
+                    payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    workspace.workspace_id,
+                    workspace.project_id,
+                    workspace.owner,
+                    workspace.snapshot.digest,
+                    encoded,
+                    workspace.created_at,
+                    workspace.updated_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM agent_workspaces WHERE workspace_id = ? AND owner = ?",
+                (workspace.workspace_id, workspace.owner),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Workspace insert did not produce a row")
+        if (
+            str(row["project_id"]) != workspace.project_id
+            or str(row["snapshot_digest"]) != workspace.snapshot.digest
+        ):
+            raise ProjectConflict("workspace_id refers to different snapshot content")
+        stored = _json_object_or_none(row["payload_json"], "payload_json")
+        if stored is None:
+            raise RuntimeError("Workspace payload disappeared")
+        return workspace_from_payload(stored)
+
+    def get_workspace(self, workspace_id: str, *, owner: str) -> AgentWorkspaceRecord:
+        from pilot107.agent.workspace import workspace_from_payload
+
+        _key(workspace_id, "workspace_id")
+        _key(owner, "owner")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM agent_workspaces "
+                "WHERE workspace_id = ? AND owner = ?",
+                (workspace_id, owner),
+            ).fetchone()
+        if row is None:
+            raise KeyError(workspace_id)
+        payload = _json_object_or_none(row["payload_json"], "payload_json")
+        if payload is None:
+            raise RuntimeError("Workspace payload disappeared")
+        return workspace_from_payload(payload)
 
     def _now(self) -> str:
         value = self._clock()

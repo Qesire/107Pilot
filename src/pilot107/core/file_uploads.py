@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import posixpath
 import secrets
 import shutil
 import sqlite3
@@ -42,6 +43,31 @@ DEFAULT_MAX_ACTIVE_PER_OWNER = 8
 DEFAULT_MAX_TOTAL_BYTES_PER_OWNER = 16 * 1024 * 1024 * 1024  # 16 GiB
 DEFAULT_WRITE_BLOCK_SIZE = 8 * 1024 * 1024  # staging -> cluster write block
 _PARTIAL_NAME = "partial"
+
+
+class OwnerPathAuthorizationError(ValueError):
+    """An absolute cluster path is outside the configured owner roots."""
+
+
+def authorize_owner_path(
+    owner_roots: tuple[str, ...] | list[str],
+    *,
+    owner: str,
+    target_path: str,
+) -> str:
+    """Return a normalized owner-contained POSIX path without filesystem access."""
+
+    if not isinstance(target_path, str) or not target_path.startswith("/"):
+        raise OwnerPathAuthorizationError("path must be absolute")
+    if "\x00" in target_path or any(part == ".." for part in target_path.split("/")):
+        raise OwnerPathAuthorizationError("path traversal is not allowed")
+    normalized = posixpath.normpath(target_path)
+    roots = resolve_owner_roots(owner_roots, user=owner)
+    for root in roots:
+        root_normalized = posixpath.normpath(root)
+        if normalized == root_normalized or normalized.startswith(f"{root_normalized}/"):
+            return normalized
+    raise OwnerPathAuthorizationError("path is outside the configured owner roots")
 
 
 class UploadState(StrEnum):
@@ -338,14 +364,16 @@ class FileUploadService:
             raise UploadError("target_path must be absolute", code="UPLOAD.UNSAFE_PATH")
         if "\x00" in target_path:
             raise UploadError("target_path contains a NUL byte", code="UPLOAD.UNSAFE_PATH")
-        roots = resolve_owner_roots(self.owner_roots, user=owner)
-        normalized = target_path.rstrip("/") or "/"
-        for root in roots:
-            root_normalized = root.rstrip("/") or "/"
-            if normalized == root_normalized or normalized.startswith(
-                f"{root_normalized}/"
-            ):
-                return normalized
+        if any(part == ".." for part in target_path.split("/")):
+            raise UploadError("target_path contains traversal", code="UPLOAD.UNSAFE_PATH")
+        try:
+            return authorize_owner_path(
+                self.owner_roots,
+                owner=owner,
+                target_path=target_path,
+            )
+        except OwnerPathAuthorizationError:
+            pass
         raise UploadError(
             f"target_path outside allowed roots: {target_path}",
             status=403,

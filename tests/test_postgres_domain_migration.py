@@ -68,6 +68,7 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
                 "agent_turn_events",
                 "agent_tool_invocations",
                 "agent_experiment_projects",
+                "agent_workspaces",
             }.issubset(names)
         )
         self.assertEqual(len(names), len(domain_table_names()))
@@ -165,6 +166,21 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
         self.assertIn("blueprint_json JSONB", schema)
         self.assertIn("version INTEGER NOT NULL", schema)
         self.assertIn("UNIQUE (owner, request_key)", schema)
+
+    def test_workspace_migration_uses_jsonb_and_project_foreign_key(self) -> None:
+        from pilot107.core.postgres_domain_schema import _MIGRATIONS
+
+        migration_id, statements = next(
+            migration
+            for migration in _MIGRATIONS
+            if migration[0] == "004a.007.agent_workspaces"
+        )
+        schema = "\n".join(statements)
+
+        self.assertEqual(migration_id, "004a.007.agent_workspaces")
+        self.assertIn("CREATE TABLE agent_workspaces", schema)
+        self.assertIn("REFERENCES agent_experiment_projects", schema)
+        self.assertIn("payload_json JSONB", schema)
 
 
 class PostgresDomainCopyTests(unittest.TestCase):

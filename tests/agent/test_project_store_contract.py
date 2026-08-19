@@ -18,6 +18,7 @@ from pilot107.agent.project import (
 )
 from pilot107.agent.project_store import ProjectStore, SQLiteProjectStore
 from pilot107.agent.store_factory import build_project_store
+from pilot107.agent.workspace import AgentWorkspaceRecord, WorkspaceSnapshot
 
 BLUEPRINT = ProjectBlueprint(
     goal="sum the values in an input table",
@@ -74,6 +75,25 @@ def exercise_project_store_contract(store: ProjectStore) -> None:
     assert updated.blueprint == BLUEPRINT
     assert updated.state.value == "editing"
     assert store.get_project(created.project_id, owner="alice") == updated
+
+    workspace = AgentWorkspaceRecord(
+        workspace_id="workspace-contract",
+        project_id=created.project_id,
+        owner="alice",
+        local_root="/tmp/pilot107-test/workspace-contract",
+        snapshot=WorkspaceSnapshot(
+            source_ref="/public/home/alice/project",
+            digest="a" * 64,
+            entries=(),
+            captured_at="2026-08-19T00:00:00Z",
+        ),
+        created_at="2026-08-19T00:00:00Z",
+        updated_at="2026-08-19T00:00:00Z",
+    )
+    assert store.save_workspace(workspace) == workspace
+    assert store.get_workspace(workspace.workspace_id, owner="alice") == workspace
+    with pytest.raises(KeyError):
+        store.get_workspace(workspace.workspace_id, owner="bob")
 
     with pytest.raises(ProjectConflict):
         store.save_blueprint(
