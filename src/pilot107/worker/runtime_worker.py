@@ -24,6 +24,7 @@ from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import CollectionTaskFenceConflict, CollectionTaskRecord
 from pilot107.core.states import TERMINAL_RUN_STATES, CapsuleState, CollectionState
+from pilot107.runtime_watch.service import RuntimeWatchService
 from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.worker.agent_turn_worker import AgentTurnWorker
 from pilot107.worker.capsule import CapsuleError, RawCapsuleService
@@ -98,6 +99,10 @@ class WorkerTickResult:
     capsule_builds_attempted: int = 0
     capsule_builds_succeeded: int = 0
     capsule_errors: list[WorkerRunError] = field(default_factory=list)
+    runtime_watches_checked: int = 0
+    runtime_watches_with_data: int = 0
+    runtime_watch_bytes_read: int = 0
+    runtime_watch_errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -124,6 +129,7 @@ class RuntimeReconcileWorker:
         agent_session_service: AgentSessionService | None = None,
         agent_turn_worker: AgentTurnWorker | None = None,
         capsule_service: RawCapsuleService | None = None,
+        runtime_watch_service: RuntimeWatchService | None = None,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -142,8 +148,12 @@ class RuntimeReconcileWorker:
         self.agent_session_service = agent_session_service
         self.agent_turn_worker = agent_turn_worker
         self.capsule_service = capsule_service
+        self.runtime_watch_service = runtime_watch_service
 
     def tick(self) -> WorkerTickResult:
+        runtime_watch_result = (
+            self.runtime_watch_service.tick() if self.runtime_watch_service is not None else None
+        )
         submission_batch = self.service.dispatch_due_submissions(limit=self.batch_size)
         submission_errors = [
             WorkerRunError(
@@ -330,6 +340,18 @@ class RuntimeReconcileWorker:
             capsule_builds_attempted=capsule_stats.attempted,
             capsule_builds_succeeded=capsule_stats.succeeded,
             capsule_errors=capsule_stats.errors,
+            runtime_watches_checked=(
+                runtime_watch_result.watches_checked if runtime_watch_result else 0
+            ),
+            runtime_watches_with_data=(
+                runtime_watch_result.watches_with_data if runtime_watch_result else 0
+            ),
+            runtime_watch_bytes_read=(
+                runtime_watch_result.bytes_read if runtime_watch_result else 0
+            ),
+            runtime_watch_errors=(
+                list(runtime_watch_result.errors) if runtime_watch_result else []
+            ),
         )
 
     def _dispatch_collection_tasks(
@@ -342,9 +364,7 @@ class RuntimeReconcileWorker:
         if repository is None:
             return self._dispatch_legacy_collection_tasks(capsule_stats)
 
-        for task in self.service.store.list_collection_tasks_for_dispatch(
-            limit=self.batch_size
-        ):
+        for task in self.service.store.list_collection_tasks_for_dispatch(limit=self.batch_size):
             repository.enqueue(
                 message_id=_collection_message_id(task),
                 topic="collection.execute",
@@ -411,11 +431,7 @@ class RuntimeReconcileWorker:
             raise RuntimeError("collection outbox dependencies are unavailable")
         task_id, run_id, task_type, generation = _collection_message_identity(message)
         task = self.service.store.get_collection_task(task_id)
-        if (
-            task.run_id != run_id
-            or task.task_type != task_type
-            or task.generation != generation
-        ):
+        if task.run_id != run_id or task.task_type != task_type or task.generation != generation:
             self._acknowledge_collection(message)
             return False, None, None
         if task.state == "succeeded":
@@ -450,10 +466,7 @@ class RuntimeReconcileWorker:
                 default_code=WorkerErrorCode.EVIDENCE_COLLECTION_ERROR,
                 default_retryable=True,
             )
-            can_retry = (
-                classification.retryable
-                and message.attempts < self.collection_max_attempts
-            )
+            can_retry = classification.retryable and message.attempts < self.collection_max_attempts
             retry_delay = _retry_delay_seconds(message.attempts) if can_retry else None
             self.service.store.mark_collection_task_failed(
                 task_id,
@@ -473,15 +486,19 @@ class RuntimeReconcileWorker:
                 delay_seconds=retry_delay or 0,
                 max_attempts=(self.collection_max_attempts if classification.retryable else 1),
             )
-            return False, WorkerTaskError(
-                task_id=task_id,
-                run_id=run_id,
-                task_type=task_type,
-                message=str(exc),
-                code=classification.code.value,
-                retryable=can_retry,
-                auth_required=classification.auth_required,
-            ), run_id
+            return (
+                False,
+                WorkerTaskError(
+                    task_id=task_id,
+                    run_id=run_id,
+                    task_type=task_type,
+                    message=str(exc),
+                    code=classification.code.value,
+                    retryable=can_retry,
+                    auth_required=classification.auth_required,
+                ),
+                run_id,
+            )
 
         self.service.store.mark_collection_task_succeeded(
             task_id,
@@ -650,8 +667,7 @@ class RuntimeReconcileWorker:
                     aggregate.agent_executions_checked + result.agent_executions_checked
                 ),
                 agent_executions_succeeded=(
-                    aggregate.agent_executions_succeeded
-                    + result.agent_executions_succeeded
+                    aggregate.agent_executions_succeeded + result.agent_executions_succeeded
                 ),
                 agent_execution_errors=[
                     *aggregate.agent_execution_errors,
@@ -664,6 +680,19 @@ class RuntimeReconcileWorker:
                     aggregate.capsule_builds_succeeded + result.capsule_builds_succeeded
                 ),
                 capsule_errors=[*aggregate.capsule_errors, *result.capsule_errors],
+                runtime_watches_checked=(
+                    aggregate.runtime_watches_checked + result.runtime_watches_checked
+                ),
+                runtime_watches_with_data=(
+                    aggregate.runtime_watches_with_data + result.runtime_watches_with_data
+                ),
+                runtime_watch_bytes_read=(
+                    aggregate.runtime_watch_bytes_read + result.runtime_watch_bytes_read
+                ),
+                runtime_watch_errors=[
+                    *aggregate.runtime_watch_errors,
+                    *result.runtime_watch_errors,
+                ],
             )
             if (
                 result.checked == 0
@@ -671,6 +700,7 @@ class RuntimeReconcileWorker:
                 and result.diagnoses_checked == 0
                 and result.submissions_checked == 0
                 and result.agent_executions_checked == 0
+                and result.runtime_watches_checked == 0
             ):
                 break
             time.sleep(interval_seconds)
@@ -710,9 +740,7 @@ def _collection_message_identity(
         task_id if isinstance(task_id, int) and not isinstance(task_id, bool) else 0,
         run_id if isinstance(run_id, str) and run_id else message.aggregate_id,
         task_type if isinstance(task_type, str) and task_type else "unknown",
-        generation
-        if isinstance(generation, int) and not isinstance(generation, bool)
-        else 0,
+        generation if isinstance(generation, int) and not isinstance(generation, bool) else 0,
     )
 
 

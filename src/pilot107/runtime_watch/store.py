@@ -7,6 +7,7 @@ import os
 import sqlite3
 import tempfile
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol
@@ -158,9 +159,7 @@ class RuntimeWatchStore(Protocol):
 
     def get_watch(self, watch_id: str, *, owner: str) -> RuntimeWatchRecord: ...
 
-    def get_cursor(
-        self, run_id: str, owner: str, stream: RuntimeLogStream
-    ) -> RuntimeLogCursor: ...
+    def get_cursor(self, run_id: str, owner: str, stream: RuntimeLogStream) -> RuntimeLogCursor: ...
 
     def claim_watch(
         self,
@@ -170,6 +169,10 @@ class RuntimeWatchStore(Protocol):
         worker_id: str,
         lease_seconds: int,
     ) -> RuntimeWatchLease | None: ...
+
+    def list_due_watches(self, *, limit: int = 100) -> list[RuntimeWatchRecord]: ...
+
+    def renew_watch(self, lease: RuntimeWatchLease, *, lease_seconds: int) -> RuntimeWatchLease: ...
 
     def commit_segment(
         self,
@@ -199,9 +202,7 @@ class RuntimeWatchStore(Protocol):
 
     def save_alert(self, alert: RuntimeAlert) -> RuntimeAlert: ...
 
-    def list_alerts(
-        self, run_id: str, *, owner: str, limit: int = 100
-    ) -> list[RuntimeAlert]: ...
+    def list_alerts(self, run_id: str, *, owner: str, limit: int = 100) -> list[RuntimeAlert]: ...
 
     def release_watch(
         self,
@@ -241,9 +242,7 @@ class SQLiteRuntimeWatchStore:
         connection.execute("PRAGMA busy_timeout = 10000")
         return connection
 
-    def create_watch(
-        self, *, run_id: str, owner: str, connection_id: str
-    ) -> RuntimeWatchRecord:
+    def create_watch(self, *, run_id: str, owner: str, connection_id: str) -> RuntimeWatchRecord:
         stdout = RuntimeLogCursor.initial(run_id=run_id, owner=owner, stream="stdout")
         stderr = RuntimeLogCursor.initial(run_id=run_id, owner=owner, stream="stderr")
         watch_id = _watch_id(run_id, owner)
@@ -268,9 +267,7 @@ class SQLiteRuntimeWatchStore:
             if row is None:
                 raise RuntimeError("Runtime Watch insert did not produce a row")
             if row["connection_id"] != connection_id:
-                raise RuntimeWatchConflict(
-                    "Run already has a Runtime Watch for another connection"
-                )
+                raise RuntimeWatchConflict("Run already has a Runtime Watch for another connection")
             for cursor in (stdout, stderr):
                 connection.execute(
                     """
@@ -301,14 +298,11 @@ class SQLiteRuntimeWatchStore:
             ).fetchall()
         return _watch_from_rows(row, cursor_rows)
 
-    def get_cursor(
-        self, run_id: str, owner: str, stream: RuntimeLogStream
-    ) -> RuntimeLogCursor:
+    def get_cursor(self, run_id: str, owner: str, stream: RuntimeLogStream) -> RuntimeLogCursor:
         _validate_stream(stream)
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM runtime_log_cursors "
-                "WHERE run_id = ? AND owner = ? AND stream = ?",
+                "SELECT * FROM runtime_log_cursors WHERE run_id = ? AND owner = ? AND stream = ?",
                 (run_id, owner, stream),
             ).fetchone()
         if row is None:
@@ -359,6 +353,46 @@ class SQLiteRuntimeWatchStore:
             fencing_token=int(row["fencing_token"]),
             expires_at=expires_at,
         )
+
+    def list_due_watches(self, *, limit: int = 100) -> list[RuntimeWatchRecord]:
+        _limit(limit)
+        now = self._now()
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT watch_id, owner FROM runtime_watches "
+                "WHERE state != 'stopped' AND (next_poll_at IS NULL OR next_poll_at <= ?) "
+                "AND (lease_owner IS NULL OR lease_expires_at <= ?) "
+                "ORDER BY COALESCE(next_poll_at, created_at), watch_id LIMIT ?",
+                (now, now, limit),
+            ).fetchall()
+        return [self.get_watch(str(row["watch_id"]), owner=str(row["owner"])) for row in rows]
+
+    def renew_watch(self, lease: RuntimeWatchLease, *, lease_seconds: int) -> RuntimeWatchLease:
+        _bounded_lease(lease_seconds)
+        now = self._clock_value()
+        now_text = timestamp(now)
+        expires_at = timestamp(now + timedelta(seconds=lease_seconds))
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE runtime_watches SET lease_expires_at = ?, updated_at = ? "
+                "WHERE watch_id = ? AND run_id = ? AND owner = ? AND lease_owner = ? "
+                "AND lease_expires_at > ? AND fencing_token = ? AND version = ?",
+                (
+                    expires_at,
+                    now_text,
+                    lease.watch_id,
+                    lease.run_id,
+                    lease.owner,
+                    lease.worker_id,
+                    now_text,
+                    lease.fencing_token,
+                    lease.version,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeWatchConflict("Runtime Watch renewal is stale or fenced")
+        return replace(lease, expires_at=expires_at)
 
     def commit_segment(
         self,
@@ -426,9 +460,7 @@ class SQLiteRuntimeWatchStore:
                 ),
             ).fetchone()
             if position_row is not None:
-                raise RuntimeWatchConflict(
-                    "Runtime segment position already has different content"
-                )
+                raise RuntimeWatchConflict("Runtime segment position already has different content")
             _validate_segment_transition(lease, current, segment, next_cursor)
             connection.execute(
                 """
@@ -569,8 +601,7 @@ class SQLiteRuntimeWatchStore:
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             watch = connection.execute(
-                "SELECT 1 FROM runtime_watches "
-                "WHERE watch_id = ? AND run_id = ? AND owner = ?",
+                "SELECT 1 FROM runtime_watches WHERE watch_id = ? AND run_id = ? AND owner = ?",
                 (alert.watch_id, alert.run_id, alert.owner),
             ).fetchone()
             if watch is None:
@@ -604,9 +635,7 @@ class SQLiteRuntimeWatchStore:
             raise RuntimeWatchConflict("Runtime alert replay conflicts")
         return stored
 
-    def list_alerts(
-        self, run_id: str, *, owner: str, limit: int = 100
-    ) -> list[RuntimeAlert]:
+    def list_alerts(self, run_id: str, *, owner: str, limit: int = 100) -> list[RuntimeAlert]:
         _limit(limit)
         with self.connect() as connection:
             rows = connection.execute(
@@ -626,9 +655,7 @@ class SQLiteRuntimeWatchStore:
     ) -> RuntimeWatchRecord:
         normalized_state = RuntimeWatchState(state)
         normalized_next_poll_at = (
-            None
-            if next_poll_at is None
-            else timestamp(parse_timestamp(next_poll_at))
+            None if next_poll_at is None else timestamp(parse_timestamp(next_poll_at))
         )
         if last_error_code is not None:
             _id(last_error_code, "last_error_code")
@@ -666,9 +693,7 @@ class SQLiteRuntimeWatchStore:
                 raise RuntimeWatchConflict("Runtime Watch release is stale or fenced")
         return self.get_watch(lease.watch_id, owner=lease.owner)
 
-    def _assert_lease(
-        self, connection: sqlite3.Connection, lease: RuntimeWatchLease
-    ) -> None:
+    def _assert_lease(self, connection: sqlite3.Connection, lease: RuntimeWatchLease) -> None:
         row = connection.execute(
             """
             SELECT 1 FROM runtime_watches
@@ -754,13 +779,9 @@ def _validate_segment_transition(
     ):
         raise RuntimeWatchConflict("Runtime segment binding conflicts with its lease")
     same_generation = (
-        segment.generation == current.generation
-        and segment.start_offset == current.offset
+        segment.generation == current.generation and segment.start_offset == current.offset
     )
-    rotated = (
-        segment.generation == current.generation + 1
-        and segment.start_offset == 0
-    )
+    rotated = segment.generation == current.generation + 1 and segment.start_offset == 0
     if not same_generation and not rotated:
         raise RuntimeWatchConflict("Runtime segment cursor is non-contiguous")
     if (
@@ -785,20 +806,14 @@ def _validate_cursor_advance(
     ):
         raise RuntimeWatchConflict("Runtime cursor advance binding is invalid")
     same_position = (
-        next_cursor.generation == current.generation
-        and next_cursor.offset == current.offset
+        next_cursor.generation == current.generation and next_cursor.offset == current.offset
     )
-    empty_rotation = (
-        next_cursor.generation == current.generation + 1
-        and next_cursor.offset == 0
-    )
+    empty_rotation = next_cursor.generation == current.generation + 1 and next_cursor.offset == 0
     if not same_position and not empty_rotation:
         raise RuntimeWatchConflict("Runtime cursor advance would skip log content")
 
 
-def _watch_from_rows(
-    row: sqlite3.Row, cursor_rows: list[sqlite3.Row]
-) -> RuntimeWatchRecord:
+def _watch_from_rows(row: sqlite3.Row, cursor_rows: list[sqlite3.Row]) -> RuntimeWatchRecord:
     return RuntimeWatchRecord(
         watch_id=str(row["watch_id"]),
         run_id=str(row["run_id"]),
@@ -827,9 +842,7 @@ def _cursor_from_row(row: sqlite3.Row) -> RuntimeLogCursor:
         generation=int(row["generation"]),
         offset=int(row["offset_value"]),
         source_size=int(row["source_size"]),
-        source_mtime=(
-            None if row["source_mtime"] is None else float(row["source_mtime"])
-        ),
+        source_mtime=(None if row["source_mtime"] is None else float(row["source_mtime"])),
         source_file_identity=_optional_text(row["source_file_identity"]),
         source_prefix_fingerprint=_optional_text(row["source_prefix_fingerprint"]),
         decoder_remainder_base64=str(row["decoder_remainder_base64"]),

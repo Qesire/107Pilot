@@ -12,6 +12,8 @@ from pilot107.runtime_watch.model import (
     runtime_watch_payload,
 )
 from pilot107.runtime_watch.postgres_store import PostgresRuntimeWatchStore
+from pilot107.runtime_watch.reader import IncrementalLogReader, RuntimeLogSource
+from pilot107.runtime_watch.service import RuntimeWatchPolicy, RuntimeWatchService
 from pilot107.runtime_watch.store import RuntimeWatchStore, SQLiteRuntimeWatchStore
 
 __all__ = [
@@ -26,5 +28,9 @@ __all__ = [
     "RuntimeWatchState",
     "SQLiteRuntimeWatchStore",
     "PostgresRuntimeWatchStore",
+    "IncrementalLogReader",
+    "RuntimeLogSource",
+    "RuntimeWatchPolicy",
+    "RuntimeWatchService",
     "runtime_watch_payload",
 ]

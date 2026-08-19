@@ -82,12 +82,18 @@ elif op == "stat":
         kind = "directory"
     else:
         fail(46, "special_file_denied")
+    prefix_sha256 = None
+    if stat.S_ISREG(mode):
+        with path.open("rb") as stream:
+            prefix_sha256 = hashlib.sha256(stream.read(4096)).hexdigest()
     emit({
         "path": str(path),
         "kind": kind,
         "size_bytes": current.st_size,
         "mtime_epoch": current.st_mtime,
         "owner_readable": bool(mode & stat.S_IRUSR),
+        "file_identity": f"{current.st_dev}:{current.st_ino}",
+        "prefix_sha256": prefix_sha256,
     })
 elif op == "tail":
     limit = int(sys.argv[4])
@@ -249,6 +255,12 @@ class SshEvidenceTransport:
             size_bytes=int(payload["size_bytes"]),
             mtime_epoch=float(payload["mtime_epoch"]),
             owner_readable=bool(payload["owner_readable"]),
+            file_identity=(
+                None if payload.get("file_identity") is None else str(payload["file_identity"])
+            ),
+            prefix_sha256=(
+                None if payload.get("prefix_sha256") is None else str(payload["prefix_sha256"])
+            ),
         )
 
     def read_text_tail(

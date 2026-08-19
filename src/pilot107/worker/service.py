@@ -74,6 +74,12 @@ from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
 from pilot107.core.submission_reconcile import ReconcileBackend
+from pilot107.runtime_watch.postgres_store import PostgresRuntimeWatchStore
+from pilot107.runtime_watch.service import (
+    RunStoreRuntimeLogSourceResolver,
+    RuntimeWatchService,
+)
+from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.services.remediation_service import RemediationService
 from pilot107.worker.agent_turn_worker import AgentTurnWorker
@@ -213,6 +219,7 @@ class WorkerService:
                 and result.submissions_checked == 0
                 and result.agent_executions_checked == 0
                 and result.agent_turns_checked == 0
+                and result.runtime_watches_checked == 0
                 and self.last_remediation_advanced == 0
             ):
                 break
@@ -241,6 +248,7 @@ class WorkerService:
                 or result.agent_execution_errors
                 or result.agent_turn_errors
                 or result.capsule_errors
+                or result.runtime_watch_errors
                 or self.last_remediation_errors
                 or self.last_telemetry_error
             ),
@@ -256,6 +264,10 @@ class WorkerService:
             "diagnoses_succeeded": result.diagnoses_succeeded,
             "submissions_checked": result.submissions_checked,
             "submissions_succeeded": result.submissions_succeeded,
+            "runtime_watches_checked": result.runtime_watches_checked,
+            "runtime_watches_with_data": result.runtime_watches_with_data,
+            "runtime_watch_bytes_read": result.runtime_watch_bytes_read,
+            "runtime_watch_errors": result.runtime_watch_errors,
             "errors": redact_sensitive_structure([error.__dict__ for error in result.errors]),
             "task_errors": redact_sensitive_structure(
                 [error.__dict__ for error in result.task_errors]
@@ -402,20 +414,15 @@ def config_from_env(
         ssh_control_path=_optional_path(values, "PILOT107_SSH_CONTROL_PATH"),
         ssh_known_hosts_file=_optional_path(values, "PILOT107_SSH_KNOWN_HOSTS_FILE"),
         ssh_port=(
-            None
-            if not values.get("PILOT107_SSH_PORT")
-            else _int(values, "PILOT107_SSH_PORT", 22)
+            None if not values.get("PILOT107_SSH_PORT") else _int(values, "PILOT107_SSH_PORT", 22)
         ),
         ssh_portal_owner=values.get("PILOT107_SSH_PORTAL_OWNER") or None,
         ssh_slurm_user=(
-            values.get("PILOT107_SSH_SLURM_USER")
-            or values.get("PILOT107_SLURM_USER_NAME")
-            or None
+            values.get("PILOT107_SSH_SLURM_USER") or values.get("PILOT107_SLURM_USER_NAME") or None
         ),
         ssh_owner_roots=tuple(
             _split_csv(
-                values.get("PILOT107_SSH_OWNER_ROOTS")
-                or values.get("PILOT107_ALLOWED_ROOTS", "")
+                values.get("PILOT107_SSH_OWNER_ROOTS") or values.get("PILOT107_ALLOWED_ROOTS", "")
             )
         ),
         slurmrestd_url=values.get("PILOT107_SLURMRESTD_URL", "http://slurmrestd:6820"),
@@ -621,6 +628,27 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             capsule_root=config.capsule_root,
             creator="pilot107-worker",
         )
+    runtime_watch_service: RuntimeWatchService | None = None
+    runtime_transport = _build_runtime_watch_transport(config)
+    if runtime_transport is not None and effective_roots:
+        segment_root = config.evidence_root / "runtime-watch-segments"
+        runtime_store = (
+            SQLiteRuntimeWatchStore(config.db_path, segment_root=segment_root)
+            if config.postgres_dsn is None
+            else PostgresRuntimeWatchStore(
+                config.postgres_dsn,
+                segment_root=segment_root,
+            )
+        )
+        runtime_watch_service = RuntimeWatchService(
+            store=runtime_store,
+            transport_for_connection=lambda _connection_id: runtime_transport,
+            source_resolver=RunStoreRuntimeLogSourceResolver(
+                run_store=store,
+                allowed_roots=tuple(effective_roots),
+            ),
+            worker_id=config.worker_id,
+        )
     worker = RuntimeReconcileWorker(
         service=run_service,
         batch_size=config.batch_size,
@@ -632,6 +660,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         agent_session_service=agent_session_service,
         agent_turn_worker=agent_turn_worker,
         capsule_service=capsule_service,
+        runtime_watch_service=runtime_watch_service,
     )
     return WorkerService(
         config=config,
@@ -984,6 +1013,14 @@ def _build_evidence_transport(config: WorkerServiceConfig) -> EvidenceTransport 
     return AuthorizedFilesystemEvidenceTransport(allowed_roots=allowed_roots)
 
 
+def _build_runtime_watch_transport(
+    config: WorkerServiceConfig,
+) -> EvidenceTransport | None:
+    if config.backend == "real107-ssh":
+        return SshEvidenceTransport(client=_build_ssh_relay_client(config))
+    return _build_evidence_transport(config)
+
+
 def _worker_llm_provider_from_env(
     config: WorkerServiceConfig,
 ) -> OpenAICompatibleLLMProvider | None:
@@ -1033,13 +1070,18 @@ def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> Work
         agent_turns_checked=left.agent_turns_checked + right.agent_turns_checked,
         agent_turns_succeeded=left.agent_turns_succeeded + right.agent_turns_succeeded,
         agent_turn_errors=[*left.agent_turn_errors, *right.agent_turn_errors],
-        capsule_builds_attempted=(
-            left.capsule_builds_attempted + right.capsule_builds_attempted
-        ),
-        capsule_builds_succeeded=(
-            left.capsule_builds_succeeded + right.capsule_builds_succeeded
-        ),
+        capsule_builds_attempted=(left.capsule_builds_attempted + right.capsule_builds_attempted),
+        capsule_builds_succeeded=(left.capsule_builds_succeeded + right.capsule_builds_succeeded),
         capsule_errors=[*left.capsule_errors, *right.capsule_errors],
+        runtime_watches_checked=(left.runtime_watches_checked + right.runtime_watches_checked),
+        runtime_watches_with_data=(
+            left.runtime_watches_with_data + right.runtime_watches_with_data
+        ),
+        runtime_watch_bytes_read=(left.runtime_watch_bytes_read + right.runtime_watch_bytes_read),
+        runtime_watch_errors=[
+            *left.runtime_watch_errors,
+            *right.runtime_watch_errors,
+        ],
     )
 
 
@@ -1060,6 +1102,9 @@ def _tick_summary(result: WorkerTickResult) -> str:
         f"agent_turn_errors={len(result.agent_turn_errors)} "
         f"capsules={result.capsule_builds_succeeded}/{result.capsule_builds_attempted} "
         f"capsule_errors={len(result.capsule_errors)}"
+        f" runtime_watch={result.runtime_watches_with_data}/"
+        f"{result.runtime_watches_checked} bytes={result.runtime_watch_bytes_read} "
+        f"runtime_watch_errors={len(result.runtime_watch_errors)}"
     )
 
 

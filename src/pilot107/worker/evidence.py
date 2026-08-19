@@ -76,6 +76,8 @@ class FileStat:
     size_bytes: int
     mtime_epoch: float
     owner_readable: bool
+    file_identity: str | None = None
+    prefix_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -198,12 +200,18 @@ class AuthorizedFilesystemEvidenceTransport:
         safe = self._authorize_safe_path(path)
         reject_special_file(safe.resolved)
         stat_result = safe.resolved.stat()
+        prefix_sha256: str | None = None
+        if safe.resolved.is_file():
+            with safe.resolved.open("rb") as handle:
+                prefix_sha256 = hashlib.sha256(handle.read(4096)).hexdigest()
         return FileStat(
             path=str(safe.resolved),
             kind=_filesystem_kind(safe.resolved),
             size_bytes=stat_result.st_size,
             mtime_epoch=stat_result.st_mtime,
             owner_readable=safe.resolved.is_file() and bool(stat_result.st_mode & 0o400),
+            file_identity=f"{stat_result.st_dev}:{stat_result.st_ino}",
+            prefix_sha256=prefix_sha256,
         )
 
     def read_text_tail(self, identity: UserIdentity, path: SafePath, max_bytes: int) -> TextTail:
@@ -459,23 +467,25 @@ class DemoEvidenceCollector:
         )
 
     def _runtime_status(self, run: RunRecord) -> EvidenceCollectionResult:
-        artifacts = [self.store.write_json(
-            run_id=run.run_id,
-            logical_path="slurm/runtime_status.json",
-            payload={
-                "schema": "pilot107.slurm.runtime_status.v1",
-                "collector": "demo_runtime_status",
-                "collected_at": utc_now_iso(),
-                "availability": "known",
-                "job": {
-                    "job_id": run.job_id,
-                    "owner": run.owner,
-                    "state": run.state.value,
-                    "reason": None,
-                    "partition": run.resource_plan.get("partition"),
+        artifacts = [
+            self.store.write_json(
+                run_id=run.run_id,
+                logical_path="slurm/runtime_status.json",
+                payload={
+                    "schema": "pilot107.slurm.runtime_status.v1",
+                    "collector": "demo_runtime_status",
+                    "collected_at": utc_now_iso(),
+                    "availability": "known",
+                    "job": {
+                        "job_id": run.job_id,
+                        "owner": run.owner,
+                        "state": run.state.value,
+                        "reason": None,
+                        "partition": run.resource_plan.get("partition"),
+                    },
                 },
-            },
-        )]
+            )
+        ]
         artifacts.append(self._write_manifest(run, warnings=[]))
         return EvidenceCollectionResult(
             run_id=run.run_id,
@@ -544,10 +554,7 @@ class DemoEvidenceCollector:
 
     def _logs_finalize(self, run: RunRecord) -> EvidenceCollectionResult:
         stdout = (
-            "107Pilot demo backend\n"
-            f"run_id={run.run_id}\n"
-            f"job_id={run.job_id}\n"
-            "status=completed\n"
+            f"107Pilot demo backend\nrun_id={run.run_id}\njob_id={run.job_id}\nstatus=completed\n"
         )
         stderr = "demo backend: no stderr\n"
         artifacts = [
@@ -953,23 +960,23 @@ class DockerSlurmEvidenceCollector:
         else:
             availability = "unavailable"
             warnings.append("job was not present in squeue during runtime status collection")
-        artifacts = [self.store.write_json(
-            run_id=run.run_id,
-            logical_path="slurm/runtime_status.json",
-            payload={
-                "schema": "pilot107.slurm.runtime_status.v1",
-                "collector": "runtime_status",
-                "collected_at": utc_now_iso(),
-                "availability": availability,
-                "job": record,
-                "command": result.argv,
-                "returncode": result.result.returncode,
-                "stderr": result.result.stderr,
-            },
-        )]
-        artifacts.append(
-            self._write_manifest(run, extra_artifacts=artifacts, warnings=warnings)
-        )
+        artifacts = [
+            self.store.write_json(
+                run_id=run.run_id,
+                logical_path="slurm/runtime_status.json",
+                payload={
+                    "schema": "pilot107.slurm.runtime_status.v1",
+                    "collector": "runtime_status",
+                    "collected_at": utc_now_iso(),
+                    "availability": availability,
+                    "job": record,
+                    "command": result.argv,
+                    "returncode": result.result.returncode,
+                    "stderr": result.result.stderr,
+                },
+            )
+        ]
+        artifacts.append(self._write_manifest(run, extra_artifacts=artifacts, warnings=warnings))
         return EvidenceCollectionResult(
             run_id=run.run_id,
             task_type="runtime_status",
@@ -1314,10 +1321,7 @@ class DockerSlurmEvidenceCollector:
             baseline_entry = baseline_map.get(file.relative_path) if is_expected else None
             eligible = is_expected or (
                 baseline_entry is None
-                and (
-                    started_at_epoch is None
-                    or file.mtime_epoch > started_at_epoch
-                )
+                and (started_at_epoch is None or file.mtime_epoch > started_at_epoch)
             )
             final_sha = file.sha256 if eligible else None
             attribution = compute_file_attribution(
@@ -1471,8 +1475,7 @@ class DockerSlurmEvidenceCollector:
                 "attributed_file_count": sum(
                     1
                     for item in output_files
-                    if item.get("attribution")
-                    in {"created_by_run", "created", "modified"}
+                    if item.get("attribution") in {"created_by_run", "created", "modified"}
                 ),
                 "attribution_summary": _attribution_summary(output_files),
                 "expected_outputs": [
@@ -1804,11 +1807,7 @@ class DockerSlurmEvidenceCollector:
             # preexisting non-expected files to avoid expensive sha256 on large
             # shared workdir leftovers.
             eligible = is_expected or (
-                baseline_entry is None
-                and (
-                    started_at_epoch is None
-                    or mtime > started_at_epoch
-                )
+                baseline_entry is None and (started_at_epoch is None or mtime > started_at_epoch)
             )
             sha = self._sha256_file(run, authorized) if eligible else None
             attribution = compute_file_attribution(
@@ -1886,9 +1885,7 @@ def _parse_pipe_records(
             continue
         values = line.split("|")
         if len(values) != len(fields):
-            raise ValueError(
-                f"expected {len(fields)} pipe-delimited fields, got {len(values)}"
-            )
+            raise ValueError(f"expected {len(fields)} pipe-delimited fields, got {len(values)}")
         records.append(dict(zip(fields, (value.strip() for value in values), strict=True)))
     return records
 
@@ -1950,9 +1947,7 @@ def _append_missing_expected(
         if relative_path in present:
             continue
         baseline_entry = baseline_map.get(relative_path)
-        baseline_sha = (
-            baseline_entry.get("sha256") if baseline_entry is not None else None
-        )
+        baseline_sha = baseline_entry.get("sha256") if baseline_entry is not None else None
         # Round-8 P1-1: when the pre-run baseline probe failed (timeout /
         # path_invalid / path_too_long / error), the entry carries a ``status``
         # key and is unusable for attribution. Even if the expected output is
@@ -1960,9 +1955,7 @@ def _append_missing_expected(
         # ``missing`` (which the verifier could misread as "legitimately not
         # produced"); emit ``baseline_unavailable`` so remediation fails closed.
         attribution = (
-            "baseline_unavailable"
-            if _baseline_entry_unavailable(baseline_entry)
-            else "missing"
+            "baseline_unavailable" if _baseline_entry_unavailable(baseline_entry) else "missing"
         )
         files.append(
             {
@@ -2072,9 +2065,7 @@ def sbatch_argv_payload(
         "submit_strategy": run.submit_strategy,
         "availability": "known" if isinstance(argv, list) else "unavailable",
         "argv": argv if isinstance(argv, list) else None,
-        "warning": None
-        if isinstance(argv, list)
-        else "submit backend did not expose sbatch argv",
+        "warning": None if isinstance(argv, list) else "submit backend did not expose sbatch argv",
     }
 
 
@@ -2131,8 +2122,7 @@ def basic_environment_payload(
             "path": run.workdir,
             "status": "not_evaluated",
             "warning": (
-                "shared path status is established by WorkDirPreflight, "
-                "not this runtime probe"
+                "shared path status is established by WorkDirPreflight, not this runtime probe"
             ),
         },
     }
@@ -2265,13 +2255,13 @@ def generated_execution_wrapper(run: RunRecord) -> str:
             'pilot107_start_epoch="$(date +%s)"',
             'echo "pilot107.wrapper.start_epoch=${pilot107_start_epoch}" >&2',
             'env | sort > "pilot107-env-${PILOT107_RUN_ID}.txt"',
-            '# Phase 0A records this generated wrapper as evidence; later submit paths can set',
-            '# PILOT107_USER_SCRIPT to execute the resolved script through this wrapper.',
+            "# Phase 0A records this generated wrapper as evidence; later submit paths can set",
+            "# PILOT107_USER_SCRIPT to execute the resolved script through this wrapper.",
             'if [ -n "${PILOT107_USER_SCRIPT:-}" ]; then',
             '  bash "${PILOT107_USER_SCRIPT}"',
-            'else',
+            "else",
             '  echo "pilot107.wrapper.user_script_not_configured" >&2',
-            'fi',
+            "fi",
             'pilot107_exit_code="$?"',
             'pilot107_end_epoch="$(date +%s)"',
             'echo "pilot107.wrapper.end_epoch=${pilot107_end_epoch}" >&2',
@@ -2297,7 +2287,8 @@ def _is_excluded_output(relative_path: str) -> bool:
     name = posixpath.basename(relative_path)
     return (
         (name.startswith("pilot107-submit-") and name.endswith(".sbatch"))
-        or name.startswith("slurm-") and (name.endswith(".out") or name.endswith(".err"))
+        or name.startswith("slurm-")
+        and (name.endswith(".out") or name.endswith(".err"))
     )
 
 
@@ -2359,9 +2350,7 @@ def compute_file_attribution(
     # capture doesn't apply, so baseline_sha256 stays None and attribution
     # falls back to mtime-based logic.
     baseline_sha = (
-        baseline_entry.get("sha256")
-        if (baseline_entry is not None and in_expected)
-        else None
+        baseline_entry.get("sha256") if (baseline_entry is not None and in_expected) else None
     )
     if in_expected and baseline_entry is not None:
         # Round-8 P1-1: a baseline entry carrying a probe-failure ``status``
