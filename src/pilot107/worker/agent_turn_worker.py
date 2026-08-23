@@ -18,12 +18,15 @@ from pilot107.services.agent_session_service import AGENT_TURN_TOPIC
 _A1_READ_TOOLS = frozenset(
     {
         "platform_get_snapshot",
+        "platform_observation_get",
+        "account_observation_get",
         "workspace_list",
         "workspace_search",
         "workspace_read",
         "run_get",
         "run_log_read",
         "evidence_read",
+        "run_resources_get",
     }
 )
 _A2_PROJECT_TOOLS = frozenset(

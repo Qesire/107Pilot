@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -176,6 +177,35 @@ def test_run_and_evidence_reads_are_owner_bound_and_redacted(tmp_path: Path) -> 
             handlers[tool]("mallory", arguments)
 
 
+def test_observation_handlers_derive_owner_and_return_evidence_refs(
+    tmp_path: Path,
+) -> None:
+    context, build_handlers, error_type, _, _ = _context(tmp_path)
+    observations = _FakeObservabilityService()
+    handlers = build_handlers(replace(context, observability_service=observations))
+
+    platform = handlers["platform_observation_get"](
+        "alice", {"connection_id": "connection1"}
+    )
+    account = handlers["account_observation_get"](
+        "alice", {"connection_id": "connection1"}
+    )
+    run = handlers["run_resources_get"]("alice", {"run_id": "run1"})
+
+    assert platform.evidence_refs == ("observation:platform1",)
+    assert account.result["owner"] == "alice"
+    assert run.evidence_refs == ("resource-summary:summary1",)
+    assert observations.calls == [
+        ("platform", "connection1", None),
+        ("account", "connection1", "alice"),
+        ("run", "run1", "alice"),
+    ]
+    with pytest.raises(error_type):
+        handlers["account_observation_get"](
+            "mallory", {"connection_id": "connection1"}
+        )
+
+
 class _ListingReader:
     def __init__(self, workspace: Path, count: int) -> None:
         self.workspace = workspace
@@ -192,3 +222,26 @@ class _ListingReader:
 
     def read_text(self, workspace: str, relative_path: str, *, max_bytes: int) -> str:
         raise AssertionError("workspace_list must not read file contents")
+
+
+class _FakeObservabilityService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str | None]] = []
+
+    def latest_platform(self, connection_id: str) -> dict[str, object]:
+        self.calls.append(("platform", connection_id, None))
+        return {"observation_id": "platform1", "freshness": "fresh"}
+
+    def latest_account(self, connection_id: str, *, owner: str) -> dict[str, object]:
+        self.calls.append(("account", connection_id, owner))
+        if owner != "alice":
+            raise KeyError(owner)
+        return {"observation_id": "account1", "owner": owner}
+
+    def run_resources(self, run_id: str, *, owner: str) -> dict[str, object]:
+        self.calls.append(("run", run_id, owner))
+        return {
+            "observation_id": "summary1",
+            "kind": "run_resource_summary",
+            "run_id": run_id,
+        }

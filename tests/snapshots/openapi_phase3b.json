@@ -71,36 +71,6 @@
         ]
       }
     },
-    "/api/v1/agent-workspaces/{workspace_id}/patch": {
-      "post": {
-        "operationId": "patch_agent_workspace",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "workspace_id",
-            "required": true
-          }
-        ],
-        "tags": [
-          "agent"
-        ]
-      }
-    },
-    "/api/v1/agent-workspaces/{workspace_id}/sandbox": {
-      "post": {
-        "operationId": "validate_agent_workspace",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "workspace_id",
-            "required": true
-          }
-        ],
-        "tags": [
-          "agent"
-        ]
-      }
-    },
     "/api/v1/agent-sessions": {
       "get": {
         "operationId": "list_agent_sessions",
@@ -208,6 +178,36 @@
         ]
       }
     },
+    "/api/v1/agent-workspaces/{workspace_id}/patch": {
+      "post": {
+        "operationId": "patch_agent_workspace",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/v1/agent-workspaces/{workspace_id}/sandbox": {
+      "post": {
+        "operationId": "validate_agent_workspace",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "agent"
+        ]
+      }
+    },
     "/api/v1/health/live": {
       "get": {
         "operationId": "get_liveness",
@@ -223,6 +223,60 @@
         "parameters": [],
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/api/v1/observability/connections/{connection_id}/account/latest": {
+      "get": {
+        "operationId": "get_latest_account_observation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "observability"
+        ]
+      }
+    },
+    "/api/v1/observability/connections/{connection_id}/capabilities/latest": {
+      "get": {
+        "operationId": "get_latest_observation_capabilities",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "observability"
+        ]
+      }
+    },
+    "/api/v1/observability/connections/{connection_id}/platform/latest": {
+      "get": {
+        "operationId": "get_latest_platform_observation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "observability"
+        ]
+      }
+    },
+    "/api/v1/observability/events/stream": {
+      "get": {
+        "operationId": "stream_observability_events",
+        "parameters": [],
+        "tags": [
+          "observability"
         ]
       }
     },
@@ -568,6 +622,51 @@
         ],
         "tags": [
           "remediation"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/resource-evaluations": {
+      "get": {
+        "operationId": "list_run_resource_evaluations",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "observability"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/resources": {
+      "get": {
+        "operationId": "get_run_resources",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "observability"
+        ]
+      }
+    },
+    "/api/v1/runs/{run_id}/resources/series": {
+      "get": {
+        "operationId": "get_run_resource_series",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "observability"
         ]
       }
     },

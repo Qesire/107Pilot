@@ -23,6 +23,7 @@ from pilot107.api.file_routes import FileRoutes
 from pilot107.api.health import ApiHealthService
 from pilot107.api.http_types import ApiResponse as ApiResponse
 from pilot107.api.metrics import ControlPlaneMetrics, normalize_http_route
+from pilot107.api.observability_routes import ResourceObservationRoutes
 from pilot107.api.project_agent_routes import ProjectAgentRoutes
 from pilot107.api.remediation_routes import RemediationRoutes
 from pilot107.api.repair_ticket_routes import RepairTicketRoutes
@@ -180,6 +181,7 @@ class Pilot107HttpApi:
         agent_session_service: AgentSessionService | None = None,
         project_agent_service: ProjectAgentService | None = None,
         runtime_watch_routes: RuntimeWatchRoutes | None = None,
+        observability_routes: ResourceObservationRoutes | None = None,
         auth_required: bool = False,
         trusted_user_header: str = "X-Pilot107-User",
         proxy_hmac_secret: bytes | None = None,
@@ -250,6 +252,7 @@ class Pilot107HttpApi:
             None if project_agent_service is None else ProjectAgentRoutes(project_agent_service)
         )
         self.runtime_watch_routes = runtime_watch_routes
+        self.observability_routes = observability_routes
         self.platform_snapshot_store = platform_snapshot_store
         self.user_entitlement_store = user_entitlement_store
         self.template_market_store = template_market_store
@@ -372,6 +375,14 @@ class Pilot107HttpApi:
             )
             if runtime_watch_response is not None:
                 return runtime_watch_response
+        if self.observability_routes is not None:
+            observability_response = self.observability_routes.handle_get(
+                parts,
+                params=params,
+                identity=identity,
+            )
+            if observability_response is not None:
+                return observability_response
         remediation_response = self.remediation_routes.handle_get(
             parts,
             params=params,
@@ -3309,6 +3320,9 @@ def build_api(
         user_entitlement_store=user_entitlement_store,
     )
     control_repository = SQLiteControlRepository(db_path)
+    from pilot107.observability.service import ObservabilityService
+    from pilot107.observability.store import SQLiteObservabilityStore
+
     return Pilot107HttpApi(
         store=store,
         control_repository=control_repository,
@@ -3343,6 +3357,9 @@ def build_api(
         platform_snapshot_store=platform_snapshot_store,
         user_entitlement_store=user_entitlement_store,
         capability_profile=capability_profile,
+        observability_routes=ResourceObservationRoutes(
+            ObservabilityService(store=SQLiteObservabilityStore(db_path))
+        ),
     )
 
 

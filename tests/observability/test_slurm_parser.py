@@ -35,9 +35,9 @@ def test_parse_slurm_duration_rejects_invalid_values(raw: str) -> None:
 
 def test_parse_sacct_preserves_empty_tail_and_joins_allocation_with_steps() -> None:
     parsed = parse_sacct(
-        "101|COMPLETED|0:0|13|300|cpu=1,mem=32M|1|00:12.018|\n"
-        "101.batch|COMPLETED|0:0|13|300|cpu=1,mem=32M|1|00:12.018|44000K\n"
-        "101.extern|COMPLETED|0:0|13|300|cpu=1,mem=32M|1|00:00.001|2M\n"
+        "101|COMPLETED|0:0|13|5|cpu=1,mem=32M|1||00:12.018|13|\n"
+        "101.batch|COMPLETED|0:0|13||cpu=1,mem=32M|1|1|00:12.018|13|44000K\n"
+        "101.extern|COMPLETED|0:0|13||cpu=1,mem=32M|1|1|00:00.001|13|2M\n"
     )
 
     assert parsed.warnings == ()
@@ -49,7 +49,10 @@ def test_parse_sacct_preserves_empty_tail_and_joins_allocation_with_steps() -> N
     assert usage is not None
     assert usage.total_cpu_seconds == 12.018
     assert usage.elapsed_seconds == 13
+    assert usage.requested_walltime_seconds == 300
     assert usage.allocated_cpus == 1
+    assert usage.task_count == 1
+    assert usage.cpu_time_raw_seconds == 13
     assert usage.allocated_memory_bytes == 32 * 1024**2
     assert usage.max_rss_bytes == 44000 * 1024
 

@@ -36,10 +36,12 @@ class SacctRecord:
     state: str
     exit_code: str
     elapsed_seconds: int | None
-    time_limit_seconds: int | None
+    time_limit_minutes: int | None
     allocated_tres: tuple[tuple[str, str], ...]
     allocated_cpus: int | None
+    task_count: int | None
     total_cpu_seconds: float | None
+    cpu_time_raw_seconds: int | None
     max_rss_bytes: int | None
 
 
@@ -49,10 +51,12 @@ class SacctJobUsage:
     state: str
     exit_code: str
     elapsed_seconds: int | None
-    time_limit_seconds: int | None
+    requested_walltime_seconds: int | None
     allocated_cpus: int | None
+    task_count: int | None
     allocated_memory_bytes: int | None
     total_cpu_seconds: float | None
+    cpu_time_raw_seconds: int | None
     max_rss_bytes: int | None
 
 
@@ -131,7 +135,7 @@ def parse_sstat(stdout: str) -> ParsedRows[SstatStepRecord]:
 def parse_sacct(stdout: str) -> ParsedRows[SacctRecord]:
     records: list[SacctRecord] = []
     warnings: list[str] = []
-    for line_number, columns in _pipe_rows(stdout, expected=9, operation="SACCT"):
+    for line_number, columns in _pipe_rows(stdout, expected=11, operation="SACCT"):
         job_id = columns[0]
         if _JOB_ID.fullmatch(job_id) is None:
             warnings.append(f"MALFORMED_SACCT_ROW:{line_number}")
@@ -142,14 +146,16 @@ def parse_sacct(stdout: str) -> ParsedRows[SacctRecord]:
                 state=columns[1],
                 exit_code=columns[2],
                 elapsed_seconds=_integer(columns[3]),
-                time_limit_seconds=_integer(columns[4]),
+                time_limit_minutes=_integer(columns[4]),
                 allocated_tres=_parse_tres(columns[5]),
                 allocated_cpus=_integer(columns[6]),
-                total_cpu_seconds=parse_slurm_duration_seconds(columns[7]),
-                max_rss_bytes=parse_memory_bytes(columns[8]),
+                task_count=_integer(columns[7]),
+                total_cpu_seconds=parse_slurm_duration_seconds(columns[8]),
+                cpu_time_raw_seconds=_integer(columns[9]),
+                max_rss_bytes=parse_memory_bytes(columns[10]),
             )
         )
-    warnings.extend(_row_warnings(stdout, expected=9, operation="SACCT"))
+    warnings.extend(_row_warnings(stdout, expected=11, operation="SACCT"))
     return ParsedRows(tuple(records), tuple(sorted(warnings, key=_warning_line)))
 
 
@@ -165,16 +171,33 @@ def summarize_sacct_job(
         for record in records
         if record.job_id_raw.startswith(step_prefix) and record.max_rss_bytes is not None
     ]
+    step_tasks = [
+        record.task_count
+        for record in records
+        if record.job_id_raw.startswith(step_prefix)
+        and not record.job_id_raw.endswith(".extern")
+        and record.task_count is not None
+    ]
     tres = dict(allocation.allocated_tres)
     return SacctJobUsage(
         job_id=job_id,
         state=allocation.state,
         exit_code=allocation.exit_code,
         elapsed_seconds=allocation.elapsed_seconds,
-        time_limit_seconds=allocation.time_limit_seconds,
+        requested_walltime_seconds=(
+            None
+            if allocation.time_limit_minutes is None
+            else allocation.time_limit_minutes * 60
+        ),
         allocated_cpus=allocation.allocated_cpus,
+        task_count=(
+            allocation.task_count
+            if allocation.task_count is not None
+            else max(step_tasks) if step_tasks else None
+        ),
         allocated_memory_bytes=parse_memory_bytes(tres.get("mem", "")),
         total_cpu_seconds=allocation.total_cpu_seconds,
+        cpu_time_raw_seconds=allocation.cpu_time_raw_seconds,
         max_rss_bytes=max(step_rss) if step_rss else None,
     )
 

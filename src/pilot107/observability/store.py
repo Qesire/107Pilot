@@ -111,6 +111,15 @@ class ObservabilityStore(Protocol):
     def save_run_sample(self, value: RunResourceSample) -> RunResourceSample: ...
     def save_minute_aggregate(self, value: RunResourceSample) -> RunResourceSample: ...
     def save_summary(self, value: RunResourceSummary) -> RunResourceSummary: ...
+    def get_latest_platform_pulse(
+        self, connection_id: str, *, lane: str
+    ) -> PlatformPulse: ...
+    def get_latest_account_pulse(
+        self, connection_id: str, *, owner: str
+    ) -> AccountPulse: ...
+    def list_account_pulses(
+        self, connection_id: str, *, owner: str, limit: int
+    ) -> list[AccountPulse]: ...
     def list_run_samples(self, run_id: str, *, owner: str) -> list[RunResourceSample]: ...
     def list_minute_aggregates(
         self, run_id: str, *, owner: str
@@ -397,6 +406,58 @@ class SQLiteObservabilityStore:
     def list_run_samples(self, run_id: str, *, owner: str) -> list[RunResourceSample]:
         return self._list_samples(run_id, owner=owner, resolution="raw")
 
+    def get_latest_platform_pulse(
+        self, connection_id: str, *, lane: str
+    ) -> PlatformPulse:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM resource_observations "
+                "WHERE kind = 'platform_pulse' AND connection_id = ? "
+                "ORDER BY captured_at DESC, observation_id DESC",
+                (connection_id,),
+            ).fetchall()
+            for row in rows:
+                payload = json.loads(row["payload_json"])
+                match = connection.execute(
+                    "SELECT cycle_id FROM observation_cycles "
+                    "WHERE cycle_id = ? AND lane = ?",
+                    (payload["cycle_id"], lane),
+                ).fetchone()
+                if match is not None:
+                    return _platform_from_payload(payload)
+        raise KeyError(connection_id)
+
+    def get_latest_account_pulse(
+        self, connection_id: str, *, owner: str
+    ) -> AccountPulse:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM resource_observations "
+                "WHERE kind = 'account_pulse' AND connection_id = ? AND owner = ? "
+                "ORDER BY captured_at DESC, observation_id DESC LIMIT 1",
+                (connection_id, owner),
+            ).fetchone()
+        if row is None:
+            raise KeyError(connection_id)
+        return _account_from_payload(json.loads(row["payload_json"]))
+
+    def list_account_pulses(
+        self, connection_id: str, *, owner: str, limit: int
+    ) -> list[AccountPulse]:
+        if isinstance(limit, bool) or not 1 <= limit <= 1000:
+            raise ValueError("account pulse limit is invalid")
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM resource_observations "
+                "WHERE kind = 'account_pulse' AND connection_id = ? AND owner = ? "
+                "ORDER BY captured_at DESC, observation_id DESC LIMIT ?",
+                (connection_id, owner, limit),
+            ).fetchall()
+        return [
+            _account_from_payload(json.loads(row["payload_json"]))
+            for row in reversed(rows)
+        ]
+
     def list_minute_aggregates(self, run_id: str, *, owner: str) -> list[RunResourceSample]:
         return self._list_samples(run_id, owner=owner, resolution="minute")
 
@@ -480,6 +541,20 @@ def _measure_set(value: dict[str, Any]) -> ResourceMeasureSet:
 
 def _sample_from_payload(value: dict[str, Any]) -> RunResourceSample:
     return RunResourceSample(
+        **_common(value),
+        measures=_measure_set(cast(dict[str, Any], value["measures"])),
+    )
+
+
+def _platform_from_payload(value: dict[str, Any]) -> PlatformPulse:
+    return PlatformPulse(
+        **_common(value),
+        measures=_measure_set(cast(dict[str, Any], value["measures"])),
+    )
+
+
+def _account_from_payload(value: dict[str, Any]) -> AccountPulse:
+    return AccountPulse(
         **_common(value),
         measures=_measure_set(cast(dict[str, Any], value["measures"])),
     )

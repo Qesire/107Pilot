@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -194,6 +195,12 @@ _AGENT_CHANGESET_SCOPE_PARAMETERS = [
 ]
 _RUN_PATH_PARAMETER = {
     "name": "run_id",
+    "in": "path",
+    "required": True,
+    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+}
+_OBSERVABILITY_CONNECTION_PARAMETER = {
+    "name": "connection_id",
     "in": "path",
     "required": True,
     "schema": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -778,6 +785,72 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
         methods=["GET"],
         operation_id="stream_runtime_watch_events",
         tags=["runtime-watch"],
+    )
+
+    for suffix, operation_id in (
+        ("capabilities/latest", "get_latest_observation_capabilities"),
+        ("platform/latest", "get_latest_platform_observation"),
+        ("account/latest", "get_latest_account_observation"),
+    ):
+        app.add_api_route(
+            f"/api/v1/observability/connections/{{connection_id}}/{suffix}",
+            forward_get,
+            methods=["GET"],
+            operation_id=operation_id,
+            tags=["observability"],
+            openapi_extra={"parameters": [_OBSERVABILITY_CONNECTION_PARAMETER]},
+        )
+    for suffix, operation_id in (
+        ("resources", "get_run_resources"),
+        ("resources/series", "get_run_resource_series"),
+        ("resource-evaluations", "list_run_resource_evaluations"),
+    ):
+        app.add_api_route(
+            f"/api/v1/runs/{{run_id}}/{suffix}",
+            forward_get,
+            methods=["GET"],
+            operation_id=operation_id,
+            tags=["observability"],
+            openapi_extra={"parameters": [_RUN_PATH_PARAMETER]},
+        )
+
+    async def observability_events(request: Request) -> Response:
+        connection_id = request.query_params.get("connection_id", "")
+        if not connection_id or len(connection_id) > 128:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "code": "OBSERVABILITY.INVALID_REQUEST",
+                        "message": "connection_id is required",
+                    }
+                },
+            )
+        target = (
+            "/api/v1/observability/connections/"
+            f"{quote(connection_id, safe='')}/platform/latest"
+        )
+        response = api.handle_get(target, headers=dict(request.headers.items()))
+        if response.status != 200:
+            return _to_fastapi_response(response, api.max_response_body_bytes)
+        encoded = json.dumps(response.payload, ensure_ascii=False, separators=(",", ":"))
+        return StreamingResponse(
+            iter(
+                [
+                    "event: observability.platform_pulse_available\n"
+                    f"data: {encoded}\n\n"
+                ]
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    app.add_api_route(
+        "/api/v1/observability/events/stream",
+        observability_events,
+        methods=["GET"],
+        operation_id="stream_observability_events",
+        tags=["observability"],
     )
 
     # Routes migrate to explicit OpenAPI operations incrementally while sharing

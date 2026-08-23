@@ -1,8 +1,14 @@
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
-import { HardDrive } from "lucide-react";
+import { DatabaseZap, HardDrive } from "lucide-react";
 import { FactState, formatTimestamp } from "./components";
-import { useResourceSummary, useStorageUsage } from "./query";
+import {
+  useLatestPlatformObservation,
+  usePlatformConnections,
+  useResourceSummary,
+  useStorageUsage,
+} from "./query";
+import { formatObservedMeasure } from "./RunResourcePanel";
 import {
   formatStorageBytes,
   jobStateLabel,
@@ -172,6 +178,9 @@ function StorageCard({ user }: { user: string }) {
 
 export function ResourceDashboard({ user }: { user: string }) {
   const summary = useResourceSummary(user);
+  const connections = usePlatformConnections(user);
+  const observationConnection = connections.data?.items[0]?.connection_id ?? "default";
+  const observation = useLatestPlatformObservation(user, observationConnection);
   const data = summary.data;
 
   const nodeData: DonutDatum[] = (data?.nodes ?? []).map((item: StateCount) => ({
@@ -216,6 +225,23 @@ export function ResourceDashboard({ user }: { user: string }) {
           <FactState status={data?.freshness} />
         </div>
       </div>
+
+      {observation.data ? (
+        <div className="platform-observation-ribbon">
+          <DatabaseZap aria-hidden="true" />
+          <div>
+            <strong>Worker 持久化观测</strong>
+            <span>
+              {Object.entries(observation.data.measures)
+                .slice(0, 3)
+                .map(([name, measure]) => `${name}: ${formatObservedMeasure(measure)}`)
+                .join(" · ") || "当前周期没有可展示字段"}
+            </span>
+          </div>
+          <FactState status={observation.data.freshness} />
+          <code>{observation.data.connection_id}</code>
+        </div>
+      ) : null}
 
       {summary.isError ? (
         <div className="resource-card-empty">暂无平台快照数据</div>

@@ -19,12 +19,15 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _A1_TOOLS = frozenset(
     {
         "platform_get_snapshot",
+        "platform_observation_get",
+        "account_observation_get",
         "workspace_list",
         "workspace_search",
         "workspace_read",
         "run_get",
         "run_log_read",
         "evidence_read",
+        "run_resources_get",
     }
 )
 _A2_TOOLS = frozenset(

@@ -223,13 +223,16 @@ def test_dispatch_persists_each_event_before_hint_and_completes(tmp_path: Path) 
     assert claims.fencing_token == 1
     assert claims.tools == frozenset(
         {
-            "platform_get_snapshot",
+                "platform_get_snapshot",
+                "platform_observation_get",
+                "account_observation_get",
             "workspace_list",
             "workspace_search",
             "workspace_read",
             "run_get",
             "run_log_read",
-            "evidence_read",
+                "evidence_read",
+                "run_resources_get",
         }
     )
     persisted, _ = store.list_events_page(

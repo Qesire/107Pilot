@@ -61,12 +61,15 @@ _EVENT_TYPES = {
 _TERMINAL_TYPES = {"turn_completed", "turn_failed"}
 _A1_READ_TOOLS = {
     "platform_get_snapshot",
+    "platform_observation_get",
+    "account_observation_get",
     "workspace_list",
     "workspace_search",
     "workspace_read",
     "run_get",
     "run_log_read",
     "evidence_read",
+    "run_resources_get",
 }
 _A2_PROJECT_TOOLS = {
     "project_get",

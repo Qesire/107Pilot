@@ -56,6 +56,7 @@ from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.file_routes import FileRoutes
 from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.api.metrics import ControlPlaneMetrics
+from pilot107.api.observability_routes import ResourceObservationRoutes
 from pilot107.api.runtime_watch_routes import RuntimeWatchRoutes
 from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
 from pilot107.core.code_context import (
@@ -105,6 +106,9 @@ from pilot107.core.template_policy import (
 from pilot107.core.template_verification import TemplateVerificationService
 from pilot107.core.terminal import TerminalCommandService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
+from pilot107.observability.postgres_store import PostgresObservabilityStore
+from pilot107.observability.service import ObservabilityService
+from pilot107.observability.store import SQLiteObservabilityStore
 from pilot107.runtime_watch.postgres_store import PostgresRuntimeWatchStore
 from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
@@ -658,6 +662,15 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         evidence_store=shared_evidence_store,
     )
     workspace_reader = _build_workspace_reader(config)
+    observation_store = (
+        SQLiteObservabilityStore(config.db_path)
+        if config.postgres_dsn is None
+        else PostgresObservabilityStore(
+            config.postgres_dsn,
+            compatibility_path=config.db_path,
+        )
+    )
+    observability_service = ObservabilityService(store=observation_store)
     agent_tool_routes: AgentToolRoutes | None = None
     agent_session_service: AgentSessionService | None = None
     project_agent_service: ProjectAgentService | None = None
@@ -672,6 +685,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             evidence_query=evidence_query,
             workspace_reader=workspace_reader,
             workspace_root_templates=config.code_context_allowed_roots,
+            observability_service=observability_service,
         )
         project_store = build_project_store(
             sqlite_path=config.db_path,
@@ -796,6 +810,9 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         agent_session_service=agent_session_service,
         project_agent_service=project_agent_service,
         runtime_watch_routes=RuntimeWatchRoutes(runtime_watch_store),
+        observability_routes=ResourceObservationRoutes(
+            observability_service
+        ),
         auth_required=config.auth_required,
         trusted_user_header=config.trusted_user_header,
         proxy_hmac_secret=config.proxy_hmac_secret,

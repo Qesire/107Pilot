@@ -20,6 +20,7 @@ import type {
   PlatformConnection,
   PlatformConnections,
   PlatformSnapshot,
+  PlatformResourceObservation,
   StorageUsage,
   RecipeVersionPayload,
   RepairTicket,
@@ -29,6 +30,7 @@ import type {
   RuntimeWatchAlerts,
   RuntimeWatchLogPage,
   RuntimeWatchSummary,
+  RunResources,
   JsonObject,
   RecipeSummaryPayload,
   PreparedRun,
@@ -205,6 +207,15 @@ export const api = {
       user,
       signal,
     ),
+  latestPlatformObservation: (
+    user: string,
+    connectionId: string,
+    signal?: AbortSignal,
+  ) => getJson<PlatformResourceObservation>(
+    `/api/v1/observability/connections/${encodeURIComponent(connectionId)}/platform/latest`,
+    user,
+    signal,
+  ),
   latestEntitlement: (user: string, signal?: AbortSignal) =>
     getJson<EntitlementSnapshot>(
       queryPath("/api/v1/platform/entitlements/latest", { owner: user }),
@@ -274,6 +285,12 @@ export const api = {
   runtimeWatchAlerts: (user: string, runId: string, signal?: AbortSignal) =>
     getJson<RuntimeWatchAlerts>(
       `/api/v1/runs/${encodeURIComponent(runId)}/runtime-watch/alerts`,
+      user,
+      signal,
+    ),
+  runResources: (user: string, runId: string, signal?: AbortSignal) =>
+    getJson<RunResources>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/resources`,
       user,
       signal,
     ),

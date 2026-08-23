@@ -59,7 +59,7 @@ function onlyTool(kind: "explain" | "contract_patch" | "remediation_plan") {
 }
 
 describe("task profiles", () => {
-  it("registers the seven read tools only for an authorized durable Turn", () => {
+  it("registers the bounded read tools only for an authorized durable Turn", () => {
     const request = durableRequest();
     const task = prepareTask(request, {
       readToolGateway: {
@@ -71,12 +71,15 @@ describe("task profiles", () => {
 
     expect(task.tools.map((tool) => tool.name)).toEqual([
       "platform_get_snapshot",
+      "platform_observation_get",
+      "account_observation_get",
       "workspace_list",
       "workspace_search",
       "workspace_read",
       "run_get",
       "run_log_read",
       "evidence_read",
+      "run_resources_get",
     ]);
     expect(task.constrained).toBe(false);
     expect(JSON.parse(task.userMessage)).toEqual({ data: request.input });

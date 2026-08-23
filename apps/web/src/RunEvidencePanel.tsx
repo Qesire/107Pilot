@@ -40,6 +40,7 @@ import {
 } from "./query";
 import { RunExplanationPanel } from "./RunExplanationPanel";
 import { RuntimeWatchPanel } from "./RuntimeWatchPanel";
+import { RunResourcePanel } from "./RunResourcePanel";
 import type {
   DiagnosisRecordPayload,
   EvidenceObject,
@@ -495,6 +496,7 @@ function Overview({ user, run, objects, tasks, remediation, onBeginRemediation }
         <div><dt>Result</dt><dd>{run.result_status}</dd></div>
         <div><dt>Updated</dt><dd>{formatTimestamp(run.updated_at)}</dd></div>
       </dl>
+      <RunResourcePanel user={user} runId={run.run_id} />
       {run.job_id ? <NativeCommands user={user} run={run} /> : null}
       <section className="collection-tasks"><h3>Collection tasks</h3><ul>{tasks.map((task) => <li key={task.task_id}><FactState status={task.state} /><span>{task.task_type}</span><small>attempt {task.attempts}</small></li>)}</ul></section>
       {["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILED", "ORPHANED"].includes(run.state) ? (

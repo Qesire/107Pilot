@@ -6,7 +6,7 @@ import { A1_READ_TOOL_NAMES, type ToolResult } from "../src/protocol.js";
 import { durableRequest } from "./support/fixtures.js";
 
 describe("A1 read tools", () => {
-  it("registers exactly seven sequential tools with closed argument schemas", () => {
+  it("registers the bounded sequential read tools with closed argument schemas", () => {
     const tools = createReadOnlyTools(durableRequest(), {
       invoke: async () => successResult("unused"),
     });
@@ -17,6 +17,8 @@ describe("A1 read tools", () => {
     const cases = [
       ["platform_get_snapshot", {}, true],
       ["platform_get_snapshot", { unknown: true }, false],
+      ["platform_observation_get", { connection_id: "connection1" }, true],
+      ["account_observation_get", { connection_id: "connection1" }, true],
       ["workspace_list", { workspace: "/work/alice/project" }, true],
       ["workspace_list", { workspace: "/work/alice/project", unknown: true }, false],
       ["workspace_search", { workspace: "/work/alice/project", query: "main" }, true],
@@ -27,6 +29,7 @@ describe("A1 read tools", () => {
       ["run_log_read", { run_id: "run-1", stream: "combined", cursor: 0 }, false],
       ["run_log_read", { run_id: "run-1", stream: "stdout", cursor: -1 }, false],
       ["evidence_read", { run_id: "run-1", object_id: "object-1" }, true],
+      ["run_resources_get", { run_id: "run-1" }, true],
     ] as const;
 
     for (const [name, value, expected] of cases) {

@@ -424,12 +424,15 @@ export type ExecutableTaskKind = TaskKind | "interactive_readonly" | "experiment
 
 export const A1_READ_TOOL_NAMES = [
   "platform_get_snapshot",
+  "platform_observation_get",
+  "account_observation_get",
   "workspace_list",
   "workspace_search",
   "workspace_read",
   "run_get",
   "run_log_read",
   "evidence_read",
+  "run_resources_get",
 ] as const;
 
 export const A2_PROJECT_TOOL_NAMES = [

@@ -207,9 +207,9 @@ def test_sacct_preserves_terminal_used_and_allocated_scopes() -> None:
         [
             CommandResult(
                 0,
-                "101|COMPLETED|0:0|120|300|cpu=2,mem=4G|2|00:03:00.018|\n"
-                "101.batch|COMPLETED|0:0|120|300|cpu=2,mem=4G|2|"
-                "00:03:00.018|2048M\n",
+                "101|COMPLETED|0:0|120|5|cpu=2,mem=4G|2||00:03:00.018|240|\n"
+                "101.batch|COMPLETED|0:0|120||cpu=2,mem=4G|2|1|"
+                "00:03:00.018|240|2048M\n",
                 "",
             )
         ]
@@ -224,13 +224,16 @@ def test_sacct_preserves_terminal_used_and_allocated_scopes() -> None:
         "-j",
         "101",
         "-o",
-        "JobIDRaw,State,ExitCode,ElapsedRaw,TimelimitRaw,AllocTRES,AllocCPUS,TotalCPU,MaxRSS",
+        "JobIDRaw,State,ExitCode,ElapsedRaw,TimelimitRaw,AllocTRES,AllocCPUS,"
+        "NTasks,TotalCPU,CPUTimeRAW,MaxRSS",
     ]
     observation = batch.run_observations[0]
     assert observation.measures.total_cpu is not None
     assert observation.measures.total_cpu.value == 180.018
     assert observation.measures.max_rss is not None
     assert observation.measures.max_rss.value == 2048 * 1024**2
+    assert observation.measures.cpu_time_raw is not None
+    assert observation.measures.cpu_time_raw.value == 240
     assert observation.measures.elapsed is not None
     assert observation.measures.elapsed.value == 120
     assert observation.allocated is not None
@@ -238,6 +241,9 @@ def test_sacct_preserves_terminal_used_and_allocated_scopes() -> None:
     assert observation.allocated.allocated_cpus.value == 2
     assert observation.allocated.allocated_memory is not None
     assert observation.allocated.allocated_memory.value == 4 * 1024**3
+    allocated = observation.allocated.as_dict()
+    assert allocated["task_count"].value == 1
+    assert allocated["requested_walltime"].value == 300
 
 
 def test_sacct_keeps_allocation_row_when_last_maxrss_field_is_empty() -> None:
@@ -245,7 +251,7 @@ def test_sacct_keeps_allocation_row_when_last_maxrss_field_is_empty() -> None:
         [
             CommandResult(
                 0,
-                "101|COMPLETED|0:0|120|300|cpu=2,mem=4G|2|00:03:00|\n",
+                "101|COMPLETED|0:0|120|5|cpu=2,mem=4G|2||00:03:00|240|\n",
                 "",
             )
         ]

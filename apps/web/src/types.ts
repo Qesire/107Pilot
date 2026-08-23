@@ -1116,3 +1116,66 @@ export interface RuntimeWatchAlert {
 export interface RuntimeWatchAlerts {
   items: RuntimeWatchAlert[];
 }
+
+export type MeasureAvailability =
+  | "available"
+  | "unsupported"
+  | "permission_denied"
+  | "not_collected"
+  | "insufficient_coverage"
+  | "invalid";
+
+export interface ObservedMeasure {
+  value: number | string | null;
+  unit: string;
+  availability: MeasureAvailability;
+  source_adapter: string;
+  source_operation: string;
+  captured_at: string;
+  quality: string;
+  coverage: number | null;
+  warning: string | null;
+}
+
+export type ResourceMeasures = Record<string, ObservedMeasure>;
+
+export interface ResourceEvaluationView {
+  evaluation_id: string;
+  rule_id: string;
+  severity: "info" | "warning" | "error";
+  confidence: "low" | "medium" | "high";
+  summary: string;
+  evidence_refs: string[];
+  suggested_contract_patch: Record<string, number | string | boolean | null>;
+}
+
+export interface RunResources {
+  observation_id: string;
+  kind: "run_resource_sample" | "run_resource_summary";
+  connection_id: string;
+  owner: string;
+  run_id: string;
+  attempt: number;
+  cycle_id: string;
+  captured_at: string;
+  freshness: "fresh" | "stale" | "expired" | "terminal";
+  partial: boolean;
+  warnings: string[];
+  measures?: ResourceMeasures;
+  used?: ResourceMeasures;
+  allocated?: ResourceMeasures;
+  evaluations: ResourceEvaluationView[];
+}
+
+export interface PlatformResourceObservation {
+  observation_id: string;
+  kind: "platform_pulse" | "cluster_capability";
+  connection_id: string;
+  owner: string | null;
+  cycle_id: string;
+  captured_at: string;
+  freshness: "fresh" | "stale" | "expired";
+  partial: boolean;
+  warnings: string[];
+  measures: ResourceMeasures;
+}

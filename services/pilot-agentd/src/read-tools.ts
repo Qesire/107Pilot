@@ -17,6 +17,14 @@ const Workspace = Type.String({ minLength: 1, maxLength: 4_096 });
 
 const ARGUMENT_SCHEMAS = {
   platform_get_snapshot: Type.Object({}, { additionalProperties: false }),
+  platform_observation_get: Type.Object(
+    { connection_id: BoundedId },
+    { additionalProperties: false },
+  ),
+  account_observation_get: Type.Object(
+    { connection_id: BoundedId },
+    { additionalProperties: false },
+  ),
   workspace_list: Type.Object(
     { workspace: Workspace },
     { additionalProperties: false },
@@ -48,16 +56,23 @@ const ARGUMENT_SCHEMAS = {
     { run_id: BoundedId, object_id: BoundedId },
     { additionalProperties: false },
   ),
+  run_resources_get: Type.Object(
+    { run_id: BoundedId },
+    { additionalProperties: false },
+  ),
 } satisfies Record<A1ToolName, TSchema>;
 
 const TOOL_DESCRIPTIONS = {
   platform_get_snapshot: "Read the latest safe platform snapshot for this owner.",
+  platform_observation_get: "Read the latest persisted platform resource observation.",
+  account_observation_get: "Read the caller's latest persisted account observation.",
   workspace_list: "List bounded tracked paths in an authorized workspace.",
   workspace_search: "Search bounded text in an authorized workspace.",
   workspace_read: "Read bounded UTF-8 text from an authorized workspace file.",
   run_get: "Read the safe state and resource summary for one owned Run.",
   run_log_read: "Read a bounded stdout or stderr page for one owned Run.",
   evidence_read: "Read a bounded preview of one owned evidence object.",
+  run_resources_get: "Read persisted live or terminal resource facts for one owned Run.",
 } satisfies Record<A1ToolName, string>;
 
 export interface ReadToolGateway {

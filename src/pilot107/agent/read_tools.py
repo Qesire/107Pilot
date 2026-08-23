@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Protocol
 
 from pilot107.agent.tool_gateway import (
     AgentReadHandler,
@@ -28,6 +29,14 @@ _MAX_PLATFORM_BYTES = 128 * 1024
 _MAX_RUN_BYTES = 64 * 1024
 
 
+class ObservabilityReadService(Protocol):
+    def latest_platform(self, connection_id: str) -> dict[str, object]: ...
+    def latest_account(
+        self, connection_id: str, *, owner: str
+    ) -> dict[str, object]: ...
+    def run_resources(self, run_id: str, *, owner: str) -> dict[str, object]: ...
+
+
 @dataclass(frozen=True)
 class AgentReadContext:
     platform_snapshot_store: PlatformSnapshotStore | None
@@ -35,6 +44,7 @@ class AgentReadContext:
     evidence_query: EvidenceQueryService
     workspace_reader: WorkspaceReader | None
     workspace_root_templates: tuple[str, ...] = ()
+    observability_service: ObservabilityReadService | None = None
 
 
 def build_a1_read_handlers(context: AgentReadContext) -> dict[str, AgentReadHandler]:
@@ -56,7 +66,77 @@ def build_a1_read_handlers(context: AgentReadContext) -> dict[str, AgentReadHand
         "evidence_read": lambda owner, arguments: _evidence_read(
             context, owner, arguments
         ),
+        "platform_observation_get": lambda owner, arguments: _platform_observation(
+            context, owner, arguments
+        ),
+        "account_observation_get": lambda owner, arguments: _account_observation(
+            context, owner, arguments
+        ),
+        "run_resources_get": lambda owner, arguments: _run_resources(
+            context, owner, arguments
+        ),
     }
+
+
+def _platform_observation(
+    context: AgentReadContext, owner: str, arguments: Mapping[str, object]
+) -> AgentReadResult:
+    del owner
+    _closed_arguments(arguments, {"connection_id"})
+    service = _observability(context)
+    try:
+        payload = service.latest_platform(_required_string(arguments, "connection_id"))
+    except KeyError:
+        raise _error("AGENT.TOOL.NOT_FOUND", "Platform observation was not found") from None
+    return _observation_result(payload, prefix="observation")
+
+
+def _account_observation(
+    context: AgentReadContext, owner: str, arguments: Mapping[str, object]
+) -> AgentReadResult:
+    _closed_arguments(arguments, {"connection_id"})
+    service = _observability(context)
+    try:
+        payload = service.latest_account(
+            _required_string(arguments, "connection_id"), owner=owner
+        )
+    except KeyError:
+        raise _error("AGENT.TOOL.NOT_FOUND", "Account observation was not found") from None
+    return _observation_result(payload, prefix="observation")
+
+
+def _run_resources(
+    context: AgentReadContext, owner: str, arguments: Mapping[str, object]
+) -> AgentReadResult:
+    _closed_arguments(arguments, {"run_id"})
+    service = _observability(context)
+    try:
+        payload = service.run_resources(_required_string(arguments, "run_id"), owner=owner)
+    except KeyError:
+        raise _error("AGENT.TOOL.NOT_FOUND", "Run resources were not found") from None
+    prefix = (
+        "resource-summary"
+        if payload.get("kind") == "run_resource_summary"
+        else "resource-sample"
+    )
+    return _observation_result(payload, prefix=prefix)
+
+
+def _observation_result(payload: dict[str, object], *, prefix: str) -> AgentReadResult:
+    observation_id = payload.get("observation_id")
+    if not isinstance(observation_id, str):
+        raise _error("AGENT.TOOL.INVALID_RESULT", "Observation result is invalid")
+    _require_serialized_bound(payload, _MAX_PLATFORM_BYTES)
+    return AgentReadResult(
+        result=payload,
+        evidence_refs=(f"{prefix}:{observation_id}",),
+    )
+
+
+def _observability(context: AgentReadContext) -> ObservabilityReadService:
+    if context.observability_service is None:
+        raise _error("AGENT.TOOL.UNAVAILABLE", "Resource observation reader is unavailable")
+    return context.observability_service
 
 
 def _platform_snapshot(

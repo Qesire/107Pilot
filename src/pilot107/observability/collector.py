@@ -450,6 +450,7 @@ def _terminal_ready(item: object) -> bool:
     allocated = item.allocated
     required = (
         item.measures.total_cpu,
+        item.measures.cpu_time_raw,
         item.measures.elapsed,
         None if allocated is None else allocated.allocated_cpus,
     )

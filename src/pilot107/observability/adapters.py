@@ -145,7 +145,7 @@ class SlurmCliObservationAdapter:
     )
     _SACCT_FIELDS = (
         "JobIDRaw,State,ExitCode,ElapsedRaw,TimelimitRaw,AllocTRES,"
-        "AllocCPUS,TotalCPU,MaxRSS"
+        "AllocCPUS,NTasks,TotalCPU,CPUTimeRAW,MaxRSS"
     )
     _SINFO_FORMAT = "%P|%c|%m|%G|%T"
     _CONFIG_FACTS = (
@@ -501,6 +501,12 @@ class SlurmCliObservationAdapter:
                             operation="sacct",
                             captured_at=captured_at,
                         ),
+                        cpu_time_raw=_measure_or_missing(
+                            usage.cpu_time_raw_seconds,
+                            unit="cpu_seconds",
+                            operation="sacct",
+                            captured_at=captured_at,
+                        ),
                         elapsed=_measure_or_missing(
                             usage.elapsed_seconds,
                             unit="seconds",
@@ -526,6 +532,26 @@ class SlurmCliObservationAdapter:
                             unit="bytes",
                             operation="sacct",
                             captured_at=captured_at,
+                        ),
+                        extras=(
+                            (
+                                "task_count",
+                                _measure_or_missing(
+                                    usage.task_count,
+                                    unit="tasks",
+                                    operation="sacct",
+                                    captured_at=captured_at,
+                                ),
+                            ),
+                            (
+                                "requested_walltime",
+                                _measure_or_missing(
+                                    usage.requested_walltime_seconds,
+                                    unit="seconds",
+                                    operation="sacct",
+                                    captured_at=captured_at,
+                                ),
+                            ),
                         ),
                     ),
                 )

@@ -171,10 +171,14 @@ def main() -> int:
             return 1
         assert summary is not None
         total_cpu = summary.used.total_cpu
+        cpu_time_raw = summary.used.cpu_time_raw
         terminal_rss = summary.used.max_rss
         gpu = summary.used.gpu_utilization
         if total_cpu is None or total_cpu.availability != "available":
             print("terminal sacct did not produce TotalCPU", file=sys.stderr)
+            return 1
+        if cpu_time_raw is None or cpu_time_raw.availability != "available":
+            print("terminal sacct did not produce CPUTimeRAW", file=sys.stderr)
             return 1
         if (
             terminal_rss is None
@@ -182,6 +186,15 @@ def main() -> int:
             or int(terminal_rss.value or 0) <= 0
         ):
             print("terminal sacct steps did not produce MaxRSS", file=sys.stderr)
+            return 1
+        allocated = summary.allocated.as_dict()
+        task_count = allocated.get("task_count")
+        requested_walltime = allocated.get("requested_walltime")
+        if task_count is None or task_count.value != 1:
+            print("terminal sacct did not preserve single-task scope", file=sys.stderr)
+            return 1
+        if requested_walltime is None or requested_walltime.value != 120:
+            print("TimelimitRaw was not converted from minutes to seconds", file=sys.stderr)
             return 1
         if gpu is None or gpu.availability != "unsupported" or gpu.value is not None:
             print("GPU missingness was not preserved as unsupported", file=sys.stderr)
@@ -196,6 +209,9 @@ def main() -> int:
             "max_rss_bytes": available_rss[-1].value,
             "terminal_max_rss_bytes": terminal_rss.value,
             "total_cpu_seconds": total_cpu.value,
+            "cpu_time_raw_seconds": cpu_time_raw.value,
+            "task_count": task_count.value,
+            "requested_walltime_seconds": requested_walltime.value,
             "gpu_availability": gpu.availability,
             "cycle_statuses": cycle_statuses,
             "jobacct_gather_type": "jobacct_gather/linux",

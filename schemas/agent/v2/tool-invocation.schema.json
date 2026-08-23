@@ -68,6 +68,14 @@
         },
         {
           "type": "string",
+          "const": "platform_observation_get"
+        },
+        {
+          "type": "string",
+          "const": "account_observation_get"
+        },
+        {
+          "type": "string",
           "const": "workspace_list"
         },
         {
@@ -89,6 +97,10 @@
         {
           "type": "string",
           "const": "evidence_read"
+        },
+        {
+          "type": "string",
+          "const": "run_resources_get"
         },
         {
           "type": "string",

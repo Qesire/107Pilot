@@ -58,6 +58,15 @@ export function useLatestEntitlement(user: string) {
   });
 }
 
+export function useLatestPlatformObservation(user: string, connectionId: string) {
+  return useQuery({
+    queryKey: ["platform-observation", user, connectionId],
+    queryFn: ({ signal }) => api.latestPlatformObservation(user, connectionId, signal),
+    retry: false,
+    refetchInterval: 20_000,
+  });
+}
+
 export interface ResourceSummary {
   nodes: StateCount[];
   cpu: CpuAllocation;
@@ -195,6 +204,17 @@ export function useRuntimeWatchAlerts(user: string, runId: string | null) {
     enabled: Boolean(runId),
     retry: false,
     refetchInterval: 5_000,
+  });
+}
+
+export function useRunResources(user: string, runId: string | null) {
+  return useQuery({
+    queryKey: ["run-resources", user, runId],
+    queryFn: ({ signal }) => api.runResources(user, runId ?? "", signal),
+    enabled: Boolean(runId),
+    retry: false,
+    refetchInterval: (query) =>
+      query.state.data?.freshness === "terminal" ? false : 10_000,
   });
 }
 
