@@ -25,6 +25,7 @@ from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import CollectionTaskFenceConflict, CollectionTaskRecord
 from pilot107.core.states import TERMINAL_RUN_STATES, CapsuleState, CollectionState
+from pilot107.core.workflow_manifest import WorkflowArtifactGateError, WorkflowService
 from pilot107.observability.adapters import RunObservationTarget
 from pilot107.observability.collector import (
     ObservabilityCollector,
@@ -119,6 +120,8 @@ class WorkerTickResult:
     observability_commands: int = 0
     observability_budget_skipped: bool = False
     observability_errors: list[str] = field(default_factory=list)
+    workflows_checked: int = 0
+    workflow_errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -149,6 +152,7 @@ class RuntimeReconcileWorker:
         runtime_watch_service: RuntimeWatchService | None = None,
         observability_collector: ObservabilityCollector | None = None,
         observability_connection_id: str = "default",
+        workflow_service: WorkflowService | None = None,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -171,6 +175,7 @@ class RuntimeReconcileWorker:
         self.runtime_watch_service = runtime_watch_service
         self.observability_collector = observability_collector
         self.observability_connection_id = observability_connection_id
+        self.workflow_service = workflow_service
 
     def tick(self) -> WorkerTickResult:
         runtime_watch_result = (
@@ -178,6 +183,21 @@ class RuntimeReconcileWorker:
         )
         agent_task_batches: list[AgentTaskDispatchBatch] = []
         agent_task_outer_errors: list[WorkerRunError] = []
+        workflows_checked = 0
+        workflow_errors: list[str] = []
+
+        if self.workflow_service is not None:
+            candidates = self.service.store.list_active_workflow_manifests(limit=self.batch_size)
+            workflows_checked = len(candidates)
+            for workflow_id, owner in candidates:
+                try:
+                    self.workflow_service.resume(workflow_id, actor=owner)
+                except WorkflowArtifactGateError:
+                    # A completed array with incomplete artifact truth is a
+                    # durable recovery state, not a Worker transport failure.
+                    continue
+                except Exception as exc:
+                    workflow_errors.append(f"{workflow_id}:{type(exc).__name__}")
 
         def run_agent_task_phase(
             phase: str, operation: Callable[..., AgentTaskDispatchBatch]
@@ -302,9 +322,7 @@ class RuntimeReconcileWorker:
                         state=reconciled.state.value,
                     )
                 except Exception as exc:
-                    observability_errors.append(
-                        f"{reconciled.run_id}:{type(exc).__name__}"
-                    )
+                    observability_errors.append(f"{reconciled.run_id}:{type(exc).__name__}")
             if self.runtime_watch_service is not None and reconciled.job_id is not None:
                 self.runtime_watch_service.ensure_run(
                     run_id=reconciled.run_id,
@@ -452,9 +470,7 @@ class RuntimeReconcileWorker:
             runtime_watch_errors=(
                 list(runtime_watch_result.errors) if runtime_watch_result else []
             ),
-            observability_cycles=(
-                len(observability_result.cycles) if observability_result else 0
-            ),
+            observability_cycles=(len(observability_result.cycles) if observability_result else 0),
             observability_samples=(
                 len(observability_result.run_samples) if observability_result else 0
             ),
@@ -468,6 +484,8 @@ class RuntimeReconcileWorker:
                 observability_result.skipped_budget if observability_result else False
             ),
             observability_errors=observability_errors,
+            workflows_checked=workflows_checked,
+            workflow_errors=workflow_errors,
         )
 
     def _dispatch_collection_tasks(
@@ -809,9 +827,7 @@ class RuntimeReconcileWorker:
                     *aggregate.runtime_watch_errors,
                     *result.runtime_watch_errors,
                 ],
-                observability_cycles=(
-                    aggregate.observability_cycles + result.observability_cycles
-                ),
+                observability_cycles=(aggregate.observability_cycles + result.observability_cycles),
                 observability_samples=(
                     aggregate.observability_samples + result.observability_samples
                 ),
@@ -822,8 +838,7 @@ class RuntimeReconcileWorker:
                     aggregate.observability_commands + result.observability_commands
                 ),
                 observability_budget_skipped=(
-                    aggregate.observability_budget_skipped
-                    or result.observability_budget_skipped
+                    aggregate.observability_budget_skipped or result.observability_budget_skipped
                 ),
                 observability_errors=[
                     *aggregate.observability_errors,

@@ -72,10 +72,25 @@ export interface RunSummary {
   recipe_version_id?: string | null;
   created_at: string;
   updated_at: string;
+  workflow?: WorkflowPolicyPayload;
   publication?: {
     status: "eligible" | "published" | "ineligible";
     reason: "run_not_succeeded" | "exit_nonzero" | "not_owner" | "already_published" | null;
     publication_id: string | null;
+  };
+}
+
+export interface WorkflowPolicyPayload {
+  dependencies: string[];
+  retry: { max_attempts: number; backoff_seconds: number };
+  automation: { level: string; require_approval: boolean };
+  manifest?: {
+    workflow_id: string;
+    stage_id: string;
+    stage_kind: "preflight" | "array" | "merge";
+    recovery_attempt: number;
+    submitted_tasks: number[];
+    reused_verified_tasks: number[];
   };
 }
 

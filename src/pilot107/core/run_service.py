@@ -73,6 +73,12 @@ class WorkflowPolicy:
     backoff_seconds: int = 0
     automation_level: str = "explain"
     require_approval: bool = True
+    manifest_workflow_id: str | None = None
+    manifest_stage_id: str | None = None
+    manifest_stage_kind: str | None = None
+    recovery_attempt: int = 0
+    submitted_tasks: tuple[int, ...] = ()
+    reused_verified_tasks: tuple[int, ...] = ()
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any] | None) -> WorkflowPolicy:
@@ -99,6 +105,7 @@ class WorkflowPolicy:
             ),
             automation_level=str(automation.get("level", "explain")),
             require_approval=automation.get("require_approval", True),
+            **_workflow_manifest_fields(payload.get("manifest")),
         )
         if policy.automation_level not in {
             "explain",
@@ -112,7 +119,7 @@ class WorkflowPolicy:
         return policy
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "dependencies": list(self.dependencies),
             "retry": {
                 "max_attempts": self.max_attempts,
@@ -123,6 +130,16 @@ class WorkflowPolicy:
                 "require_approval": self.require_approval,
             },
         }
+        if self.manifest_workflow_id is not None:
+            result["manifest"] = {
+                "workflow_id": self.manifest_workflow_id,
+                "stage_id": self.manifest_stage_id,
+                "stage_kind": self.manifest_stage_kind,
+                "recovery_attempt": self.recovery_attempt,
+                "submitted_tasks": list(self.submitted_tasks),
+                "reused_verified_tasks": list(self.reused_verified_tasks),
+            }
+        return result
 
 
 class WorkDirPreflightError(SlurmBackendError):
@@ -150,9 +167,7 @@ class SubmissionUncertainError(SlurmBackendError):
 
     def __init__(self, *, job_ids: list[str]) -> None:
         self.job_ids = job_ids
-        super().__init__(
-            f"submission uncertain; {len(job_ids)} candidate jobs: {job_ids}"
-        )
+        super().__init__(f"submission uncertain; {len(job_ids)} candidate jobs: {job_ids}")
 
 
 class WorkflowDependencyError(SlurmBackendError):
@@ -288,6 +303,23 @@ class RunService:
 
     def submit(self, request: RunSubmitRequest) -> RunRecord:
         run = self.prepare(request)
+        return self.submit_prepared(run.run_id)
+
+    def submit_workflow_stage(
+        self,
+        request: RunSubmitRequest,
+        *,
+        workflow_id: str,
+        stage_id: str,
+        recovery_attempt: int = 0,
+    ) -> RunRecord:
+        """Idempotently materialize one durable workflow stage decision."""
+
+        if not workflow_id or not stage_id or recovery_attempt < 0:
+            raise ValueError("workflow stage identity is invalid")
+        identity = f"{workflow_id}\0{stage_id}\0{recovery_attempt}".encode()
+        run_id = f"run_wf_{hashlib.sha256(identity).hexdigest()[:24]}"
+        run = self.prepare(request, run_id=run_id, idempotent=True)
         return self.submit_prepared(run.run_id)
 
     def prepare(
@@ -447,14 +479,10 @@ class RunService:
         except SlurmTransportError:
             if self.idempotency_reconcile_enabled and self.reconcile_backend is not None:
                 return self._apply_reconcile_result(run_id, run, intent, submitted_after)
-            self.store.update_state(
-                run_id, RunState.SUBMIT_FAILED, event_type="run.submit_failed"
-            )
+            self.store.update_state(run_id, RunState.SUBMIT_FAILED, event_type="run.submit_failed")
             raise
         except SlurmBackendError:
-            self.store.update_state(
-                run_id, RunState.SUBMIT_FAILED, event_type="run.submit_failed"
-            )
+            self.store.update_state(run_id, RunState.SUBMIT_FAILED, event_type="run.submit_failed")
             raise
         return self.store.apply_submit_receipt(run_id, receipt)
 
@@ -837,9 +865,7 @@ class RunService:
     def cancel(self, run_id: str) -> RunRecord:
         run = self.store.get_run(run_id)
         if run.job_id is None:
-            return self.store.update_state(
-                run_id, RunState.CANCELLED, event_type="run.cancelled"
-            )
+            return self.store.update_state(run_id, RunState.CANCELLED, event_type="run.cancelled")
         snapshot = self.backend.cancel(user=run.owner, job_id=run.job_id)
         return self.store.apply_snapshot(run_id, snapshot)
 
@@ -930,9 +956,7 @@ class RunService:
             return
         deadline = time.monotonic() + budget
         try:
-            expected_outputs = _resolve_expected_outputs(
-                self.contract_store, run.contract_id
-            )
+            expected_outputs = _resolve_expected_outputs(self.contract_store, run.contract_id)
             if not expected_outputs:
                 self._write_baseline_payload(
                     run,
@@ -1287,9 +1311,7 @@ class RunService:
             return None
         digest = hashlib.sha256(f"{run.run_id}:{run.attempt + 1}".encode()).hexdigest()[:32]
         retry_run_id = f"run_retry_{digest}"
-        not_before = (
-            datetime.now(UTC) + timedelta(seconds=policy.backoff_seconds)
-        ).isoformat()
+        not_before = (datetime.now(UTC) + timedelta(seconds=policy.backoff_seconds)).isoformat()
         try:
             retry = self.store.create_run(
                 run_id=retry_run_id,
@@ -1451,7 +1473,7 @@ def _submission_job_name(prefix: str, run_id: str, original_name: str | None = N
     suffix = f"-p107-{digest}"
     # Slurm accepts at most 128 characters. Keep a stable unique suffix for
     # reconciliation while retaining as much of the user-visible name as fits.
-    return f"{(normalized or prefix)[:128 - len(suffix)]}{suffix}"
+    return f"{(normalized or prefix)[: 128 - len(suffix)]}{suffix}"
 
 
 def _resolve_expected_outputs(contract_store: ContractStore, contract_id: str) -> list[str]:
@@ -1666,11 +1688,51 @@ def _resource_plan_from_dict(payload: dict[str, Any]) -> ResourcePlan:
 
 
 def _bounded_int(value: object, name: str, minimum: int, maximum: int) -> int:
-    if (
-        not isinstance(value, int)
-        or isinstance(value, bool)
-        or value < minimum
-        or value > maximum
-    ):
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum or value > maximum:
         raise ValueError(f"workflow {name} must be between {minimum} and {maximum}")
     return value
+
+
+def _workflow_manifest_fields(value: object) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("workflow.manifest must be an object")
+    required = {"workflow_id", "stage_id", "stage_kind"}
+    if not required.issubset(value):
+        raise ValueError("workflow.manifest identity is incomplete")
+    workflow_id = value["workflow_id"]
+    stage_id = value["stage_id"]
+    stage_kind = value["stage_kind"]
+    if not all(isinstance(item, str) and item for item in (workflow_id, stage_id)):
+        raise ValueError("workflow.manifest identity is invalid")
+    if stage_kind not in {"preflight", "array", "merge"}:
+        raise ValueError("workflow.manifest stage kind is invalid")
+    submitted = _bounded_task_indexes(value.get("submitted_tasks", []), "submitted_tasks")
+    reused = _bounded_task_indexes(value.get("reused_verified_tasks", []), "reused_verified_tasks")
+    if set(submitted) & set(reused):
+        raise ValueError("workflow.manifest submitted and reused tasks overlap")
+    return {
+        "manifest_workflow_id": workflow_id,
+        "manifest_stage_id": stage_id,
+        "manifest_stage_kind": stage_kind,
+        "recovery_attempt": _bounded_int(
+            value.get("recovery_attempt", 0), "recovery_attempt", 0, 3
+        ),
+        "submitted_tasks": submitted,
+        "reused_verified_tasks": reused,
+    }
+
+
+def _bounded_task_indexes(value: object, label: str) -> tuple[int, ...]:
+    if not isinstance(value, list) or len(value) > 10000:
+        raise ValueError(f"workflow.manifest {label} must be a bounded array")
+    if any(
+        not isinstance(item, int) or isinstance(item, bool) or item < 0 or item > 1_000_000
+        for item in value
+    ):
+        raise ValueError(f"workflow.manifest {label} contains an invalid task")
+    result = tuple(value)
+    if len(result) != len(set(result)):
+        raise ValueError(f"workflow.manifest {label} must be unique")
+    return result

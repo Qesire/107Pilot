@@ -916,6 +916,23 @@ _AGENT_TASK_SCHEMA = _statements(
     "ON agent_tasks(linked_run_id) WHERE linked_run_id IS NOT NULL"
 )
 
+_WORKFLOW_MANIFEST_SCHEMA = _statements(
+    """
+    CREATE TABLE workflow_manifests (
+        workflow_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        version BIGINT NOT NULL,
+        manifest_json TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        CHECK (version > 0)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_workflow_manifests_owner "
+    "ON workflow_manifests(owner, updated_at DESC, workflow_id DESC)"
+)
+
 _RUNTIME_WATCH_SCHEMA = _statements(
     """
     CREATE TABLE runtime_watches (
@@ -1129,6 +1146,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.014.resource_observations", _RESOURCE_OBSERVATION_SCHEMA),
     ("004a.015.observation_collection", _OBSERVATION_COLLECTION_SCHEMA),
     ("004a.016.agent_tasks", _AGENT_TASK_SCHEMA),
+    ("004a.017.workflow_manifests", _WORKFLOW_MANIFEST_SCHEMA),
 )
 
 
@@ -1176,6 +1194,7 @@ def domain_table_names() -> tuple[str, ...]:
     return (
         "runs",
         "run_events",
+        "workflow_manifests",
         "collection_tasks",
         "evidence_objects",
         "diagnoses",

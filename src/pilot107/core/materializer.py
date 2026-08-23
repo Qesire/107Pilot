@@ -45,6 +45,26 @@ class MaterializationResult:
     materializer: str
 
 
+def compress_array_tasks(tasks: tuple[int, ...] | list[int]) -> str:
+    """Return a deterministic Slurm expression for a bounded task set."""
+
+    selected = sorted(set(tasks))
+    if not selected:
+        raise ValueError("array recovery requires at least one task")
+    if selected[0] < 0 or selected[-1] > 1_000_000:
+        raise ValueError("array recovery task is outside the supported range")
+    ranges: list[str] = []
+    start = previous = selected[0]
+    for task in selected[1:]:
+        if task == previous + 1:
+            previous = task
+            continue
+        ranges.append(str(start) if start == previous else f"{start}-{previous}")
+        start = previous = task
+    ranges.append(str(start) if start == previous else f"{start}-{previous}")
+    return ",".join(ranges)
+
+
 def materialize_contract(
     payload: dict[str, Any],
     recipe: RecipeMaterializationSpec,

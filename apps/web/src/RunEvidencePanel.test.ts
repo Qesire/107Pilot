@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nativeRunCommands, runComparisonRows } from "./RunEvidencePanel";
+import { nativeRunCommands, runComparisonRows, workflowRunFacts } from "./RunEvidencePanel";
 import type { EvidenceObject, RunSummary } from "./types";
 
 describe("Run workbench helpers", () => {
@@ -46,6 +46,29 @@ describe("Run workbench helpers", () => {
       other: "1",
       changed: false,
     });
+  });
+
+  it("shows persisted workflow recovery decisions from the run payload", () => {
+    const item = run("run_recovery", "PENDING", "0:0");
+    item.workflow = {
+      dependencies: ["run_array"],
+      retry: { max_attempts: 1, backoff_seconds: 0 },
+      automation: { level: "explain", require_approval: true },
+      manifest: {
+        workflow_id: "wf-experiment",
+        stage_id: "array",
+        stage_kind: "array",
+        recovery_attempt: 1,
+        submitted_tasks: [8, 9, 10, 11],
+        reused_verified_tasks: [0, 1, 2, 3, 4, 5, 6, 7],
+      },
+    };
+
+    expect(workflowRunFacts(item)).toEqual([
+      ["Workflow", "wf-experiment"],
+      ["Stage", "array · array"],
+      ["Recovery", "attempt 1 · submit 8-11 · reuse 0-7"],
+    ]);
   });
 });
 

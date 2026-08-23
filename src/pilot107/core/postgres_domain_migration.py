@@ -44,6 +44,7 @@ _TIMESTAMPTZ_COLUMNS: dict[str, frozenset[str]] = {
     "agent_tasks": frozenset(
         {"envelope_expires_at", "lease_expires_at", "created_at", "updated_at"}
     ),
+    "workflow_manifests": frozenset({"created_at", "updated_at"}),
 }
 
 _JSONB_COLUMNS: dict[str, frozenset[str]] = {

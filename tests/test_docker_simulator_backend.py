@@ -230,6 +230,40 @@ class DockerSimulatorCommandBackendTests(unittest.TestCase):
         self.assertEqual(snapshot.owner, "alice")
         self.assertEqual(snapshot.exit_code, "0:0")
 
+    def test_get_job_aggregates_array_task_rows_under_parent_job_id(self) -> None:
+        executor = FakeDockerExecutor()
+        executor.squeue_output = (
+            "9001_0|alice|RUNNING|anode16\n"
+            "9001_[1-3]|alice|PENDING|Dependency\n"
+        )
+        backend = DockerSimulatorCommandBackend(
+            executor=executor,  # type: ignore[arg-type]
+            allowed_roots=["/public/home/alice"],
+        )
+
+        snapshot = backend.get_job(user="alice", job_id="9001")
+
+        self.assertEqual(snapshot.job_id, "9001")
+        self.assertEqual(snapshot.run_state, RunState.RUNNING)
+        self.assertEqual(snapshot.raw_state_flags, ["RUNNING", "PENDING"])
+
+    def test_get_finished_job_aggregates_array_accounting_rows(self) -> None:
+        executor = FakeDockerExecutor()
+        executor.sacct_output = (
+            "9001_0|alice|COMPLETED|0:0\n"
+            "9001_1|alice|COMPLETED|0:0\n"
+        )
+        backend = DockerSimulatorCommandBackend(
+            executor=executor,  # type: ignore[arg-type]
+            allowed_roots=["/public/home/alice"],
+        )
+
+        snapshot = backend.get_job(user="alice", job_id="9001")
+
+        self.assertEqual(snapshot.run_state, RunState.SUCCEEDED)
+        self.assertEqual(snapshot.exit_code, "0:0")
+        self.assertIn("JobID,User,State,ExitCode", executor.calls[-1][0])
+
     def test_get_finished_job_treats_empty_accounting_owner_as_retryable(self) -> None:
         executor = FakeDockerExecutor()
         executor.sacct_output = "9001||COMPLETED|0:0\n"

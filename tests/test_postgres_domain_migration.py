@@ -59,6 +59,7 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
         self.assertTrue(
             {
                 "runs",
+                "workflow_manifests",
                 "contracts",
                 "platform_snapshots",
                 "user_entitlement_snapshots",

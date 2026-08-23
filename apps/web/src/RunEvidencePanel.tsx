@@ -476,6 +476,7 @@ export function runComparisonRows(
 
 function Overview({ user, run, objects, tasks, remediation, onBeginRemediation }: { user: string; run: RunSummary; objects: EvidenceObject[]; tasks: Array<{ task_id: number; task_type: string; state: string; attempts: number; updated_at: string }>; remediation: { isPending: boolean; isError: boolean; error: Error | null }; onBeginRemediation: () => void }) {
   const categories = [...new Set(objects.map((item) => item.category))];
+  const workflowFacts = workflowRunFacts(run);
   return (
     <div className="evidence-section">
       <div className="evidence-summary-strip">
@@ -496,6 +497,12 @@ function Overview({ user, run, objects, tasks, remediation, onBeginRemediation }
         <div><dt>Result</dt><dd>{run.result_status}</dd></div>
         <div><dt>Updated</dt><dd>{formatTimestamp(run.updated_at)}</dd></div>
       </dl>
+      {workflowFacts.length ? (
+        <section className="collection-tasks" aria-label="Workflow manifest 决策">
+          <h3>Workflow manifest</h3>
+          <ul>{workflowFacts.map(([label, value]) => <li key={label}><span>{label}</span><small className="mono wrap-anywhere">{value}</small></li>)}</ul>
+        </section>
+      ) : null}
       <RunResourcePanel user={user} runId={run.run_id} />
       {run.job_id ? <NativeCommands user={user} run={run} /> : null}
       <section className="collection-tasks"><h3>Collection tasks</h3><ul>{tasks.map((task) => <li key={task.task_id}><FactState status={task.state} /><span>{task.task_type}</span><small>attempt {task.attempts}</small></li>)}</ul></section>
@@ -508,6 +515,37 @@ function Overview({ user, run, objects, tasks, remediation, onBeginRemediation }
       ) : null}
     </div>
   );
+}
+
+export function workflowRunFacts(run: RunSummary): Array<[string, string]> {
+  const manifest = run.workflow?.manifest;
+  if (!manifest) return [];
+  const recovery = manifest.recovery_attempt > 0
+    ? `attempt ${manifest.recovery_attempt} · submit ${formatTaskIndexes(manifest.submitted_tasks)} · reuse ${formatTaskIndexes(manifest.reused_verified_tasks)}`
+    : "initial submission";
+  return [
+    ["Workflow", manifest.workflow_id],
+    ["Stage", `${manifest.stage_id} · ${manifest.stage_kind}`],
+    ["Recovery", recovery],
+  ];
+}
+
+function formatTaskIndexes(tasks: number[]): string {
+  if (!tasks.length) return "none";
+  const sorted = [...new Set(tasks)].sort((left, right) => left - right);
+  const ranges: string[] = [];
+  let start = sorted[0]!;
+  let previous = start;
+  for (const task of sorted.slice(1)) {
+    if (task === previous + 1) {
+      previous = task;
+      continue;
+    }
+    ranges.push(start === previous ? `${start}` : `${start}-${previous}`);
+    start = previous = task;
+  }
+  ranges.push(start === previous ? `${start}` : `${start}-${previous}`);
+  return ranges.join(",");
 }
 
 function NativeCommands({ user, run }: { user: string; run: RunSummary }) {

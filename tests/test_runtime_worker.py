@@ -13,6 +13,7 @@ from pilot107.core.resources import ResourcePlan
 from pilot107.core.run_service import RunService, RunSubmitRequest
 from pilot107.core.run_store import RunRecord, RunStore
 from pilot107.core.states import CollectionState, DiagnosisState, RunState
+from pilot107.core.workflow_manifest import WorkflowManifest, WorkflowService, WorkflowStage
 from pilot107.observability.adapters import RunObservationTarget
 from pilot107.observability.collector import ObservabilityTickResult
 from pilot107.worker.evidence import EvidenceArtifact, EvidenceCollectionResult, EvidenceStore
@@ -74,6 +75,7 @@ class FakeObservabilityCollector:
             skipped_budget=True,
             errors=("SOURCE_TIMEOUT",),
         )
+
 
 def _plan() -> ResourcePlan:
     return ResourcePlan(
@@ -487,6 +489,43 @@ class RuntimeReconcileWorkerTests(unittest.TestCase):
             "RUNTIME.PYTHON_PACKAGE_MISSING",
             {record.rule_id for record in self.store.list_diagnoses(run.run_id)},
         )
+
+    def test_worker_restart_resumes_manifest_without_duplicate_stage_run(self) -> None:
+        backend = InMemorySlurmBackend()
+        run_service = RunService(store=self.store, backend=backend)
+        workflows = WorkflowService(store=self.store, run_service=run_service)
+        manifest = workflows.create(
+            WorkflowManifest(
+                workflow_id="wf-worker-restart",
+                owner="alice",
+                stages=(
+                    WorkflowStage(
+                        "preflight",
+                        "preflight",
+                        RunSubmitRequest(
+                            owner="alice",
+                            workdir=Path("/public/home/alice"),
+                            script="#!/bin/bash\ntrue\n",
+                            resource_plan=_plan(),
+                        ),
+                    ),
+                ),
+            )
+        )
+
+        first = RuntimeReconcileWorker(
+            service=run_service,
+            workflow_service=workflows,
+        ).tick()
+        second = RuntimeReconcileWorker(
+            service=run_service,
+            workflow_service=workflows,
+        ).tick()
+
+        loaded = workflows.status(manifest.workflow_id, actor="alice")
+        self.assertEqual(first.workflows_checked, 1)
+        self.assertEqual(second.workflows_checked, 1)
+        self.assertEqual(len(loaded.stage("preflight").decisions), 1)
 
 
 if __name__ == "__main__":

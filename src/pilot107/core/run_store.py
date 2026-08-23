@@ -35,6 +35,10 @@ class AgentExecutionFenceConflict(RuntimeError):
     """Raised when a stale Agent execution worker attempts to persist a result."""
 
 
+class WorkflowManifestFenceConflict(RuntimeError):
+    """Raised when a stale workflow writer attempts to replace manifest truth."""
+
+
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -243,6 +247,18 @@ class RunStore:
                 CREATE INDEX IF NOT EXISTS idx_run_events_run_id ON run_events(run_id);
                 CREATE INDEX IF NOT EXISTS idx_run_events_run_type_id
                     ON run_events(run_id, event_type, event_id);
+
+                CREATE TABLE IF NOT EXISTS workflow_manifests (
+                    workflow_id TEXT PRIMARY KEY,
+                    owner TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    manifest_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_workflow_manifests_owner
+                    ON workflow_manifests(owner, updated_at DESC, workflow_id DESC);
 
                 CREATE TABLE IF NOT EXISTS collection_tasks (
                     task_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -544,9 +560,7 @@ class RunStore:
                     remediation_plan_id=remediation_plan_id,
                 )
             elif remediation_plan_id is not None:
-                raise ValueError(
-                    "remediation_plan_id requires lineage_reason=agent_remediation"
-                )
+                raise ValueError("remediation_plan_id requires lineage_reason=agent_remediation")
             conn.execute(
                 """
                 INSERT INTO runs (
@@ -597,6 +611,99 @@ class RunStore:
                 },
             )
         return self.get_run(run_id)
+
+    def create_workflow_manifest(
+        self,
+        *,
+        workflow_id: str,
+        owner: str,
+        manifest: dict[str, Any],
+    ) -> tuple[int, dict[str, Any]]:
+        """Persist the first immutable workflow decision document."""
+
+        now = utc_now_iso()
+        encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO workflow_manifests (
+                    workflow_id, owner, version, manifest_json, created_at, updated_at
+                ) VALUES (?, ?, 1, ?, ?, ?)
+                """,
+                (workflow_id, owner, encoded, now, now),
+            )
+        return self.get_workflow_manifest(workflow_id, owner=owner)
+
+    def get_workflow_manifest(
+        self,
+        workflow_id: str,
+        *,
+        owner: str,
+    ) -> tuple[int, dict[str, Any]]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT version, manifest_json FROM workflow_manifests "
+                "WHERE workflow_id = ? AND owner = ?",
+                (workflow_id, owner),
+            ).fetchone()
+        if row is None:
+            raise KeyError(workflow_id)
+        payload = json.loads(str(row["manifest_json"]))
+        if not isinstance(payload, dict):
+            raise RuntimeError("workflow manifest payload is not an object")
+        return int(row["version"]), payload
+
+    def update_workflow_manifest(
+        self,
+        *,
+        workflow_id: str,
+        owner: str,
+        expected_version: int,
+        manifest: dict[str, Any],
+    ) -> tuple[int, dict[str, Any]]:
+        """Compare-and-swap the complete manifest as one atomic decision."""
+
+        if expected_version <= 0:
+            raise ValueError("workflow manifest expected_version must be positive")
+        encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        with self.connect() as conn:
+            result = conn.execute(
+                """
+                UPDATE workflow_manifests
+                SET version = version + 1, manifest_json = ?, updated_at = ?
+                WHERE workflow_id = ? AND owner = ? AND version = ?
+                """,
+                (encoded, utc_now_iso(), workflow_id, owner, expected_version),
+            )
+            if result.rowcount != 1:
+                raise WorkflowManifestFenceConflict(
+                    f"workflow manifest update is fenced: {workflow_id}"
+                )
+        return self.get_workflow_manifest(workflow_id, owner=owner)
+
+    def list_active_workflow_manifests(
+        self,
+        *,
+        limit: int = 100,
+    ) -> list[tuple[str, str]]:
+        if limit <= 0 or limit > 1000:
+            raise ValueError("workflow manifest limit must be between 1 and 1000")
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT workflow_id, owner, manifest_json FROM workflow_manifests "
+                "ORDER BY updated_at, workflow_id LIMIT 1000"
+            ).fetchall()
+        active: list[tuple[str, str]] = []
+        for row in rows:
+            payload = json.loads(str(row["manifest_json"]))
+            if isinstance(payload, dict) and payload.get("state") not in {
+                "cancelled",
+                "completed",
+            }:
+                active.append((str(row["workflow_id"]), str(row["owner"])))
+                if len(active) == limit:
+                    break
+        return active
 
     def mark_submitting(self, run_id: str) -> RunRecord:
         return self.update_state(run_id, RunState.SUBMITTING, event_type="run.submitting")
@@ -960,9 +1067,7 @@ class RunStore:
             )
             values.extend([pattern, pattern, pattern, pattern, pattern])
         if cursor is not None:
-            conditions.append(
-                "(runs.created_at < ? OR (runs.created_at = ? AND runs.run_id < ?))"
-            )
+            conditions.append("(runs.created_at < ? OR (runs.created_at = ? AND runs.run_id < ?))")
             values.extend([cursor.primary, cursor.primary, cursor.secondary])
         with self.connect() as conn:
             rows = conn.execute(
@@ -1294,9 +1399,7 @@ class RunStore:
             conditions.append("run_id = ?")
             values.append(run_id)
         if cursor is not None:
-            conditions.append(
-                "(created_at < ? OR (created_at = ? AND advice_id < ?))"
-            )
+            conditions.append("(created_at < ? OR (created_at = ? AND advice_id < ?))")
             values.extend([cursor.primary, cursor.primary, cursor.secondary])
         with self.connect() as conn:
             rows = conn.execute(
@@ -1559,11 +1662,7 @@ class RunStore:
         if row is None:
             raise RuntimeError("failed to claim fenced agent action execution")
         record = _row_to_agent_action_execution(row)
-        if (
-            record.advice_id != advice_id
-            or record.action_id != action_id
-            or record.owner != owner
-        ):
+        if record.advice_id != advice_id or record.action_id != action_id or record.owner != owner:
             raise ValueError("agent action execution idempotency conflict")
         return record, claimed
 
@@ -1581,9 +1680,7 @@ class RunStore:
         execution_owner: str | None = None,
         fencing_token: int | None = None,
     ) -> AgentActionExecutionRecord:
-        if fencing_token is not None and (
-            execution_phase is None or execution_owner is None
-        ):
+        if fencing_token is not None and (execution_phase is None or execution_owner is None):
             raise ValueError("fenced update requires execution phase and owner")
         existing = self.get_agent_action_execution(execution_id)
         effective_submit_requested = (
@@ -1669,9 +1766,7 @@ class RunStore:
             conditions.append("advice_id = ?")
             values.append(advice_id)
         if cursor is not None:
-            conditions.append(
-                "(created_at < ? OR (created_at = ? AND execution_id < ?))"
-            )
+            conditions.append("(created_at < ? OR (created_at = ? AND execution_id < ?))")
             values.extend([cursor.primary, cursor.primary, cursor.secondary])
         with self.connect() as conn:
             rows = conn.execute(
@@ -2185,9 +2280,7 @@ class RunStore:
                     (now, task_id, lease_owner, fencing_token),
                 )
             if result.rowcount != 1:
-                raise CollectionTaskFenceConflict(
-                    f"collection task lease is fenced: {task_id}"
-                )
+                raise CollectionTaskFenceConflict(f"collection task lease is fenced: {task_id}")
             task = self._get_task_in_conn(conn, task_id)
             self._append_event(
                 conn,
@@ -2278,9 +2371,7 @@ class RunStore:
                     ),
                 )
             if result.rowcount != 1:
-                raise CollectionTaskFenceConflict(
-                    f"collection task lease is fenced: {task_id}"
-                )
+                raise CollectionTaskFenceConflict(f"collection task lease is fenced: {task_id}")
             task = self._get_task_in_conn(conn, task_id)
             self._append_event(
                 conn,
@@ -2407,16 +2498,10 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
     return RunRecord(
         run_id=str(row["run_id"]),
         contract_id=None if row["contract_id"] is None else str(row["contract_id"]),
-        parent_run_id=(
-            None if row["parent_run_id"] is None else str(row["parent_run_id"])
-        ),
-        lineage_reason=(
-            None if row["lineage_reason"] is None else str(row["lineage_reason"])
-        ),
+        parent_run_id=(None if row["parent_run_id"] is None else str(row["parent_run_id"])),
+        lineage_reason=(None if row["lineage_reason"] is None else str(row["lineage_reason"])),
         remediation_plan_id=(
-            None
-            if row["remediation_plan_id"] is None
-            else str(row["remediation_plan_id"])
+            None if row["remediation_plan_id"] is None else str(row["remediation_plan_id"])
         ),
         attempt=int(row["attempt"]),
         workflow=json.loads(str(row["workflow_json"] or "{}")),
@@ -2506,21 +2591,13 @@ def _row_to_agent_action_execution(row: sqlite3.Row) -> AgentActionExecutionReco
         state=str(row["state"]),
         submit_requested=bool(row["submit_requested"]),
         derived_contract_id=(
-            None
-            if row["derived_contract_id"] is None
-            else str(row["derived_contract_id"])
+            None if row["derived_contract_id"] is None else str(row["derived_contract_id"])
         ),
         run_id=None if row["run_id"] is None else str(row["run_id"]),
         error_code=None if row["error_code"] is None else str(row["error_code"]),
-        error_message=(
-            None if row["error_message"] is None else str(row["error_message"])
-        ),
-        execution_phase=(
-            None if row["execution_phase"] is None else str(row["execution_phase"])
-        ),
-        execution_owner=(
-            None if row["execution_owner"] is None else str(row["execution_owner"])
-        ),
+        error_message=(None if row["error_message"] is None else str(row["error_message"])),
+        execution_phase=(None if row["execution_phase"] is None else str(row["execution_phase"])),
+        execution_owner=(None if row["execution_owner"] is None else str(row["execution_owner"])),
         execution_fencing_token=int(row["execution_fencing_token"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),

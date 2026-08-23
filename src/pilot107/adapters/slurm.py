@@ -1594,14 +1594,14 @@ class CommandSubmitBackend:
         )
         if result.returncode != 0:
             raise SlurmTransportError(result.stderr.strip() or "squeue failed")
-        line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
-        if not line:
+        if not result.stdout.strip():
             return self._get_finished_job(user=user, job_id=job_id)
-        found_job_id, owner, raw_state, reason = _split_command_row(line, expected_fields=4)
-        if found_job_id != job_id:
-            raise SlurmTransportError("squeue returned mismatched job_id")
-        _require_accounting_owner(owner=owner, user=user)
-        run_state, flags = normalize_slurm_state(raw_state)
+        owner, run_state, flags, _exit_code, reason = _aggregate_command_job_rows(
+            result.stdout,
+            job_id=job_id,
+            user=user,
+            source="squeue",
+        )
         return JobSnapshot(
             job_id=job_id,
             owner=owner,
@@ -1628,19 +1628,19 @@ class CommandSubmitBackend:
 
     def _get_finished_job(self, *, user: str, job_id: str) -> JobSnapshot:
         result = self.runner.run(
-            ["sacct", "-n", "-j", job_id, "-X", "-o", "JobIDRaw,User,State,ExitCode"],
+            ["sacct", "-n", "-j", job_id, "-X", "-o", "JobID,User,State,ExitCode"],
             timeout_seconds=self.timeout_seconds,
         )
         if result.returncode != 0:
             raise SlurmTransportError(result.stderr.strip() or "sacct failed")
-        line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
-        if not line:
+        if not result.stdout.strip():
             raise SlurmTransportError(f"job not found: {job_id}")
-        found_job_id, owner, raw_state, exit_code = _split_command_row(line, expected_fields=4)
-        if found_job_id != job_id:
-            raise SlurmTransportError("sacct returned mismatched job_id")
-        _require_accounting_owner(owner=owner, user=user)
-        run_state, flags = normalize_slurm_state(raw_state)
+        owner, run_state, flags, exit_code, _reason = _aggregate_command_job_rows(
+            result.stdout,
+            job_id=job_id,
+            user=user,
+            source="sacct",
+        )
         return JobSnapshot(
             job_id=job_id,
             owner=owner,
@@ -1721,14 +1721,14 @@ class DockerSimulatorCommandBackend:
         )
         if result.returncode != 0:
             raise SlurmTransportError(result.stderr.strip() or "squeue failed")
-        line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
-        if not line:
+        if not result.stdout.strip():
             return self._get_finished_job(user=user, job_id=job_id)
-        found_job_id, owner, raw_state, reason = _split_command_row(line, expected_fields=4)
-        if found_job_id != job_id:
-            raise SlurmTransportError("squeue returned mismatched job_id")
-        _require_accounting_owner(owner=owner, user=user)
-        run_state, flags = normalize_slurm_state(raw_state)
+        owner, run_state, flags, _exit_code, reason = _aggregate_command_job_rows(
+            result.stdout,
+            job_id=job_id,
+            user=user,
+            source="squeue",
+        )
         return JobSnapshot(
             job_id=job_id,
             owner=owner,
@@ -1759,20 +1759,20 @@ class DockerSimulatorCommandBackend:
 
     def _get_finished_job(self, *, user: str, job_id: str) -> JobSnapshot:
         result = self.executor.run(
-            ["sacct", "-nP", "-j", job_id, "-X", "-o", "JobIDRaw,User,State,ExitCode"],
+            ["sacct", "-nP", "-j", job_id, "-X", "-o", "JobID,User,State,ExitCode"],
             user=user,
             timeout_seconds=self.timeout_seconds,
         )
         if result.returncode != 0:
             raise SlurmTransportError(result.stderr.strip() or "sacct failed")
-        line = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
-        if not line:
+        if not result.stdout.strip():
             raise SlurmTransportError(f"job not found: {job_id}")
-        found_job_id, owner, raw_state, exit_code = _split_command_row(line, expected_fields=4)
-        if found_job_id != job_id:
-            raise SlurmTransportError("sacct returned mismatched job_id")
-        _require_accounting_owner(owner=owner, user=user)
-        run_state, flags = normalize_slurm_state(raw_state)
+        owner, run_state, flags, exit_code, _reason = _aggregate_command_job_rows(
+            result.stdout,
+            job_id=job_id,
+            user=user,
+            source="sacct",
+        )
         return JobSnapshot(
             job_id=job_id,
             owner=owner,
@@ -1940,7 +1940,7 @@ class SshSlurmBackend(DockerSimulatorCommandBackend):
 
     def _get_finished_job(self, *, user: str, job_id: str) -> JobSnapshot:
         result = self.executor.run(
-            ["sacct", "-nP", "-j", job_id, "-X", "-o", "JobIDRaw,User,State,ExitCode"],
+            ["sacct", "-nP", "-j", job_id, "-X", "-o", "JobID,User,State,ExitCode"],
             user=user,
             timeout_seconds=self.timeout_seconds,
         )
@@ -2004,6 +2004,66 @@ def _require_accounting_owner(*, owner: str, user: str) -> None:
         raise SlurmTransportError("sacct did not populate job owner yet")
     if owner != user:
         raise SlurmAuthError("job is not owned by user")
+
+
+def _aggregate_command_job_rows(
+    output: str,
+    *,
+    job_id: str,
+    user: str,
+    source: str,
+) -> tuple[str, RunState, list[str], str | None, str | None]:
+    """Aggregate a parent job and its Slurm array element rows."""
+
+    if source not in {"squeue", "sacct"}:
+        raise ValueError("command job row source is invalid")
+    rows: list[tuple[str, RunState, list[str], str]] = []
+    for line in output.strip().splitlines():
+        found_job_id, owner, raw_state, detail = _split_command_row(
+            line, expected_fields=4
+        )
+        if not _is_job_or_array_element(found_job_id, parent_job_id=job_id):
+            raise SlurmTransportError(f"{source} returned mismatched job_id")
+        _require_accounting_owner(owner=owner, user=user)
+        run_state, flags = normalize_slurm_state(raw_state)
+        rows.append((owner, run_state, flags, detail))
+    if not rows:
+        raise SlurmTransportError(f"job not found: {job_id}")
+
+    states = {row[1] for row in rows}
+    priority = (
+        RunState.RUNNING,
+        RunState.COMPLETING,
+        RunState.PENDING,
+        RunState.SUBMITTED,
+        RunState.FAILED,
+        RunState.CANCELLED,
+        RunState.SUCCEEDED,
+        RunState.UNKNOWN,
+    )
+    run_state = next(state for state in priority if state in states)
+    raw_flags = list(
+        dict.fromkeys(flag for _owner, _state, flags, _detail in rows for flag in flags)
+    )
+    details = list(dict.fromkeys(row[3] for row in rows if row[3]))
+    if source == "sacct":
+        nonzero = [value for value in details if not value.startswith("0:")]
+        exit_code = nonzero[0] if nonzero else details[0] if details else None
+        reason = None
+    else:
+        exit_code = None
+        reason = ", ".join(details) or None
+    return rows[0][0], run_state, raw_flags, exit_code, reason
+
+
+def _is_job_or_array_element(found_job_id: str, *, parent_job_id: str) -> bool:
+    if found_job_id == parent_job_id:
+        return True
+    prefix = f"{parent_job_id}_"
+    if not found_job_id.startswith(prefix):
+        return False
+    suffix = found_job_id[len(prefix) :]
+    return bool(re.fullmatch(r"(?:\d+|\[[0-9,_%+\-]+\])", suffix))
 
 
 def _split_command_row(line: str, *, expected_fields: int) -> list[str]:
