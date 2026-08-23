@@ -130,7 +130,10 @@ def exercise_agent_task_store_contract(
     with pytest.raises(AgentTaskConflict):
         store.link_run(task.task_id, lease=first, run_id="run-2")
 
-    advance_clock(timedelta(seconds=2))
+    released = store.release_task(first)
+    assert released.state is AgentTaskState.RUNNING
+    assert released.lease_owner is None
+    assert released.lease_expires_at is None
     second = store.claim_task(
         task.task_id, owner="alice", worker_id="worker-b", lease_seconds=30
     )

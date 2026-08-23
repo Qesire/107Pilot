@@ -117,6 +117,8 @@ class AgentTaskStore(Protocol):
         self, lease: AgentTaskLease, *, lease_seconds: int
     ) -> AgentTaskLease: ...
 
+    def release_task(self, lease: AgentTaskLease) -> AgentTaskRecord: ...
+
     def link_run(
         self, task_id: str, *, lease: AgentTaskLease, run_id: str
     ) -> AgentTaskRecord: ...
@@ -262,7 +264,8 @@ class SQLiteAgentTaskStore:
             rows = connection.execute(
                 "SELECT * FROM agent_tasks WHERE "
                 "(state = 'pending' AND envelope_expires_at > ?) OR "
-                "(state = 'running' AND lease_expires_at <= ?) "
+                "(state = 'running' AND "
+                "(lease_owner IS NULL OR lease_expires_at <= ?)) "
                 "ORDER BY created_at, task_id LIMIT ?",
                 (now, now, limit),
             ).fetchall()
@@ -291,9 +294,12 @@ class SQLiteAgentTaskStore:
                 SET state = 'running', lease_owner = ?, lease_expires_at = ?,
                     fencing_token = fencing_token + 1, version = version + 1,
                     updated_at = ?
-                WHERE task_id = ? AND owner = ? AND cancel_requested = 0
-                  AND ((state = 'pending' AND envelope_expires_at > ?) OR (
-                    state = 'running' AND lease_expires_at <= ?
+                WHERE task_id = ? AND owner = ?
+                  AND ((state = 'pending' AND cancel_requested = 0
+                    AND envelope_expires_at > ?) OR (
+                    state = 'running' AND (
+                      lease_owner IS NULL OR lease_expires_at <= ?
+                    )
                   ))
                 RETURNING *
                 """,
@@ -351,6 +357,29 @@ class SQLiteAgentTaskStore:
             if updated.rowcount != 1:
                 raise AgentTaskConflict("AgentTask renewal is stale or fenced")
         return replace(lease, expires_at=expires_at)
+
+    def release_task(self, lease: AgentTaskLease) -> AgentTaskRecord:
+        if not isinstance(lease, AgentTaskLease):
+            raise TypeError("lease must be AgentTaskLease")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._assert_lease(connection, lease)
+            updated = connection.execute(
+                "UPDATE agent_tasks SET lease_owner = NULL, lease_expires_at = NULL, "
+                "updated_at = ? WHERE task_id = ? AND owner = ? AND state = 'running' "
+                "AND lease_owner = ? AND version = ? AND fencing_token = ? RETURNING *",
+                (
+                    self._now(),
+                    lease.task_id,
+                    lease.owner,
+                    lease.worker_id,
+                    lease.version,
+                    lease.fencing_token,
+                ),
+            ).fetchone()
+        if updated is None:
+            raise AgentTaskConflict("AgentTask release was fenced")
+        return _task_from_row(updated)
 
     def link_run(
         self, task_id: str, *, lease: AgentTaskLease, run_id: str

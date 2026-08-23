@@ -78,6 +78,7 @@ _A2_PROJECT_TOOLS = {
     "workspace_patch",
     "workspace_diff",
     "sandbox_exec",
+    "validation_schedule",
 }
 
 

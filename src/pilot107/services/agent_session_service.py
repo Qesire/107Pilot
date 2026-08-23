@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 from pilot107.agent.session import AgentSessionRecord, AgentTurnRecord
 from pilot107.agent.store import AgentSessionStore
+from pilot107.agent.tasks import AgentResourceEnvelope
 from pilot107.core.control_repository import ControlRepository, OutboxMessage
 
 AGENT_TURN_TOPIC = "agent.turn.execute.v1"
@@ -33,19 +34,33 @@ class AgentSessionService:
         if profile_id not in {"hpc-readonly-v1", "platform_coach", "experiment_builder"}:
             raise ValueError("Agent profile is not supported")
         if profile_id == "experiment_builder" and (
-            set(source) != {"project_id", "workspace_id"}
+            set(source) not in (
+                {"project_id", "workspace_id"},
+                {"project_id", "workspace_id", "resource_envelope"},
+            )
             or any(
                 not isinstance(source.get(key), str) or not source.get(key)
                 for key in ("project_id", "workspace_id")
             )
         ):
             raise ValueError("experiment_builder requires Project and Workspace bindings")
+        normalized_source = dict(source)
+        envelope_value = normalized_source.get("resource_envelope")
+        if profile_id != "experiment_builder" and envelope_value is not None:
+            raise ValueError("resource envelope requires experiment_builder profile")
+        if profile_id == "experiment_builder" and envelope_value is not None:
+            if not isinstance(envelope_value, Mapping):
+                raise ValueError("experiment_builder resource envelope is invalid")
+            envelope = AgentResourceEnvelope(**dict(envelope_value))
+            if envelope.approved_by != owner:
+                raise ValueError("experiment_builder resource envelope owner is invalid")
+            normalized_source["resource_envelope"] = _envelope_payload(envelope)
         return self.store.create_session(
             owner=owner,
             request_key=request_key,
             profile_id=profile_id,
             model_profile_id=model_profile_id,
-            source=source,
+            source=normalized_source,
         )
 
     def submit_message(
@@ -81,3 +96,20 @@ class AgentSessionService:
             aggregate_id=turn.turn_id,
             payload={"turn_id": turn.turn_id},
         )
+
+
+def _envelope_payload(value: AgentResourceEnvelope) -> dict[str, object]:
+    return {
+        "partition": value.partition,
+        "qos": value.qos,
+        "cpus": value.cpus,
+        "memory_mib": value.memory_mib,
+        "gpu_type": value.gpu_type,
+        "gpus": value.gpus,
+        "walltime_seconds": value.walltime_seconds,
+        "max_tasks": value.max_tasks,
+        "max_submissions": value.max_submissions,
+        "workspace_snapshot_digest": value.workspace_snapshot_digest,
+        "expires_at": value.expires_at,
+        "approved_by": value.approved_by,
+    }

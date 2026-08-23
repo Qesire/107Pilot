@@ -56,6 +56,21 @@ const ARGUMENT_SCHEMAS = {
     },
     { additionalProperties: false },
   ),
+  validation_schedule: Type.Object(
+    {
+      ...Scope,
+      request_key: Id,
+      cpus: Type.Integer({ minimum: 1, maximum: 1_048_576 }),
+      memory_mib: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+      gpus: Type.Integer({ minimum: 0, maximum: 1_048_576 }),
+      walltime_seconds: Type.Integer({ minimum: 1, maximum: 31_536_000 }),
+      tasks: Type.Integer({ minimum: 1, maximum: 1_024 }),
+      submissions: Type.Integer({ minimum: 1, maximum: 1_024 }),
+      script: Type.String({ minLength: 1, maxLength: 262_144 }),
+      job_name: Id,
+    },
+    { additionalProperties: false },
+  ),
 } satisfies Record<ProjectToolName, TSchema>;
 
 const DESCRIPTIONS = {
@@ -65,6 +80,8 @@ const DESCRIPTIONS = {
   workspace_patch: "Atomically apply digest-guarded text patches inside the bound Workspace.",
   workspace_diff: "Read the bounded unified diff for one bound ChangeSet.",
   sandbox_exec: "Run one allowlisted argv-only validation in the network-disabled sandbox.",
+  validation_schedule:
+    "Schedule one approved, bounded Slurm validation and end this Turn while it runs.",
 } satisfies Record<ProjectToolName, string>;
 
 export function createProjectTools(
@@ -78,11 +95,18 @@ export function createProjectTools(
     parameters: ARGUMENT_SCHEMAS[name],
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => {
+      const argumentsWithBinding = name === "validation_schedule"
+        ? {
+            ...(params as JsonObject),
+            session_id: request.session_id,
+            turn_id: request.turn_id,
+          }
+        : params as JsonObject;
       const result = await gateway.invoke(
         request,
         toolCallId,
         name,
-        params as JsonObject,
+        argumentsWithBinding,
         signal ?? new AbortController().signal,
       );
       if (result.error !== null || result.result === null) {
@@ -95,6 +119,7 @@ export function createProjectTools(
           evidence_refs: [...result.evidence_refs],
           bytes_returned: result.bytes_returned,
         },
+        terminate: name === "validation_schedule",
       };
     },
   }));

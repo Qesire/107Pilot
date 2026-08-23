@@ -50,6 +50,14 @@ class FakeAgentTurnWorker:
         )
 
 
+class FailingAgentTaskService:
+    def dispatch_due(self, *, limit: int) -> NoReturn:
+        raise RuntimeError("task dispatch unavailable")
+
+    def reconcile_active(self, *, limit: int) -> NoReturn:
+        raise RuntimeError("task reconciliation unavailable")
+
+
 class FakeObservabilityCollector:
     def __init__(self) -> None:
         self.observed: list[tuple[RunObservationTarget, str]] = []
@@ -190,6 +198,19 @@ class RuntimeReconcileWorkerTests(unittest.TestCase):
         self.assertEqual(result.terminal, 1)
         self.assertEqual(result.errors, [])
         self.assertEqual(self.store.get_run(run.run_id).state, RunState.SUCCEEDED)
+
+    def test_agent_task_service_failure_does_not_abort_runtime_tick(self) -> None:
+        result = RuntimeReconcileWorker(
+            service=RunService(store=self.store, backend=InMemorySlurmBackend()),
+            agent_task_service=FailingAgentTaskService(),  # type: ignore[arg-type]
+        ).tick()
+
+        self.assertEqual(result.checked, 0)
+        self.assertEqual(result.agent_tasks_checked, 0)
+        self.assertEqual(len(result.agent_task_errors), 3)
+        self.assertTrue(
+            all(error.code == "AGENT.TASK_SERVICE_ERROR" for error in result.agent_task_errors)
+        )
 
     def test_tick_registers_reconciled_run_before_collecting_observations(self) -> None:
         backend = InMemorySlurmBackend()

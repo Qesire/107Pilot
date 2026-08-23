@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { changeSetStateLabel, changeSetTone, originLabel, riskLabel } from "./AgentProjectPanel";
+import {
+  buildValidationEnvelope,
+  changeSetStateLabel,
+  changeSetTone,
+  isValidationEnvelopeInputValid,
+  originLabel,
+  riskLabel,
+} from "./AgentProjectPanel";
 import type { WorkspaceChangeSet } from "./types";
 
 function changeSet(state: WorkspaceChangeSet["state"]): WorkspaceChangeSet {
@@ -33,5 +40,45 @@ describe("Agent Project review presentation", () => {
     expect(changeSetStateLabel("reviewable")).toBe("可审阅");
     expect(changeSetTone(changeSet("reviewable"))).toBe("success");
     expect(changeSetTone(changeSet("failed"))).toBe("danger");
+  });
+
+  it("binds an approved validation envelope to the current Workspace snapshot", () => {
+    const envelope = buildValidationEnvelope({
+      owner: "alice",
+      snapshotDigest: "a".repeat(64),
+      partition: "debug",
+      qos: "normal",
+      cpus: 2,
+      memoryMib: 2048,
+      gpus: 0,
+      walltimeSeconds: 300,
+      now: new Date("2026-08-19T00:00:00Z"),
+    });
+
+    expect(envelope.workspace_snapshot_digest).toBe("a".repeat(64));
+    expect(envelope.approved_by).toBe("alice");
+    expect(envelope.expires_at).toBe("2026-08-19T01:00:00.000Z");
+    expect(envelope.max_submissions).toBe(1);
+  });
+
+  it("rejects invalid or fractional validation resource inputs", () => {
+    expect(isValidationEnvelopeInputValid({
+      cpus: 1,
+      memoryMib: 1024,
+      gpus: 0,
+      walltimeSeconds: 300,
+    })).toBe(true);
+    expect(isValidationEnvelopeInputValid({
+      cpus: 0,
+      memoryMib: 1024,
+      gpus: 0,
+      walltimeSeconds: 300,
+    })).toBe(false);
+    expect(isValidationEnvelopeInputValid({
+      cpus: 1.5,
+      memoryMib: 1024,
+      gpus: 0,
+      walltimeSeconds: 300,
+    })).toBe(false);
   });
 });

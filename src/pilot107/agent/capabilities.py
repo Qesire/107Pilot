@@ -38,6 +38,7 @@ _A2_TOOLS = frozenset(
         "workspace_patch",
         "workspace_diff",
         "sandbox_exec",
+        "validation_schedule",
     }
 )
 _A2_OPERATIONS = frozenset({"read", "write", "validate"})
@@ -245,6 +246,8 @@ def _validate_claims(
             "validate" not in claims.operations or claims.max_commands < 1
         ):
             raise ValueError("builder sandbox tool lacks command budget")
+        if "validation_schedule" in claims.tools and "validate" not in claims.operations:
+            raise ValueError("builder validation tool lacks validate operation")
     else:
         raise ValueError("invalid capability profile")
     if claims.state_version <= 0 or claims.fencing_token <= 0:

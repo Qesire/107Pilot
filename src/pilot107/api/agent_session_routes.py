@@ -26,7 +26,9 @@ from pilot107.core.pagination import (
 )
 from pilot107.services.agent_session_service import AgentSessionService
 
-_SOURCE_KEYS = frozenset({"run_id", "project_id", "workspace_id", "evidence_id"})
+_SOURCE_KEYS = frozenset(
+    {"run_id", "project_id", "workspace_id", "evidence_id", "resource_envelope"}
+)
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$")
 _PROTOCOL_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _AUTHORITY_KEYS = frozenset({"authorization", "capability_token"})
@@ -315,6 +317,11 @@ def _source(value: object) -> dict[str, object]:
         raise ValueError(f"unsupported source fields: {', '.join(unknown)}")
     source: dict[str, object] = {}
     for key, item in value.items():
+        if key == "resource_envelope":
+            if not isinstance(item, dict):
+                raise ValueError("source.resource_envelope must be an object")
+            source[key] = item
+            continue
         if not isinstance(item, str) or _IDENTIFIER.fullmatch(item) is None:
             raise ValueError(f"source.{key} must be a valid identifier")
         source[key] = item

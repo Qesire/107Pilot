@@ -48,9 +48,14 @@ from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig
 from pilot107.agent.read_tools import AgentReadContext, build_a1_read_handlers
 from pilot107.agent.sandbox import SandboxExecutor
-from pilot107.agent.store_factory import build_agent_session_store, build_project_store
+from pilot107.agent.store_factory import (
+    build_agent_session_store,
+    build_agent_task_store,
+    build_project_store,
+)
+from pilot107.agent.tasks import AgentResourceEnvelope
 from pilot107.agent.tool_gateway import AgentToolGateway
-from pilot107.agent.workspace import WorkspaceImporter
+from pilot107.agent.workspace import WorkspaceImporter, WorkspaceSourceReader
 from pilot107.api.agent_tool_routes import AgentToolRoutes
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.file_routes import FileRoutes
@@ -73,6 +78,7 @@ from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.file_uploads import FileUploadService, UploadSessionStore
 from pilot107.core.identity import is_safe_username
+from pilot107.core.path_policy import resolve_owner_roots
 from pilot107.core.platform import (
     CapabilityProfile,
     docker_sim_capability_profile,
@@ -112,6 +118,7 @@ from pilot107.observability.store import SQLiteObservabilityStore
 from pilot107.runtime_watch.postgres_store import PostgresRuntimeWatchStore
 from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
+from pilot107.services.agent_task_service import AgentTaskService
 from pilot107.services.platform_snapshot_freshness import SnapshotCollectionMonitor
 from pilot107.services.platform_snapshot_service import PlatformSnapshotService
 from pilot107.services.project_agent_service import ProjectAgentService
@@ -691,7 +698,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             sqlite_path=config.db_path,
             postgres_dsn=config.postgres_dsn,
         )
-        workspace_source = None
+        workspace_source: WorkspaceSourceReader | None = None
         workspace_owner_roots: tuple[str, ...] = ()
         if config.backend == "command-gateway" and config.allowed_roots:
             workspace_source = HttpCommandGatewayExecutor(
@@ -701,7 +708,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             )
             workspace_owner_roots = config.allowed_roots
         elif config.backend == "real107-ssh" and ssh_relay_client is not None:
-            workspace_source = ssh_relay_client
+            workspace_source = SshRelayExecutor(ssh_relay_client)
             workspace_owner_roots = config.allowed_roots or ssh_relay_client.config.owner_roots
         importer = (
             None
@@ -719,19 +726,63 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             sandbox=SandboxExecutor(store=project_store),
             importer=importer,
         )
+        agent_session_service = AgentSessionService(
+            store=agent_session_store,
+            control_repository=control_repository,
+        )
+        project_handlers = project_agent_service.build_tool_handlers()
+        if run_service is not None:
+            def resolve_agent_workspace(
+                owner: str, workspace_id: str, snapshot_digest: str
+            ) -> Path:
+                workspace = project_store.get_workspace(workspace_id, owner=owner)
+                if workspace.snapshot.digest != snapshot_digest:
+                    raise ValueError("AgentTask Workspace snapshot has changed")
+                return Path(workspace.local_root)
+
+            def resolve_agent_run_workdir(owner: str) -> Path:
+                roots = resolve_owner_roots(workspace_owner_roots, user=owner)
+                if not roots:
+                    raise ValueError("AgentTask requires an authorized cluster workdir")
+                return Path(roots[0])
+
+            agent_task_service = AgentTaskService(
+                store=build_agent_task_store(
+                    sqlite_path=config.db_path,
+                    postgres_dsn=config.postgres_dsn,
+                ),
+                session_store=agent_session_store,
+                session_service=agent_session_service,
+                run_service=run_service,
+                control_repository=control_repository,
+                workspace_resolver=resolve_agent_workspace,
+                run_workdir_resolver=(
+                    resolve_agent_run_workdir if workspace_owner_roots else None
+                ),
+                worker_id="api-agent-task",
+            )
+
+            def resolve_resource_envelope(
+                owner: str, session_id: str
+            ) -> AgentResourceEnvelope:
+                session = agent_session_store.get_session(session_id, owner=owner)
+                value = session.source.get("resource_envelope")
+                if not isinstance(value, dict):
+                    raise ValueError("AgentSession has no approved resource envelope")
+                return AgentResourceEnvelope(**value)
+
+            project_handlers["validation_schedule"] = agent_task_service.build_tool_handler(
+                resolve_resource_envelope
+            )
         agent_tool_routes = AgentToolRoutes(
             gateway=AgentToolGateway(
                 store=agent_session_store,
                 signer=AgentCapabilitySigner(agent_capability_secret),
                 handlers=build_a1_read_handlers(read_context),
                 profile_handlers={
-                    "experiment_builder": project_agent_service.build_tool_handlers()
+                    "experiment_builder": project_handlers
                 },
             )
-        )
-        agent_session_service = AgentSessionService(
-            store=agent_session_store,
-            control_repository=control_repository,
         )
     terminal_service = (
         TerminalCommandService(

@@ -156,14 +156,84 @@ export function AgentProjectPanel({ user, location, navigate }: AgentProjectPane
           emptyTitle="选择一个工程"
           emptyDetail="这里展示 Blueprint、变更文件、统一 diff、Sandbox 结果与风险摘要。"
         >
-          {detail.data ? <ProjectReview view={detail.data} user={user} /> : null}
+          {detail.data ? (
+            <ProjectReview
+              view={detail.data}
+              user={user}
+              location={location}
+              navigate={navigate}
+            />
+          ) : null}
         </QueryBoundary>
       </section>
     </div>
   );
 }
 
-function ProjectReview({ view, user }: { view: NonNullable<ReturnType<typeof useAgentProject>["data"]>; user: string }) {
+function ProjectReview({
+  view,
+  user,
+  location,
+  navigate,
+}: {
+  view: NonNullable<ReturnType<typeof useAgentProject>["data"]>;
+  user: string;
+  location: LocationState;
+  navigate: (path: string) => void;
+}) {
+  const [partition, setPartition] = useState("debug");
+  const [qos, setQos] = useState("normal");
+  const [cpus, setCpus] = useState(1);
+  const [memoryMib, setMemoryMib] = useState(1024);
+  const [gpus, setGpus] = useState(0);
+  const [gpuType, setGpuType] = useState("a100");
+  const [walltimeSeconds, setWalltimeSeconds] = useState(300);
+  const validationInputValid = isValidationEnvelopeInputValid({
+    cpus,
+    memoryMib,
+    gpus,
+    walltimeSeconds,
+  });
+  const startValidation = useMutation({
+    mutationFn: async () => {
+      const session = await api.createAgentSession(user, {
+        profile: "campus-default",
+        profile_id: "experiment_builder",
+        request_key: `ui:builder-session:${crypto.randomUUID()}`,
+        source: {
+          project_id: view.project.project_id,
+          workspace_id: view.workspace.workspace_id,
+          resource_envelope: buildValidationEnvelope({
+            owner: user,
+            snapshotDigest: view.workspace.snapshot.digest,
+            partition,
+            qos,
+            cpus,
+            memoryMib,
+            gpus,
+            gpuType,
+            walltimeSeconds,
+            now: new Date(),
+          }),
+        },
+      });
+      await api.createAgentTurn(user, session.session_id, {
+        request_key: `ui:builder-turn:${crypto.randomUUID()}`,
+        expected_state_version: session.state_version,
+        message: (
+          "Review the bound Project, Workspace, Blueprint, ChangeSets, and sandbox results. "
+          + "If Slurm validation is needed, schedule one validation within the approved "
+          + "resource envelope, then end this Turn while the task runs."
+        ),
+      });
+      return session;
+    },
+    onSuccess: (session) => navigate(withSearch("/agent", location.search, {
+      mode: "conversation",
+      project: null,
+      session: session.session_id,
+    })),
+  });
   const [selectedChangeSet, setSelectedChangeSet] = useState<string | null>(
     view.change_sets[0]?.change_set_id ?? null,
   );
@@ -192,8 +262,39 @@ function ProjectReview({ view, user }: { view: NonNullable<ReturnType<typeof use
         <p>
           <strong>{riskLabel(view.risk_summary.level)}</strong>
           {view.risk_summary.changed_files} 个文件变更，{view.risk_summary.sandbox_failures} 次 Sandbox 失败。
-          发布入口尚未开放。
+          正式发布入口尚未开放；仅可在下方明确批准的小型额度内安排验证 Run。
         </p>
+      </section>
+      <section className="agent-validation-approval" aria-labelledby="validation-envelope-heading">
+        <div>
+          <p className="panel-kicker">Explicit validation approval</p>
+          <h3 id="validation-envelope-heading">批准一次异步 Slurm 验证额度</h3>
+          <p className="muted">额度绑定当前 snapshot，一小时后过期；不会授权正式实验提交或发布。</p>
+        </div>
+        <div className="agent-validation-grid">
+          <label>Partition<input value={partition} onChange={(event) => setPartition(event.target.value)} /></label>
+          <label>QoS<input value={qos} onChange={(event) => setQos(event.target.value)} /></label>
+          <label>CPU<input type="number" min={1} value={cpus} onChange={(event) => setCpus(Number(event.target.value))} /></label>
+          <label>内存 MiB<input type="number" min={1} value={memoryMib} onChange={(event) => setMemoryMib(Number(event.target.value))} /></label>
+          <label>GPU<input type="number" min={0} value={gpus} onChange={(event) => setGpus(Number(event.target.value))} /></label>
+          {gpus > 0 ? <label>GPU 类型<input value={gpuType} onChange={(event) => setGpuType(event.target.value)} /></label> : null}
+          <label>Walltime 秒<input type="number" min={1} max={31_536_000} value={walltimeSeconds} onChange={(event) => setWalltimeSeconds(Number(event.target.value))} /></label>
+        </div>
+        <button
+          type="button"
+          className="button primary"
+          disabled={
+            startValidation.isPending
+            || !partition.trim()
+            || !qos.trim()
+            || !validationInputValid
+          }
+          onClick={() => startValidation.mutate()}
+        >
+          <FlaskConical aria-hidden="true" size={15} />
+          {startValidation.isPending ? "正在持久化批准" : "批准额度并启动验证 Agent"}
+        </button>
+        {startValidation.error ? <ProjectMutationError error={startValidation.error} /> : null}
       </section>
       <section>
         <h3>Blueprint</h3>
@@ -298,4 +399,52 @@ export function changeSetTone(changeSet: WorkspaceChangeSet): "success" | "warni
 
 export function riskLabel(level: string): string {
   return level === "high" ? "高风险" : level === "medium" ? "中风险" : "低风险";
+}
+
+export function buildValidationEnvelope(input: {
+  owner: string;
+  snapshotDigest: string;
+  partition: string;
+  qos: string;
+  cpus: number;
+  memoryMib: number;
+  gpus: number;
+  gpuType?: string;
+  walltimeSeconds: number;
+  now: Date;
+}) {
+  return {
+    partition: input.partition.trim(),
+    qos: input.qos.trim(),
+    cpus: input.cpus,
+    memory_mib: input.memoryMib,
+    gpu_type: input.gpus > 0 ? (input.gpuType?.trim() || "generic") : null,
+    gpus: input.gpus,
+    walltime_seconds: input.walltimeSeconds,
+    max_tasks: 1,
+    max_submissions: 1,
+    workspace_snapshot_digest: input.snapshotDigest,
+    expires_at: new Date(input.now.getTime() + 60 * 60 * 1000).toISOString(),
+    approved_by: input.owner,
+  };
+}
+
+export function isValidationEnvelopeInputValid(input: {
+  cpus: number;
+  memoryMib: number;
+  gpus: number;
+  walltimeSeconds: number;
+}): boolean {
+  return Number.isInteger(input.cpus)
+    && input.cpus >= 1
+    && input.cpus <= 1_048_576
+    && Number.isInteger(input.memoryMib)
+    && input.memoryMib >= 1
+    && input.memoryMib <= Number.MAX_SAFE_INTEGER
+    && Number.isInteger(input.gpus)
+    && input.gpus >= 0
+    && input.gpus <= 1_048_576
+    && Number.isInteger(input.walltimeSeconds)
+    && input.walltimeSeconds >= 1
+    && input.walltimeSeconds <= 31_536_000;
 }

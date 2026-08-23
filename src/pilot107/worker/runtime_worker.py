@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -31,6 +32,7 @@ from pilot107.observability.collector import (
 )
 from pilot107.runtime_watch.service import RuntimeWatchService
 from pilot107.services.agent_session_service import AgentSessionService
+from pilot107.services.agent_task_service import AgentTaskDispatchBatch, AgentTaskService
 from pilot107.worker.agent_turn_worker import AgentTurnWorker
 from pilot107.worker.capsule import CapsuleError, RawCapsuleService
 from pilot107.worker.evidence import CollectionTaskHandler
@@ -101,6 +103,9 @@ class WorkerTickResult:
     agent_turns_checked: int = 0
     agent_turns_succeeded: int = 0
     agent_turn_errors: list[WorkerRunError] = field(default_factory=list)
+    agent_tasks_checked: int = 0
+    agent_tasks_succeeded: int = 0
+    agent_task_errors: list[WorkerRunError] = field(default_factory=list)
     capsule_builds_attempted: int = 0
     capsule_builds_succeeded: int = 0
     capsule_errors: list[WorkerRunError] = field(default_factory=list)
@@ -139,6 +144,7 @@ class RuntimeReconcileWorker:
         agent_advice_service: AgentAdviceService | None = None,
         agent_session_service: AgentSessionService | None = None,
         agent_turn_worker: AgentTurnWorker | None = None,
+        agent_task_service: AgentTaskService | None = None,
         capsule_service: RawCapsuleService | None = None,
         runtime_watch_service: RuntimeWatchService | None = None,
         observability_collector: ObservabilityCollector | None = None,
@@ -160,6 +166,7 @@ class RuntimeReconcileWorker:
         self.agent_advice_service = agent_advice_service
         self.agent_session_service = agent_session_service
         self.agent_turn_worker = agent_turn_worker
+        self.agent_task_service = agent_task_service
         self.capsule_service = capsule_service
         self.runtime_watch_service = runtime_watch_service
         self.observability_collector = observability_collector
@@ -169,6 +176,26 @@ class RuntimeReconcileWorker:
         runtime_watch_result = (
             self.runtime_watch_service.tick() if self.runtime_watch_service is not None else None
         )
+        agent_task_batches: list[AgentTaskDispatchBatch] = []
+        agent_task_outer_errors: list[WorkerRunError] = []
+
+        def run_agent_task_phase(
+            phase: str, operation: Callable[..., AgentTaskDispatchBatch]
+        ) -> None:
+            try:
+                agent_task_batches.append(operation(limit=self.batch_size))
+            except Exception:
+                agent_task_outer_errors.append(
+                    WorkerRunError(
+                        run_id=f"agent-task-{phase}",
+                        message=f"AgentTask {phase} failed",
+                        code="AGENT.TASK_SERVICE_ERROR",
+                        retryable=True,
+                    )
+                )
+
+        if self.agent_task_service is not None:
+            run_agent_task_phase("dispatch", self.agent_task_service.dispatch_due)
         submission_batch = self.service.dispatch_due_submissions(limit=self.batch_size)
         submission_errors = [
             WorkerRunError(
@@ -292,6 +319,10 @@ class RuntimeReconcileWorker:
                 ):
                     self.service.store.defer_logs_finalize_for_runtime_watch(reconciled.run_id)
 
+        if self.agent_task_service is not None:
+            run_agent_task_phase("reconcile", self.agent_task_service.reconcile_active)
+            run_agent_task_phase("ready-dispatch", self.agent_task_service.dispatch_due)
+
         observability_result: ObservabilityTickResult | None = None
         if self.observability_collector is not None:
             try:
@@ -393,6 +424,19 @@ class RuntimeReconcileWorker:
                 agent_turn_batch.succeeded if agent_turn_batch is not None else 0
             ),
             agent_turn_errors=agent_turn_errors,
+            agent_tasks_checked=sum(batch.checked for batch in agent_task_batches),
+            agent_tasks_succeeded=sum(batch.succeeded for batch in agent_task_batches),
+            agent_task_errors=agent_task_outer_errors
+            + [
+                WorkerRunError(
+                    run_id=error.task_id,
+                    message=error.message,
+                    code="AGENT.TASK_DISPATCH_ERROR",
+                    retryable=error.retryable,
+                )
+                for batch in agent_task_batches
+                for error in batch.errors
+            ],
             capsule_builds_attempted=capsule_stats.attempted,
             capsule_builds_succeeded=capsule_stats.succeeded,
             capsule_errors=capsule_stats.errors,

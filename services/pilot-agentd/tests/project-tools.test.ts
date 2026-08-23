@@ -65,6 +65,39 @@ describe("A2 Project tools", () => {
       patches: [{ ...valid.patches[0], shell: "rm -rf" }],
     })).toBe(false);
   });
+
+  it("binds validation to the authoritative Turn and terminates immediately", async () => {
+    const request = builderRequest();
+    let forwarded: Record<string, unknown> | undefined;
+    const tools = createProjectTools(request, {
+      invoke: async (_request, _callId, _name, arguments_) => {
+        forwarded = arguments_;
+        return successResult();
+      },
+    });
+    const validation = tools.find((tool) => tool.name === "validation_schedule");
+    if (validation === undefined) throw new Error("missing validation_schedule");
+
+    const result = await validation.execute("call-validation-1", {
+      project_id: "project-1",
+      workspace_id: "workspace-1",
+      request_key: "validation-1",
+      cpus: 1,
+      memory_mib: 1024,
+      gpus: 0,
+      walltime_seconds: 300,
+      tasks: 1,
+      submissions: 1,
+      script: "true\n",
+      job_name: "validation",
+    });
+
+    expect(forwarded).toMatchObject({
+      session_id: request.session_id,
+      turn_id: request.turn_id,
+    });
+    expect(result.terminate).toBe(true);
+  });
 });
 
 function successResult(): ToolResult {

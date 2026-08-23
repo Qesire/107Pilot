@@ -283,3 +283,77 @@ def test_gateway_persists_invalid_handler_result_for_stable_replay(tmp_path: Pat
         with pytest.raises(AgentToolGatewayError) as invalid:
             gateway.invoke(token, invocation)
         assert invalid.value.code == "AGENT.TOOL.INVALID_RESULT"
+
+
+@pytest.mark.parametrize("binding", ["session_id", "turn_id"])
+def test_validation_schedule_rejects_argument_binding_spoof_before_handler(
+    tmp_path: Path, binding: str
+) -> None:
+    _, AgentCapabilitySigner, AgentReadResult, AgentToolGateway, AgentToolGatewayError = (
+        _gateway_api()
+    )
+    clock = MutableClock()
+    store = SQLiteAgentSessionStore(tmp_path / "agent.db", clock=clock)
+    session, _ = store.create_session(
+        owner="alice",
+        request_key="builder-session",
+        profile_id="experiment_builder",
+        model_profile_id="faux-default",
+        source={"project_id": "project-1", "workspace_id": "workspace-1"},
+    )
+    turn, _ = store.create_turn(
+        session_id=session.session_id,
+        owner="alice",
+        request_key="builder-turn",
+        message="validate",
+        expected_state_version=session.state_version,
+    )
+    claim = store.claim_turn(turn.turn_id, worker_id="worker-1", lease_seconds=30)
+    assert claim is not None
+    called: list[str] = []
+
+    def schedule(owner, arguments):
+        called.append(owner)
+        return AgentReadResult(result={}, evidence_refs=())
+
+    signer = AgentCapabilitySigner(b"s" * 32, clock=clock.epoch)
+    gateway = AgentToolGateway(
+        store=store,
+        signer=signer,
+        handlers={"validation_schedule": schedule},
+        clock=clock,
+    )
+    token = signer.sign(
+        _claims(
+            clock,
+            session,
+            turn,
+            claim,
+            profile_id="experiment_builder",
+            tools=frozenset({"validation_schedule"}),
+            project_id="project-1",
+            workspace_id="workspace-1",
+            operations=frozenset({"validate"}),
+        )
+    )
+    arguments = {
+        "project_id": "project-1",
+        "workspace_id": "workspace-1",
+        "session_id": session.session_id,
+        "turn_id": turn.turn_id,
+    }
+    arguments[binding] = "spoofed-binding"
+    invocation = _invocation(
+        session,
+        turn,
+        claim,
+        profile_id="experiment_builder",
+        tool_name="validation_schedule",
+        arguments=arguments,
+    )
+
+    with pytest.raises(AgentToolGatewayError) as error:
+        gateway.invoke(token, invocation)
+
+    assert error.value.code == "AGENT.TOOL.CAPABILITY_DENIED"
+    assert called == []

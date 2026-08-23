@@ -44,7 +44,12 @@ from pilot107.adapters.ssh_relay import (
 from pilot107.agent.capabilities import AgentCapabilitySigner
 from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig
-from pilot107.agent.store_factory import build_agent_session_store
+from pilot107.agent.store import AgentSessionStore
+from pilot107.agent.store_factory import (
+    build_agent_session_store,
+    build_agent_task_store,
+    build_project_store,
+)
 from pilot107.core.advice import AgentAdviceService, AgentPolicyEngine
 from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
 from pilot107.core.code_context import (
@@ -58,6 +63,7 @@ from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalo
 from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.evidence_binding import EvidenceBinder
+from pilot107.core.path_policy import resolve_owner_roots
 from pilot107.core.platform import (
     CapabilityProfile,
     docker_sim_capability_profile,
@@ -88,6 +94,7 @@ from pilot107.runtime_watch.service import (
 )
 from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
+from pilot107.services.agent_task_service import AgentTaskService
 from pilot107.services.remediation_service import RemediationService
 from pilot107.worker.agent_turn_worker import AgentTurnWorker
 from pilot107.worker.capsule import RawCapsuleService
@@ -187,6 +194,7 @@ class WorkerServiceStack:
     worker: RuntimeReconcileWorker
     remediation_service: RemediationService
     agent_session_service: AgentSessionService | None = None
+    agent_task_service: AgentTaskService | None = None
 
 
 class WorkerService:
@@ -229,6 +237,7 @@ class WorkerService:
                 and result.submissions_checked == 0
                 and result.agent_executions_checked == 0
                 and result.agent_turns_checked == 0
+                and result.agent_tasks_checked == 0
                 and result.runtime_watches_checked == 0
                 and result.observability_cycles == 0
                 and self.last_remediation_advanced == 0
@@ -258,6 +267,7 @@ class WorkerService:
                 or result.submission_errors
                 or result.agent_execution_errors
                 or result.agent_turn_errors
+                or result.agent_task_errors
                 or result.capsule_errors
                 or result.runtime_watch_errors
                 or result.observability_errors
@@ -306,6 +316,11 @@ class WorkerService:
             "agent_turn_errors": redact_sensitive_structure(
                 [error.__dict__ for error in result.agent_turn_errors]
             ),
+            "agent_tasks_checked": result.agent_tasks_checked,
+            "agent_tasks_succeeded": result.agent_tasks_succeeded,
+            "agent_task_errors": redact_sensitive_structure(
+                [error.__dict__ for error in result.agent_task_errors]
+            ),
             "capsule_builds_attempted": result.capsule_builds_attempted,
             "capsule_builds_succeeded": result.capsule_builds_succeeded,
             "capsule_errors": redact_sensitive_structure(
@@ -344,6 +359,9 @@ class WorkerService:
             "agent_turn_checked_total": result.agent_turns_checked,
             "agent_turn_succeeded_total": result.agent_turns_succeeded,
             "agent_turn_errors_total": len(result.agent_turn_errors),
+            "agent_task_checked_total": result.agent_tasks_checked,
+            "agent_task_succeeded_total": result.agent_tasks_succeeded,
+            "agent_task_errors_total": len(result.agent_task_errors),
             "capsule_builds_attempted_total": result.capsule_builds_attempted,
             "capsule_builds_succeeded_total": result.capsule_builds_succeeded,
             "capsule_errors_total": len(result.capsule_errors),
@@ -558,6 +576,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         postgres_dsn=config.control_postgres_dsn,
     )
     agent_session_service: AgentSessionService | None = None
+    agent_session_store: AgentSessionStore | None = None
     agent_turn_worker: AgentTurnWorker | None = None
     if agent_capability_secret is not None:
         if not (config.agentd_url and config.agentd_token and config.agentd_model_profile):
@@ -610,6 +629,43 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         evidence_store=evidence_store,
         baseline_executor=baseline_executor,
     )
+    agent_task_service: AgentTaskService | None = None
+    if agent_session_store is not None and agent_session_service is not None:
+        project_store = build_project_store(
+            sqlite_path=config.db_path,
+            postgres_dsn=config.postgres_dsn,
+        )
+
+        def resolve_agent_workspace(
+            owner: str, workspace_id: str, snapshot_digest: str
+        ) -> Path:
+            workspace = project_store.get_workspace(workspace_id, owner=owner)
+            if workspace.snapshot.digest != snapshot_digest:
+                raise ValueError("AgentTask Workspace snapshot has changed")
+            return Path(workspace.local_root)
+
+        def resolve_agent_run_workdir(owner: str) -> Path:
+            roots = resolve_owner_roots(effective_roots, user=owner)
+            if not roots:
+                raise ValueError("AgentTask requires an authorized cluster workdir")
+            return Path(roots[0])
+
+        agent_task_service = AgentTaskService(
+            store=build_agent_task_store(
+                sqlite_path=config.db_path,
+                postgres_dsn=config.postgres_dsn,
+            ),
+            session_store=agent_session_store,
+            session_service=agent_session_service,
+            run_service=run_service,
+            control_repository=control_repository,
+            workspace_resolver=resolve_agent_workspace,
+            run_workdir_resolver=(
+                resolve_agent_run_workdir if effective_roots else None
+            ),
+            worker_id=f"{config.worker_id}-agent-task",
+            lease_seconds=min(3600, max(30, config.task_lease_seconds)),
+        )
     capability_profile = _worker_capability_profile(config)
     partition_qos = capability_profile.partition_qos()
     qos_limits = capability_profile.qos_limits()
@@ -750,6 +806,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         agent_advice_service=advice_service,
         agent_session_service=agent_session_service,
         agent_turn_worker=agent_turn_worker,
+        agent_task_service=agent_task_service,
         capsule_service=capsule_service,
         runtime_watch_service=runtime_watch_service,
         observability_collector=observability_collector,
@@ -767,6 +824,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             worker=worker,
             remediation_service=remediation_service,
             agent_session_service=agent_session_service,
+            agent_task_service=agent_task_service,
         ),
     )
 
@@ -1167,6 +1225,9 @@ def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> Work
         agent_turns_checked=left.agent_turns_checked + right.agent_turns_checked,
         agent_turns_succeeded=left.agent_turns_succeeded + right.agent_turns_succeeded,
         agent_turn_errors=[*left.agent_turn_errors, *right.agent_turn_errors],
+        agent_tasks_checked=left.agent_tasks_checked + right.agent_tasks_checked,
+        agent_tasks_succeeded=left.agent_tasks_succeeded + right.agent_tasks_succeeded,
+        agent_task_errors=[*left.agent_task_errors, *right.agent_task_errors],
         capsule_builds_attempted=(left.capsule_builds_attempted + right.capsule_builds_attempted),
         capsule_builds_succeeded=(left.capsule_builds_succeeded + right.capsule_builds_succeeded),
         capsule_errors=[*left.capsule_errors, *right.capsule_errors],
@@ -1212,6 +1273,8 @@ def _tick_summary(result: WorkerTickResult) -> str:
         f"agent_execution_errors={len(result.agent_execution_errors)} "
         f"agent_turns={result.agent_turns_succeeded}/{result.agent_turns_checked} "
         f"agent_turn_errors={len(result.agent_turn_errors)} "
+        f"agent_tasks={result.agent_tasks_succeeded}/{result.agent_tasks_checked} "
+        f"agent_task_errors={len(result.agent_task_errors)} "
         f"capsules={result.capsule_builds_succeeded}/{result.capsule_builds_attempted} "
         f"capsule_errors={len(result.capsule_errors)}"
         f" runtime_watch={result.runtime_watches_with_data}/"

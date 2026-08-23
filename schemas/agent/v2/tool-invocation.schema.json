@@ -125,6 +125,10 @@
         {
           "type": "string",
           "const": "sandbox_exec"
+        },
+        {
+          "type": "string",
+          "const": "validation_schedule"
         }
       ]
     },

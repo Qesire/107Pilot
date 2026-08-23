@@ -37,6 +37,7 @@ _A2_PROJECT_TOOLS = frozenset(
         "workspace_patch",
         "workspace_diff",
         "sandbox_exec",
+        "validation_schedule",
     }
 )
 _TERMINAL_STATES = frozenset(

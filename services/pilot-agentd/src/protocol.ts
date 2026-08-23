@@ -442,6 +442,7 @@ export const A2_PROJECT_TOOL_NAMES = [
   "workspace_patch",
   "workspace_diff",
   "sandbox_exec",
+  "validation_schedule",
 ] as const;
 
 export type ReadToolName =

@@ -210,6 +210,7 @@ class AgentToolGateway:
                 "workspace_diff": "read",
                 "workspace_patch": "write",
                 "sandbox_exec": "validate",
+                "validation_schedule": "validate",
             }.get(invocation.tool_name)
             project_id = invocation.arguments.get("project_id")
             workspace_id = invocation.arguments.get("workspace_id")
@@ -218,6 +219,13 @@ class AgentToolGateway:
                 or required_operation not in claims.operations
                 or project_id != claims.project_id
                 or workspace_id != claims.workspace_id
+                or (
+                    invocation.tool_name == "validation_schedule"
+                    and (
+                        invocation.arguments.get("session_id") != invocation.session_id
+                        or invocation.arguments.get("turn_id") != invocation.turn_id
+                    )
+                )
             ):
                 raise AgentToolGatewayError(
                     "Agent tool invocation exceeds its Project capability",

@@ -2150,3 +2150,28 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 }
 .filepane-notice.notice-success { background: var(--teal); color: #fff; }
 .filepane-notice.notice-error { background: var(--danger); color: #fff; }
+
+.agent-validation-approval {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, var(--teal) 28%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--teal) 5%, var(--surface));
+}
+.agent-validation-approval h3,
+.agent-validation-approval p { margin: 0; }
+.agent-validation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 0.65rem;
+}
+.agent-validation-grid label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.agent-validation-grid input { width: 100%; }

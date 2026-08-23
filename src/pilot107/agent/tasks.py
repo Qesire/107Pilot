@@ -280,8 +280,6 @@ class AgentTaskRecord:
                     parse_timestamp(self.lease_expires_at or "", "lease_expires_at")
                 ),
             )
-        if self.state is AgentTaskState.RUNNING and self.lease_owner is None:
-            raise ValueError("running AgentTask requires a lease")
         if self.state in TERMINAL_TASK_STATES and self.result is None:
             raise ValueError("terminal AgentTask requires a result")
         if self.result is not None and self.result.status != self.state.value:

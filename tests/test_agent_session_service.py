@@ -89,3 +89,41 @@ def test_recover_pending_turns_recreates_only_missing_outbox_messages(
     assert control.get_outbox(f"agent-turn:{turn.turn_id}").payload == {
         "turn_id": turn.turn_id
     }
+
+
+def test_experiment_builder_persists_owner_approved_resource_envelope(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "agent.db"
+    service = AgentSessionService(
+        store=SQLiteAgentSessionStore(database),
+        control_repository=SQLiteControlRepository(database),
+    )
+    envelope = {
+        "partition": "debug",
+        "qos": "normal",
+        "cpus": 2,
+        "memory_mib": 2048,
+        "gpu_type": None,
+        "gpus": 0,
+        "walltime_seconds": 300,
+        "max_tasks": 1,
+        "max_submissions": 1,
+        "workspace_snapshot_digest": "a" * 64,
+        "expires_at": "2026-08-19T01:00:00Z",
+        "approved_by": "alice",
+    }
+
+    session, _ = service.create_session(
+        owner="alice",
+        request_key="builder-with-envelope",
+        profile_id="experiment_builder",
+        model_profile_id="faux-default",
+        source={
+            "project_id": "project-1",
+            "workspace_id": "workspace-1",
+            "resource_envelope": envelope,
+        },
+    )
+
+    assert session.source["resource_envelope"] == envelope
