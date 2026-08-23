@@ -192,3 +192,41 @@ def test_restart_retries_terminal_handoff_for_already_stopped_watch(
     restarted.tick()
 
     assert handoffs == ["run1"]
+
+
+def test_stopped_watch_handoff_failure_is_reported_and_retried(
+    tmp_path: Path,
+) -> None:
+    clock = MutableClock()
+    store, service = _service(tmp_path, clock)
+    log_root = tmp_path / "logs"
+    (log_root / "run1.out").write_bytes(b"done\n")
+    (log_root / "run1.err").write_bytes(b"")
+    store.create_watch(run_id="run1", owner="alice", connection_id="c1")
+    service.on_run_terminal(run_id="run1", owner="alice")
+    service.tick()
+    calls = 0
+
+    def handoff(run_id: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError(f"temporary handoff failure: {run_id}")
+
+    restarted = RuntimeWatchService(
+        store=store,
+        transport_for_connection=service.transport_for_connection,
+        source_resolver=SourceResolver(log_root),
+        worker_id="worker2",
+        clock=clock,
+        on_terminal_drained=handoff,
+    )
+
+    first = restarted.tick()
+    second = restarted.tick()
+    third = restarted.tick()
+
+    assert first.errors == ("run1:RuntimeError",)
+    assert second.errors == ()
+    assert third.errors == ()
+    assert calls == 2

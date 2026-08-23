@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 from pilot107.core.paths import SafePath
-from pilot107.core.run_store import RunStore
+from pilot107.core.run_store import RunRecord, RunStore
 from pilot107.runtime_watch.evaluator import RuntimeAlertEvaluator
 from pilot107.runtime_watch.model import (
     RuntimeLogSegment,
@@ -108,6 +108,23 @@ class RuntimeWatchTickResult:
     errors: tuple[str, ...] = ()
 
 
+class RuntimeWatchRegistrar:
+    """API-side registration surface; Worker owns collection and draining."""
+
+    def __init__(self, *, store: RuntimeWatchStore, default_connection_id: str = "default") -> None:
+        self.store = store
+        self.default_connection_id = default_connection_id
+
+    def ensure_submitted_run(self, run: RunRecord) -> RuntimeWatchRecord:
+        if run.job_id is None:
+            raise ValueError("Runtime Watch requires a submitted Run job ID")
+        return self.store.create_watch(
+            run_id=run.run_id,
+            owner=run.owner,
+            connection_id=self.default_connection_id,
+        )
+
+
 class RuntimeWatchService:
     def __init__(
         self,
@@ -139,23 +156,32 @@ class RuntimeWatchService:
             connection_id=self.default_connection_id,
         )
 
+    def ensure_submitted_run(self, run: RunRecord) -> RuntimeWatchRecord:
+        """Start (or replay) a Watch only after Slurm accepted the formal Run."""
+
+        if run.job_id is None:
+            raise ValueError("Runtime Watch requires a submitted Run job ID")
+        return self.ensure_run(run_id=run.run_id, owner=run.owner)
+
     def on_run_terminal(self, *, run_id: str, owner: str) -> bool:
         return self.store.schedule_terminal_drain(run_id, owner=owner)
 
     def tick(self) -> RuntimeWatchTickResult:
+        errors: list[str] = []
         if self.on_terminal_drained is not None:
-            for stopped in self.store.list_stopped_watches(
-                limit=self.policy.max_watches_per_tick
-            ):
-                self.on_terminal_drained(stopped.run_id)
-                self.store.acknowledge_terminal_handoff(
-                    stopped.watch_id, owner=stopped.owner
-                )
+            for stopped in self.store.list_stopped_watches(limit=self.policy.max_watches_per_tick):
+                try:
+                    self.on_terminal_drained(stopped.run_id)
+                    self.store.acknowledge_terminal_handoff(
+                        stopped.watch_id,
+                        owner=stopped.owner,
+                    )
+                except Exception as exc:
+                    errors.append(f"{stopped.run_id}:{type(exc).__name__}")
         grouped: dict[str, list[RuntimeWatchRecord]] = defaultdict(list)
         for watch in self.store.list_due_watches(limit=self.policy.max_watches_per_tick):
             grouped[watch.connection_id].append(watch)
         checked = with_data = total_bytes = 0
-        errors: list[str] = []
         for connection_id in sorted(grouped)[: self.policy.max_connections_per_tick]:
             budget = self.policy.max_bytes_per_connection_tick
             transport = self.transport_for_connection(connection_id)
@@ -250,16 +276,13 @@ class RuntimeWatchService:
                             None
                             if drained
                             else timestamp(
-                                self._now()
-                                + timedelta(seconds=0 if finalizing else delay)
+                                self._now() + timedelta(seconds=0 if finalizing else delay)
                             )
                         ),
                     )
                     if drained and self.on_terminal_drained is not None:
                         self.on_terminal_drained(watch.run_id)
-                        self.store.acknowledge_terminal_handoff(
-                            watch.watch_id, owner=watch.owner
-                        )
+                        self.store.acknowledge_terminal_handoff(watch.watch_id, owner=watch.owner)
                 except RuntimeWatchConflict:
                     continue
                 except Exception as exc:

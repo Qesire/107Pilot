@@ -49,6 +49,9 @@ COUNTERS = (
     "observability_summaries_total",
     "observability_commands_total",
     "observability_errors_total",
+    "formal_result_checked_total",
+    "formal_result_succeeded_total",
+    "formal_result_errors_total",
 )
 
 

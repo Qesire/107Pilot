@@ -559,6 +559,36 @@ export interface WorkspacePublication {
   updated_at: string;
 }
 
+export interface FormalRunApproval {
+  approval_digest: string;
+  approved_by: string;
+  change_set_digest: string;
+  published_snapshot_digest: string;
+  contract_digest: string;
+  validation_contract_id: string;
+  validation_run_id: string;
+  validation_evidence_digest: string;
+  session_id: string;
+}
+
+export interface FormalProjectRun {
+  approval: FormalRunApproval;
+  contract: ContractRecordPayload;
+  run: {
+    run_id: string;
+    owner: string;
+    state: string;
+    job_id: string | null;
+    contract_id: string;
+    parent_run_id: string;
+    lineage_reason: "agent_formal_run";
+    result_status: string;
+    created_at: string;
+    updated_at: string;
+  };
+  watch: RuntimeWatchSummary;
+}
+
 export type RemediationState =
   | "waiting_evidence"
   | "diagnosing"

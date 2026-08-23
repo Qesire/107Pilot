@@ -720,6 +720,67 @@ class ContractService:
             idempotent=True,
         )
 
+    def create_agent_formal(
+        self,
+        *,
+        validation_contract: ContractRecord,
+        payload: dict[str, Any],
+        contract_id: str,
+        approval_binding: dict[str, str],
+    ) -> ContractRecord:
+        """Create one approval-bound formal Contract derived from validation."""
+
+        required = {
+            "approval_digest",
+            "approved_by",
+            "project_id",
+            "workspace_id",
+            "session_id",
+            "change_set_id",
+            "change_set_digest",
+            "published_snapshot_digest",
+            "validation_run_id",
+            "validation_evidence_digest",
+        }
+        if set(approval_binding) != required or any(
+            not isinstance(value, str) or not value for value in approval_binding.values()
+        ):
+            raise ContractError(
+                "formal approval binding is invalid",
+                code="CONTRACT.FORMAL_APPROVAL_INVALID",
+            )
+        canonical = _normalize_or_contract_error(payload)
+        result = self.validate(canonical)
+        if result.status == "BLOCK":
+            raise ContractError(
+                "formal contract validation failed",
+                code="CONTRACT.PREFLIGHT_BLOCKED",
+                findings=result.findings,
+            )
+        if validation_contract.owner != approval_binding["approved_by"]:
+            raise ContractError(
+                "formal approval owner does not match validation Contract",
+                code="CONTRACT.FORMAL_APPROVAL_INVALID",
+            )
+        return self.store.create_contract(
+            owner=validation_contract.owner,
+            recipe_version_id=_recipe_version_id(canonical),
+            payload=canonical,
+            field_sources=[
+                *validation_contract.field_sources,
+                {
+                    "field": "formal_run",
+                    "source": "agent_formal_approval",
+                    **approval_binding,
+                    "needs_user_confirmation": False,
+                },
+            ],
+            contract_id=contract_id,
+            parent_contract_id=validation_contract.contract_id,
+            derivation_reason="agent_formal_run",
+            idempotent=True,
+        )
+
     def preflight(self, contract: ContractRecord) -> ContractValidationResult:
         result = self.validate(contract.payload)
         if self.platform_snapshot_store is None and self.user_entitlement_store is None:

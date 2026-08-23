@@ -13,6 +13,8 @@ from pilot107.api.http_types import ApiResponse
 from pilot107.core.identity import UserIdentity
 from pilot107.services.project_agent_service import (
     ProjectAgentService,
+    formal_project_run_payload,
+    formal_run_approval_payload,
     project_view_payload,
 )
 
@@ -226,6 +228,82 @@ class ProjectAgentRoutes:
                 raise
             except (TypeError, ValueError, WorkspacePolicyError) as exc:
                 return _error(400, "AGENT.WORKSPACE.INVALID_REQUEST", str(exc))
+        if (
+            len(parts) == 3
+            and parts[0] == "agent-changesets"
+            and parts[2] in {"formal-preview", "formal-submit"}
+        ):
+            payload, error = _body(body)
+            if error is not None:
+                return error
+            try:
+                required = {
+                    "project_id",
+                    "workspace_id",
+                    "session_id",
+                    "validation_contract_id",
+                    "validation_run_id",
+                    "validation_evidence_refs",
+                    "formal_contract",
+                }
+                if parts[2] == "formal-submit":
+                    required.add("approved_digest")
+                _closed(payload, required)
+                raw_refs = payload["validation_evidence_refs"]
+                raw_contract = payload["formal_contract"]
+                if not isinstance(raw_refs, list) or not all(
+                    isinstance(item, str) and item for item in raw_refs
+                ):
+                    raise TypeError("validation_evidence_refs must contain strings")
+                if not isinstance(raw_contract, Mapping):
+                    raise TypeError("formal_contract must be an object")
+                project_id = _required_string(payload, "project_id")
+                workspace_id = _required_string(payload, "workspace_id")
+                session_id = _required_string(payload, "session_id")
+                validation_contract_id = _required_string(
+                    payload, "validation_contract_id"
+                )
+                validation_run_id = _required_string(payload, "validation_run_id")
+                evidence_refs = tuple(raw_refs)
+                contract_value = dict(raw_contract)
+                if parts[2] == "formal-preview":
+                    approval = self.service.prepare_formal_run(
+                        project_id=project_id,
+                        workspace_id=workspace_id,
+                        change_set_id=parts[1],
+                        owner=owner,
+                        session_id=session_id,
+                        validation_contract_id=validation_contract_id,
+                        validation_run_id=validation_run_id,
+                        validation_evidence_refs=evidence_refs,
+                        formal_contract_payload=contract_value,
+                    )
+                    return ApiResponse(
+                        status=200, payload=formal_run_approval_payload(approval)
+                    )
+                formal = self.service.approve_and_submit_formal_run(
+                    project_id=project_id,
+                    workspace_id=workspace_id,
+                    change_set_id=parts[1],
+                    owner=owner,
+                    session_id=session_id,
+                    validation_contract_id=validation_contract_id,
+                    validation_run_id=validation_run_id,
+                    validation_evidence_refs=evidence_refs,
+                    formal_contract_payload=contract_value,
+                    approved_digest=_required_string(payload, "approved_digest"),
+                )
+                return ApiResponse(status=201, payload=formal_project_run_payload(formal))
+            except KeyError:
+                return _error(404, "AGENT.PROJECT.NOT_FOUND", "Agent Project not found")
+            except RuntimeError as exc:
+                if str(exc) == "formal Project Run services are unavailable":
+                    return _error(503, "AGENT.FORMAL_RUN.UNAVAILABLE", str(exc))
+                raise
+            except ProjectConflict as exc:
+                return _error(409, "AGENT.PROJECT.CONFLICT", str(exc))
+            except (TypeError, ValueError) as exc:
+                return _error(400, "AGENT.FORMAL_RUN.INVALID_REQUEST", str(exc))
         return None
 
 

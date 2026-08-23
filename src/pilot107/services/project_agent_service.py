@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+import json
 import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
@@ -17,8 +19,14 @@ from pilot107.agent.project import (
     ProjectSource,
 )
 from pilot107.agent.project_store import ProjectStore
-from pilot107.agent.publisher import WorkspacePublication, WorkspacePublisher
+from pilot107.agent.publisher import (
+    WorkspacePublication,
+    WorkspacePublicationState,
+    WorkspacePublisher,
+    publication_snapshot_digest,
+)
 from pilot107.agent.sandbox import SandboxExecutionResult, SandboxExecutor
+from pilot107.agent.session import AgentTurnRecord
 from pilot107.agent.tool_gateway import AgentReadHandler, AgentReadResult, AgentToolGatewayError
 from pilot107.agent.workspace import (
     AgentWorkspaceRecord,
@@ -33,6 +41,19 @@ from pilot107.agent.workspace import (
     change_set_payload,
     workspace_payload,
 )
+from pilot107.core.contracts import ContractRecord, ContractService
+from pilot107.core.contracts import contract_payload as formal_contract_record_payload
+from pilot107.core.evidence_binding import EvidenceBinder, EvidenceBundle
+from pilot107.core.run_service import RunService
+from pilot107.core.run_store import RunRecord
+from pilot107.core.states import TERMINAL_RUN_STATES, ResultStatus, RunState
+from pilot107.runtime_watch.model import (
+    RuntimeWatchRecord,
+    RuntimeWatchState,
+    runtime_watch_payload,
+)
+from pilot107.runtime_watch.service import RuntimeWatchRegistrar, RuntimeWatchService
+from pilot107.services.agent_session_service import AgentSessionService
 
 _MAX_LIST_ITEMS = 500
 _MAX_READ_BYTES = 64 * 1024
@@ -46,6 +67,35 @@ class ProjectAgentView:
     publish_available: bool
 
 
+@dataclass(frozen=True)
+class FormalRunApproval:
+    approval_digest: str
+    approved_by: str
+    change_set_digest: str
+    published_snapshot_digest: str
+    contract_digest: str
+    validation_contract_id: str
+    validation_run_id: str
+    validation_evidence_digest: str
+    session_id: str
+
+
+@dataclass(frozen=True)
+class FormalProjectRun:
+    approval: FormalRunApproval
+    contract: ContractRecord
+    run: RunRecord
+    watch: RuntimeWatchRecord
+
+
+@dataclass(frozen=True)
+class FormalRunCompletion:
+    run: RunRecord
+    watch: RuntimeWatchRecord
+    evidence_bundle: EvidenceBundle
+    explanation_turn: AgentTurnRecord
+
+
 class ProjectAgentService:
     def __init__(
         self,
@@ -55,6 +105,11 @@ class ProjectAgentService:
         sandbox: SandboxExecutor,
         importer: WorkspaceImporter | None = None,
         publisher: WorkspacePublisher | None = None,
+        contract_service: ContractService | None = None,
+        run_service: RunService | None = None,
+        runtime_watch_service: RuntimeWatchService | RuntimeWatchRegistrar | None = None,
+        agent_session_service: AgentSessionService | None = None,
+        evidence_binder: EvidenceBinder | None = None,
     ) -> None:
         self.store = store
         self.workspace_root = workspace_root.resolve()
@@ -62,6 +117,11 @@ class ProjectAgentService:
         self.sandbox = sandbox
         self.importer = importer
         self.publisher = publisher
+        self.contract_service = contract_service
+        self.run_service = run_service
+        self.runtime_watch_service = runtime_watch_service
+        self.agent_session_service = agent_session_service
+        self.evidence_binder = evidence_binder
         self.editor = WorkspaceEditor(store=store)
 
     def create_project(
@@ -298,6 +358,224 @@ class ProjectAgentService:
         self.publisher.prepare(change_set_id, actor=owner, target_root=target_root)
         return self.publisher.publish(change_set_id, actor=owner)
 
+    def prepare_formal_run(
+        self,
+        *,
+        project_id: str,
+        workspace_id: str,
+        change_set_id: str,
+        owner: str,
+        session_id: str,
+        validation_contract_id: str,
+        validation_run_id: str,
+        validation_evidence_refs: tuple[str, ...],
+        formal_contract_payload: Mapping[str, Any],
+    ) -> FormalRunApproval:
+        """Recompute the exact digest a user must approve for a formal Run."""
+
+        contract_service, run_service, _, _, evidence_binder = self._formal_services()
+        self._workspace(project_id, workspace_id, owner)
+        change_set = self.store.get_change_set(change_set_id, owner=owner)
+        if (
+            change_set.project_id != project_id
+            or change_set.workspace_id != workspace_id
+            or change_set.state is not WorkspaceChangeSetState.PUBLISHED
+        ):
+            raise ValueError("formal Run requires the published ChangeSet")
+        publication = self.store.get_workspace_publication(change_set_id, owner=owner)
+        if (
+            publication.state is not WorkspacePublicationState.PUBLISHED
+            or publication.approved_digest != change_set.digest
+            or publication.approved_by != owner
+            or publication.project_id != project_id
+            or publication.workspace_id != workspace_id
+        ):
+            raise ValueError("formal Run publication binding is invalid")
+        validation_contract = contract_service.get(validation_contract_id)
+        validation_run = run_service.store.get_run(validation_run_id)
+        if (
+            validation_contract.owner != owner
+            or validation_run.owner != owner
+            or validation_run.contract_id != validation_contract.contract_id
+            or validation_run.state is not RunState.SUCCEEDED
+            or validation_run.result_status is not ResultStatus.COMPLETE
+        ):
+            raise ValueError("formal Run requires successful validation lineage")
+        validation_bundle = evidence_binder.bind(validation_run_id, validation_evidence_refs)
+        if not validation_bundle.objects or validation_bundle.rejected_refs:
+            raise ValueError("validation Evidence is incomplete or untrusted")
+        contract_result = contract_service.validate(dict(formal_contract_payload))
+        if contract_result.status != "OK":
+            raise ValueError("formal Contract validation is blocked")
+        if contract_result.effective_request["workdir"] != publication.target_root:
+            raise ValueError("formal Contract workdir must equal the published target")
+        published_digest = (
+            publication_snapshot_digest(publication, change_set.digest)
+            if self.publisher is None
+            else self.publisher.verify_published_snapshot(change_set_id, actor=owner)
+        )
+        approval_payload = {
+            "schema_version": "pilot107.formal-run-approval/v1",
+            "approved_by": owner,
+            "project_id": project_id,
+            "workspace_id": workspace_id,
+            "session_id": session_id,
+            "change_set_id": change_set_id,
+            "change_set_digest": change_set.digest,
+            "publication_id": publication.publication_id,
+            "published_snapshot_digest": published_digest,
+            "contract_digest": str(contract_result.effective_request["contract_digest"]),
+            "validation_contract_id": validation_contract.contract_id,
+            "validation_contract_digest": validation_contract.digest,
+            "validation_run_id": validation_run.run_id,
+            "validation_evidence_digest": validation_bundle.sha256,
+        }
+        approval_digest = hashlib.sha256(
+            json.dumps(
+                approval_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        return FormalRunApproval(
+            approval_digest=approval_digest,
+            approved_by=owner,
+            change_set_digest=change_set.digest,
+            published_snapshot_digest=published_digest,
+            contract_digest=str(contract_result.effective_request["contract_digest"]),
+            validation_contract_id=validation_contract.contract_id,
+            validation_run_id=validation_run.run_id,
+            validation_evidence_digest=validation_bundle.sha256,
+            session_id=session_id,
+        )
+
+    def approve_and_submit_formal_run(
+        self,
+        *,
+        project_id: str,
+        workspace_id: str,
+        change_set_id: str,
+        owner: str,
+        session_id: str,
+        validation_contract_id: str,
+        validation_run_id: str,
+        validation_evidence_refs: tuple[str, ...],
+        formal_contract_payload: Mapping[str, Any],
+        approved_digest: str,
+    ) -> FormalProjectRun:
+        """Verify exact approval, rerun preflight, submit once, and start Watch."""
+
+        contract_service, run_service, watch_service, session_service, _ = self._formal_services()
+        session = session_service.store.get_session(session_id, owner=owner)
+        if (
+            session.source.get("project_id") != project_id
+            or session.source.get("workspace_id") != workspace_id
+        ):
+            raise ValueError("Agent Session is not bound to the formal Project")
+        approval = self.prepare_formal_run(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            change_set_id=change_set_id,
+            owner=owner,
+            session_id=session_id,
+            validation_contract_id=validation_contract_id,
+            validation_run_id=validation_run_id,
+            validation_evidence_refs=validation_evidence_refs,
+            formal_contract_payload=formal_contract_payload,
+        )
+        if not hmac.compare_digest(approved_digest, approval.approval_digest):
+            raise ValueError("formal Run approval digest is stale")
+        validation_contract = contract_service.get(validation_contract_id)
+        contract_id = f"contract_formal_{approval.approval_digest[:24]}"
+        contract = contract_service.create_agent_formal(
+            validation_contract=validation_contract,
+            payload=dict(formal_contract_payload),
+            contract_id=contract_id,
+            approval_binding={
+                "approval_digest": approval.approval_digest,
+                "approved_by": owner,
+                "project_id": project_id,
+                "workspace_id": workspace_id,
+                "session_id": session_id,
+                "change_set_id": change_set_id,
+                "change_set_digest": approval.change_set_digest,
+                "published_snapshot_digest": approval.published_snapshot_digest,
+                "validation_run_id": validation_run_id,
+                "validation_evidence_digest": approval.validation_evidence_digest,
+            },
+        )
+        request = contract_service.to_submit_request(
+            contract,
+            parent_run_id=validation_run_id,
+            lineage_reason="agent_formal_run",
+        )
+        run = run_service.submit_agent_formal(request, approval_digest=approval.approval_digest)
+        watch = watch_service.ensure_submitted_run(run)
+        return FormalProjectRun(
+            approval=approval,
+            contract=contract,
+            run=run,
+            watch=watch,
+        )
+
+    def complete_formal_run(
+        self,
+        *,
+        run_id: str,
+        owner: str,
+        session_id: str,
+        evidence_refs: tuple[str, ...],
+    ) -> FormalRunCompletion:
+        """Bind terminal facts and enqueue one evidence-grounded explanation."""
+
+        _, run_service, watch_service, session_service, evidence_binder = self._formal_services()
+        run = run_service.store.get_run(run_id)
+        if (
+            run.owner != owner
+            or run.lineage_reason != "agent_formal_run"
+            or run.state not in TERMINAL_RUN_STATES
+        ):
+            raise ValueError("formal Run is not terminal")
+        watch = watch_service.store.get_watch_for_run(run_id, owner=owner)
+        if watch.state is not RuntimeWatchState.STOPPED:
+            raise ValueError("formal Run Watch has not drained")
+        bundle = evidence_binder.bind(run_id, evidence_refs)
+        if not bundle.objects or bundle.rejected_refs:
+            raise ValueError("terminal Evidence is incomplete or untrusted")
+        turn = session_service.enqueue_result_explanation(
+            session_id=session_id,
+            owner=owner,
+            run_id=run_id,
+            evidence_bundle_sha256=bundle.sha256,
+        )
+        return FormalRunCompletion(
+            run=run,
+            watch=watch,
+            evidence_bundle=bundle,
+            explanation_turn=turn,
+        )
+
+    def _formal_services(
+        self,
+    ) -> tuple[
+        ContractService,
+        RunService,
+        RuntimeWatchService | RuntimeWatchRegistrar,
+        AgentSessionService,
+        EvidenceBinder,
+    ]:
+        services = (
+            self.contract_service,
+            self.run_service,
+            self.runtime_watch_service,
+            self.agent_session_service,
+            self.evidence_binder,
+        )
+        if any(service is None for service in services):
+            raise RuntimeError("formal Project Run services are unavailable")
+        return services  # type: ignore[return-value]
+
     def build_tool_handlers(self) -> dict[str, AgentReadHandler]:
         return {
             "project_get": self._tool_project_get,
@@ -504,9 +782,31 @@ def project_view_payload(view: ProjectAgentView) -> dict[str, Any]:
         },
         "workspace": _public_workspace_payload(view.workspace),
         "change_sets": [change_set_payload(item) for item in view.change_sets],
-        "risk_summary": _risk_summary(
-            view.change_sets, publish_available=view.publish_available
-        ),
+        "risk_summary": _risk_summary(view.change_sets, publish_available=view.publish_available),
+    }
+
+
+def formal_run_approval_payload(value: FormalRunApproval) -> dict[str, str]:
+    return asdict(value)
+
+
+def formal_project_run_payload(value: FormalProjectRun) -> dict[str, Any]:
+    return {
+        "approval": formal_run_approval_payload(value.approval),
+        "contract": formal_contract_record_payload(value.contract),
+        "run": {
+            "run_id": value.run.run_id,
+            "owner": value.run.owner,
+            "state": value.run.state.value,
+            "job_id": value.run.job_id,
+            "contract_id": value.run.contract_id,
+            "parent_run_id": value.run.parent_run_id,
+            "lineage_reason": value.run.lineage_reason,
+            "result_status": value.run.result_status.value,
+            "created_at": value.run.created_at,
+            "updated_at": value.run.updated_at,
+        },
+        "watch": runtime_watch_payload(value.watch),
     }
 
 

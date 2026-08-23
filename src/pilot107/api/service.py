@@ -117,6 +117,7 @@ from pilot107.observability.postgres_store import PostgresObservabilityStore
 from pilot107.observability.service import ObservabilityService
 from pilot107.observability.store import SQLiteObservabilityStore
 from pilot107.runtime_watch.postgres_store import PostgresRuntimeWatchStore
+from pilot107.runtime_watch.service import RuntimeWatchRegistrar
 from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.services.agent_task_service import AgentTaskService
@@ -679,6 +680,17 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         )
     )
     observability_service = ObservabilityService(store=observation_store)
+    runtime_watch_store = (
+        SQLiteRuntimeWatchStore(
+            config.db_path,
+            segment_root=config.evidence_root / "runtime-watch-segments",
+        )
+        if config.postgres_dsn is None
+        else PostgresRuntimeWatchStore(
+            config.postgres_dsn,
+            segment_root=config.evidence_root / "runtime-watch-segments",
+        )
+    )
     agent_tool_routes: AgentToolRoutes | None = None
     agent_session_service: AgentSessionService | None = None
     project_agent_service: ProjectAgentService | None = None
@@ -730,19 +742,35 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             if isinstance(workspace_source, SshRelayExecutor) and workspace_owner_roots
             else None
         )
+        agent_session_service = AgentSessionService(
+            store=agent_session_store,
+            control_repository=control_repository,
+        )
         project_agent_service = ProjectAgentService(
             store=project_store,
             workspace_root=config.db_path.parent / "agent-workspaces",
             sandbox=SandboxExecutor(store=project_store),
             importer=importer,
             publisher=publisher,
-        )
-        agent_session_service = AgentSessionService(
-            store=agent_session_store,
-            control_repository=control_repository,
+            contract_service=contract_service,
+            run_service=run_service,
+            runtime_watch_service=RuntimeWatchRegistrar(
+                store=runtime_watch_store,
+                default_connection_id=(
+                    config.ssh_connection_id
+                    if config.backend == "real107-ssh"
+                    else "default"
+                ),
+            ),
+            agent_session_service=agent_session_service,
+            evidence_binder=EvidenceBinder(
+                store=store,
+                evidence_root=config.evidence_root,
+            ),
         )
         project_handlers = project_agent_service.build_tool_handlers()
         if run_service is not None:
+
             def resolve_agent_workspace(
                 owner: str, workspace_id: str, snapshot_digest: str
             ) -> Path:
@@ -767,15 +795,11 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 run_service=run_service,
                 control_repository=control_repository,
                 workspace_resolver=resolve_agent_workspace,
-                run_workdir_resolver=(
-                    resolve_agent_run_workdir if workspace_owner_roots else None
-                ),
+                run_workdir_resolver=(resolve_agent_run_workdir if workspace_owner_roots else None),
                 worker_id="api-agent-task",
             )
 
-            def resolve_resource_envelope(
-                owner: str, session_id: str
-            ) -> AgentResourceEnvelope:
+            def resolve_resource_envelope(owner: str, session_id: str) -> AgentResourceEnvelope:
                 session = agent_session_store.get_session(session_id, owner=owner)
                 value = session.source.get("resource_envelope")
                 if not isinstance(value, dict):
@@ -790,9 +814,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 store=agent_session_store,
                 signer=AgentCapabilitySigner(agent_capability_secret),
                 handlers=build_a1_read_handlers(read_context),
-                profile_handlers={
-                    "experiment_builder": project_handlers
-                },
+                profile_handlers={"experiment_builder": project_handlers},
             )
         )
     terminal_service = (
@@ -809,18 +831,6 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     )
 
     file_routes = _build_file_routes(config, ssh_relay_client, metrics=metrics)
-    runtime_watch_store = (
-        SQLiteRuntimeWatchStore(
-            config.db_path,
-            segment_root=config.evidence_root / "runtime-watch-segments",
-        )
-        if config.postgres_dsn is None
-        else PostgresRuntimeWatchStore(
-            config.postgres_dsn,
-            segment_root=config.evidence_root / "runtime-watch-segments",
-        )
-    )
-
     return Pilot107HttpApi(
         store=store,
         control_repository=control_repository,
@@ -864,17 +874,13 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 store=store,
                 evidence_root=config.evidence_root,
             ),
-            code_context_service=_build_code_context_service(
-                config, reader=workspace_reader
-            ),
+            code_context_service=_build_code_context_service(config, reader=workspace_reader),
         ),
         agent_tool_routes=agent_tool_routes,
         agent_session_service=agent_session_service,
         project_agent_service=project_agent_service,
         runtime_watch_routes=RuntimeWatchRoutes(runtime_watch_store),
-        observability_routes=ResourceObservationRoutes(
-            observability_service
-        ),
+        observability_routes=ResourceObservationRoutes(observability_service),
         auth_required=config.auth_required,
         trusted_user_header=config.trusted_user_header,
         proxy_hmac_secret=config.proxy_hmac_secret,

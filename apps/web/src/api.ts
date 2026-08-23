@@ -1,6 +1,8 @@
 import type {
   AgentEventPage,
   AgentProjectView,
+  FormalProjectRun,
+  FormalRunApproval,
   WorkspacePublication,
   AgentSession,
   AgentTurn,
@@ -795,6 +797,45 @@ export const api = {
     signal?: AbortSignal,
   ) => sendJson<WorkspacePublication>(
     `/api/v1/agent-changesets/${encodeURIComponent(changeSetId)}/publish`,
+    user,
+    input,
+    signal,
+  ),
+  previewAgentFormalRun: (
+    user: string,
+    changeSetId: string,
+    input: {
+      project_id: string;
+      workspace_id: string;
+      session_id: string;
+      validation_contract_id: string;
+      validation_run_id: string;
+      validation_evidence_refs: string[];
+      formal_contract: JsonObject;
+    },
+    signal?: AbortSignal,
+  ) => sendJson<FormalRunApproval>(
+    `/api/v1/agent-changesets/${encodeURIComponent(changeSetId)}/formal-preview`,
+    user,
+    input,
+    signal,
+  ),
+  submitAgentFormalRun: (
+    user: string,
+    changeSetId: string,
+    input: {
+      project_id: string;
+      workspace_id: string;
+      session_id: string;
+      validation_contract_id: string;
+      validation_run_id: string;
+      validation_evidence_refs: string[];
+      formal_contract: JsonObject;
+      approved_digest: string;
+    },
+    signal?: AbortSignal,
+  ) => sendJson<FormalProjectRun>(
+    `/api/v1/agent-changesets/${encodeURIComponent(changeSetId)}/formal-submit`,
     user,
     input,
     signal,

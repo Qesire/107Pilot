@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import posixpath
 from collections.abc import Callable, Mapping
 from contextlib import suppress
@@ -293,6 +294,30 @@ class WorkspacePublisher:
             return publication
         return self.publish(change_set_id, actor=actor)
 
+    def verify_published_snapshot(self, change_set_id: str, *, actor: str) -> str:
+        """Re-read every published path and return its approval-bound snapshot digest."""
+
+        publication = self.store.get_workspace_publication(change_set_id, owner=actor)
+        change_set = self.store.get_change_set(change_set_id, owner=actor)
+        if (
+            publication.state is not WorkspacePublicationState.PUBLISHED
+            or change_set.state is not WorkspaceChangeSetState.PUBLISHED
+            or publication.approved_digest != change_set.digest
+            or publication.approved_by != actor
+        ):
+            raise ValueError("published Workspace binding is invalid")
+        for item in publication.files:
+            target_path = authorize_owner_path(
+                self.owner_roots,
+                owner=actor,
+                target_path=posixpath.join(publication.target_root, item.path),
+            )
+            current = self.relay.path_sha256(path=target_path, owner=actor)
+            expected = None if item.operation == "delete" else item.desired_sha256
+            if current != expected:
+                raise ValueError("published Workspace changed after publication")
+        return publication_snapshot_digest(publication, change_set.digest)
+
     def _validate_approval(self, change_set: WorkspaceChangeSet, *, actor: str) -> None:
         if change_set.owner != actor:
             raise KeyError(change_set.change_set_id)
@@ -439,6 +464,30 @@ def publication_payload(record: WorkspacePublication) -> dict[str, Any]:
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
+
+
+def publication_snapshot_digest(
+    publication: WorkspacePublication,
+    change_set_digest: str,
+) -> str:
+    if any(item.state != "committed" for item in publication.files):
+        raise ValueError("published Workspace contains incomplete files")
+    payload = {
+        "target_root": publication.target_root,
+        "change_set_digest": change_set_digest,
+        "files": [
+            {
+                "path": item.path,
+                "operation": item.operation,
+                "sha256": item.desired_sha256,
+                "size_bytes": item.size_bytes,
+            }
+            for item in publication.files
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def publication_from_payload(value: Mapping[str, Any]) -> WorkspacePublication:

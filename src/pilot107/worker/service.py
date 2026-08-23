@@ -240,6 +240,7 @@ class WorkerService:
                 and result.agent_tasks_checked == 0
                 and result.runtime_watches_checked == 0
                 and result.observability_cycles == 0
+                and result.formal_results_checked == 0
                 and self.last_remediation_advanced == 0
             ):
                 break
@@ -271,6 +272,7 @@ class WorkerService:
                 or result.capsule_errors
                 or result.runtime_watch_errors
                 or result.observability_errors
+                or result.formal_result_errors
                 or self.last_remediation_errors
                 or self.last_telemetry_error
             ),
@@ -296,6 +298,11 @@ class WorkerService:
             "observability_commands": result.observability_commands,
             "observability_budget_skipped": result.observability_budget_skipped,
             "observability_errors": result.observability_errors,
+            "formal_results_checked": result.formal_results_checked,
+            "formal_results_succeeded": result.formal_results_succeeded,
+            "formal_result_errors": redact_sensitive_structure(
+                result.formal_result_errors
+            ),
             "errors": redact_sensitive_structure([error.__dict__ for error in result.errors]),
             "task_errors": redact_sensitive_structure(
                 [error.__dict__ for error in result.task_errors]
@@ -370,6 +377,9 @@ class WorkerService:
             "observability_summaries_total": result.observability_summaries,
             "observability_commands_total": result.observability_commands,
             "observability_errors_total": len(result.observability_errors),
+            "formal_result_checked_total": result.formal_results_checked,
+            "formal_result_succeeded_total": result.formal_results_succeeded,
+            "formal_result_errors_total": len(result.formal_result_errors),
             "remediation_checked_total": self.last_remediation_checked,
             "remediation_advanced_total": self.last_remediation_advanced,
             "remediation_errors_total": len(self.last_remediation_errors),
@@ -680,13 +690,14 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         partition_qos=partition_qos,
         qos_limits=qos_limits,
     )
+    formal_result_evidence_binder = EvidenceBinder(
+        store=store,
+        evidence_root=config.evidence_root,
+    )
     explain_service = AgentExplainService(
         store=store,
         llm_provider=_worker_llm_provider_from_env(config),
-        evidence_binder=EvidenceBinder(
-            store=store,
-            evidence_root=config.evidence_root,
-        ),
+        evidence_binder=formal_result_evidence_binder,
         code_context_service=_worker_code_context_service(config),
     )
     advice_service = AgentAdviceService(
@@ -733,6 +744,15 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
 
         def release_logs_finalize(run_id: str) -> None:
             store.release_logs_finalize_after_runtime_watch(run_id)
+            if agent_session_service is None:
+                return
+            run = store.get_run(run_id)
+            if run.lineage_reason != "agent_formal_run" or run.contract_id is None:
+                return
+            agent_session_service.enqueue_formal_result_handoff(
+                run=run,
+                contract=contract_service.get(run.contract_id),
+            )
 
         runtime_watch_service = RuntimeWatchService(
             store=runtime_store,
@@ -814,6 +834,11 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             config.ssh_connection_id
             if config.backend == "real107-ssh"
             else "default"
+        ),
+        formal_result_evidence_binder=(
+            formal_result_evidence_binder
+            if agent_session_service is not None and runtime_watch_service is not None
+            else None
         ),
     )
     return WorkerService(
@@ -1255,6 +1280,16 @@ def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> Work
             *left.observability_errors,
             *right.observability_errors,
         ],
+        formal_results_checked=(
+            left.formal_results_checked + right.formal_results_checked
+        ),
+        formal_results_succeeded=(
+            left.formal_results_succeeded + right.formal_results_succeeded
+        ),
+        formal_result_errors=[
+            *left.formal_result_errors,
+            *right.formal_result_errors,
+        ],
     )
 
 
@@ -1284,6 +1319,9 @@ def _tick_summary(result: WorkerTickResult) -> str:
         f"{result.observability_cycles} summaries={result.observability_summaries} "
         f"commands={result.observability_commands} "
         f"observability_errors={len(result.observability_errors)}"
+        f" formal_results={result.formal_results_succeeded}/"
+        f"{result.formal_results_checked} "
+        f"formal_result_errors={len(result.formal_result_errors)}"
     )
 
 

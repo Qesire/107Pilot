@@ -22,6 +22,7 @@ from pilot107.core.control_repository import (
     OutboxMessage,
 )
 from pilot107.core.diagnosis import DiagnosisService
+from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import CollectionTaskFenceConflict, CollectionTaskRecord
 from pilot107.core.states import TERMINAL_RUN_STATES, CapsuleState, CollectionState
@@ -122,6 +123,9 @@ class WorkerTickResult:
     observability_errors: list[str] = field(default_factory=list)
     workflows_checked: int = 0
     workflow_errors: list[str] = field(default_factory=list)
+    formal_results_checked: int = 0
+    formal_results_succeeded: int = 0
+    formal_result_errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -153,6 +157,7 @@ class RuntimeReconcileWorker:
         observability_collector: ObservabilityCollector | None = None,
         observability_connection_id: str = "default",
         workflow_service: WorkflowService | None = None,
+        formal_result_evidence_binder: EvidenceBinder | None = None,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -176,6 +181,7 @@ class RuntimeReconcileWorker:
         self.observability_collector = observability_collector
         self.observability_connection_id = observability_connection_id
         self.workflow_service = workflow_service
+        self.formal_result_evidence_binder = formal_result_evidence_binder
 
     def tick(self) -> WorkerTickResult:
         runtime_watch_result = (
@@ -393,6 +399,29 @@ class RuntimeReconcileWorker:
                 capsule_stats
             )
 
+        formal_results_checked = 0
+        formal_results_succeeded = 0
+        formal_result_errors: list[str] = []
+        if (
+            self.agent_session_service is not None
+            and self.runtime_watch_service is not None
+            and self.formal_result_evidence_binder is not None
+        ):
+            try:
+                formal_batch = self.agent_session_service.dispatch_formal_result_handoffs(
+                    run_store=self.service.store,
+                    runtime_watch_store=self.runtime_watch_service.store,
+                    evidence_binder=self.formal_result_evidence_binder,
+                    worker_id=f"{self.worker_id}-formal-result",
+                    limit=self.batch_size,
+                )
+            except Exception as exc:
+                formal_result_errors.append(f"dispatcher:{type(exc).__name__}")
+            else:
+                formal_results_checked = formal_batch.checked
+                formal_results_succeeded = formal_batch.succeeded
+                formal_result_errors.extend(formal_batch.errors)
+
         diagnoses_checked = 0
         diagnoses_succeeded = 0
         diagnosis_errors: list[WorkerDiagnosisError] = []
@@ -486,6 +515,9 @@ class RuntimeReconcileWorker:
             observability_errors=observability_errors,
             workflows_checked=workflows_checked,
             workflow_errors=workflow_errors,
+            formal_results_checked=formal_results_checked,
+            formal_results_succeeded=formal_results_succeeded,
+            formal_result_errors=formal_result_errors,
         )
 
     def _dispatch_collection_tasks(
@@ -844,6 +876,16 @@ class RuntimeReconcileWorker:
                     *aggregate.observability_errors,
                     *result.observability_errors,
                 ],
+                formal_results_checked=(
+                    aggregate.formal_results_checked + result.formal_results_checked
+                ),
+                formal_results_succeeded=(
+                    aggregate.formal_results_succeeded + result.formal_results_succeeded
+                ),
+                formal_result_errors=[
+                    *aggregate.formal_result_errors,
+                    *result.formal_result_errors,
+                ],
             )
             if (
                 result.checked == 0
@@ -853,6 +895,7 @@ class RuntimeReconcileWorker:
                 and result.agent_executions_checked == 0
                 and result.runtime_watches_checked == 0
                 and result.observability_cycles == 0
+                and result.formal_results_checked == 0
             ):
                 break
             time.sleep(interval_seconds)

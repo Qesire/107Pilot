@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildValidationEnvelope,
+  buildFormalContract,
   changeSetStateLabel,
   changeSetTone,
   isValidationEnvelopeInputValid,
@@ -84,5 +85,25 @@ describe("Agent Project review presentation", () => {
       gpus: 0,
       walltimeSeconds: 300,
     })).toBe(false);
+  });
+
+  it("materializes formal resources into an approval-ready Contract", () => {
+    const contract = buildFormalContract({
+      name: "formal test",
+      workdir: "/public/home/alice/project",
+      command: "python main.py",
+      partition: "debug",
+      qos: "normal",
+      cpus: 2,
+      memoryMib: 4096,
+      gpus: 0,
+      gpuType: "a100",
+      walltimeSeconds: 3661,
+    });
+    expect(contract.resources).toMatchObject({
+      cpus_per_task: 2,
+      memory: "4096M",
+      time_limit: "01:01:01",
+    });
   });
 });

@@ -322,6 +322,26 @@ class RunService:
         run = self.prepare(request, run_id=run_id, idempotent=True)
         return self.submit_prepared(run.run_id)
 
+    def submit_agent_formal(
+        self,
+        request: RunSubmitRequest,
+        *,
+        approval_digest: str,
+    ) -> RunRecord:
+        """Idempotently submit the formal Run named by an exact approval digest."""
+
+        if not re.fullmatch(r"[0-9a-f]{64}", approval_digest):
+            raise ValueError("formal Run approval digest is invalid")
+        if (
+            request.contract_id is None
+            or request.parent_run_id is None
+            or request.lineage_reason != "agent_formal_run"
+        ):
+            raise ValueError("formal Run lineage is incomplete")
+        run_id = f"run_formal_{approval_digest[:24]}"
+        run = self.prepare(request, run_id=run_id, idempotent=True)
+        return self.submit_prepared(run.run_id)
+
     def prepare(
         self,
         request: RunSubmitRequest,

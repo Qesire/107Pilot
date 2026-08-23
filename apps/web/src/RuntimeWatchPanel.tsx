@@ -60,6 +60,7 @@ export function RuntimeWatchPanel({ user, runId }: { user: string; runId: string
           <div className="runtime-log-frame"><div><span>{stream}</span><small>最近检查 {formatTimestamp(watch.data?.streams[stream].last_checked_at)}</small></div><pre><code>{logs.data?.content || "（当前没有日志内容）"}</code></pre></div>
         </QueryBoundary>
         {alerts.data?.items.length ? <div className="runtime-alerts"><h4><AlertTriangle aria-hidden="true" /> 暂定告警</h4>{alerts.data.items.map((alert) => <article key={alert.alert_id}><StatusBadge label={alert.code} tone={alert.severity === "critical" ? "danger" : "warning"} /><div><strong>{alert.summary}</strong><small>generation {alert.generation} · offset {alert.offset} · {formatTimestamp(alert.created_at)}</small></div></article>)}</div> : null}
+        {watch.data?.state === "stopped" ? <p className="muted" role="status">日志已排空并封存。终态 Evidence 完成后，Agent 会生成一次结果解释；Slurm 成功不等同于科学结论有效。</p> : null}
       </QueryBoundary>
     </section>
   );

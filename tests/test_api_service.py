@@ -118,6 +118,48 @@ class ApiServiceTests(unittest.TestCase):
         self.assertIsNotNone(api.agent_session_routes)
         self.assertNotIn("f" * 32, repr(api))
 
+    def test_formal_watch_uses_the_configured_cluster_connection(self) -> None:
+        api = build_api_service(
+            config_from_env(
+                {
+                    "PILOT107_AGENT_CAPABILITY_HMAC_SECRET": "s" * 32,
+                    "PILOT107_API_BACKEND": "real107-ssh",
+                    "PILOT107_SSH_CONNECTION_ID": "cluster-a",
+                    "PILOT107_SSH_TARGET": "pilot107-slurm",
+                    "PILOT107_SSH_CONTROL_PATH": str(self.root / "relay.sock"),
+                    "PILOT107_SSH_PORTAL_OWNER": "alice",
+                    "PILOT107_SSH_SLURM_USER": "alice",
+                    "PILOT107_SSH_OWNER_ROOTS": "/public/home/alice",
+                },
+                project_root=self.root,
+            )
+        )
+
+        self.assertIsNotNone(api.project_agent_routes)
+        assert api.project_agent_routes is not None
+        registrar = api.project_agent_routes.service.runtime_watch_service
+        self.assertIsNotNone(registrar)
+        assert registrar is not None
+        self.assertEqual(registrar.default_connection_id, "cluster-a")
+
+    def test_non_ssh_formal_watch_uses_the_worker_default_connection(self) -> None:
+        api = build_api_service(
+            config_from_env(
+                {
+                    "PILOT107_AGENT_CAPABILITY_HMAC_SECRET": "s" * 32,
+                    "PILOT107_SSH_CONNECTION_ID": "cluster-a",
+                },
+                project_root=self.root,
+            )
+        )
+
+        self.assertIsNotNone(api.project_agent_routes)
+        assert api.project_agent_routes is not None
+        registrar = api.project_agent_routes.service.runtime_watch_service
+        self.assertIsNotNone(registrar)
+        assert registrar is not None
+        self.assertEqual(registrar.default_connection_id, "default")
+
     def test_config_from_env_accepts_backend_and_auth_overrides(self) -> None:
         config = config_from_env(
             {

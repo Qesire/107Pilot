@@ -150,6 +150,30 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertTrue(service.config.agent_a1_enabled)
         self.assertIsNotNone(service.stack.worker.agent_turn_worker)
         self.assertIsNotNone(service.stack.agent_session_service)
+
+    def test_worker_wires_formal_result_dispatch_after_runtime_watch(self) -> None:
+        allowed_root = self.root / "cluster-home"
+        allowed_root.mkdir()
+        service = build_worker_service(
+            config_from_env(
+                {
+                    "PILOT107_WORKER_BACKEND": "command-gateway",
+                    "PILOT107_COMMAND_GATEWAY_URL": "http://gateway.invalid:8090",
+                    "PILOT107_COMMAND_GATEWAY_TOKEN": "gateway-token-test",
+                    "PILOT107_ALLOWED_ROOTS": str(allowed_root),
+                    "PILOT107_ENABLE_DOCKER_VOLUME_EVIDENCE_TRANSPORT": "true",
+                    "PILOT107_AGENT_CAPABILITY_HMAC_SECRET": "s" * 32,
+                    "PILOT107_AGENTD_URL": "http://pilot-agentd.invalid:8091",
+                    "PILOT107_AGENTD_TOKEN": "agentd-token-test",
+                    "PILOT107_AGENTD_MODEL_PROFILE": "faux-default",
+                },
+                project_root=self.root,
+            )
+        )
+
+        self.assertIsNotNone(service.stack.worker.runtime_watch_service)
+        self.assertIsNotNone(service.stack.worker.agent_session_service)
+        self.assertIsNotNone(service.stack.worker.formal_result_evidence_binder)
         self.assertNotIn("f" * 32, repr(service.config))
 
     def test_worker_config_loader_never_reads_legacy_llm_settings(self) -> None:
@@ -311,6 +335,30 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertNotIn("db-password", health_text)
         self.assertNotIn("opaque-token", health_text)
         self.assertIn("<redacted>", health_text)
+
+    def test_formal_result_dispatch_error_marks_worker_unhealthy(self) -> None:
+        config = config_from_env(
+            {
+                "PILOT107_WORKER_BACKEND": "in-memory",
+                "PILOT107_WORKER_ID": "formal-result-health-test",
+            },
+            project_root=self.root,
+        )
+        service = build_worker_service(config)
+
+        service.write_health(
+            WorkerTickResult(
+                checked=0,
+                terminal=0,
+                formal_results_checked=1,
+                formal_result_errors=["run-formal:ValueError"],
+            )
+        )
+
+        health = json.loads(config.health_path.read_text())  # type: ignore[union-attr]
+        self.assertFalse(health["ok"])
+        self.assertEqual(health["formal_results_checked"], 1)
+        self.assertEqual(health["formal_result_errors"], ["run-formal:ValueError"])
 
     def test_worker_advances_actionable_remediation_sessions(self) -> None:
         service = build_worker_service(

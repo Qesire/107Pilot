@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api, ApiRequestError } from "./api";
 import { QueryBoundary, StatusBadge, formatTimestamp } from "./components";
 import { useAgentChangeSetDiff, useAgentProject, useAgentProjects } from "./query";
-import type { AgentProjectOrigin, WorkspaceChangeSet } from "./types";
+import type { AgentProjectOrigin, FormalRunApproval, JsonObject, WorkspaceChangeSet } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
 
@@ -191,6 +191,13 @@ function ProjectReview({
   const [walltimeSeconds, setWalltimeSeconds] = useState(300);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [publishTarget, setPublishTarget] = useState("");
+  const [validationContractId, setValidationContractId] = useState("");
+  const [validationRunId, setValidationRunId] = useState("");
+  const [validationEvidenceRef, setValidationEvidenceRef] = useState("");
+  const [formalWorkdir, setFormalWorkdir] = useState("");
+  const [formalCommand, setFormalCommand] = useState("python main.py");
+  const [formalApproval, setFormalApproval] = useState<FormalRunApproval | null>(null);
+  const [formalConfirmed, setFormalConfirmed] = useState(false);
   const validationInputValid = isValidationEnvelopeInputValid({
     cpus,
     memoryMib,
@@ -243,6 +250,8 @@ function ProjectReview({
   useEffect(() => {
     setSelectedChangeSet(view.change_sets[0]?.change_set_id ?? null);
     setPublishConfirmed(false);
+    setFormalApproval(null);
+    setFormalConfirmed(false);
   }, [view.project.project_id, view.change_sets]);
   const diff = useAgentChangeSetDiff(
     user,
@@ -267,6 +276,50 @@ function ProjectReview({
       void queryClient.invalidateQueries({ queryKey: ["agent-project", user, view.project.project_id] });
       void queryClient.invalidateQueries({ queryKey: ["agent-projects", user] });
     },
+  });
+  const sessionId = location.search.get("session") ?? "";
+  const formalInput = () => {
+    if (!selected) throw new Error("请选择已发布的 ChangeSet");
+    return {
+      project_id: view.project.project_id,
+      workspace_id: view.workspace.workspace_id,
+      session_id: sessionId,
+      validation_contract_id: validationContractId.trim(),
+      validation_run_id: validationRunId.trim(),
+      validation_evidence_refs: [validationEvidenceRef.trim()],
+      formal_contract: buildFormalContract({
+        name: view.project.goal,
+        workdir: formalWorkdir,
+        command: formalCommand,
+        partition,
+        qos,
+        cpus,
+        memoryMib,
+        gpus,
+        gpuType,
+        walltimeSeconds,
+      }),
+    };
+  };
+  const previewFormalRun = useMutation({
+    mutationFn: () => {
+      if (!selected) throw new Error("请选择已发布的 ChangeSet");
+      return api.previewAgentFormalRun(user, selected.change_set_id, formalInput());
+    },
+    onSuccess: (approval) => {
+      setFormalApproval(approval);
+      setFormalConfirmed(false);
+    },
+  });
+  const submitFormalRun = useMutation({
+    mutationFn: () => {
+      if (!selected || !formalApproval) throw new Error("请先生成正式运行审批摘要");
+      return api.submitAgentFormalRun(user, selected.change_set_id, {
+        ...formalInput(),
+        approved_digest: formalApproval.approval_digest,
+      });
+    },
+    onSuccess: () => setFormalConfirmed(false),
   });
   const blueprint = view.project.blueprint;
   return (
@@ -330,6 +383,43 @@ function ProjectReview({
           {selected.state === "published" ? <p role="status">此 ChangeSet 已发布。</p> : null}
           {selected.state === "conflicted" ? <p role="alert">远端工作区已变化，未覆盖外部修改。</p> : null}
           {publishChangeSet.error ? <ProjectMutationError error={publishChangeSet.error} /> : null}
+        </section>
+      ) : null}
+      {selected?.state === "published" ? (
+        <section className="agent-validation-approval" aria-labelledby="formal-run-heading">
+          <div>
+            <p className="panel-kicker">Formal experiment approval</p>
+            <h3 id="formal-run-heading">生成正式 Contract 并提交 Run</h3>
+            <p className="muted">审批摘要同时绑定发布快照、验证 Evidence 和正式资源；提交时会重新运行 preflight。</p>
+          </div>
+          <div className="agent-validation-grid">
+            <label>Agent Session ID<input value={sessionId} readOnly /></label>
+            <label>验证 Contract ID<input value={validationContractId} onChange={(event) => { setValidationContractId(event.target.value); setFormalApproval(null); }} /></label>
+            <label>验证 Run ID<input value={validationRunId} onChange={(event) => { setValidationRunId(event.target.value); setFormalApproval(null); }} /></label>
+            <label>验证 Evidence ref<input value={validationEvidenceRef} onChange={(event) => { setValidationEvidenceRef(event.target.value); setFormalApproval(null); }} /></label>
+            <label>正式工作目录<input value={formalWorkdir} placeholder={`/public/home/${user}/project`} onChange={(event) => { setFormalWorkdir(event.target.value); setFormalApproval(null); }} /></label>
+            <label>正式命令<input value={formalCommand} onChange={(event) => { setFormalCommand(event.target.value); setFormalApproval(null); }} /></label>
+          </div>
+          <button
+            type="button"
+            className="button secondary"
+            disabled={previewFormalRun.isPending || !sessionId || !validationContractId.trim() || !validationRunId.trim() || !validationEvidenceRef.trim() || !formalWorkdir.trim() || !formalCommand.trim() || !validationInputValid}
+            onClick={() => previewFormalRun.mutate()}
+          >
+            {previewFormalRun.isPending ? "正在重算" : "生成精确审批摘要"}
+          </button>
+          {formalApproval ? (
+            <>
+              <p className="mono wrap-anywhere">approval {formalApproval.approval_digest}</p>
+              <label><input type="checkbox" checked={formalConfirmed} onChange={(event) => setFormalConfirmed(event.target.checked)} />我批准该精确摘要对应的正式资源与提交</label>
+              <button type="button" className="button primary" disabled={!formalConfirmed || submitFormalRun.isPending} onClick={() => submitFormalRun.mutate()}>
+                {submitFormalRun.isPending ? "正在提交" : "批准并提交正式 Run"}
+              </button>
+            </>
+          ) : null}
+          {submitFormalRun.data ? <p role="status">正式 Run <a href={`/runs/${encodeURIComponent(submitFormalRun.data.run.run_id)}`}>{submitFormalRun.data.run.run_id}</a> 已提交，Job {submitFormalRun.data.run.job_id}；Runtime Watch 已建立。</p> : null}
+          {previewFormalRun.error ? <ProjectMutationError error={previewFormalRun.error} /> : null}
+          {submitFormalRun.error ? <ProjectMutationError error={submitFormalRun.error} /> : null}
         </section>
       ) : null}
       <section className="agent-validation-approval" aria-labelledby="validation-envelope-heading">
@@ -497,6 +587,39 @@ export function buildValidationEnvelope(input: {
     workspace_snapshot_digest: input.snapshotDigest,
     expires_at: new Date(input.now.getTime() + 60 * 60 * 1000).toISOString(),
     approved_by: input.owner,
+  };
+}
+
+export function buildFormalContract(input: {
+  name: string;
+  workdir: string;
+  command: string;
+  partition: string;
+  qos: string;
+  cpus: number;
+  memoryMib: number;
+  gpus: number;
+  gpuType: string;
+  walltimeSeconds: number;
+}): JsonObject {
+  const hours = Math.floor(input.walltimeSeconds / 3600);
+  const minutes = Math.floor((input.walltimeSeconds % 3600) / 60);
+  const seconds = input.walltimeSeconds % 60;
+  return {
+    recipe_version_id: "recipe_python_cpu@1.0.0",
+    project: { name: input.name.slice(0, 128), workdir: input.workdir.trim() },
+    entry: { command: input.command.trim(), expected_outputs: ["result.txt"] },
+    resources: {
+      partition: input.partition.trim(),
+      qos: input.qos.trim(),
+      nodes: 1,
+      ntasks: 1,
+      cpus_per_task: input.cpus,
+      memory: `${input.memoryMib}M`,
+      gpus_total: input.gpus,
+      gpu_type: input.gpus > 0 ? input.gpuType.trim() : null,
+      time_limit: [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":"),
+    },
   };
 }
 
