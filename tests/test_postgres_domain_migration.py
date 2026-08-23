@@ -75,6 +75,8 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
                 "runtime_log_cursors",
                 "runtime_log_segments",
                 "runtime_alerts",
+                "observation_cycles",
+                "observation_run_targets",
             }.issubset(names)
         )
         self.assertEqual(len(names), len(domain_table_names()))

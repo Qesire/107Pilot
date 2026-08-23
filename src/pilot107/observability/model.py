@@ -10,10 +10,16 @@ from typing import Literal
 
 type MeasureValue = float | int | str | None
 Availability = Literal[
-    "available", "unsupported", "not_collected", "insufficient_coverage", "invalid"
+    "available",
+    "unsupported",
+    "permission_denied",
+    "not_collected",
+    "insufficient_coverage",
+    "invalid",
 ]
 Quality = Literal["verified", "estimated", "partial", "unavailable", "invalid"]
 Freshness = Literal["fresh", "stale", "expired", "terminal"]
+CycleStatus = Literal["complete", "partial", "failed", "skipped_budget"]
 
 _ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _MEASURE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
@@ -35,6 +41,7 @@ class ObservedMeasure:
         if self.availability not in {
             "available",
             "unsupported",
+            "permission_denied",
             "not_collected",
             "insufficient_coverage",
             "invalid",
@@ -176,6 +183,40 @@ class RunResourceSummary(_Observation):
             raise ValueError("Run resource summary must be terminal")
 
 
+@dataclass(frozen=True)
+class ObservationCycle:
+    cycle_id: str
+    connection_id: str
+    lane: str
+    fencing_token: int
+    scheduled_at: str
+    started_at: str
+    completed_at: str
+    command_count: int
+    status: CycleStatus
+    warnings: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.cycle_id, "cycle_id")
+        _identifier(self.connection_id, "connection_id")
+        _identifier(self.lane, "lane")
+        if isinstance(self.fencing_token, bool) or self.fencing_token <= 0:
+            raise ValueError("fencing_token is invalid")
+        scheduled = _timestamp_value(self.scheduled_at)
+        started = _timestamp_value(self.started_at)
+        completed = _timestamp_value(self.completed_at)
+        if not scheduled <= started <= completed:
+            raise ValueError("cycle timestamps are out of order")
+        if isinstance(self.command_count, bool) or self.command_count < 0:
+            raise ValueError("command_count is invalid")
+        if self.status not in {"complete", "partial", "failed", "skipped_budget"}:
+            raise ValueError("cycle status is invalid")
+        warnings = tuple(self.warnings)
+        if len(warnings) > 256 or any(not item or len(item) > 4096 for item in warnings):
+            raise ValueError("cycle warnings are invalid")
+        object.__setattr__(self, "warnings", warnings)
+
+
 def _identifier(value: object, label: str) -> str:
     if not isinstance(value, str) or _ID.fullmatch(value) is None:
         raise ValueError(f"{label} is invalid")
@@ -183,9 +224,14 @@ def _identifier(value: object, label: str) -> str:
 
 
 def _timestamp(value: str) -> None:
+    _timestamp_value(value)
+
+
+def _timestamp_value(value: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (AttributeError, ValueError) as exc:
         raise ValueError("timestamp is invalid") from exc
     if parsed.tzinfo is None:
         raise ValueError("timestamp must include timezone")
+    return parsed

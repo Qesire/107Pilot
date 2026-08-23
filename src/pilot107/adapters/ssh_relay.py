@@ -826,7 +826,7 @@ def _validate_remote_argv(argv: tuple[str, ...], *, roots: tuple[str, ...]) -> N
     if command == "sbatch":
         _validate_sbatch_argv(argv, roots=roots)
         return
-    if command in {"squeue", "sacct", "scontrol", "scancel"}:
+    if command in {"sinfo", "squeue", "sstat", "sacct", "scontrol", "scancel"}:
         _validate_slurm_query_argv(argv)
         return
     if command in {"pwd", "whoami", "hostname", "id", "env"} and len(argv) == 1:
@@ -933,6 +933,8 @@ def _validate_slurm_query_argv(argv: tuple[str, ...]) -> None:
             raise SshRelayPolicyError("invalid scancel operation")
         return
     if command == "scontrol":
+        if argv == ("scontrol", "show", "config"):
+            return
         if (
             len(argv) != 5
             or argv[1:4] != ("-o", "show", "job")
@@ -940,8 +942,14 @@ def _validate_slurm_query_argv(argv: tuple[str, ...]) -> None:
         ):
             raise SshRelayPolicyError("invalid scontrol operation")
         return
+    if command == "sinfo":
+        if argv != ("sinfo", "-h", "-o", "%P|%c|%m|%G|%T"):
+            raise SshRelayPolicyError("invalid sinfo operation")
+        return
     if command == "squeue":
         allowed_flags = {"-h", "-j", "-u", "-o"}
+    elif command == "sstat":
+        allowed_flags = {"-nP", "--allsteps", "-j", "-o"}
     else:
         allowed_flags = {"-nP", "-nPX", "-j", "-u", "-S", "-o", "-X"}
     index = 1
@@ -949,13 +957,13 @@ def _validate_slurm_query_argv(argv: tuple[str, ...]) -> None:
         flag = argv[index]
         if flag not in allowed_flags:
             raise SshRelayPolicyError(f"unsupported {command} flag: {flag}")
-        if flag in {"-h", "-nP", "-nPX", "-X"}:
+        if flag in {"-h", "-nP", "-nPX", "-X", "--allsteps"}:
             index += 1
             continue
         if index + 1 >= len(argv):
             raise SshRelayPolicyError(f"missing value for {command} flag: {flag}")
         value = argv[index + 1]
-        if flag == "-j" and not _SAFE_JOB_ID.fullmatch(value):
+        if flag == "-j" and not _safe_job_id_list(value):
             raise SshRelayPolicyError("invalid Slurm job id")
         elif flag == "-u" and not is_safe_username(value):
             raise SshRelayPolicyError("invalid Slurm user")
@@ -966,6 +974,13 @@ def _validate_slurm_query_argv(argv: tuple[str, ...]) -> None:
         ):
             raise SshRelayPolicyError("invalid Slurm time filter")
         index += 2
+
+
+def _safe_job_id_list(value: str) -> bool:
+    job_ids = value.split(",")
+    return bool(job_ids) and len(job_ids) <= 1000 and all(
+        _SAFE_JOB_ID.fullmatch(job_id) is not None for job_id in job_ids
+    )
 
 
 def _absolute_remote_path(path: str) -> str:

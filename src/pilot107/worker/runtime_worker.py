@@ -24,6 +24,11 @@ from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import CollectionTaskFenceConflict, CollectionTaskRecord
 from pilot107.core.states import TERMINAL_RUN_STATES, CapsuleState, CollectionState
+from pilot107.observability.adapters import RunObservationTarget
+from pilot107.observability.collector import (
+    ObservabilityCollector,
+    ObservabilityTickResult,
+)
 from pilot107.runtime_watch.service import RuntimeWatchService
 from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.worker.agent_turn_worker import AgentTurnWorker
@@ -103,6 +108,12 @@ class WorkerTickResult:
     runtime_watches_with_data: int = 0
     runtime_watch_bytes_read: int = 0
     runtime_watch_errors: list[str] = field(default_factory=list)
+    observability_cycles: int = 0
+    observability_samples: int = 0
+    observability_summaries: int = 0
+    observability_commands: int = 0
+    observability_budget_skipped: bool = False
+    observability_errors: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -130,6 +141,8 @@ class RuntimeReconcileWorker:
         agent_turn_worker: AgentTurnWorker | None = None,
         capsule_service: RawCapsuleService | None = None,
         runtime_watch_service: RuntimeWatchService | None = None,
+        observability_collector: ObservabilityCollector | None = None,
+        observability_connection_id: str = "default",
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -149,6 +162,8 @@ class RuntimeReconcileWorker:
         self.agent_turn_worker = agent_turn_worker
         self.capsule_service = capsule_service
         self.runtime_watch_service = runtime_watch_service
+        self.observability_collector = observability_collector
+        self.observability_connection_id = observability_connection_id
 
     def tick(self) -> WorkerTickResult:
         runtime_watch_result = (
@@ -206,6 +221,7 @@ class RuntimeReconcileWorker:
         runs = self.service.store.list_active_job_runs(limit=self.batch_size)
         terminal = 0
         errors: list[WorkerRunError] = []
+        observability_errors: list[str] = []
 
         for run in runs:
             try:
@@ -246,6 +262,22 @@ class RuntimeReconcileWorker:
                 continue
             if reconciled.state in TERMINAL_RUN_STATES:
                 terminal += 1
+            if self.observability_collector is not None and reconciled.job_id is not None:
+                try:
+                    self.observability_collector.observe_run(
+                        RunObservationTarget(
+                            connection_id=self.observability_connection_id,
+                            owner=reconciled.owner,
+                            run_id=reconciled.run_id,
+                            job_id=reconciled.job_id,
+                            attempt=reconciled.attempt,
+                        ),
+                        state=reconciled.state.value,
+                    )
+                except Exception as exc:
+                    observability_errors.append(
+                        f"{reconciled.run_id}:{type(exc).__name__}"
+                    )
             if self.runtime_watch_service is not None and reconciled.job_id is not None:
                 self.runtime_watch_service.ensure_run(
                     run_id=reconciled.run_id,
@@ -259,6 +291,17 @@ class RuntimeReconcileWorker:
                     )
                 ):
                     self.service.store.defer_logs_finalize_for_runtime_watch(reconciled.run_id)
+
+        observability_result: ObservabilityTickResult | None = None
+        if self.observability_collector is not None:
+            try:
+                observability_result = self.observability_collector.tick(
+                    self.observability_connection_id
+                )
+            except Exception as exc:
+                observability_errors.append(f"collector:{type(exc).__name__}")
+            else:
+                observability_errors.extend(observability_result.errors)
 
         retry_runs = self.service.store.list_due_workflow_retries(limit=self.batch_size)
         for retry_run in retry_runs:
@@ -365,6 +408,22 @@ class RuntimeReconcileWorker:
             runtime_watch_errors=(
                 list(runtime_watch_result.errors) if runtime_watch_result else []
             ),
+            observability_cycles=(
+                len(observability_result.cycles) if observability_result else 0
+            ),
+            observability_samples=(
+                len(observability_result.run_samples) if observability_result else 0
+            ),
+            observability_summaries=(
+                len(observability_result.summaries) if observability_result else 0
+            ),
+            observability_commands=(
+                observability_result.command_count if observability_result else 0
+            ),
+            observability_budget_skipped=(
+                observability_result.skipped_budget if observability_result else False
+            ),
+            observability_errors=observability_errors,
         )
 
     def _dispatch_collection_tasks(
@@ -706,6 +765,26 @@ class RuntimeReconcileWorker:
                     *aggregate.runtime_watch_errors,
                     *result.runtime_watch_errors,
                 ],
+                observability_cycles=(
+                    aggregate.observability_cycles + result.observability_cycles
+                ),
+                observability_samples=(
+                    aggregate.observability_samples + result.observability_samples
+                ),
+                observability_summaries=(
+                    aggregate.observability_summaries + result.observability_summaries
+                ),
+                observability_commands=(
+                    aggregate.observability_commands + result.observability_commands
+                ),
+                observability_budget_skipped=(
+                    aggregate.observability_budget_skipped
+                    or result.observability_budget_skipped
+                ),
+                observability_errors=[
+                    *aggregate.observability_errors,
+                    *result.observability_errors,
+                ],
             )
             if (
                 result.checked == 0
@@ -714,6 +793,7 @@ class RuntimeReconcileWorker:
                 and result.submissions_checked == 0
                 and result.agent_executions_checked == 0
                 and result.runtime_watches_checked == 0
+                and result.observability_cycles == 0
             ):
                 break
             time.sleep(interval_seconds)

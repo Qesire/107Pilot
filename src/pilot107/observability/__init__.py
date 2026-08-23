@@ -2,6 +2,7 @@
 
 from pilot107.observability.model import (
     AccountPulse,
+    ObservationCycle,
     ObservedMeasure,
     PlatformPulse,
     ResourceMeasureSet,
@@ -14,6 +15,7 @@ from pilot107.observability.store import ObservabilityStore, SQLiteObservability
 __all__ = [
     "AccountPulse",
     "ObservedMeasure",
+    "ObservationCycle",
     "ObservabilityStore",
     "PlatformPulse",
     "PostgresObservabilityStore",

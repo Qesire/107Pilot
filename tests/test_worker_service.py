@@ -67,6 +67,9 @@ class WorkerServiceTests(unittest.TestCase):
                 "PILOT107_AGENTD_URL": "http://pilot-agentd:8091",
                 "PILOT107_AGENTD_TOKEN": "internal-agentd-token",
                 "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
+                "PILOT107_OBSERVABILITY_ENABLED": "true",
+                "PILOT107_OBSERVABILITY_MAX_COMMANDS_PER_MINUTE": "17",
+                "PILOT107_OBSERVABILITY_BATCH_SIZE": "23",
             },
             project_root=self.root,
         )
@@ -96,6 +99,9 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(config.agentd_token, "internal-agentd-token")
         self.assertEqual(config.agentd_model_profile, "campus-default")
         self.assertFalse(config.agent_a1_enabled)
+        self.assertTrue(config.observability_enabled)
+        self.assertEqual(config.observability_max_commands_per_minute, 17)
+        self.assertEqual(config.observability_batch_size, 23)
         self.assertIsNone(config.agent_capability_hmac_secret_file)
         self.assertNotIn("internal-agentd-token", repr(config))
 

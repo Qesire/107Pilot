@@ -13,6 +13,7 @@ from typing import Any, Protocol, TypeVar, cast
 from pilot107.core.schema_migrations import SchemaMigration, apply_schema_migrations
 from pilot107.observability.model import (
     AccountPulse,
+    ObservationCycle,
     ObservedMeasure,
     PlatformPulse,
     ResourceMeasureSet,
@@ -51,6 +52,52 @@ OBSERVABILITY_MIGRATIONS = (
             "WHERE kind = 'run_resource_summary'",
         ),
     ),
+    SchemaMigration(
+        migration_id="008a.002.observation_cycles_targets",
+        statements=(
+            """
+            CREATE TABLE observation_cycles (
+                cycle_id TEXT PRIMARY KEY,
+                connection_id TEXT NOT NULL,
+                lane TEXT NOT NULL,
+                fencing_token INTEGER NOT NULL,
+                scheduled_at TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                command_count INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                warnings_json TEXT NOT NULL,
+                payload_sha256 TEXT NOT NULL,
+                CHECK (fencing_token > 0),
+                CHECK (command_count >= 0),
+                CHECK (status IN ('complete', 'partial', 'failed', 'skipped_budget'))
+            )
+            """,
+            "CREATE INDEX idx_observation_cycles_due "
+            "ON observation_cycles(connection_id, lane, completed_at)",
+            """
+            CREATE TABLE observation_run_targets (
+                connection_id TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                run_state TEXT NOT NULL,
+                finalized INTEGER NOT NULL DEFAULT 0,
+                last_observed_at TEXT,
+                terminal_digest TEXT,
+                terminal_stable_observations INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (owner, run_id),
+                CHECK (attempt >= 0),
+                CHECK (finalized IN (0, 1)),
+                CHECK (terminal_stable_observations >= 0)
+            )
+            """,
+            "CREATE INDEX idx_observation_targets_connection "
+            "ON observation_run_targets(connection_id, finalized, last_observed_at, updated_at)",
+        ),
+    ),
 )
 
 
@@ -59,6 +106,8 @@ class ObservabilityConflict(RuntimeError):
 
 
 class ObservabilityStore(Protocol):
+    def save_platform_pulse(self, value: PlatformPulse) -> PlatformPulse: ...
+    def save_account_pulse(self, value: AccountPulse) -> AccountPulse: ...
     def save_run_sample(self, value: RunResourceSample) -> RunResourceSample: ...
     def save_minute_aggregate(self, value: RunResourceSample) -> RunResourceSample: ...
     def save_summary(self, value: RunResourceSummary) -> RunResourceSummary: ...
@@ -67,6 +116,27 @@ class ObservabilityStore(Protocol):
         self, run_id: str, *, owner: str
     ) -> list[RunResourceSample]: ...
     def get_summary(self, run_id: str, *, owner: str) -> RunResourceSummary: ...
+    def save_cycle(self, value: ObservationCycle) -> ObservationCycle: ...
+    def latest_cycle(self, connection_id: str, *, lane: str) -> ObservationCycle | None: ...
+    def count_cycle_commands_since(self, connection_id: str, *, since: str) -> int: ...
+    def upsert_run_target(
+        self, target: Any, *, state: str, observed_at: str
+    ) -> None: ...
+    def list_run_targets(self, connection_id: str) -> list[tuple[Any, str]]: ...
+    def mark_run_target_observed(
+        self, run_id: str, *, owner: str, observed_at: str
+    ) -> None: ...
+    def mark_run_target_finalized(
+        self, run_id: str, *, owner: str, observed_at: str
+    ) -> None: ...
+    def record_terminal_observation(
+        self,
+        run_id: str,
+        *,
+        owner: str,
+        digest: str,
+        observed_at: str,
+    ) -> int: ...
     def prune_expired(self) -> int: ...
 
 
@@ -104,6 +174,189 @@ class SQLiteObservabilityStore:
 
     def save_summary(self, value: RunResourceSummary) -> RunResourceSummary:
         return self._save(value, kind="run_resource_summary", resolution="terminal", hours=None)
+
+    def save_cycle(self, value: ObservationCycle) -> ObservationCycle:
+        payload = {
+            "cycle_id": value.cycle_id,
+            "connection_id": value.connection_id,
+            "lane": value.lane,
+            "fencing_token": value.fencing_token,
+            "scheduled_at": value.scheduled_at,
+            "started_at": value.started_at,
+            "completed_at": value.completed_at,
+            "command_count": value.command_count,
+            "status": value.status,
+            "warnings": list(value.warnings),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(encoded.encode()).hexdigest()
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO observation_cycles (cycle_id, connection_id, lane, "
+                "fencing_token, scheduled_at, started_at, completed_at, command_count, "
+                "status, warnings_json, payload_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT DO NOTHING",
+                (
+                    value.cycle_id,
+                    value.connection_id,
+                    value.lane,
+                    value.fencing_token,
+                    value.scheduled_at,
+                    value.started_at,
+                    value.completed_at,
+                    value.command_count,
+                    value.status,
+                    json.dumps(list(value.warnings), separators=(",", ":")),
+                    digest,
+                ),
+            )
+            row = connection.execute(
+                "SELECT payload_sha256 FROM observation_cycles WHERE cycle_id = ?",
+                (value.cycle_id,),
+            ).fetchone()
+        if row is None or str(row["payload_sha256"]) != digest:
+            raise ObservabilityConflict("immutable observation cycle replay conflicts")
+        return value
+
+    def latest_cycle(self, connection_id: str, *, lane: str) -> ObservationCycle | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM observation_cycles WHERE connection_id = ? AND lane = ? "
+                "ORDER BY completed_at DESC, cycle_id DESC LIMIT 1",
+                (connection_id, lane),
+            ).fetchone()
+        return None if row is None else _cycle_from_row(row)
+
+    def count_cycle_commands_since(self, connection_id: str, *, since: str) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(SUM(command_count), 0) AS commands "
+                "FROM observation_cycles WHERE connection_id = ? AND completed_at >= ?",
+                (connection_id, since),
+            ).fetchone()
+        return int(row["commands"]) if row is not None else 0
+
+    def upsert_run_target(self, target: Any, *, state: str, observed_at: str) -> None:
+        from pilot107.observability.adapters import RunObservationTarget
+
+        if not isinstance(target, RunObservationTarget):
+            raise TypeError("target must be RunObservationTarget")
+        terminal = state in {
+            "SUCCEEDED", "FAILED", "CANCELLED", "SUBMIT_FAILED",
+            "COLLECTION_FAILED", "AUTH_REQUIRED", "ORPHANED",
+        }
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO observation_run_targets (
+                    connection_id, owner, run_id, job_id, attempt, run_state,
+                    finalized, last_observed_at, terminal_digest,
+                    terminal_stable_observations, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, NULL, 0, ?)
+                ON CONFLICT(owner, run_id) DO UPDATE SET
+                    connection_id = excluded.connection_id,
+                    job_id = excluded.job_id,
+                    attempt = excluded.attempt,
+                    run_state = CASE
+                        WHEN observation_run_targets.finalized = 1
+                            THEN observation_run_targets.run_state
+                        WHEN observation_run_targets.run_state IN (
+                            'SUCCEEDED','FAILED','CANCELLED','SUBMIT_FAILED',
+                            'COLLECTION_FAILED','AUTH_REQUIRED','ORPHANED'
+                        ) AND excluded.run_state NOT IN (
+                            'SUCCEEDED','FAILED','CANCELLED','SUBMIT_FAILED',
+                            'COLLECTION_FAILED','AUTH_REQUIRED','ORPHANED'
+                        ) THEN observation_run_targets.run_state
+                        ELSE excluded.run_state
+                    END,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    target.connection_id,
+                    target.owner,
+                    target.run_id,
+                    target.job_id,
+                    target.attempt,
+                    state,
+                    observed_at,
+                ),
+            )
+        del terminal
+
+    def list_run_targets(self, connection_id: str) -> list[tuple[Any, str]]:
+        from pilot107.observability.adapters import RunObservationTarget
+
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM observation_run_targets WHERE connection_id = ? "
+                "AND finalized = 0 ORDER BY last_observed_at IS NOT NULL, "
+                "last_observed_at, updated_at, owner, run_id",
+                (connection_id,),
+            ).fetchall()
+        return [
+            (
+                RunObservationTarget(
+                    connection_id=str(row["connection_id"]),
+                    owner=str(row["owner"]),
+                    run_id=str(row["run_id"]),
+                    job_id=str(row["job_id"]),
+                    attempt=int(row["attempt"]),
+                ),
+                str(row["run_state"]),
+            )
+            for row in rows
+        ]
+
+    def mark_run_target_observed(
+        self, run_id: str, *, owner: str, observed_at: str
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE observation_run_targets SET last_observed_at = ?, updated_at = ? "
+                "WHERE owner = ? AND run_id = ? AND finalized = 0",
+                (observed_at, observed_at, owner, run_id),
+            )
+
+    def mark_run_target_finalized(
+        self, run_id: str, *, owner: str, observed_at: str
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE observation_run_targets SET finalized = 1, "
+                "last_observed_at = ?, updated_at = ? WHERE owner = ? AND run_id = ?",
+                (observed_at, observed_at, owner, run_id),
+            )
+
+    def record_terminal_observation(
+        self,
+        run_id: str,
+        *,
+        owner: str,
+        digest: str,
+        observed_at: str,
+    ) -> int:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT terminal_digest, terminal_stable_observations "
+                "FROM observation_run_targets WHERE owner = ? AND run_id = ? "
+                "AND finalized = 0",
+                (owner, run_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            stable = (
+                int(row["terminal_stable_observations"]) + 1
+                if row["terminal_digest"] == digest
+                else 1
+            )
+            connection.execute(
+                "UPDATE observation_run_targets SET terminal_digest = ?, "
+                "terminal_stable_observations = ?, last_observed_at = ?, updated_at = ? "
+                "WHERE owner = ? AND run_id = ? AND finalized = 0",
+                (digest, stable, observed_at, observed_at, owner, run_id),
+            )
+        return stable
 
     def _save(self, value: T, *, kind: str, resolution: str, hours: int | None) -> T:
         payload = _payload(value, kind=kind)
@@ -245,6 +498,21 @@ def _common(value: dict[str, Any]) -> dict[str, Any]:
         "observation_id", "connection_id", "owner", "run_id", "attempt", "cycle_id",
         "captured_at", "freshness", "partial", "warnings", "fencing_token"
     )}
+
+
+def _cycle_from_row(row: sqlite3.Row) -> ObservationCycle:
+    return ObservationCycle(
+        cycle_id=str(row["cycle_id"]),
+        connection_id=str(row["connection_id"]),
+        lane=str(row["lane"]),
+        fencing_token=int(row["fencing_token"]),
+        scheduled_at=str(row["scheduled_at"]),
+        started_at=str(row["started_at"]),
+        completed_at=str(row["completed_at"]),
+        command_count=int(row["command_count"]),
+        status=cast(Any, str(row["status"])),
+        warnings=tuple(cast(list[str], json.loads(str(row["warnings_json"])))),
+    )
 
 
 def _parse(value: str) -> datetime:

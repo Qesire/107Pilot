@@ -41,6 +41,11 @@ COUNTERS = (
     "capsule_builds_attempted_total",
     "capsule_builds_succeeded_total",
     "capsule_errors_total",
+    "observability_cycles_total",
+    "observability_samples_total",
+    "observability_summaries_total",
+    "observability_commands_total",
+    "observability_errors_total",
 )
 
 

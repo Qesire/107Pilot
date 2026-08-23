@@ -13,6 +13,8 @@ from pilot107.core.resources import ResourcePlan
 from pilot107.core.run_service import RunService, RunSubmitRequest
 from pilot107.core.run_store import RunRecord, RunStore
 from pilot107.core.states import CollectionState, DiagnosisState, RunState
+from pilot107.observability.adapters import RunObservationTarget
+from pilot107.observability.collector import ObservabilityTickResult
 from pilot107.worker.evidence import EvidenceArtifact, EvidenceCollectionResult, EvidenceStore
 from pilot107.worker.runtime_worker import (
     RuntimeReconcileWorker,
@@ -47,6 +49,23 @@ class FakeAgentTurnWorker:
             errors=[AgentTurnDispatchError(turn_id="turn-2", message="retry")],
         )
 
+
+class FakeObservabilityCollector:
+    def __init__(self) -> None:
+        self.observed: list[tuple[RunObservationTarget, str]] = []
+        self.connections: list[str] = []
+
+    def observe_run(self, target: RunObservationTarget, *, state: str) -> None:
+        self.observed.append((target, state))
+
+    def tick(self, connection_id: str) -> ObservabilityTickResult:
+        self.connections.append(connection_id)
+        return ObservabilityTickResult(
+            lease_acquired=True,
+            command_count=2,
+            skipped_budget=True,
+            errors=("SOURCE_TIMEOUT",),
+        )
 
 def _plan() -> ResourcePlan:
     return ResourcePlan(
@@ -171,6 +190,35 @@ class RuntimeReconcileWorkerTests(unittest.TestCase):
         self.assertEqual(result.terminal, 1)
         self.assertEqual(result.errors, [])
         self.assertEqual(self.store.get_run(run.run_id).state, RunState.SUCCEEDED)
+
+    def test_tick_registers_reconciled_run_before_collecting_observations(self) -> None:
+        backend = InMemorySlurmBackend()
+        service = RunService(store=self.store, backend=backend)
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=Path("/public/home/alice"),
+                script="#!/bin/bash\nhostname\n",
+                resource_plan=_plan(),
+            )
+        )
+        backend.advance_job(job_id=run.job_id or "", raw_state="COMPLETED", exit_code="0:0")
+        collector = FakeObservabilityCollector()
+
+        result = RuntimeReconcileWorker(
+            service=service,
+            observability_collector=collector,
+            observability_connection_id="cluster-a",
+        ).tick()
+
+        target, state = collector.observed[0]
+        self.assertEqual(target.run_id, run.run_id)
+        self.assertEqual(target.job_id, run.job_id)
+        self.assertEqual(state, "SUCCEEDED")
+        self.assertEqual(collector.connections, ["cluster-a"])
+        self.assertEqual(result.observability_commands, 2)
+        self.assertTrue(result.observability_budget_skipped)
+        self.assertEqual(result.observability_errors, ["SOURCE_TIMEOUT"])
 
     def test_tick_recovers_and_dispatches_durable_agent_turns(self) -> None:
         session_service = FakeAgentSessionService()

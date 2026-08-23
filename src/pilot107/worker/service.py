@@ -74,6 +74,13 @@ from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
 from pilot107.core.submission_reconcile import ReconcileBackend
+from pilot107.observability.adapters import SlurmCliObservationAdapter
+from pilot107.observability.collector import (
+    ObservabilityCollector,
+    ObservabilityCollectorPolicy,
+)
+from pilot107.observability.postgres_store import PostgresObservabilityStore
+from pilot107.observability.store import SQLiteObservabilityStore
 from pilot107.runtime_watch.postgres_store import PostgresRuntimeWatchStore
 from pilot107.runtime_watch.service import (
     RunStoreRuntimeLogSourceResolver,
@@ -168,6 +175,9 @@ class WorkerServiceConfig:
     code_context_before_lines: int = 60
     code_context_after_lines: int = 60
     code_context_max_file_bytes: int = 64 * 1024
+    observability_enabled: bool = False
+    observability_max_commands_per_minute: int = 60
+    observability_batch_size: int = 50
 
 
 @dataclass(frozen=True)
@@ -220,6 +230,7 @@ class WorkerService:
                 and result.agent_executions_checked == 0
                 and result.agent_turns_checked == 0
                 and result.runtime_watches_checked == 0
+                and result.observability_cycles == 0
                 and self.last_remediation_advanced == 0
             ):
                 break
@@ -249,6 +260,7 @@ class WorkerService:
                 or result.agent_turn_errors
                 or result.capsule_errors
                 or result.runtime_watch_errors
+                or result.observability_errors
                 or self.last_remediation_errors
                 or self.last_telemetry_error
             ),
@@ -268,6 +280,12 @@ class WorkerService:
             "runtime_watches_with_data": result.runtime_watches_with_data,
             "runtime_watch_bytes_read": result.runtime_watch_bytes_read,
             "runtime_watch_errors": result.runtime_watch_errors,
+            "observability_cycles": result.observability_cycles,
+            "observability_samples": result.observability_samples,
+            "observability_summaries": result.observability_summaries,
+            "observability_commands": result.observability_commands,
+            "observability_budget_skipped": result.observability_budget_skipped,
+            "observability_errors": result.observability_errors,
             "errors": redact_sensitive_structure([error.__dict__ for error in result.errors]),
             "task_errors": redact_sensitive_structure(
                 [error.__dict__ for error in result.task_errors]
@@ -329,6 +347,11 @@ class WorkerService:
             "capsule_builds_attempted_total": result.capsule_builds_attempted,
             "capsule_builds_succeeded_total": result.capsule_builds_succeeded,
             "capsule_errors_total": len(result.capsule_errors),
+            "observability_cycles_total": result.observability_cycles,
+            "observability_samples_total": result.observability_samples,
+            "observability_summaries_total": result.observability_summaries,
+            "observability_commands_total": result.observability_commands,
+            "observability_errors_total": len(result.observability_errors),
             "remediation_checked_total": self.last_remediation_checked,
             "remediation_advanced_total": self.last_remediation_advanced,
             "remediation_errors_total": len(self.last_remediation_errors),
@@ -500,6 +523,17 @@ def config_from_env(
             "PILOT107_CODE_CONTEXT_MAX_FILE_BYTES",
             64 * 1024,
         ),
+        observability_enabled=_bool(values, "PILOT107_OBSERVABILITY_ENABLED", False),
+        observability_max_commands_per_minute=_int(
+            values,
+            "PILOT107_OBSERVABILITY_MAX_COMMANDS_PER_MINUTE",
+            60,
+        ),
+        observability_batch_size=_int(
+            values,
+            "PILOT107_OBSERVABILITY_BATCH_SIZE",
+            50,
+        ),
     )
 
 
@@ -640,6 +674,10 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
                 segment_root=segment_root,
             )
         )
+
+        def release_logs_finalize(run_id: str) -> None:
+            store.release_logs_finalize_after_runtime_watch(run_id)
+
         runtime_watch_service = RuntimeWatchService(
             store=runtime_store,
             transport_for_connection=lambda _connection_id: runtime_transport,
@@ -648,11 +686,58 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
                 allowed_roots=tuple(effective_roots),
             ),
             worker_id=config.worker_id,
-            on_terminal_drained=store.release_logs_finalize_after_runtime_watch,
+            on_terminal_drained=release_logs_finalize,
             default_connection_id=(
                 config.ssh_connection_id
                 if config.backend == "real107-ssh"
                 else "default"
+            ),
+        )
+    observability_collector: ObservabilityCollector | None = None
+    if config.observability_enabled:
+        if baseline_executor is None:
+            raise ValueError(
+                "resource observability requires a bounded command executor backend"
+            )
+        observation_user = (
+            config.ssh_slurm_user
+            if config.backend == "real107-ssh"
+            else config.slurm_username
+        )
+        if not observation_user:
+            raise ValueError(
+                "resource observability requires PILOT107_SLURM_USER_NAME"
+            )
+        observation_store = (
+            SQLiteObservabilityStore(config.db_path)
+            if config.postgres_dsn is None
+            else PostgresObservabilityStore(
+                config.postgres_dsn,
+                compatibility_path=config.db_path,
+            )
+        )
+        observability_collector = ObservabilityCollector(
+            store=observation_store,
+            control_repository=control_repository,
+            adapter=SlurmCliObservationAdapter(
+                executor=baseline_executor,
+                slurm_user=observation_user,
+                observation_owner=(
+                    config.ssh_portal_owner
+                    if config.backend == "real107-ssh"
+                    else config.slurm_username
+                ),
+                timeout_seconds=config.command_timeout_seconds,
+            ),
+            worker_id=f"{config.worker_id}-observability",
+            policy=ObservabilityCollectorPolicy(
+                max_commands_per_minute=(
+                    config.observability_max_commands_per_minute
+                ),
+                batch_size=config.observability_batch_size,
+                command_deadline_seconds=max(
+                    1, int(config.command_timeout_seconds)
+                ),
             ),
         )
     worker = RuntimeReconcileWorker(
@@ -667,6 +752,12 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         agent_turn_worker=agent_turn_worker,
         capsule_service=capsule_service,
         runtime_watch_service=runtime_watch_service,
+        observability_collector=observability_collector,
+        observability_connection_id=(
+            config.ssh_connection_id
+            if config.backend == "real107-ssh"
+            else "default"
+        ),
     )
     return WorkerService(
         config=config,
@@ -1088,6 +1179,21 @@ def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> Work
             *left.runtime_watch_errors,
             *right.runtime_watch_errors,
         ],
+        observability_cycles=left.observability_cycles + right.observability_cycles,
+        observability_samples=left.observability_samples + right.observability_samples,
+        observability_summaries=(
+            left.observability_summaries + right.observability_summaries
+        ),
+        observability_commands=(
+            left.observability_commands + right.observability_commands
+        ),
+        observability_budget_skipped=(
+            left.observability_budget_skipped or right.observability_budget_skipped
+        ),
+        observability_errors=[
+            *left.observability_errors,
+            *right.observability_errors,
+        ],
     )
 
 
@@ -1111,6 +1217,10 @@ def _tick_summary(result: WorkerTickResult) -> str:
         f" runtime_watch={result.runtime_watches_with_data}/"
         f"{result.runtime_watches_checked} bytes={result.runtime_watch_bytes_read} "
         f"runtime_watch_errors={len(result.runtime_watch_errors)}"
+        f" observability={result.observability_samples}/"
+        f"{result.observability_cycles} summaries={result.observability_summaries} "
+        f"commands={result.observability_commands} "
+        f"observability_errors={len(result.observability_errors)}"
     )
 
 

@@ -52,7 +52,7 @@ class CommandGatewayTests(unittest.TestCase):
     def test_runs_structured_argv_without_shell(self) -> None:
         config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
 
-        with mock.patch.object(gateway.subprocess, "run") as fake_run:
+        with _mock_ownership(), mock.patch.object(gateway.subprocess, "run") as fake_run:
             fake_run.return_value = SimpleNamespace(returncode=0, stdout="123\n", stderr="")
 
             result = gateway._run(
@@ -93,6 +93,49 @@ class CommandGatewayTests(unittest.TestCase):
         self.assertEqual(result["returncode"], 0)
         with self.assertRaisesRegex(gateway.GatewayError, "arguments not allowed"):
             gateway._run({"argv": ["sinfo", "-R"]}, config)
+
+    def test_allows_only_bounded_observability_sstat_projection(self) -> None:
+        config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
+        fields = "JobID,NTasks,AllocTRES,AveCPU,MaxRSS,TRESUsageInTot,TRESUsageOutTot"
+        argv = [
+            "sstat",
+            "-nP",
+            "--allsteps",
+            "-j",
+            "101,102",
+            "-o",
+            fields,
+        ]
+
+        with _mock_ownership(), mock.patch.object(gateway.subprocess, "run") as fake_run:
+            fake_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+            result = gateway._run({"argv": argv, "user": "alice"}, config)
+
+        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(fake_run.call_args.args[0], ["gosu", "alice", *argv])
+        with _mock_ownership(), self.assertRaisesRegex(
+            gateway.GatewayError, "arguments not allowed"
+        ):
+            gateway._run({"argv": ["sstat", "--help"], "user": "alice"}, config)
+
+    def test_allows_only_fixed_observability_scontrol_probe(self) -> None:
+        config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
+
+        with _mock_ownership(), mock.patch.object(gateway.subprocess, "run") as fake_run:
+            fake_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+            result = gateway._run(
+                {"argv": ["scontrol", "show", "config"], "user": "alice"},
+                config,
+            )
+
+        self.assertEqual(result["returncode"], 0)
+        with _mock_ownership(), self.assertRaisesRegex(
+            gateway.GatewayError, "arguments not allowed"
+        ):
+            gateway._run(
+                {"argv": ["scontrol", "show", "secrets"], "user": "alice"},
+                config,
+            )
 
     def test_path_probe_rejects_path_outside_allowed_roots(self) -> None:
         config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])

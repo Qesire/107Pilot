@@ -968,6 +968,53 @@ _RESOURCE_OBSERVATION_SCHEMA = _statements(
     "WHERE kind = 'run_resource_summary'"
 )
 
+_OBSERVATION_COLLECTION_SCHEMA = _statements(
+    """
+    CREATE TABLE observation_cycles (
+        cycle_id TEXT PRIMARY KEY,
+        connection_id TEXT NOT NULL,
+        lane TEXT NOT NULL,
+        fencing_token BIGINT NOT NULL,
+        scheduled_at TIMESTAMPTZ NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL,
+        completed_at TIMESTAMPTZ NOT NULL,
+        command_count INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        warnings_json TEXT NOT NULL,
+        payload_sha256 TEXT NOT NULL,
+        CHECK (fencing_token > 0),
+        CHECK (command_count >= 0),
+        CHECK (status IN ('complete', 'partial', 'failed', 'skipped_budget'))
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_observation_cycles_due "
+    "ON observation_cycles(connection_id, lane, completed_at)"
+    "\n-- statement\n"
+    """
+    CREATE TABLE observation_run_targets (
+        connection_id TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        run_state TEXT NOT NULL,
+        finalized INTEGER NOT NULL DEFAULT 0,
+        last_observed_at TIMESTAMPTZ,
+        terminal_digest TEXT,
+        terminal_stable_observations INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (owner, run_id),
+        CHECK (attempt >= 0),
+        CHECK (finalized IN (0, 1)),
+        CHECK (terminal_stable_observations >= 0)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_observation_targets_connection "
+    "ON observation_run_targets(connection_id, finalized, last_observed_at, updated_at)"
+)
+
 _RUNTIME_LOG_SEGMENT_SCHEMA = _statements(
     """
     CREATE TABLE runtime_log_segments (
@@ -1033,6 +1080,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.012.runtime_alerts", _RUNTIME_ALERT_SCHEMA),
     ("004a.013.runtime_watch_terminal_handoff", _RUNTIME_WATCH_HANDOFF_SCHEMA),
     ("004a.014.resource_observations", _RESOURCE_OBSERVATION_SCHEMA),
+    ("004a.015.observation_collection", _OBSERVATION_COLLECTION_SCHEMA),
 )
 
 
@@ -1118,6 +1166,8 @@ def domain_table_names() -> tuple[str, ...]:
         "runtime_log_segments",
         "runtime_alerts",
         "resource_observations",
+        "observation_cycles",
+        "observation_run_targets",
     )
 
 

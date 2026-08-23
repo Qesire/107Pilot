@@ -39,6 +39,7 @@ ALLOWED_COMMANDS = {
     "sha256sum",
     "sinfo",
     "squeue",
+    "sstat",
     "stat",
     "tail",
     "test",
@@ -467,6 +468,32 @@ def _validate_command(
         if len(argv) != 3 or argv[1] not in {"-e", "-d", "-r", "-x", "-w"}:
             raise GatewayError("command arguments not allowed: test")
         _authorize_path(argv[2], config, user=user)
+    if argv[0] == "sstat":
+        expected_fields = (
+            "JobID,NTasks,AllocTRES,AveCPU,MaxRSS,"
+            "TRESUsageInTot,TRESUsageOutTot"
+        )
+        if (
+            len(argv) != 7
+            or argv[1:4] != ["-nP", "--allsteps", "-j"]
+            or argv[5:] != ["-o", expected_fields]
+        ):
+            raise GatewayError("command arguments not allowed: sstat")
+        job_ids = argv[4].split(",")
+        if not 1 <= len(job_ids) <= 1000 or any(
+            re.fullmatch(r"[A-Za-z0-9_.+-]+", job_id) is None
+            for job_id in job_ids
+        ):
+            raise GatewayError("command arguments not allowed: sstat")
+    if argv[0] == "scontrol":
+        show_config = argv == ["scontrol", "show", "config"]
+        show_job = (
+            len(argv) == 5
+            and argv[1:4] == ["-o", "show", "job"]
+            and re.fullmatch(r"[A-Za-z0-9_.+-]+", argv[4]) is not None
+        )
+        if not show_config and not show_job:
+            raise GatewayError("command arguments not allowed: scontrol")
 
 
 def _write_text(payload: dict[str, Any], config: GatewayConfig) -> None:

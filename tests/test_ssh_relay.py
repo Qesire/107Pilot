@@ -87,6 +87,59 @@ def test_subprocess_relay_checks_master_and_quotes_structured_argv(tmp_path: Pat
     assert "BatchMode=yes" in run.call_args_list[1].args[0]
 
 
+def test_subprocess_relay_allows_only_batched_readonly_sstat_shape(tmp_path: Path) -> None:
+    client = SubprocessSshRelayClient(relay_config(tmp_path))
+    fields = "JobID,NTasks,AllocTRES,AveCPU,MaxRSS,TRESUsageInTot,TRESUsageOutTot"
+    with patch(
+        "pilot107.adapters.ssh_relay.subprocess.run",
+        side_effect=[completed(0, "Master running\n"), completed(0, "")],
+    ) as run:
+        client.execute(
+            (
+                "sstat",
+                "-nP",
+                "--allsteps",
+                "-j",
+                "101,102",
+                "-o",
+                fields,
+            ),
+            portal_owner="alice",
+        )
+
+    assert run.call_args_list[1].args[0][-1] == (
+        "sstat -nP --allsteps -j 101,102 -o " + fields
+    )
+    with pytest.raises(SshRelayPolicyError, match="unsupported sstat flag"):
+        client.execute(("sstat", "--help"), portal_owner="alice")
+
+
+def test_subprocess_relay_allows_only_fixed_observability_platform_probes(
+    tmp_path: Path,
+) -> None:
+    client = SubprocessSshRelayClient(relay_config(tmp_path))
+    allowed = (
+        ("scontrol", "show", "config"),
+        ("sinfo", "-h", "-o", "%P|%c|%m|%G|%T"),
+    )
+    with patch(
+        "pilot107.adapters.ssh_relay.subprocess.run",
+        side_effect=[
+            completed(0, "Master running\n"),
+            completed(0, ""),
+            completed(0, "Master running\n"),
+            completed(0, ""),
+        ],
+    ):
+        for argv in allowed:
+            client.execute(argv, portal_owner="alice")
+
+    with pytest.raises(SshRelayPolicyError):
+        client.execute(("scontrol", "show", "secrets"), portal_owner="alice")
+    with pytest.raises(SshRelayPolicyError):
+        client.execute(("sinfo", "-R"), portal_owner="alice")
+
+
 def test_subprocess_relay_is_fail_closed_for_owner_command_and_path(tmp_path: Path) -> None:
     client = SubprocessSshRelayClient(relay_config(tmp_path))
     with pytest.raises(SshRelayPolicyError, match="owner mismatch"):
