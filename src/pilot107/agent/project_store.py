@@ -6,6 +6,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -102,9 +103,37 @@ PROJECT_MIGRATIONS = (
             """,
         ),
     ),
+    SchemaMigration(
+        migration_id="006b.004.agent_workspace_publications",
+        statements=(
+            """
+            CREATE TABLE agent_workspace_publications (
+                publication_id TEXT PRIMARY KEY,
+                change_set_id TEXT NOT NULL UNIQUE
+                    REFERENCES agent_workspace_changesets(change_set_id),
+                project_id TEXT NOT NULL REFERENCES agent_experiment_projects(project_id),
+                workspace_id TEXT NOT NULL REFERENCES agent_workspaces(workspace_id),
+                owner TEXT NOT NULL,
+                target_root TEXT NOT NULL,
+                approved_digest TEXT NOT NULL,
+                state TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (version > 0)
+            )
+            """,
+            """
+            CREATE INDEX idx_agent_workspace_publications_owner_updated
+            ON agent_workspace_publications(owner, updated_at DESC, publication_id DESC)
+            """,
+        ),
+    ),
 )
 
 if TYPE_CHECKING:
+    from pilot107.agent.publisher import WorkspacePublication
     from pilot107.agent.workspace import (
         AgentWorkspaceRecord,
         SandboxResultRecord,
@@ -123,9 +152,7 @@ class ProjectStore(Protocol):
         source: ProjectSource | None = None,
     ) -> ExperimentProjectSessionRecord: ...
 
-    def get_project(
-        self, project_id: str, *, owner: str
-    ) -> ExperimentProjectSessionRecord: ...
+    def get_project(self, project_id: str, *, owner: str) -> ExperimentProjectSessionRecord: ...
 
     def list_projects(
         self, *, owner: str, limit: int = 100
@@ -143,27 +170,37 @@ class ProjectStore(Protocol):
 
     def get_workspace(self, workspace_id: str, *, owner: str) -> AgentWorkspaceRecord: ...
 
-    def list_workspaces(
-        self, project_id: str, *, owner: str
-    ) -> list[AgentWorkspaceRecord]: ...
+    def list_workspaces(self, project_id: str, *, owner: str) -> list[AgentWorkspaceRecord]: ...
 
     def save_change_set(
         self, change_set: WorkspaceChangeSet, *, diff_text: str
     ) -> WorkspaceChangeSet: ...
 
-    def get_change_set(
-        self, change_set_id: str, *, owner: str
-    ) -> WorkspaceChangeSet: ...
+    def get_change_set(self, change_set_id: str, *, owner: str) -> WorkspaceChangeSet: ...
 
     def get_change_set_diff(self, change_set_id: str, *, owner: str) -> str: ...
 
-    def list_change_sets(
-        self, project_id: str, *, owner: str
-    ) -> list[WorkspaceChangeSet]: ...
+    def list_change_sets(self, project_id: str, *, owner: str) -> list[WorkspaceChangeSet]: ...
 
     def append_sandbox_result(
         self, change_set_id: str, *, owner: str, result: SandboxResultRecord
     ) -> WorkspaceChangeSet: ...
+
+    def replace_change_set(
+        self, change_set: WorkspaceChangeSet, *, expected_version: int
+    ) -> WorkspaceChangeSet: ...
+
+    def save_workspace_publication(
+        self, publication: WorkspacePublication
+    ) -> WorkspacePublication: ...
+
+    def get_workspace_publication(
+        self, change_set_id: str, *, owner: str
+    ) -> WorkspacePublication: ...
+
+    def replace_workspace_publication(
+        self, publication: WorkspacePublication, *, expected_version: int
+    ) -> WorkspacePublication: ...
 
 
 class SQLiteProjectStore:
@@ -232,9 +269,7 @@ class SQLiteProjectStore:
         _assert_create_replay(row, normalized)
         return _row_to_project(row)
 
-    def get_project(
-        self, project_id: str, *, owner: str
-    ) -> ExperimentProjectSessionRecord:
+    def get_project(self, project_id: str, *, owner: str) -> ExperimentProjectSessionRecord:
         _key(project_id, "project_id")
         _key(owner, "owner")
         with self.connect() as connection:
@@ -341,8 +376,7 @@ class SQLiteProjectStore:
         _key(owner, "owner")
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT payload_json FROM agent_workspaces "
-                "WHERE workspace_id = ? AND owner = ?",
+                "SELECT payload_json FROM agent_workspaces WHERE workspace_id = ? AND owner = ?",
                 (workspace_id, owner),
             ).fetchone()
         if row is None:
@@ -352,9 +386,7 @@ class SQLiteProjectStore:
             raise RuntimeError("Workspace payload disappeared")
         return workspace_from_payload(payload)
 
-    def list_workspaces(
-        self, project_id: str, *, owner: str
-    ) -> list[AgentWorkspaceRecord]:
+    def list_workspaces(self, project_id: str, *, owner: str) -> list[AgentWorkspaceRecord]:
         from pilot107.agent.workspace import workspace_from_payload
 
         self.get_project(project_id, owner=owner)
@@ -407,8 +439,7 @@ class SQLiteProjectStore:
                 ),
             )
             row = connection.execute(
-                "SELECT * FROM agent_workspace_changesets "
-                "WHERE change_set_id = ? AND owner = ?",
+                "SELECT * FROM agent_workspace_changesets WHERE change_set_id = ? AND owner = ?",
                 (change_set.change_set_id, change_set.owner),
             ).fetchone()
         if row is None:
@@ -420,9 +451,7 @@ class SQLiteProjectStore:
             raise RuntimeError("ChangeSet payload disappeared")
         return change_set_from_payload(payload)
 
-    def get_change_set(
-        self, change_set_id: str, *, owner: str
-    ) -> WorkspaceChangeSet:
+    def get_change_set(self, change_set_id: str, *, owner: str) -> WorkspaceChangeSet:
         from pilot107.agent.workspace import change_set_from_payload
 
         _key(change_set_id, "change_set_id")
@@ -453,9 +482,7 @@ class SQLiteProjectStore:
             raise KeyError(change_set_id)
         return str(row["diff_text"])
 
-    def list_change_sets(
-        self, project_id: str, *, owner: str
-    ) -> list[WorkspaceChangeSet]:
+    def list_change_sets(self, project_id: str, *, owner: str) -> list[WorkspaceChangeSet]:
         from pilot107.agent.workspace import change_set_from_payload
 
         self.get_project(project_id, owner=owner)
@@ -542,6 +569,137 @@ class SQLiteProjectStore:
                 ),
             )
         return change_set_from_payload(payload)
+
+    def replace_change_set(
+        self, change_set: WorkspaceChangeSet, *, expected_version: int
+    ) -> WorkspaceChangeSet:
+        from pilot107.agent.workspace import change_set_from_payload, change_set_payload
+
+        _version(expected_version)
+        current = self.get_change_set(change_set.change_set_id, owner=change_set.owner)
+        if current.digest != change_set.digest:
+            raise ProjectConflict("ChangeSet content cannot change during state update")
+        payload = change_set_payload(replace(change_set, version=expected_version + 1))
+        encoded = _canonical_json(payload)
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE agent_workspace_changesets
+                SET state = ?, version = ?, payload_json = ?, updated_at = ?
+                WHERE change_set_id = ? AND owner = ? AND version = ?
+                """,
+                (
+                    payload["state"],
+                    payload["version"],
+                    encoded,
+                    payload["updated_at"],
+                    change_set.change_set_id,
+                    change_set.owner,
+                    expected_version,
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise ProjectConflict("ChangeSet version changed during update")
+        return change_set_from_payload(payload)
+
+    def save_workspace_publication(self, publication: WorkspacePublication) -> WorkspacePublication:
+        from pilot107.agent.publisher import publication_from_payload, publication_payload
+
+        change_set = self.get_change_set(publication.change_set_id, owner=publication.owner)
+        if (
+            change_set.project_id != publication.project_id
+            or change_set.workspace_id != publication.workspace_id
+        ):
+            raise ProjectConflict("Publication does not match its ChangeSet")
+        encoded = _canonical_json(publication_payload(publication))
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO agent_workspace_publications (
+                    publication_id, change_set_id, project_id, workspace_id, owner,
+                    target_root, approved_digest, state, version, payload_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    publication.publication_id,
+                    publication.change_set_id,
+                    publication.project_id,
+                    publication.workspace_id,
+                    publication.owner,
+                    publication.target_root,
+                    publication.approved_digest,
+                    publication.state.value,
+                    publication.version,
+                    encoded,
+                    publication.created_at,
+                    publication.updated_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT payload_json FROM agent_workspace_publications "
+                "WHERE change_set_id = ? AND owner = ?",
+                (publication.change_set_id, publication.owner),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Publication insert did not produce a row")
+        payload = _json_object_or_none(row["payload_json"], "payload_json")
+        if payload is None:
+            raise RuntimeError("Publication payload disappeared")
+        result = publication_from_payload(payload)
+        if (
+            result.approved_digest != publication.approved_digest
+            or result.target_root != publication.target_root
+        ):
+            raise ProjectConflict("ChangeSet already has a different publication")
+        return result
+
+    def get_workspace_publication(self, change_set_id: str, *, owner: str) -> WorkspacePublication:
+        from pilot107.agent.publisher import publication_from_payload
+
+        _key(change_set_id, "change_set_id")
+        _key(owner, "owner")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM agent_workspace_publications "
+                "WHERE change_set_id = ? AND owner = ?",
+                (change_set_id, owner),
+            ).fetchone()
+        if row is None:
+            raise KeyError(change_set_id)
+        payload = _json_object_or_none(row["payload_json"], "payload_json")
+        if payload is None:
+            raise RuntimeError("Publication payload disappeared")
+        return publication_from_payload(payload)
+
+    def replace_workspace_publication(
+        self, publication: WorkspacePublication, *, expected_version: int
+    ) -> WorkspacePublication:
+        from pilot107.agent.publisher import publication_from_payload, publication_payload
+
+        _version(expected_version)
+        payload = publication_payload(replace(publication, version=expected_version + 1))
+        encoded = _canonical_json(payload)
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE agent_workspace_publications
+                SET state = ?, version = ?, payload_json = ?, updated_at = ?
+                WHERE change_set_id = ? AND owner = ? AND version = ?
+                """,
+                (
+                    payload["state"],
+                    payload["version"],
+                    encoded,
+                    payload["updated_at"],
+                    publication.change_set_id,
+                    publication.owner,
+                    expected_version,
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise ProjectConflict("Publication version changed during update")
+        return publication_from_payload(payload)
 
     def _now(self) -> str:
         value = self._clock()

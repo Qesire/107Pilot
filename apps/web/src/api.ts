@@ -1,6 +1,7 @@
 import type {
   AgentEventPage,
   AgentProjectView,
+  WorkspacePublication,
   AgentSession,
   AgentTurn,
   AgentExplanation,
@@ -779,6 +780,23 @@ export const api = {
       { project_id: projectId, workspace_id: workspaceId },
     ),
     user,
+    signal,
+  ),
+  publishAgentChangeSet: (
+    user: string,
+    changeSetId: string,
+    input: {
+      project_id: string;
+      workspace_id: string;
+      expected_version: number;
+      approved_digest: string;
+      target_root?: string;
+    },
+    signal?: AbortSignal,
+  ) => sendJson<WorkspacePublication>(
+    `/api/v1/agent-changesets/${encodeURIComponent(changeSetId)}/publish`,
+    user,
+    input,
     signal,
   ),
   remediationSessions: (user: string, state?: string, signal?: AbortSignal) =>

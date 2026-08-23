@@ -530,8 +530,33 @@ export interface AgentProjectView {
     changed_files: number;
     deletions: number;
     sandbox_failures: number;
-    publish_available: false;
+    publish_available: boolean;
   };
+}
+
+export interface WorkspacePublication {
+  publication_id: string;
+  change_set_id: string;
+  project_id: string;
+  workspace_id: string;
+  owner: string;
+  target_root: string;
+  approved_digest: string;
+  approved_by: string;
+  state: "prepared" | "publishing" | "published" | "conflicted" | "failed";
+  version: number;
+  files: Array<{
+    path: string;
+    operation: "create" | "modify" | "delete";
+    expected_sha256: string | null;
+    desired_sha256: string | null;
+    staging_path: string | null;
+    state: "pending" | "staged" | "committed";
+    size_bytes: number;
+  }>;
+  error_code: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export type RemediationState =

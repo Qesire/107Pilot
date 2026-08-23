@@ -46,6 +46,7 @@ from pilot107.adapters.ssh_relay import (
 from pilot107.agent.capabilities import AgentCapabilitySigner
 from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig
+from pilot107.agent.publisher import WorkspacePublisher
 from pilot107.agent.read_tools import AgentReadContext, build_a1_read_handlers
 from pilot107.agent.sandbox import SandboxExecutor
 from pilot107.agent.store_factory import (
@@ -720,11 +721,21 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 workspace_root=config.db_path.parent / "agent-workspaces",
             )
         )
+        publisher = (
+            WorkspacePublisher(
+                store=project_store,
+                relay=workspace_source,
+                owner_roots=workspace_owner_roots,
+            )
+            if isinstance(workspace_source, SshRelayExecutor) and workspace_owner_roots
+            else None
+        )
         project_agent_service = ProjectAgentService(
             store=project_store,
             workspace_root=config.db_path.parent / "agent-workspaces",
             sandbox=SandboxExecutor(store=project_store),
             importer=importer,
+            publisher=publisher,
         )
         agent_session_service = AgentSessionService(
             store=agent_session_store,

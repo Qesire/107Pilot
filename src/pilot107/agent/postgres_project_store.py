@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +29,7 @@ from pilot107.core.postgres_control_repository import PostgresDriverUnavailable
 from pilot107.core.postgres_domain_schema import initialize_postgres_domain_schema
 
 if TYPE_CHECKING:
+    from pilot107.agent.publisher import WorkspacePublication
     from pilot107.agent.workspace import (
         AgentWorkspaceRecord,
         SandboxResultRecord,
@@ -102,8 +104,7 @@ class PostgresProjectStore:
             ).fetchone()
             if row is None:
                 row = connection.execute(
-                    "SELECT * FROM agent_experiment_projects "
-                    "WHERE owner = %s AND request_key = %s",
+                    "SELECT * FROM agent_experiment_projects WHERE owner = %s AND request_key = %s",
                     (normalized.owner, normalized.request_key),
                 ).fetchone()
         if row is None:
@@ -111,15 +112,12 @@ class PostgresProjectStore:
         _assert_create_replay(row, normalized)
         return _row_to_project(row)
 
-    def get_project(
-        self, project_id: str, *, owner: str
-    ) -> ExperimentProjectSessionRecord:
+    def get_project(self, project_id: str, *, owner: str) -> ExperimentProjectSessionRecord:
         _key(project_id, "project_id")
         _key(owner, "owner")
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM agent_experiment_projects "
-                "WHERE project_id = %s AND owner = %s",
+                "SELECT * FROM agent_experiment_projects WHERE project_id = %s AND owner = %s",
                 (project_id, owner),
             ).fetchone()
         if row is None:
@@ -208,8 +206,7 @@ class PostgresProjectStore:
             ).fetchone()
             if row is None:
                 row = connection.execute(
-                    "SELECT * FROM agent_workspaces "
-                    "WHERE workspace_id = %s AND owner = %s",
+                    "SELECT * FROM agent_workspaces WHERE workspace_id = %s AND owner = %s",
                     (workspace.workspace_id, workspace.owner),
                 ).fetchone()
         if row is None:
@@ -231,8 +228,7 @@ class PostgresProjectStore:
         _key(owner, "owner")
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT payload_json FROM agent_workspaces "
-                "WHERE workspace_id = %s AND owner = %s",
+                "SELECT payload_json FROM agent_workspaces WHERE workspace_id = %s AND owner = %s",
                 (workspace_id, owner),
             ).fetchone()
         if row is None:
@@ -242,9 +238,7 @@ class PostgresProjectStore:
             raise TypeError("Workspace payload must be an object")
         return workspace_from_payload(payload)
 
-    def list_workspaces(
-        self, project_id: str, *, owner: str
-    ) -> list[AgentWorkspaceRecord]:
+    def list_workspaces(self, project_id: str, *, owner: str) -> list[AgentWorkspaceRecord]:
         from pilot107.agent.workspace import workspace_from_payload
 
         self.get_project(project_id, owner=owner)
@@ -312,9 +306,7 @@ class PostgresProjectStore:
             raise TypeError("ChangeSet payload must be an object")
         return change_set_from_payload(payload)
 
-    def get_change_set(
-        self, change_set_id: str, *, owner: str
-    ) -> WorkspaceChangeSet:
+    def get_change_set(self, change_set_id: str, *, owner: str) -> WorkspaceChangeSet:
         from pilot107.agent.workspace import change_set_from_payload
 
         _key(change_set_id, "change_set_id")
@@ -345,9 +337,7 @@ class PostgresProjectStore:
             raise KeyError(change_set_id)
         return str(row["diff_text"])
 
-    def list_change_sets(
-        self, project_id: str, *, owner: str
-    ) -> list[WorkspaceChangeSet]:
+    def list_change_sets(self, project_id: str, *, owner: str) -> list[WorkspaceChangeSet]:
         from pilot107.agent.workspace import change_set_from_payload
 
         self.get_project(project_id, owner=owner)
@@ -433,6 +423,151 @@ class PostgresProjectStore:
                 ),
             )
         return change_set_from_payload(payload)
+
+    def replace_change_set(
+        self, change_set: WorkspaceChangeSet, *, expected_version: int
+    ) -> WorkspaceChangeSet:
+        from pilot107.agent.workspace import change_set_from_payload, change_set_payload
+
+        _version(expected_version)
+        payload = change_set_payload(replace(change_set, version=expected_version + 1))
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                UPDATE agent_workspace_changesets
+                SET state = %s, version = %s, payload_json = %s, updated_at = %s
+                WHERE change_set_id = %s AND owner = %s AND version = %s AND digest = %s
+                RETURNING payload_json
+                """,
+                (
+                    payload["state"],
+                    payload["version"],
+                    self._jsonb(payload),
+                    payload["updated_at"],
+                    change_set.change_set_id,
+                    change_set.owner,
+                    expected_version,
+                    change_set.digest,
+                ),
+            ).fetchone()
+            if row is None:
+                existing = connection.execute(
+                    "SELECT change_set_id FROM agent_workspace_changesets "
+                    "WHERE change_set_id = %s AND owner = %s",
+                    (change_set.change_set_id, change_set.owner),
+                ).fetchone()
+        if row is None:
+            if existing is None:
+                raise KeyError(change_set.change_set_id)
+            raise ProjectConflict("ChangeSet version or content changed during update")
+        value = row["payload_json"]
+        if not isinstance(value, dict):
+            raise TypeError("ChangeSet payload must be an object")
+        return change_set_from_payload(value)
+
+    def save_workspace_publication(self, publication: WorkspacePublication) -> WorkspacePublication:
+        from pilot107.agent.publisher import publication_from_payload, publication_payload
+
+        change_set = self.get_change_set(publication.change_set_id, owner=publication.owner)
+        if (
+            change_set.project_id != publication.project_id
+            or change_set.workspace_id != publication.workspace_id
+        ):
+            raise ProjectConflict("Publication does not match its ChangeSet")
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO agent_workspace_publications (
+                    publication_id, change_set_id, project_id, workspace_id, owner,
+                    target_root, approved_digest, state, version, payload_json,
+                    created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (change_set_id) DO NOTHING
+                RETURNING payload_json
+                """,
+                (
+                    publication.publication_id,
+                    publication.change_set_id,
+                    publication.project_id,
+                    publication.workspace_id,
+                    publication.owner,
+                    publication.target_root,
+                    publication.approved_digest,
+                    publication.state.value,
+                    publication.version,
+                    self._jsonb(publication_payload(publication)),
+                    publication.created_at,
+                    publication.updated_at,
+                ),
+            ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    "SELECT payload_json FROM agent_workspace_publications "
+                    "WHERE change_set_id = %s AND owner = %s",
+                    (publication.change_set_id, publication.owner),
+                ).fetchone()
+        if row is None:
+            raise RuntimeError("Publication insert did not produce a row")
+        value = row["payload_json"]
+        if not isinstance(value, dict):
+            raise TypeError("Publication payload must be an object")
+        result = publication_from_payload(value)
+        if (
+            result.approved_digest != publication.approved_digest
+            or result.target_root != publication.target_root
+        ):
+            raise ProjectConflict("ChangeSet already has a different publication")
+        return result
+
+    def get_workspace_publication(self, change_set_id: str, *, owner: str) -> WorkspacePublication:
+        from pilot107.agent.publisher import publication_from_payload
+
+        _key(change_set_id, "change_set_id")
+        _key(owner, "owner")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM agent_workspace_publications "
+                "WHERE change_set_id = %s AND owner = %s",
+                (change_set_id, owner),
+            ).fetchone()
+        if row is None:
+            raise KeyError(change_set_id)
+        value = row["payload_json"]
+        if not isinstance(value, dict):
+            raise TypeError("Publication payload must be an object")
+        return publication_from_payload(value)
+
+    def replace_workspace_publication(
+        self, publication: WorkspacePublication, *, expected_version: int
+    ) -> WorkspacePublication:
+        from pilot107.agent.publisher import publication_from_payload, publication_payload
+
+        _version(expected_version)
+        payload = publication_payload(replace(publication, version=expected_version + 1))
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                UPDATE agent_workspace_publications
+                SET state = %s, version = %s, payload_json = %s, updated_at = %s
+                WHERE change_set_id = %s AND owner = %s AND version = %s
+                RETURNING payload_json
+                """,
+                (
+                    payload["state"],
+                    payload["version"],
+                    self._jsonb(payload),
+                    payload["updated_at"],
+                    publication.change_set_id,
+                    publication.owner,
+                    expected_version,
+                ),
+            ).fetchone()
+        if row is None:
+            raise ProjectConflict("Publication version changed during update")
+        value = row["payload_json"]
+        if not isinstance(value, dict):
+            raise TypeError("Publication payload must be an object")
+        return publication_from_payload(value)
 
     def _now(self) -> datetime:
         value = self._clock()

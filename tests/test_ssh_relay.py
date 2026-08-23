@@ -241,6 +241,66 @@ class FileManifestRelayClient(FakeRelayClient):
         )
 
 
+class PublicationRelayClient(FakeRelayClient):
+    def __init__(self, config: SshRelayConfig, outputs: list[str]) -> None:
+        super().__init__(config)
+        self.outputs = outputs
+        self.file_shell_commands: list[str] = []
+
+    def run_file_shell(
+        self,
+        shell_command: str,
+        *,
+        stdin: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> CommandResult:
+        del stdin, timeout_seconds
+        self.file_shell_commands.append(shell_command)
+        return CommandResult(0, self.outputs.pop(0), "")
+
+
+def test_ssh_publication_relay_exposes_typed_digest_and_compare_swap(tmp_path: Path) -> None:
+    client = PublicationRelayClient(
+        relay_config(tmp_path),
+        ["MISSING\n", "committed\n", "already_committed\n"],
+    )
+    relay = SshRelayExecutor(client)
+
+    assert relay.path_sha256(
+        path="/public/home/alice/project/new.py", owner="alice"
+    ) is None
+    assert relay.compare_and_swap_file(
+        staged_path="/public/home/alice/project/.107pilot/publish/c/new.py",
+        target_path="/public/home/alice/project/new.py",
+        expected_sha256=None,
+        desired_sha256="a" * 64,
+        owner="alice",
+    ) == "committed"
+    assert relay.compare_and_delete_file(
+        target_path="/public/home/alice/project/old.py",
+        expected_sha256="b" * 64,
+        owner="alice",
+    ) == "already_committed"
+
+    for command in client.file_shell_commands:
+        tokens = shlex.split(command)
+        assert tokens[:2] == ["python3", "-c"]
+        compile(tokens[2], "<ssh-publication-operation>", "exec")
+
+
+def test_ssh_publication_relay_rejects_unknown_protocol_status(tmp_path: Path) -> None:
+    client = PublicationRelayClient(relay_config(tmp_path), ["surprise\n"])
+
+    with pytest.raises(RuntimeError, match="SSH.PUBLICATION_PROTOCOL_INVALID"):
+        SshRelayExecutor(client).compare_and_swap_file(
+            staged_path="/public/home/alice/project/.107pilot/publish/c/main.py",
+            target_path="/public/home/alice/project/main.py",
+            expected_sha256="b" * 64,
+            desired_sha256="a" * 64,
+            owner="alice",
+        )
+
+
 def test_ssh_file_manifest_preserves_special_file_types(tmp_path: Path) -> None:
     client = FileManifestRelayClient(relay_config(tmp_path))
 

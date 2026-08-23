@@ -181,6 +181,7 @@ function ProjectReview({
   location: LocationState;
   navigate: (path: string) => void;
 }) {
+  const queryClient = useQueryClient();
   const [partition, setPartition] = useState("debug");
   const [qos, setQos] = useState("normal");
   const [cpus, setCpus] = useState(1);
@@ -188,6 +189,8 @@ function ProjectReview({
   const [gpus, setGpus] = useState(0);
   const [gpuType, setGpuType] = useState("a100");
   const [walltimeSeconds, setWalltimeSeconds] = useState(300);
+  const [publishConfirmed, setPublishConfirmed] = useState(false);
+  const [publishTarget, setPublishTarget] = useState("");
   const validationInputValid = isValidationEnvelopeInputValid({
     cpus,
     memoryMib,
@@ -239,6 +242,7 @@ function ProjectReview({
   );
   useEffect(() => {
     setSelectedChangeSet(view.change_sets[0]?.change_set_id ?? null);
+    setPublishConfirmed(false);
   }, [view.project.project_id, view.change_sets]);
   const diff = useAgentChangeSetDiff(
     user,
@@ -247,6 +251,23 @@ function ProjectReview({
     selectedChangeSet,
   );
   const selected = view.change_sets.find((item) => item.change_set_id === selectedChangeSet) ?? null;
+  const publishChangeSet = useMutation({
+    mutationFn: () => {
+      if (!selected) throw new Error("请选择 ChangeSet");
+      return api.publishAgentChangeSet(user, selected.change_set_id, {
+        project_id: view.project.project_id,
+        workspace_id: view.workspace.workspace_id,
+        expected_version: selected.version,
+        approved_digest: selected.digest,
+        ...(view.project.origin === "blank" ? { target_root: publishTarget.trim() } : {}),
+      });
+    },
+    onSuccess: () => {
+      setPublishConfirmed(false);
+      void queryClient.invalidateQueries({ queryKey: ["agent-project", user, view.project.project_id] });
+      void queryClient.invalidateQueries({ queryKey: ["agent-projects", user] });
+    },
+  });
   const blueprint = view.project.blueprint;
   return (
     <div className="agent-conversation">
@@ -262,9 +283,55 @@ function ProjectReview({
         <p>
           <strong>{riskLabel(view.risk_summary.level)}</strong>
           {view.risk_summary.changed_files} 个文件变更，{view.risk_summary.sandbox_failures} 次 Sandbox 失败。
-          正式发布入口尚未开放；仅可在下方明确批准的小型额度内安排验证 Run。
+          发布只会写入当前批准摘要覆盖的文件；远端摘要不匹配时将停止并报告冲突。
         </p>
       </section>
+      {selected ? (
+        <section className="agent-validation-approval" aria-labelledby="workspace-publish-heading">
+          <div>
+            <p className="panel-kicker">Explicit workspace approval</p>
+            <h3 id="workspace-publish-heading">批准并发布所选 ChangeSet</h3>
+            <p className="muted mono wrap-anywhere">digest {selected.digest}</p>
+          </div>
+          {view.project.origin === "blank" ? (
+            <label>
+              集群目标目录
+              <input
+                aria-label="发布目标目录"
+                placeholder={`/public/home/${user}/project`}
+                value={publishTarget}
+                onChange={(event) => setPublishTarget(event.target.value)}
+              />
+            </label>
+          ) : null}
+          <label>
+            <input
+              type="checkbox"
+              checked={publishConfirmed}
+              onChange={(event) => setPublishConfirmed(event.target.checked)}
+            />
+            我确认批准以上精确 digest，并理解远端冲突不会被覆盖
+          </label>
+          <button
+            type="button"
+            className="button primary"
+            disabled={
+              publishChangeSet.isPending
+              || !view.risk_summary.publish_available
+              || !isChangeSetPublishable(selected)
+              || !publishConfirmed
+              || (view.project.origin === "blank" && !publishTarget.trim())
+            }
+            onClick={() => publishChangeSet.mutate()}
+          >
+            <ShieldCheck aria-hidden="true" size={15} />
+            {publishChangeSet.isPending ? "正在发布" : "批准精确摘要并发布"}
+          </button>
+          {selected.state === "published" ? <p role="status">此 ChangeSet 已发布。</p> : null}
+          {selected.state === "conflicted" ? <p role="alert">远端工作区已变化，未覆盖外部修改。</p> : null}
+          {publishChangeSet.error ? <ProjectMutationError error={publishChangeSet.error} /> : null}
+        </section>
+      ) : null}
       <section className="agent-validation-approval" aria-labelledby="validation-envelope-heading">
         <div>
           <p className="panel-kicker">Explicit validation approval</p>
@@ -357,7 +424,7 @@ function ProjectReview({
 
 function ProjectMutationError({ error }: { error: Error }) {
   const code = error instanceof ApiRequestError ? error.code : null;
-  return <div className="agent-mutation-error" role="alert"><strong>无法创建工程</strong><p>{error.message}</p>{code ? <small className="mono">{code}</small> : null}</div>;
+  return <div className="agent-mutation-error" role="alert"><strong>操作失败</strong><p>{error.message}</p>{code ? <small className="mono">{code}</small> : null}</div>;
 }
 
 export function originLabel(origin: AgentProjectOrigin): string {
@@ -395,6 +462,10 @@ export function changeSetTone(changeSet: WorkspaceChangeSet): "success" | "warni
   if (changeSet.state === "failed" || changeSet.state === "conflicted") return "danger";
   if (changeSet.state === "draft" || changeSet.state === "approved") return "warning";
   return "neutral";
+}
+
+export function isChangeSetPublishable(changeSet: WorkspaceChangeSet): boolean {
+  return changeSet.state === "reviewable";
 }
 
 export function riskLabel(level: string): string {

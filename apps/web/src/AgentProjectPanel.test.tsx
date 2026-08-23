@@ -4,6 +4,7 @@ import {
   changeSetStateLabel,
   changeSetTone,
   isValidationEnvelopeInputValid,
+  isChangeSetPublishable,
   originLabel,
   riskLabel,
 } from "./AgentProjectPanel";
@@ -40,6 +41,9 @@ describe("Agent Project review presentation", () => {
     expect(changeSetStateLabel("reviewable")).toBe("可审阅");
     expect(changeSetTone(changeSet("reviewable"))).toBe("success");
     expect(changeSetTone(changeSet("failed"))).toBe("danger");
+    expect(isChangeSetPublishable(changeSet("reviewable"))).toBe(true);
+    expect(isChangeSetPublishable(changeSet("published"))).toBe(false);
+    expect(isChangeSetPublishable(changeSet("conflicted"))).toBe(false);
   });
 
   it("binds an approved validation envelope to the current Workspace snapshot", () => {

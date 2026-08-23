@@ -57,7 +57,9 @@ def test_project_api_create_get_and_cross_owner_masking(tmp_path: Path) -> None:
     assert masked is not None and masked.status == 404
 
 
-def test_project_api_is_closed_and_has_no_publish_route(tmp_path: Path) -> None:
+def test_project_api_is_closed_and_publish_route_fails_closed_without_publisher(
+    tmp_path: Path,
+) -> None:
     routes = _routes(tmp_path)
     invalid = routes.handle_post(
         ["agent-projects"],
@@ -65,10 +67,18 @@ def test_project_api_is_closed_and_has_no_publish_route(tmp_path: Path) -> None:
         identity=_identity("alice"),
     )
     publish = routes.handle_post(
-        ["agent-projects", "project-unknown", "publish"],
-        body=b"{}",
+        ["agent-changesets", "changeset-unknown", "publish"],
+        body=json.dumps(
+            {
+                "project_id": "project-unknown",
+                "workspace_id": "workspace-unknown",
+                "expected_version": 1,
+                "approved_digest": "a" * 64,
+            }
+        ).encode(),
         identity=_identity("alice"),
     )
 
     assert invalid is not None and invalid.status == 400
-    assert publish is None
+    assert publish is not None and publish.status == 503
+    assert publish.payload["error"]["code"] == "AGENT.PUBLISHER.UNAVAILABLE"

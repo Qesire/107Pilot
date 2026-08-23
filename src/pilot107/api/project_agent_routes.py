@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 
 from pilot107.agent.project import ProjectConflict, blueprint_from_payload
+from pilot107.agent.publisher import WorkspacePublicationState, publication_payload
 from pilot107.agent.sandbox import SandboxPolicyError
 from pilot107.agent.workspace import WorkspaceConflict, WorkspacePolicyError, change_set_payload
 from pilot107.api.http_types import ApiResponse
@@ -77,7 +78,7 @@ class ProjectAgentRoutes:
         body: bytes,
         identity: UserIdentity | None,
     ) -> ApiResponse | None:
-        if not parts or parts[0] not in {"agent-projects", "agent-workspaces"}:
+        if not parts or parts[0] not in {"agent-projects", "agent-workspaces", "agent-changesets"}:
             return None
         if identity is None:
             return _error(401, "AUTH.MISSING", "authenticated identity is required")
@@ -184,6 +185,47 @@ class ProjectAgentRoutes:
                 return _error(404, "AGENT.PROJECT.NOT_FOUND", "Agent Project not found")
             except (TypeError, ValueError, SandboxPolicyError) as exc:
                 return _error(400, "AGENT.SANDBOX.INVALID_REQUEST", str(exc))
+        if len(parts) == 3 and parts[0] == "agent-changesets" and parts[2] == "publish":
+            payload, error = _body(body)
+            if error is not None:
+                return error
+            try:
+                _closed(
+                    payload,
+                    {"project_id", "workspace_id", "expected_version", "approved_digest"},
+                    {"target_root"},
+                )
+                publication = self.service.publish_change_set(
+                    project_id=_required_string(payload, "project_id"),
+                    workspace_id=_required_string(payload, "workspace_id"),
+                    owner=owner,
+                    change_set_id=parts[1],
+                    expected_version=_required_integer(payload, "expected_version"),
+                    approved_digest=_required_string(payload, "approved_digest"),
+                    target_root=_optional_string(payload.get("target_root")),
+                )
+                status = (
+                    409
+                    if publication.state is WorkspacePublicationState.CONFLICTED
+                    else 200
+                )
+                response = publication_payload(publication)
+                if status == 409:
+                    response["error"] = {
+                        "code": "AGENT.WORKSPACE.CONFLICT",
+                        "message": "Workspace source changed before publication",
+                    }
+                return ApiResponse(status=status, payload=response)
+            except KeyError:
+                return _error(404, "AGENT.PROJECT.NOT_FOUND", "Agent Project not found")
+            except ProjectConflict as exc:
+                return _error(409, "AGENT.PROJECT.CONFLICT", str(exc))
+            except RuntimeError as exc:
+                if str(exc) == "Workspace publisher is unavailable":
+                    return _error(503, "AGENT.PUBLISHER.UNAVAILABLE", str(exc))
+                raise
+            except (TypeError, ValueError, WorkspacePolicyError) as exc:
+                return _error(400, "AGENT.WORKSPACE.INVALID_REQUEST", str(exc))
         return None
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -17,11 +17,14 @@ from pilot107.agent.project import (
     ProjectSource,
 )
 from pilot107.agent.project_store import ProjectStore
+from pilot107.agent.publisher import WorkspacePublication, WorkspacePublisher
 from pilot107.agent.sandbox import SandboxExecutionResult, SandboxExecutor
 from pilot107.agent.tool_gateway import AgentReadHandler, AgentReadResult, AgentToolGatewayError
 from pilot107.agent.workspace import (
     AgentWorkspaceRecord,
+    WorkspaceApproval,
     WorkspaceChangeSet,
+    WorkspaceChangeSetState,
     WorkspaceEditor,
     WorkspaceImporter,
     WorkspacePatch,
@@ -40,6 +43,7 @@ class ProjectAgentView:
     project: ExperimentProjectSessionRecord
     workspace: AgentWorkspaceRecord
     change_sets: tuple[WorkspaceChangeSet, ...]
+    publish_available: bool
 
 
 class ProjectAgentService:
@@ -50,12 +54,14 @@ class ProjectAgentService:
         workspace_root: Path,
         sandbox: SandboxExecutor,
         importer: WorkspaceImporter | None = None,
+        publisher: WorkspacePublisher | None = None,
     ) -> None:
         self.store = store
         self.workspace_root = workspace_root.resolve()
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.sandbox = sandbox
         self.importer = importer
+        self.publisher = publisher
         self.editor = WorkspaceEditor(store=store)
 
     def create_project(
@@ -97,11 +103,14 @@ class ProjectAgentService:
                 raise RuntimeError("Workspace importer is unavailable")
             assert source_ref is not None
             workspace = self.importer.create(project, source_ref=source_ref)
-        return ProjectAgentView(project=project, workspace=workspace, change_sets=())
+        return ProjectAgentView(
+            project=project,
+            workspace=workspace,
+            change_sets=(),
+            publish_available=self.publisher is not None,
+        )
 
-    def list_projects(
-        self, *, owner: str, limit: int = 100
-    ) -> list[ProjectAgentView]:
+    def list_projects(self, *, owner: str, limit: int = 100) -> list[ProjectAgentView]:
         projects = self.store.list_projects(owner=owner, limit=limit)
         return [self.get_project(item.project_id, owner=owner) for item in projects]
 
@@ -135,6 +144,7 @@ class ProjectAgentService:
                 for item in change_sets
                 if workspace_id is None or item.workspace_id == workspace_id
             ),
+            publish_available=self.publisher is not None,
         )
 
     def save_blueprint(
@@ -205,10 +215,7 @@ class ProjectAgentService:
     ) -> str:
         self._workspace(project_id, workspace_id, owner)
         change_set = self.store.get_change_set(change_set_id, owner=owner)
-        if (
-            change_set.project_id != project_id
-            or change_set.workspace_id != workspace_id
-        ):
+        if change_set.project_id != project_id or change_set.workspace_id != workspace_id:
             raise KeyError(change_set_id)
         return self.store.get_change_set_diff(change_set_id, owner=owner)
 
@@ -230,6 +237,67 @@ class ProjectAgentService:
             change_set_id=change_set_id,
         )
 
+    def publish_change_set(
+        self,
+        *,
+        project_id: str,
+        workspace_id: str,
+        owner: str,
+        change_set_id: str,
+        expected_version: int,
+        approved_digest: str,
+        target_root: str | None = None,
+    ) -> WorkspacePublication:
+        """Approve an exact reviewed digest and synchronously publish it."""
+
+        if self.publisher is None:
+            raise RuntimeError("Workspace publisher is unavailable")
+        self._workspace(project_id, workspace_id, owner)
+        change_set = self.store.get_change_set(change_set_id, owner=owner)
+        if change_set.project_id != project_id or change_set.workspace_id != workspace_id:
+            raise KeyError(change_set_id)
+        if change_set.digest != approved_digest:
+            raise ValueError("approved_digest does not match the ChangeSet")
+        if change_set.state is WorkspaceChangeSetState.REVIEWABLE:
+            if change_set.version != expected_version:
+                raise ValueError("ChangeSet version changed before approval")
+            now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            change_set = self.store.replace_change_set(
+                replace(
+                    change_set,
+                    state=WorkspaceChangeSetState.APPROVED,
+                    approval=WorkspaceApproval(
+                        actor=owner,
+                        approved_digest=approved_digest,
+                        approved_at=now,
+                    ),
+                    updated_at=now,
+                ),
+                expected_version=expected_version,
+            )
+        else:
+            approval = change_set.approval
+            if (
+                approval is None
+                or approval.actor != owner
+                or approval.approved_digest != approved_digest
+                or change_set.state
+                not in {
+                    WorkspaceChangeSetState.APPROVED,
+                    WorkspaceChangeSetState.PUBLISHING,
+                    WorkspaceChangeSetState.PUBLISHED,
+                    WorkspaceChangeSetState.CONFLICTED,
+                }
+            ):
+                raise ValueError("ChangeSet is not reviewable or exactly approved")
+        if change_set.state in {
+            WorkspaceChangeSetState.PUBLISHED,
+            WorkspaceChangeSetState.CONFLICTED,
+        }:
+            return self.store.get_workspace_publication(change_set_id, owner=owner)
+        self.publisher.prepare(change_set_id, actor=owner, target_root=target_root)
+        return self.publisher.publish(change_set_id, actor=owner)
+
     def build_tool_handlers(self) -> dict[str, AgentReadHandler]:
         return {
             "project_get": self._tool_project_get,
@@ -243,9 +311,7 @@ class ProjectAgentService:
     def _create_blank_workspace(
         self, project: ExperimentProjectSessionRecord
     ) -> AgentWorkspaceRecord:
-        snapshot_digest = hashlib.sha256(
-            f"blank\0{project.project_id}".encode()
-        ).hexdigest()
+        snapshot_digest = hashlib.sha256(f"blank\0{project.project_id}".encode()).hexdigest()
         workspace_id = f"workspace-{snapshot_digest[:24]}"
         owner_root = (self.workspace_root / project.owner).resolve()
         local_root = (owner_root / workspace_id).resolve()
@@ -270,18 +336,14 @@ class ProjectAgentService:
             )
         )
 
-    def _workspace(
-        self, project_id: str, workspace_id: str, owner: str
-    ) -> AgentWorkspaceRecord:
+    def _workspace(self, project_id: str, workspace_id: str, owner: str) -> AgentWorkspaceRecord:
         self.store.get_project(project_id, owner=owner)
         workspace = self.store.get_workspace(workspace_id, owner=owner)
         if workspace.project_id != project_id:
             raise KeyError("Workspace is not bound to the requested Project")
         return workspace
 
-    def _tool_project_get(
-        self, owner: str, arguments: Mapping[str, object]
-    ) -> AgentReadResult:
+    def _tool_project_get(self, owner: str, arguments: Mapping[str, object]) -> AgentReadResult:
         _closed(arguments, {"project_id", "workspace_id"})
         project_id, workspace_id = _scope(arguments)
         view = self.get_project(
@@ -294,9 +356,7 @@ class ProjectAgentService:
             evidence_refs=(f"project:{project_id}",),
         )
 
-    def _tool_workspace_list(
-        self, owner: str, arguments: Mapping[str, object]
-    ) -> AgentReadResult:
+    def _tool_workspace_list(self, owner: str, arguments: Mapping[str, object]) -> AgentReadResult:
         _closed(arguments, {"project_id", "workspace_id"})
         project_id, workspace_id = _scope(arguments)
         workspace = self._workspace(project_id, workspace_id, owner)
@@ -320,9 +380,7 @@ class ProjectAgentService:
             evidence_refs=(f"workspace:{workspace_id}:index",),
         )
 
-    def _tool_workspace_read(
-        self, owner: str, arguments: Mapping[str, object]
-    ) -> AgentReadResult:
+    def _tool_workspace_read(self, owner: str, arguments: Mapping[str, object]) -> AgentReadResult:
         _closed(arguments, {"project_id", "workspace_id", "path"})
         project_id, workspace_id = _scope(arguments)
         workspace = self._workspace(project_id, workspace_id, owner)
@@ -352,9 +410,7 @@ class ProjectAgentService:
             evidence_refs=(f"workspace:{workspace_id}:{relative}",),
         )
 
-    def _tool_workspace_patch(
-        self, owner: str, arguments: Mapping[str, object]
-    ) -> AgentReadResult:
+    def _tool_workspace_patch(self, owner: str, arguments: Mapping[str, object]) -> AgentReadResult:
         _closed(arguments, {"project_id", "workspace_id", "patches"})
         project_id, workspace_id = _scope(arguments)
         raw_patches = arguments.get("patches")
@@ -387,9 +443,7 @@ class ProjectAgentService:
             evidence_refs=(f"changeset:{change_set.change_set_id}",),
         )
 
-    def _tool_workspace_diff(
-        self, owner: str, arguments: Mapping[str, object]
-    ) -> AgentReadResult:
+    def _tool_workspace_diff(self, owner: str, arguments: Mapping[str, object]) -> AgentReadResult:
         _closed(arguments, {"project_id", "workspace_id", "change_set_id"})
         project_id, workspace_id = _scope(arguments)
         change_set_id = _required_string(arguments, "change_set_id")
@@ -404,9 +458,7 @@ class ProjectAgentService:
             evidence_refs=(f"changeset:{change_set_id}:diff",),
         )
 
-    def _tool_sandbox_exec(
-        self, owner: str, arguments: Mapping[str, object]
-    ) -> AgentReadResult:
+    def _tool_sandbox_exec(self, owner: str, arguments: Mapping[str, object]) -> AgentReadResult:
         _closed(
             arguments,
             {"project_id", "workspace_id", "change_set_id", "argv", "timeout"},
@@ -445,16 +497,16 @@ def project_view_payload(view: ProjectAgentView) -> dict[str, Any]:
             "goal": project.goal,
             "source": None if project.source is None else asdict(project.source),
             "blueprint": (
-                None
-                if project.blueprint is None
-                else _blueprint_payload(project.blueprint)
+                None if project.blueprint is None else _blueprint_payload(project.blueprint)
             ),
             "created_at": project.created_at,
             "updated_at": project.updated_at,
         },
         "workspace": _public_workspace_payload(view.workspace),
         "change_sets": [change_set_payload(item) for item in view.change_sets],
-        "risk_summary": _risk_summary(view.change_sets),
+        "risk_summary": _risk_summary(
+            view.change_sets, publish_available=view.publish_available
+        ),
     }
 
 
@@ -473,18 +525,18 @@ def _public_workspace_payload(workspace: AgentWorkspaceRecord) -> dict[str, Any]
     return payload
 
 
-def _risk_summary(change_sets: tuple[WorkspaceChangeSet, ...]) -> dict[str, object]:
+def _risk_summary(
+    change_sets: tuple[WorkspaceChangeSet, ...], *, publish_available: bool
+) -> dict[str, object]:
     files = [file for item in change_sets for file in item.files]
     return {
         "level": "medium" if any(item.operation == "delete" for item in files) else "low",
         "changed_files": len(files),
         "deletions": sum(item.operation == "delete" for item in files),
         "sandbox_failures": sum(
-            result.status != "succeeded"
-            for item in change_sets
-            for result in item.sandbox_results
+            result.status != "succeeded" for item in change_sets for result in item.sandbox_results
         ),
-        "publish_available": False,
+        "publish_available": publish_available,
     }
 
 

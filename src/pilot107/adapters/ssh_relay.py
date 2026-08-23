@@ -530,6 +530,127 @@ class SshRelayExecutor:
             raise SlurmTransportError("SSH.SHA256_INVALID")
         return digest
 
+    def path_sha256(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> str | None:
+        """Return a regular file digest, distinguishing absence from failure."""
+
+        self._require_file_owner(owner)
+        safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
+        script = (
+            "import hashlib,os,stat,sys;"
+            "p=sys.argv[1];"
+            "s=os.lstat(p) if os.path.lexists(p) else None;"
+            "print('MISSING' if s is None else "
+            "(hashlib.sha256(open(p,'rb').read()).hexdigest() "
+            "if stat.S_ISREG(s.st_mode) else 'UNSAFE'))"
+        )
+        result = self._file_shell(
+            f"python3 -c {shlex.quote(script)} {shlex.quote(safe_path)}",
+            timeout_seconds=timeout_seconds,
+        )
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.PATH_SHA256_FAILED")
+        value = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        if value == "MISSING":
+            return None
+        if value == "UNSAFE":
+            raise SlurmTransportError("SSH.PATH_NOT_REGULAR")
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise SlurmTransportError("SSH.PATH_SHA256_INVALID")
+        return value
+
+    def compare_and_swap_file(
+        self,
+        *,
+        staged_path: str,
+        target_path: str,
+        expected_sha256: str | None,
+        desired_sha256: str,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> str:
+        """Atomically install a staged regular file when the target still matches."""
+
+        self._require_file_owner(owner)
+        safe_staged = _validate_remote_path(
+            staged_path, roots=self.config.expanded_owner_roots()
+        )
+        safe_target = _validate_remote_path(
+            target_path, roots=self.config.expanded_owner_roots()
+        )
+        expected = "-" if expected_sha256 is None else self._publication_digest(expected_sha256)
+        desired = self._publication_digest(desired_sha256)
+        script = (
+            "import hashlib,os,stat,sys;"
+            "s,t,e,d=sys.argv[1:5];"
+            "dg=lambda p: (None if not os.path.lexists(p) else "
+            "(hashlib.sha256(open(p,'rb').read()).hexdigest() "
+            "if stat.S_ISREG(os.lstat(p).st_mode) else 'unsafe'));"
+            "c=dg(t);x=None if e=='-' else e;"
+            "print('already_committed') if c==d else "
+            "(print('conflict') if c!=x else "
+            "(print('staged_digest_mismatch') if dg(s)!=d else "
+            "(os.makedirs(os.path.dirname(t),exist_ok=True),os.replace(s,t),print('committed'))[-1]))"
+        )
+        command = " ".join(
+            shlex.quote(token)
+            for token in ("python3", "-c", script, safe_staged, safe_target, expected, desired)
+        )
+        result = self._file_shell(command, timeout_seconds=timeout_seconds)
+        return self._publication_outcome(result)
+
+    def compare_and_delete_file(
+        self,
+        *,
+        target_path: str,
+        expected_sha256: str,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> str:
+        """Atomically decide and unlink a regular file with an expected digest."""
+
+        self._require_file_owner(owner)
+        safe_target = _validate_remote_path(
+            target_path, roots=self.config.expanded_owner_roots()
+        )
+        expected = self._publication_digest(expected_sha256)
+        script = (
+            "import hashlib,os,stat,sys;"
+            "t,e=sys.argv[1:3];"
+            "c=(None if not os.path.lexists(t) else "
+            "(hashlib.sha256(open(t,'rb').read()).hexdigest() "
+            "if stat.S_ISREG(os.lstat(t).st_mode) else 'unsafe'));"
+            "print('already_committed') if c is None else "
+            "(print('conflict') if c!=e else (os.unlink(t),print('committed'))[-1])"
+        )
+        command = " ".join(
+            shlex.quote(token)
+            for token in ("python3", "-c", script, safe_target, expected)
+        )
+        result = self._file_shell(command, timeout_seconds=timeout_seconds)
+        return self._publication_outcome(result)
+
+    @staticmethod
+    def _publication_digest(value: str) -> str:
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise SshRelayPolicyError("publication digest is invalid")
+        return value
+
+    @staticmethod
+    def _publication_outcome(result: CommandResult) -> str:
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.PUBLICATION_OPERATION_FAILED")
+        outcome = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+        if outcome not in {
+            "committed",
+            "already_committed",
+            "conflict",
+            "staged_digest_mismatch",
+        }:
+            raise SlurmTransportError("SSH.PUBLICATION_PROTOCOL_INVALID")
+        return outcome
+
     def list_dir(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
     ) -> list[FileEntry]:
