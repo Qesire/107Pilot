@@ -869,6 +869,53 @@ _AGENT_WORKSPACE_CHANGESET_SCHEMA = _statements(
     "ON agent_workspace_changesets(owner, updated_at DESC, change_set_id DESC)"
 )
 
+_AGENT_TASK_SCHEMA = _statements(
+    """
+    CREATE TABLE agent_tasks (
+        task_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        task_kind TEXT NOT NULL,
+        state TEXT NOT NULL,
+        version BIGINT NOT NULL,
+        request_key TEXT NOT NULL,
+        request_json JSONB NOT NULL,
+        resource_envelope_json JSONB NOT NULL,
+        envelope_expires_at TIMESTAMPTZ NOT NULL,
+        linked_run_id TEXT,
+        result_json JSONB,
+        cancel_requested SMALLINT NOT NULL,
+        lease_owner TEXT,
+        lease_expires_at TIMESTAMPTZ,
+        fencing_token BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        UNIQUE (owner, request_key),
+        CHECK (task_kind = 'slurm_validation'),
+        CHECK (state IN (
+            'pending', 'running', 'succeeded', 'failed', 'cancelled',
+            'auth_required'
+        )),
+        CHECK (version >= 0),
+        CHECK (cancel_requested IN (0, 1)),
+        CHECK (fencing_token >= 0),
+        CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL))
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_tasks_recoverable "
+    "ON agent_tasks(state, lease_expires_at, created_at, task_id)"
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_tasks_owner_session "
+    "ON agent_tasks(owner, session_id, created_at, task_id)"
+    "\n-- statement\n"
+    "CREATE UNIQUE INDEX uq_agent_tasks_linked_run "
+    "ON agent_tasks(linked_run_id) WHERE linked_run_id IS NOT NULL"
+)
+
 _RUNTIME_WATCH_SCHEMA = _statements(
     """
     CREATE TABLE runtime_watches (
@@ -1081,6 +1128,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.013.runtime_watch_terminal_handoff", _RUNTIME_WATCH_HANDOFF_SCHEMA),
     ("004a.014.resource_observations", _RESOURCE_OBSERVATION_SCHEMA),
     ("004a.015.observation_collection", _OBSERVATION_COLLECTION_SCHEMA),
+    ("004a.016.agent_tasks", _AGENT_TASK_SCHEMA),
 )
 
 
@@ -1161,6 +1209,7 @@ def domain_table_names() -> tuple[str, ...]:
         "agent_experiment_projects",
         "agent_workspaces",
         "agent_workspace_changesets",
+        "agent_tasks",
         "runtime_watches",
         "runtime_log_cursors",
         "runtime_log_segments",

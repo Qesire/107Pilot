@@ -7,6 +7,7 @@ from typing import Any
 
 from pilot107.agent.project_store import SQLiteProjectStore
 from pilot107.agent.store import SQLiteAgentSessionStore
+from pilot107.agent.task_store import SQLiteAgentTaskStore
 from pilot107.core.contracts import ContractStore
 from pilot107.core.control_repository import SQLiteControlRepository
 from pilot107.core.file_uploads import UploadSessionStore
@@ -71,6 +72,7 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
                 "agent_tool_invocations",
                 "agent_experiment_projects",
                 "agent_workspaces",
+                "agent_tasks",
                 "runtime_watches",
                 "runtime_log_cursors",
                 "runtime_log_segments",
@@ -97,6 +99,7 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
             UploadSessionStore(database)
             SQLiteAgentSessionStore(database)
             SQLiteProjectStore(database)
+            SQLiteAgentTaskStore(database)
             SQLiteRuntimeWatchStore(
                 database,
                 segment_root=Path(temporary) / "runtime-segments",
