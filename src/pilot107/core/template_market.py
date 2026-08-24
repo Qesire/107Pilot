@@ -713,6 +713,16 @@ class TemplateMarketStore:
                         finding.as_payload() for finding in current_gate.findings
                     ),
                 )
+            publication_payload = json.loads(str(draft["publication_json"]))
+            release_template_id = publication_payload.get("template_family_id")
+            if release_template_id is None:
+                release_template_id = str(draft["template_id"])
+            if not isinstance(release_template_id, str):
+                raise TemplateMarketError(
+                    "template family identifier is invalid",
+                    code="TEMPLATE.PUBLICATION_BLOCKED",
+                )
+            _validate_id(release_template_id, field="template_id")
             try:
                 conn.execute(
                     """
@@ -726,7 +736,7 @@ class TemplateMarketStore:
                     """,
                     (
                         resolved_release_id,
-                        str(draft["template_id"]),
+                        release_template_id,
                         release_version,
                         str(draft["draft_id"]),
                         int(draft["version"]),
@@ -773,6 +783,29 @@ class TemplateMarketStore:
         if row is None:
             raise KeyError(release_id)
         return _row_to_release(row)
+
+    def find_active_release_by_bundle_digest(
+        self,
+        bundle_digest: str,
+    ) -> TemplateReleaseRecord | None:
+        """Return the immutable active release for an equivalent semantic bundle."""
+
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT releases.*, withdrawals.withdrawn_at,
+                       withdrawals.actor AS withdrawal_actor,
+                       withdrawals.reason AS withdrawal_reason
+                FROM template_releases AS releases
+                LEFT JOIN template_release_withdrawals AS withdrawals USING (release_id)
+                WHERE withdrawals.release_id IS NULL
+                  AND json_extract(releases.publication_json, '$.bundle_digest') = ?
+                ORDER BY releases.published_at, releases.release_id
+                LIMIT 1
+                """,
+                (bundle_digest,),
+            ).fetchone()
+        return None if row is None else _row_to_release(row)
 
     def get_release_by_version(
         self, template_id: str, release_version: str
@@ -1260,6 +1293,8 @@ class TemplateMarketStore:
         adopter: str,
         request_key: str,
         course_scopes: frozenset[str] = frozenset(),
+        target_payload: dict[str, Any] | None = None,
+        market_application_session_id: str | None = None,
     ) -> TemplateAdoptionRecord:
         _validate_actor(adopter)
         if self.contract_service is None or self.publication_gate is None:
@@ -1333,9 +1368,10 @@ class TemplateMarketStore:
                         finding.as_payload() for finding in current_gate.findings
                     ),
                 )
-            payload = _rebase_adopter_workdir(
-                release.payload,
-                adopter=adopter,
+            payload = (
+                _rebase_adopter_workdir(release.payload, adopter=adopter)
+                if target_payload is None
+                else json.loads(_canonical_json(target_payload))
             )
             validation = self.contract_service.validate(payload)
             if validation.status == "BLOCK":
@@ -1397,10 +1433,22 @@ class TemplateMarketStore:
                         "source_release_version": release.release_version,
                         "needs_user_confirmation": False,
                         "adopter_workdir_rebased": payload != release.payload,
+                        **(
+                            {
+                                "market_application_session_id": market_application_session_id,
+                                "assurance": "curated",
+                            }
+                            if market_application_session_id is not None
+                            else {}
+                        ),
                     }
                 ],
                 contract_id=target_contract_id,
-                derivation_reason="template_adoption",
+                derivation_reason=(
+                    "template_application"
+                    if market_application_session_id is not None
+                    else "template_adoption"
+                ),
                 idempotent=True,
                 connection=conn,
             )

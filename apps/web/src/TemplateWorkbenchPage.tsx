@@ -5,7 +5,7 @@ import { api } from "./api";
 import { createDefaultContract, parseJsonObject } from "./contract-state";
 import { QueryBoundary, SectionHeading, StatusBadge, formatTimestamp } from "./components";
 import { useTemplateDraft, useTemplateDrafts, useTemplateReviews } from "./query";
-import type { MarketVisibility, TemplateDraft, TemplateGateValidation, TemplateReviewQueueItem } from "./types";
+import type { MarketVisibility, TemplateDraft, TemplateGateValidation, TemplatePublicationSession, TemplateReviewQueueItem } from "./types";
 import type { LocationState } from "./url";
 
 interface WorkbenchProps {
@@ -46,7 +46,7 @@ function rememberedReviewId(draftId: string): string {
 export function TemplateWorkbenchPage({ user, location, navigate }: WorkbenchProps) {
   const path = location.pathname;
   if (path === "/templates/new") {
-    return <DraftEditor user={user} location={location} navigate={navigate} draftId={null} />;
+    return <PublicationSessionStarter user={user} location={location} navigate={navigate} />;
   }
   if (path.startsWith("/templates/draft/")) {
     const draftId = decodeURIComponent(path.slice("/templates/draft/".length));
@@ -56,6 +56,102 @@ export function TemplateWorkbenchPage({ user, location, navigate }: WorkbenchPro
     return <ReviewQueueView user={user} location={location} navigate={navigate} />;
   }
   return <MyDraftsView user={user} location={location} navigate={navigate} />;
+}
+
+function PublicationSessionStarter({ user, navigate }: WorkbenchProps) {
+  const [runId, setRunId] = useState("");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [baseReleaseId, setBaseReleaseId] = useState("");
+  const [visibility, setVisibility] = useState<MarketVisibility>("private");
+  const [compatibilityText, setCompatibilityText] = useState(defaultCompatibility);
+  const [publicationText, setPublicationText] = useState(defaultPublication);
+  const [session, setSession] = useState<TemplatePublicationSession | null>(null);
+  const [evidenceRef, setEvidenceRef] = useState("");
+  const [evidenceDigest, setEvidenceDigest] = useState("");
+  const [environment, setEnvironment] = useState("docker");
+  const [releaseVersion, setReleaseVersion] = useState("1.0.0");
+  const parseError = useMemo(() => {
+    try {
+      parseJsonObject(compatibilityText, "compatibility");
+      parseJsonObject(publicationText, "publication");
+      return null;
+    } catch (caught) {
+      return caught instanceof Error ? caught.message : "invalid JSON";
+    }
+  }, [compatibilityText, publicationText]);
+  const start = useMutation({
+    mutationFn: () => api.startTemplatePublication(user, runId.trim(), {
+      request_key: `web-template-publication-${crypto.randomUUID()}`,
+      title: title.trim(),
+      description: description.trim(),
+      visibility,
+      compatibility: parseJsonObject(compatibilityText, "compatibility"),
+      publication: parseJsonObject(publicationText, "publication"),
+      ...(baseReleaseId.trim() ? { base_release_id: baseReleaseId.trim() } : {}),
+    }),
+    onSuccess: setSession,
+  });
+  const reproduce = useMutation({
+    mutationFn: () => {
+      if (!session) throw new Error("template publication session is missing");
+      return api.recordTemplateReproduction(user, session.session_id, {
+        expected_version: session.version,
+        evidence_ref: evidenceRef.trim(),
+        evidence_digest: evidenceDigest.trim(),
+        environment,
+        release_version: releaseVersion.trim(),
+      });
+    },
+    onSuccess: setSession,
+  });
+  const confirm = useMutation({
+    mutationFn: () => {
+      if (!session?.confirmation_digest) throw new Error("confirmation digest is missing");
+      return api.confirmTemplatePublication(user, session.session_id, {
+        expected_version: session.version,
+        confirmation_digest: session.confirmation_digest,
+      });
+    },
+    onSuccess: setSession,
+  });
+  const error = start.error ?? reproduce.error ?? confirm.error;
+
+  return (
+    <>
+      <SectionHeading
+        eyebrow="Template publication / Agent session"
+        title="从成功 Run 发布模板"
+        detail="成功 Run 默认保持私有。Agent 只从显式选择的 Run 构建严格脱敏、digest-bound bundle；隔离复现和你的确认完成后才送审。"
+      />
+      <section className="panel template-release-main">
+        {!session ? <div className="form-grid two">
+          <label className="form-field"><span>成功 Run ID</span><input value={runId} onChange={(event) => setRunId(event.target.value)} /></label>
+          <label className="form-field"><span>标题</span><input value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+          <label className="form-field"><span>说明</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+          <label className="form-field"><span>基础 release ID（新版本时填写）</span><input value={baseReleaseId} placeholder="留空表示新的模板家族" onChange={(event) => setBaseReleaseId(event.target.value)} /></label>
+          <label className="form-field"><span>可见性</span><select value={visibility} onChange={(event) => setVisibility(event.target.value as MarketVisibility)}><option value="private">Private</option><option value="course">Course</option><option value="campus">Campus</option><option value="public">Public</option></select></label>
+          <label className="form-field"><span>Compatibility JSON</span><textarea className="mono" value={compatibilityText} onChange={(event) => setCompatibilityText(event.target.value)} /></label>
+          <label className="form-field"><span>Publication metadata JSON</span><textarea className="mono" value={publicationText} onChange={(event) => setPublicationText(event.target.value)} /></label>
+          <button className="button primary" type="button" disabled={!runId.trim() || !title.trim() || Boolean(parseError) || start.isPending} onClick={() => start.mutate()}>{start.isPending ? "正在构建脱敏 bundle" : "启动发布 Agent Session"}</button>
+        </div> : <>
+          <dl className="fact-list"><div><dt>Session</dt><dd className="mono wrap-anywhere">{session.session_id}</dd></div><div><dt>State</dt><dd>{session.state}</dd></div><div><dt>Bundle digest</dt><dd className="mono wrap-anywhere">{session.bundle_digest}</dd></div><div><dt>Draft</dt><dd className="mono wrap-anywhere">{session.draft_id ?? "等价 bundle：复用现有 release"}</dd></div></dl>
+          {session.state === "awaiting_reproduction" ? <div className="form-grid two">
+            <label className="form-field"><span>Evidence URI</span><input value={evidenceRef} placeholder="evidence://runs/.../manifest/manifest.json" onChange={(event) => setEvidenceRef(event.target.value)} /></label>
+            <label className="form-field"><span>Evidence SHA-256</span><input className="mono" value={evidenceDigest} onChange={(event) => setEvidenceDigest(event.target.value)} /></label>
+            <label className="form-field"><span>环境</span><select value={environment} onChange={(event) => setEnvironment(event.target.value)}><option value="docker">Docker</option><option value="real107_cpu">Real107 CPU</option><option value="real107_gpu">Real107 GPU</option></select></label>
+            <label className="form-field"><span>Release 版本</span><input value={releaseVersion} onChange={(event) => setReleaseVersion(event.target.value)} /></label>
+            <button className="button primary" type="button" disabled={!evidenceRef.trim() || evidenceDigest.trim().length !== 64 || !releaseVersion.trim() || reproduce.isPending} onClick={() => reproduce.mutate()}>{reproduce.isPending ? "正在记录复现" : "记录隔离复现 Evidence"}</button>
+          </div> : null}
+          {session.state === "awaiting_confirmation" ? <div className="agent-action-row"><p className="request-key mono">confirmation {session.confirmation_digest}</p><button className="button primary" type="button" disabled={confirm.isPending} onClick={() => confirm.mutate()}>{confirm.isPending ? "正在送审" : "确认 bundle、Evidence 与版本并送审"}</button></div> : null}
+          {session.state === "submitted" ? <div className="studio-notice success"><div><strong>已提交审核</strong><p className="mono">review {session.review_id}</p></div><button className="button secondary" type="button" onClick={() => navigate(`/templates/reviews?user=${encodeURIComponent(user)}`)}>打开审核队列</button></div> : null}
+          {session.state === "completed" ? <div className="studio-notice success"><div><strong>等价 bundle 已记录验证或 release 已完成</strong><p className="mono">{session.release_id}</p></div></div> : null}
+        </>}
+        {parseError ? <p className="limitation" role="alert">{parseError}</p> : null}
+        {error ? <p className="limitation" role="alert">{error.message}</p> : null}
+      </section>
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +169,7 @@ function MyDraftsView({ user, navigate }: WorkbenchProps) {
       />
       <div className="agent-action-row">
         <button className="button primary" type="button" onClick={() => navigate(`/templates/new?user=${encodeURIComponent(user)}`)}>
-          <FilePlus2 aria-hidden="true" size={15} /> 新建模板草稿
+          <FilePlus2 aria-hidden="true" size={15} /> 从成功 Run 发布
         </button>
         <button className="button secondary" type="button" onClick={() => navigate(`/templates/reviews?user=${encodeURIComponent(user)}`)}>
           审核队列

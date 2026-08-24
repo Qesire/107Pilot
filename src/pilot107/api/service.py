@@ -46,6 +46,11 @@ from pilot107.adapters.ssh_relay import (
 from pilot107.agent.capabilities import AgentCapabilitySigner
 from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig
+from pilot107.agent.market_sessions import (
+    MarketApplicationService,
+    SQLiteMarketSessionStore,
+    TemplatePublicationService,
+)
 from pilot107.agent.publisher import WorkspacePublisher
 from pilot107.agent.read_tools import AgentReadContext, build_a1_read_handlers
 from pilot107.agent.sandbox import SandboxExecutor
@@ -817,9 +822,26 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 profile_handlers={
                     "experiment_builder": project_handlers,
                     "run_diagnosis_repair": project_handlers,
+                    "market_application": project_handlers,
+                    "template_publication": project_handlers,
                 },
             )
         )
+    market_session_store = SQLiteMarketSessionStore(config.db_path)
+    market_application_service = MarketApplicationService(
+        store=market_session_store,
+        contract_service=contract_service,
+        run_publications=run_publication_store,
+        template_market=template_market_store,
+        project_service=project_agent_service,
+    )
+    template_publication_service = TemplatePublicationService(
+        store=market_session_store,
+        run_store=store,
+        contract_service=contract_service,
+        run_publications=run_publication_store,
+        template_market=template_market_store,
+    )
     terminal_service = (
         TerminalCommandService(
             executor=HttpCommandGatewayExecutor(
@@ -882,6 +904,8 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         agent_tool_routes=agent_tool_routes,
         agent_session_service=agent_session_service,
         project_agent_service=project_agent_service,
+        market_application_service=market_application_service,
+        template_publication_service=template_publication_service,
         runtime_watch_routes=RuntimeWatchRoutes(runtime_watch_store),
         observability_routes=ResourceObservationRoutes(observability_service),
         auth_required=config.auth_required,

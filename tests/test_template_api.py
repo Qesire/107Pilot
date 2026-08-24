@@ -3,9 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from pilot107.agent.market_sessions import (
+    MarketApplicationService,
+    SQLiteMarketSessionStore,
+)
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
+from pilot107.core.run_publications import RunPublicationStore
 from pilot107.core.run_store import RunStore
 from pilot107.core.template_market import TemplateMarketStore
 from pilot107.core.template_policy import (
@@ -25,6 +30,22 @@ class TemplateApiTests(unittest.TestCase):
             catalog=RecipeCatalog(),
             store=ContractStore(db_path),
         )
+        template_store = TemplateMarketStore(
+            db_path,
+            publication_gate=TemplatePublicationGate(contract_service),
+            contract_service=contract_service,
+        )
+        market_application_service = MarketApplicationService(
+            store=SQLiteMarketSessionStore(db_path),
+            contract_service=contract_service,
+            run_publications=RunPublicationStore(
+                db_path,
+                run_store=run_store,
+                contract_service=contract_service,
+            ),
+            template_market=template_store,
+            project_service=None,
+        )
         self.api = Pilot107HttpApi(
             store=run_store,
             evidence_query=EvidenceQueryService(
@@ -32,11 +53,8 @@ class TemplateApiTests(unittest.TestCase):
                 evidence_store=EvidenceStore(root / "evidence"),
             ),
             contract_service=contract_service,
-            template_market_store=TemplateMarketStore(
-                db_path,
-                publication_gate=TemplatePublicationGate(contract_service),
-                contract_service=contract_service,
-            ),
+            template_market_store=template_store,
+            market_application_service=market_application_service,
             template_role_directory=TemplateRoleDirectory(
                 reviewers=frozenset({"reviewer"}),
                 admins=frozenset({"admin"}),
@@ -120,18 +138,52 @@ class TemplateApiTests(unittest.TestCase):
             f"/api/v1/market/items/{published.payload['release_id']}",
             headers=self._headers("bob"),
         )
-        adopted = self.api.handle_post(
+        legacy_adopt = self.api.handle_post(
             f"/api/v1/market/items/{published.payload['release_id']}/adopt",
             body=_json({"request_key": "bob-adopts-public"}),
             headers=self._headers("bob"),
         )
-        adopted_again = self.api.handle_post(
+        legacy_template_adopt = self.api.handle_post(
             f"/api/v1/templates/{template_id}/releases/1.0.0/adopt",
             body=_json({"request_key": "bob-adopts-public"}),
             headers=self._headers("bob"),
         )
-        adopted_draft = self.api.handle_get(
-            f"/api/v1/template-drafts/{adopted.payload['target_draft_id']}",
+        started_application = self.api.handle_post(
+            "/api/v1/market/applications",
+            body=_json(
+                {
+                    "source_kind": "curated_template",
+                    "source_item_id": published.payload["release_id"],
+                    "user_intent": "instantiate the reviewed template privately",
+                    "request_key": "bob-curated-application",
+                }
+            ),
+            headers=self._headers("bob"),
+        )
+        adopted = self.api.handle_post(
+            f"/api/v1/market/applications/{started_application.payload['session_id']}/confirmation",
+            body=_json(
+                {
+                    "expected_version": started_application.payload["version"],
+                    "confirmation_digest": started_application.payload[
+                        "confirmation_digest"
+                    ],
+                    "request_key": "bob-adopts-public",
+                }
+            ),
+            headers=self._headers("bob"),
+        )
+        adopted_again = self.api.handle_post(
+            f"/api/v1/market/applications/{started_application.payload['session_id']}/confirmation",
+            body=_json(
+                {
+                    "expected_version": adopted.payload["version"],
+                    "confirmation_digest": started_application.payload[
+                        "confirmation_digest"
+                    ],
+                    "request_key": "bob-adopts-public",
+                }
+            ),
             headers=self._headers("bob"),
         )
         withdrawn = self.api.handle_post(
@@ -180,6 +232,13 @@ class TemplateApiTests(unittest.TestCase):
             template_id,
         )
         self.assertIn("metrics", unified_detail.payload)
+        self.assertEqual(legacy_adopt.status, 409)
+        self.assertEqual(
+            legacy_adopt.payload["error"]["code"],
+            "MARKET.AGENT_APPLICATION_REQUIRED",
+        )
+        self.assertEqual(legacy_template_adopt.status, 409)
+        self.assertEqual(adopted.status, 200)
         self.assertEqual(adopted_again.payload["adoption_id"], adopted.payload["adoption_id"])
         self.assertTrue(adopted.payload["target_contract_id"].startswith("contract_adopted_"))
         adopted_contract = self.api.handle_get(
@@ -187,12 +246,7 @@ class TemplateApiTests(unittest.TestCase):
             headers=self._headers("bob"),
         )
         self.assertEqual(adopted_contract.status, 200)
-        self.assertEqual(adopted_contract.payload["derivation_reason"], "template_adoption")
-        self.assertEqual(adopted_draft.payload["visibility"], "private")
-        self.assertEqual(
-            adopted_draft.payload["payload"]["extensions"]["advanced"]["raw_sbatch"],
-            "#SBATCH --exclusive",
-        )
+        self.assertEqual(adopted_contract.payload["derivation_reason"], "template_application")
         self.assertEqual(withdrawn.status, 200)
         self.assertEqual(withdrawn_detail.payload["withdrawal_actor"], "alice")
         self.assertEqual(
@@ -200,10 +254,7 @@ class TemplateApiTests(unittest.TestCase):
             "superseded by a safer release",
         )
         self.assertEqual(blocked_adoption.status, 409)
-        self.assertEqual(
-            retried_after_withdrawal.payload["adoption_id"],
-            adopted.payload["adoption_id"],
-        )
+        self.assertEqual(retried_after_withdrawal.status, 409)
 
     def test_client_cannot_self_assert_reviewer_role_or_course_scope(self) -> None:
         public = self._create_draft(visibility="public")

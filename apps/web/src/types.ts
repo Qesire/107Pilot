@@ -369,7 +369,7 @@ export interface AgentSession {
   session_id: string;
   owner: string;
   request_key: string;
-  profile_id: "hpc-readonly-v1" | "platform_coach" | "experiment_builder" | "run_diagnosis_repair";
+  profile_id: "hpc-readonly-v1" | "platform_coach" | "experiment_builder" | "run_diagnosis_repair" | "market_application" | "template_publication";
   model_profile_id: string;
   source: JsonObject;
   state: AgentSessionState;
@@ -811,6 +811,15 @@ export interface SuccessfulRunPublicationInput {
   tags: string[];
   reproduction_note: string;
   confirm_share: boolean;
+  share_manifest: {
+    description: boolean;
+    resource_summary: boolean;
+    result_summary: boolean;
+    contract_for_adaptation: boolean;
+    script: boolean;
+    evidence_previews: boolean;
+    small_assets: string[];
+  };
 }
 
 export interface SuccessfulRunAdoption {
@@ -847,6 +856,9 @@ export interface RunPublicationMarketItem extends MarketItemBase {
     run_id: string;
   };
   reproduction_note: string;
+  share_manifest: JsonObject;
+  share_manifest_digest: string;
+  shared: JsonObject;
 }
 
 export interface CuratedTemplateMarketItem extends MarketItemBase {
@@ -872,6 +884,55 @@ export interface MarketItemAdoption {
   release_id?: string;
   target_template_id?: string;
   target_draft_id?: string;
+}
+
+export type MarketApplicationSourceKind = "run_publication" | "curated_template";
+
+export interface MarketApplicationSession {
+  session_id: string;
+  owner: string;
+  request_key: string;
+  source_kind: MarketApplicationSourceKind;
+  source_item_id: string;
+  source_digest: string;
+  assurance: "reference_only" | "curated";
+  user_intent: string;
+  state: "awaiting_confirmation" | "completed";
+  version: number;
+  project_id: string | null;
+  workspace_id: string | null;
+  change_set_id: string | null;
+  target_contract_id: string | null;
+  adoption_id: string | null;
+  target_contract_payload?: JsonObject;
+  plan_digest?: string;
+  confirmation_digest?: string;
+  change_set_digest?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TemplatePublicationSession {
+  session_id: string;
+  owner: string;
+  request_key: string;
+  source_run_id: string;
+  source_contract_id: string;
+  source_digest: string;
+  bundle_digest: string;
+  draft_id: string | null;
+  state: "awaiting_reproduction" | "awaiting_confirmation" | "submitted" | "completed";
+  version: number;
+  reproduction_evidence_ref: string | null;
+  reproduction_evidence_digest: string | null;
+  reproduction_environment: string | null;
+  confirmation_digest: string | null;
+  review_id: string | null;
+  release_id: string | null;
+  release_version: string | null;
+  verification_id: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface PreparedRun extends RunSummary {

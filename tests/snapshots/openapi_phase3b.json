@@ -226,6 +226,52 @@
         ]
       }
     },
+    "/api/v1/market/applications": {
+      "get": {
+        "operationId": "list_market_applications",
+        "parameters": [],
+        "tags": [
+          "market"
+        ]
+      },
+      "post": {
+        "operationId": "start_market_application",
+        "parameters": [],
+        "tags": [
+          "market"
+        ]
+      }
+    },
+    "/api/v1/market/applications/{session_id}": {
+      "get": {
+        "operationId": "get_market_application",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "market"
+        ]
+      }
+    },
+    "/api/v1/market/applications/{session_id}/confirmation": {
+      "post": {
+        "operationId": "confirm_market_application",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "market"
+        ]
+      }
+    },
     "/api/v1/observability/connections/{connection_id}/account/latest": {
       "get": {
         "operationId": "get_latest_account_observation",
@@ -730,6 +776,21 @@
         ]
       }
     },
+    "/api/v1/runs/{run_id}/template-publication-sessions": {
+      "post": {
+        "operationId": "start_template_publication_session",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "market"
+        ]
+      }
+    },
     "/api/v1/template-drafts": {
       "get": {
         "operationId": "list_template_drafts",
@@ -837,6 +898,51 @@
         ],
         "tags": [
           "templates"
+        ]
+      }
+    },
+    "/api/v1/template-publication-sessions/{session_id}": {
+      "get": {
+        "operationId": "get_template_publication_session",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "market"
+        ]
+      }
+    },
+    "/api/v1/template-publication-sessions/{session_id}/confirmation": {
+      "post": {
+        "operationId": "confirm_template_publication_session",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "market"
+        ]
+      }
+    },
+    "/api/v1/template-publication-sessions/{session_id}/responses": {
+      "post": {
+        "operationId": "record_template_publication_reproduction",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "market"
         ]
       }
     },

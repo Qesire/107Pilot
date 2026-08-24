@@ -12,8 +12,15 @@ from typing import Any, Literal
 PROJECT_SCHEMA_VERSION = "pilot107.experiment-project-session/v1"
 EXPERIMENT_BUILDER_PROFILE = "experiment_builder"
 RUN_DIAGNOSIS_REPAIR_PROFILE = "run_diagnosis_repair"
+MARKET_APPLICATION_PROFILE = "market_application"
+TEMPLATE_PUBLICATION_PROFILE = "template_publication"
 PROJECT_AGENT_PROFILES = frozenset(
-    {EXPERIMENT_BUILDER_PROFILE, RUN_DIAGNOSIS_REPAIR_PROFILE}
+    {
+        EXPERIMENT_BUILDER_PROFILE,
+        RUN_DIAGNOSIS_REPAIR_PROFILE,
+        MARKET_APPLICATION_PROFILE,
+        TEMPLATE_PUBLICATION_PROFILE,
+    }
 )
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _VERSIONED_ID = re.compile(r"^[A-Za-z0-9._:@-]{1,256}$")

@@ -351,9 +351,15 @@ function RunPublicationControl({ run, publish }: {
   const [title, setTitle] = useState(run.job_name ?? "成功作业分享");
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState("");
-  const [visibility, setVisibility] = useState<"campus" | "course" | "public">("campus");
+  const [visibility, setVisibility] = useState<"private" | "campus" | "course" | "public">("private");
   const [scopeKey, setScopeKey] = useState("");
   const [reproductionNote, setReproductionNote] = useState("");
+  const [shareResourceSummary, setShareResourceSummary] = useState(false);
+  const [shareResultSummary, setShareResultSummary] = useState(false);
+  const [shareContract, setShareContract] = useState(false);
+  const [shareScript, setShareScript] = useState(false);
+  const [shareEvidencePreviews, setShareEvidencePreviews] = useState(false);
+  const [smallAssets, setSmallAssets] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   if (run.publication?.status === "published") {
     return <section className="run-controls" aria-label="成功 Run 分享"><div><strong>已发布到作业市场</strong><span className="mono">{run.publication.publication_id}</span></div></section>;
@@ -368,6 +374,15 @@ function RunPublicationControl({ run, publish }: {
     tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean),
     reproduction_note: reproductionNote.trim(),
     confirm_share: confirmed,
+    share_manifest: {
+      description: true,
+      resource_summary: shareResourceSummary,
+      result_summary: shareResultSummary,
+      contract_for_adaptation: shareContract,
+      script: shareScript,
+      evidence_previews: shareEvidencePreviews,
+      small_assets: smallAssets.split(",").map((item) => item.trim()).filter(Boolean),
+    },
   });
   return (
     <section className="run-controls" aria-label="成功 Run 分享">
@@ -377,13 +392,14 @@ function RunPublicationControl({ run, publish }: {
       </div>
       <div className="agent-action-row">
         <label className="form-field"><span>标题</span><input value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} /></label>
-        <label className="form-field"><span>可见性</span><select value={visibility} onChange={(event) => setVisibility(event.target.value as typeof visibility)}><option value="campus">Campus</option><option value="course">Course</option><option value="public">Public</option></select></label>
+        <label className="form-field"><span>可见性</span><select value={visibility} onChange={(event) => setVisibility(event.target.value as typeof visibility)}><option value="private">Private（默认）</option><option value="campus">Campus</option><option value="course">Course</option><option value="public">Public</option></select></label>
         {visibility === "course" ? <label className="form-field"><span>课程 scope</span><input value={scopeKey} placeholder="course-107" onChange={(event) => setScopeKey(event.target.value)} /></label> : null}
       </div>
       <label className="form-field"><span>说明</span><textarea value={description} maxLength={4000} onChange={(event) => setDescription(event.target.value)} /></label>
       <label className="form-field"><span>标签（逗号分隔）</span><input value={tags} placeholder="ml, preprocessing" onChange={(event) => setTags(event.target.value)} /></label>
       <label className="form-field"><span>采用提示</span><textarea value={reproductionNote} maxLength={4000} placeholder="需要由采用者检查代码、路径、数据与环境。" onChange={(event) => setReproductionNote(event.target.value)} /></label>
-      <label className="checkbox-field"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>我确认主动分享此成功 Run 的标题、说明和采用提示，并理解它不等同于可复现模板。</span></label>
+      <fieldset className="form-field"><legend>ShareManifest（未勾选字段保持私有）</legend><label className="checkbox-field"><input type="checkbox" checked={shareResourceSummary} onChange={(event) => setShareResourceSummary(event.target.checked)} /><span>资源摘要</span></label><label className="checkbox-field"><input type="checkbox" checked={shareResultSummary} onChange={(event) => setShareResultSummary(event.target.checked)} /><span>结果摘要</span></label><label className="checkbox-field"><input type="checkbox" checked={shareContract} onChange={(event) => setShareContract(event.target.checked)} /><span>授权他人通过 reference-only Agent 应用此 Contract</span></label><label className="checkbox-field"><input type="checkbox" checked={shareScript} onChange={(event) => setShareScript(event.target.checked)} /><span>脚本（发布前执行 secret/path gate）</span></label><label className="checkbox-field"><input type="checkbox" checked={shareEvidencePreviews} onChange={(event) => setShareEvidencePreviews(event.target.checked)} /><span>Evidence 预览</span></label><label className="form-field"><span>小型资产相对路径（逗号分隔）</span><input value={smallAssets} onChange={(event) => setSmallAssets(event.target.value)} /></label></fieldset>
+      <label className="checkbox-field"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>我确认以上逐字段 ShareManifest；所有未选择字段保持私有，成功 Run 不等同于可复现模板。</span></label>
       {publish.isError ? <p role="alert">{publish.error?.message}</p> : null}
       {publish.data ? <p>已发布为市场条目 <span className="mono">{publish.data.publication_id}</span>。</p> : null}
       <button className="button secondary" type="button" disabled={!confirmed || !title.trim() || publish.isPending || (visibility === "course" && !scopeKey.trim())} onClick={submit}><Upload aria-hidden="true" size={15} />{publish.isPending ? "发布中" : "确认发布成功 Run"}</button>

@@ -391,6 +391,8 @@ export const DurableAgentTurnRequestSchema = Type.Object(
       Type.Literal("interactive_readonly"),
       Type.Literal("experiment_builder"),
       Type.Literal("run_diagnosis_repair"),
+      Type.Literal("market_application"),
+      Type.Literal("template_publication"),
     ]),
     model_profile_id: Id,
     prompt_profile_id: Type.Union([
@@ -398,6 +400,8 @@ export const DurableAgentTurnRequestSchema = Type.Object(
       Type.Literal("platform_coach"),
       Type.Literal("experiment_builder"),
       Type.Literal("run_diagnosis_repair"),
+      Type.Literal("market_application"),
+      Type.Literal("template_publication"),
     ]),
     toolset_id: Type.Union([
       Type.Literal("a1-readonly"),
@@ -426,7 +430,9 @@ export type ExecutableTaskKind =
   | TaskKind
   | "interactive_readonly"
   | "experiment_builder"
-  | "run_diagnosis_repair";
+  | "run_diagnosis_repair"
+  | "market_application"
+  | "template_publication";
 
 export const A1_READ_TOOL_NAMES = [
   "platform_get_snapshot",
@@ -473,6 +479,8 @@ export const ToolInvocationSchema = Type.Object(
       Type.Literal("platform_coach"),
       Type.Literal("experiment_builder"),
       Type.Literal("run_diagnosis_repair"),
+      Type.Literal("market_application"),
+      Type.Literal("template_publication"),
     ]),
     tool_name: ReadToolNameSchema,
     arguments: JsonObjectSchema,
@@ -701,7 +709,12 @@ export function parseDurableTurnRequest(value: unknown): DurableAgentTurnRequest
   const readonlyPair = value.task_kind === "interactive_readonly"
     && ["hpc-readonly-v1", "platform_coach"].includes(value.prompt_profile_id)
     && value.toolset_id === "a1-readonly";
-  const builderPair = ["experiment_builder", "run_diagnosis_repair"]
+  const builderPair = [
+    "experiment_builder",
+    "run_diagnosis_repair",
+    "market_application",
+    "template_publication",
+  ]
     .includes(value.task_kind)
     && value.prompt_profile_id === value.task_kind
     && value.toolset_id === "a2-project";
@@ -730,7 +743,12 @@ export function parseToolInvocation(value: unknown): ToolInvocation {
   if (!Value.Check(ToolInvocationSchema, value)) {
     throw new TypeError(validationMessage("tool invocation", ToolInvocationSchema, value));
   }
-  const allowed = ["experiment_builder", "run_diagnosis_repair"]
+  const allowed = [
+    "experiment_builder",
+    "run_diagnosis_repair",
+    "market_application",
+    "template_publication",
+  ]
     .includes(value.profile_id)
     ? A2_PROJECT_TOOL_NAMES
     : A1_READ_TOOL_NAMES;

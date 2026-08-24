@@ -175,6 +175,9 @@ def _run_item(record: RunPublicationRecord) -> MarketItemRecord:
             "reason": None if record.adoptable else "source_contract_unavailable",
         },
         "reproduction_note": record.reproduction_note,
+        "share_manifest": record.share_manifest,
+        "share_manifest_digest": record.share_manifest_digest,
+        "shared": record.shared_payload,
         "withdrawn_at": record.withdrawn_at,
     }
     return MarketItemRecord(

@@ -84,6 +84,21 @@ describe("A2 Project tools", () => {
     }).map((tool) => tool.name)).toEqual([...A2_PROJECT_TOOL_NAMES]);
   });
 
+  it.each(["market_application", "template_publication"] as const)(
+    "gives the %s profile the same closed Project tools",
+    (profile) => {
+      const request = parseDurableTurnRequest({
+        ...durableRequest(),
+        task_kind: profile,
+        prompt_profile_id: profile,
+        toolset_id: "a2-project",
+      });
+      expect(createProjectTools(request, {
+        invoke: async () => successResult(),
+      }).map((tool) => tool.name)).toEqual([...A2_PROJECT_TOOL_NAMES]);
+    },
+  );
+
   it("binds validation to the authoritative Turn and terminates immediately", async () => {
     const request = builderRequest();
     let forwarded: Record<string, unknown> | undefined;

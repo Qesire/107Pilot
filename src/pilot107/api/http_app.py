@@ -15,6 +15,10 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 from uuid import uuid4
 
 from pilot107.adapters.slurm import SlurmBackendError
+from pilot107.agent.market_sessions import (
+    MarketApplicationService,
+    TemplatePublicationService,
+)
 from pilot107.agent.store import SQLiteAgentSessionStore
 from pilot107.api.agent_session_routes import AgentSessionRoutes
 from pilot107.api.agent_tool_routes import AgentToolRoutes
@@ -22,6 +26,7 @@ from pilot107.api.evidence_query import EvidencePreviewUnavailable, EvidenceQuer
 from pilot107.api.file_routes import FileRoutes
 from pilot107.api.health import ApiHealthService
 from pilot107.api.http_types import ApiResponse as ApiResponse
+from pilot107.api.market_session_routes import MarketSessionRoutes
 from pilot107.api.metrics import ControlPlaneMetrics, normalize_http_route
 from pilot107.api.observability_routes import ResourceObservationRoutes
 from pilot107.api.project_agent_routes import ProjectAgentRoutes
@@ -95,9 +100,9 @@ from pilot107.core.resources import (
 )
 from pilot107.core.run_publications import (
     RunPublicationError,
+    RunPublicationShareManifest,
     RunPublicationStore,
     RunPublicationVisibility,
-    run_publication_adoption_payload,
     run_publication_payload,
 )
 from pilot107.core.run_service import (
@@ -118,7 +123,6 @@ from pilot107.core.template_market import (
     TemplateReleaseRecord,
     TemplateVisibility,
     authorize_template_release,
-    template_adoption_payload,
     template_draft_payload,
     template_market_item_payload,
     template_release_payload,
@@ -180,6 +184,8 @@ class Pilot107HttpApi:
         agent_tool_routes: AgentToolRoutes | None = None,
         agent_session_service: AgentSessionService | None = None,
         project_agent_service: ProjectAgentService | None = None,
+        market_application_service: MarketApplicationService | None = None,
+        template_publication_service: TemplatePublicationService | None = None,
         runtime_watch_routes: RuntimeWatchRoutes | None = None,
         observability_routes: ResourceObservationRoutes | None = None,
         auth_required: bool = False,
@@ -259,6 +265,10 @@ class Pilot107HttpApi:
                 project_agent_service,
                 formal_run_observer=self.remediation_service,
             )
+        )
+        self.market_session_routes = MarketSessionRoutes(
+            applications=market_application_service,
+            publications=template_publication_service,
         )
         self.runtime_watch_routes = runtime_watch_routes
         self.observability_routes = observability_routes
@@ -376,6 +386,13 @@ class Pilot107HttpApi:
             )
             if project_agent_response is not None:
                 return project_agent_response
+        market_session_response = self.market_session_routes.handle_get(
+            parts,
+            params=params,
+            identity=identity,
+        )
+        if market_session_response is not None:
+            return market_session_response
         if self.runtime_watch_routes is not None:
             runtime_watch_response = self.runtime_watch_routes.handle_get(
                 parts,
@@ -997,6 +1014,13 @@ class Pilot107HttpApi:
             )
             if project_agent_response is not None:
                 return project_agent_response
+        market_session_response = self.market_session_routes.handle_post(
+            parts,
+            body=body,
+            identity=identity,
+        )
+        if market_session_response is not None:
+            return market_session_response
         remediation_response = self.remediation_routes.handle_post(
             parts,
             body=body,
@@ -2717,6 +2741,7 @@ class Pilot107HttpApi:
                     "tags",
                     "reproduction_note",
                     "confirm_share",
+                    "share_manifest",
                 },
             )
             visibility = _required_body_enum(
@@ -2730,6 +2755,42 @@ class Pilot107HttpApi:
             confirmation = payload.get("confirm_share")
             if not isinstance(confirmation, bool):
                 raise ValueError("confirm_share must be a boolean")
+            manifest_payload = _required_body_mapping(payload, "share_manifest")
+            _reject_unknown_body(
+                manifest_payload,
+                {
+                    "description",
+                    "resource_summary",
+                    "result_summary",
+                    "contract_for_adaptation",
+                    "script",
+                    "evidence_previews",
+                    "small_assets",
+                },
+            )
+            small_assets = manifest_payload.get("small_assets")
+            if not isinstance(small_assets, list) or not all(
+                isinstance(item, str) for item in small_assets
+            ):
+                raise ValueError("share_manifest.small_assets must be an array of strings")
+            manifest = RunPublicationShareManifest(
+                title=_required_body_string(payload, "title"),
+                visibility=visibility,
+                scope_key=_optional_body_string(payload, "scope_key"),
+                description=_required_body_bool(manifest_payload, "description"),
+                resource_summary=_required_body_bool(
+                    manifest_payload, "resource_summary"
+                ),
+                result_summary=_required_body_bool(manifest_payload, "result_summary"),
+                contract_for_adaptation=_required_body_bool(
+                    manifest_payload, "contract_for_adaptation"
+                ),
+                script=_required_body_bool(manifest_payload, "script"),
+                evidence_previews=_required_body_bool(
+                    manifest_payload, "evidence_previews"
+                ),
+                small_assets=tuple(small_assets),
+            )
             record = self.run_publication_store.publish(
                 source_run_id=run_id,
                 owner=identity.username,
@@ -2741,6 +2802,7 @@ class Pilot107HttpApi:
                 reproduction_note=_optional_body_string(payload, "reproduction_note") or "",
                 request_key=_required_body_string(payload, "request_key"),
                 confirmed=confirmation,
+                share_manifest=manifest,
             )
             return ApiResponse(status=201, payload=run_publication_payload(record))
         except (RunPublicationError, TypeError, ValueError) as exc:
@@ -2767,17 +2829,17 @@ class Pilot107HttpApi:
                 {"request_key"} if action == "adopt" else {"reason"},
             )
             if action == "adopt":
-                adoption = self.run_publication_store.adopt(
-                    publication_id=publication_id,
-                    adopter=identity.username,
-                    request_key=_required_body_string(payload, "request_key"),
-                    course_scopes=self.template_role_directory.visible_course_scopes(
-                        identity.username
-                    ),
-                )
                 return ApiResponse(
-                    status=201,
-                    payload=run_publication_adoption_payload(adoption),
+                    status=409,
+                    payload={
+                        "error": {
+                            "code": "MARKET.AGENT_APPLICATION_REQUIRED",
+                            "message": "start a typed market application session",
+                            "application_url": "/api/v1/market/applications",
+                            "source_kind": "run_publication",
+                            "source_item_id": publication_id,
+                        }
+                    },
                 )
             record = self.run_publication_store.withdraw(
                 publication_id=publication_id,
@@ -3176,13 +3238,18 @@ class Pilot107HttpApi:
             return _template_not_found("release", f"{template_id}@{release_version}")
         try:
             if action == "adopt":
-                adoption = self.template_market_store.adopt_release(
-                    release.release_id,
-                    adopter=actor,
-                    request_key=_required_body_string(payload, "request_key"),
-                    course_scopes=self.template_role_directory.visible_course_scopes(actor),
+                return ApiResponse(
+                    status=409,
+                    payload={
+                        "error": {
+                            "code": "MARKET.AGENT_APPLICATION_REQUIRED",
+                            "message": "start a typed market application session",
+                            "application_url": "/api/v1/market/applications",
+                            "source_kind": "curated_template",
+                            "source_item_id": release.release_id,
+                        }
+                    },
                 )
-                return ApiResponse(status=201, payload=template_adoption_payload(adoption))
             if action == "verify":
                 if self.template_verification_service is None:
                     return ApiResponse(
@@ -4478,6 +4545,13 @@ def _required_body_mapping(payload: dict[str, Any], key: str) -> dict[str, Any]:
     value = payload.get(key)
     if not isinstance(value, dict):
         raise ValueError(f"{key} must be an object")
+    return value
+
+
+def _required_body_bool(payload: dict[str, Any], key: str) -> bool:
+    value = payload.get(key)
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be a boolean")
     return value
 
 

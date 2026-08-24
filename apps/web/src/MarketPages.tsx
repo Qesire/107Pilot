@@ -14,7 +14,7 @@ import { api } from "./api";
 import { QueryBoundary, SectionHeading, StatusBadge, formatTimestamp } from "./components";
 import { detailVersions } from "./market-state";
 import { useMarketItem, useMarketItems, useTemplateDiff, useTemplateRelease, useTemplates } from "./query";
-import type { MarketItem } from "./types";
+import type { MarketApplicationSession, MarketItem } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
 
@@ -93,11 +93,30 @@ export function MarketItemDetailPage({ user, location, navigate }: MarketPagePro
   const queryClient = useQueryClient();
   const [requestKey, setRequestKey] = useState<string | null>(null);
   const [withdrawReason, setWithdrawReason] = useState("");
-  const adoption = useMutation({
-    mutationFn: (key: string) => api.adoptMarketItem(user, itemId, key),
+  const [application, setApplication] = useState<MarketApplicationSession | null>(null);
+  const startApplication = useMutation({
+    mutationFn: ({ key, record }: { key: string; record: MarketItem }) =>
+      api.startMarketApplication(user, {
+        source_kind: record.kind,
+        source_item_id: record.item_id,
+        user_intent: "将此市场条目安全地应用到我的私有实验工程",
+        request_key: key,
+      }),
+    onSuccess: setApplication,
+  });
+  const confirmApplication = useMutation({
+    mutationFn: (session: MarketApplicationSession) => api.confirmMarketApplication(
+      user,
+      session.session_id,
+      {
+        expected_version: session.version,
+        confirmation_digest: session.confirmation_digest ?? "",
+        request_key: `${session.request_key}:finalize`,
+      },
+    ),
     onSuccess: (result) => {
       if (result.target_contract_id) {
-        navigate(`/studio/${encodeURIComponent(result.target_contract_id)}?user=${encodeURIComponent(user)}&tab=basic&adoption=${encodeURIComponent(result.adoption_id)}`);
+        navigate(`/studio/${encodeURIComponent(result.target_contract_id)}?user=${encodeURIComponent(user)}&tab=basic&adoption=${encodeURIComponent(result.adoption_id ?? "")}`);
       }
     },
   });
@@ -110,9 +129,10 @@ export function MarketItemDetailPage({ user, location, navigate }: MarketPagePro
     },
   });
   const adopt = () => {
+    if (!record) return;
     const key = requestKey ?? `web-adopt-market-item-${crypto.randomUUID()}`;
     setRequestKey(key);
-    adoption.mutate(key);
+    startApplication.mutate({ key, record });
   };
   const record = item.data;
   return (
@@ -127,6 +147,7 @@ export function MarketItemDetailPage({ user, location, navigate }: MarketPagePro
             {record.kind === "run_publication" ? <>
               <p className="side-detail">{record.reproduction_note || "采用后请替换自己的工作目录、代码、数据和依赖。"}</p>
               <p className="request-key mono">source Run: {record.source.run_id}</p>
+              <div className="release-json-grid"><JsonPanel title="ShareManifest" value={record.share_manifest} /><JsonPanel title="显式共享字段" value={record.shared} /></div>
             </> : <>
               <dl className="template-metrics"><div><dt>采用</dt><dd>{record.metrics.adoption_count}</dd></div><div><dt>验证通过</dt><dd>{record.metrics.verification_passed}</dd></div><div><dt>验证失败</dt><dd>{record.metrics.verification_failed}</dd></div></dl>
               <div className="release-json-grid"><JsonPanel title="Compatibility" value={record.compatibility} /><JsonPanel title="Publication" value={record.publication} /></div>
@@ -134,7 +155,7 @@ export function MarketItemDetailPage({ user, location, navigate }: MarketPagePro
             </>}
           </section>
           <aside className="template-detail-side">
-            <section className="panel"><div className="panel-heading"><div><p className="panel-kicker">Adopt</p><h2>采用为私有 Contract</h2></div><CopyPlus aria-hidden="true" size={19} /></div><p className="side-detail">采用只创建你的私有副本；提交前必须在 Studio 重新检查路径、资源和依赖。</p>{adoption.isError ? <p className="limitation" role="alert">{adoption.error.message}</p> : null}<button className="button primary wide" type="button" disabled={!record.adoption.available || adoption.isPending} onClick={adopt}>{adoption.isPending ? "采用中" : "采用并进入 Studio"}</button>{requestKey ? <p className="request-key mono">request key: {requestKey}</p> : null}</section>
+            <section className="panel"><div className="panel-heading"><div><p className="panel-kicker">Agent application</p><h2>应用为私有 Contract</h2></div><CopyPlus aria-hidden="true" size={19} /></div><p className="side-detail">Agent 先创建隔离 Project、ChangeSet 和精确 Contract 计划；确认后才执行 typed finalizer。</p>{startApplication.isError ? <p className="limitation" role="alert">{startApplication.error.message}</p> : null}{confirmApplication.isError ? <p className="limitation" role="alert">{confirmApplication.error.message}</p> : null}{application ? <><dl className="fact-list"><div><dt>Assurance</dt><dd>{application.assurance}</dd></div><div><dt>Plan digest</dt><dd className="mono wrap-anywhere">{application.plan_digest}</dd></div><div><dt>ChangeSet</dt><dd className="mono wrap-anywhere">{application.change_set_id ?? "—"}</dd></div></dl><JsonPanel title="确认前 Contract 计划" value={application.target_contract_payload} /><button className="button primary wide" type="button" disabled={confirmApplication.isPending || !application.confirmation_digest} onClick={() => confirmApplication.mutate(application)}>{confirmApplication.isPending ? "正在完成应用" : "确认精确计划并创建 Contract"}</button></> : <button className="button primary wide" type="button" disabled={!record.adoption.available || startApplication.isPending} onClick={adopt}>{startApplication.isPending ? "正在生成计划" : "启动 Agent 应用计划"}</button>}{requestKey ? <p className="request-key mono">request key: {requestKey}</p> : null}</section>
             {record.kind === "run_publication" && record.publisher === user ? <section className="panel"><div className="panel-heading"><div><p className="panel-kicker">Publisher control</p><h2>撤回条目</h2></div></div><label className="form-field"><span>撤回原因</span><textarea value={withdrawReason} onChange={(event) => setWithdrawReason(event.target.value)} /></label>{withdraw.isError ? <p className="limitation" role="alert">{withdraw.error.message}</p> : null}<button className="button danger wide" type="button" disabled={!withdrawReason.trim() || withdraw.isPending} onClick={() => withdraw.mutate(withdrawReason.trim())}>{withdraw.isPending ? "撤回中" : "确认撤回"}</button></section> : null}
           </aside>
         </div> : null}
@@ -168,11 +189,29 @@ export function TemplateDetailPage({ user, location, navigate }: MarketPageProps
       await queryClient.invalidateQueries({ queryKey: ["market-items"] });
     },
   });
-  const adoption = useMutation({
-    mutationFn: (key: string) => api.adoptTemplate(user, templateId, version ?? "", key),
+  const [application, setApplication] = useState<MarketApplicationSession | null>(null);
+  const startApplication = useMutation({
+    mutationFn: (key: string) => api.startMarketApplication(user, {
+      source_kind: "curated_template",
+      source_item_id: release.data?.release_id ?? "",
+      user_intent: "将此 reviewed release 应用到我的私有实验工程",
+      request_key: key,
+    }),
+    onSuccess: setApplication,
+  });
+  const confirmApplication = useMutation({
+    mutationFn: (session: MarketApplicationSession) => api.confirmMarketApplication(
+      user,
+      session.session_id,
+      {
+        expected_version: session.version,
+        confirmation_digest: session.confirmation_digest ?? "",
+        request_key: `${session.request_key}:finalize`,
+      },
+    ),
     onSuccess: (result) => {
       if (!result.target_contract_id) return;
-      navigate(`/studio/${encodeURIComponent(result.target_contract_id)}?user=${encodeURIComponent(user)}&tab=basic&adoption=${encodeURIComponent(result.adoption_id)}`);
+      navigate(`/studio/${encodeURIComponent(result.target_contract_id)}?user=${encodeURIComponent(user)}&tab=basic&adoption=${encodeURIComponent(result.adoption_id ?? "")}`);
     },
   });
 
@@ -185,7 +224,7 @@ export function TemplateDetailPage({ user, location, navigate }: MarketPageProps
   const adopt = () => {
     const key = requestKey ?? `web-adopt-${crypto.randomUUID()}`;
     setRequestKey(key);
-    adoption.mutate(key);
+    startApplication.mutate(key);
   };
 
   return (
@@ -202,7 +241,7 @@ export function TemplateDetailPage({ user, location, navigate }: MarketPageProps
               <JsonPanel title="Canonical Contract payload" value={release.data.payload} tall />
             </section>
             <aside className="template-detail-side">
-              <section className="panel"><div className="panel-heading"><div><p className="panel-kicker">Adopt</p><h2>采用此 release</h2></div><CopyPlus aria-hidden="true" size={19} /></div><p className="side-detail">不会修改 release；服务器原子创建 private draft、Contract 和 lineage。</p>{adoption.isError ? <p className="limitation" role="alert">{adoption.error.message}</p> : null}<button className="button primary wide" type="button" disabled={Boolean(release.data.withdrawn_at) || adoption.isPending} onClick={adopt}>{adoption.isPending ? "采用中" : "采用并进入 Studio"}</button>{requestKey ? <p className="request-key mono">request key: {requestKey}</p> : null}</section>
+              <section className="panel"><div className="panel-heading"><div><p className="panel-kicker">Agent application</p><h2>应用此 release</h2></div><CopyPlus aria-hidden="true" size={19} /></div><p className="side-detail">先在隔离 Project 中形成 digest-bound 计划；release 保持不可变，确认后创建 private Contract 与 lineage。</p>{startApplication.isError ? <p className="limitation" role="alert">{startApplication.error.message}</p> : null}{confirmApplication.isError ? <p className="limitation" role="alert">{confirmApplication.error.message}</p> : null}{application ? <><dl className="fact-list"><div><dt>Assurance</dt><dd>{application.assurance}</dd></div><div><dt>Plan digest</dt><dd className="mono wrap-anywhere">{application.plan_digest}</dd></div><div><dt>ChangeSet</dt><dd className="mono wrap-anywhere">{application.change_set_id ?? "—"}</dd></div></dl><JsonPanel title="确认前 Contract 计划" value={application.target_contract_payload} /><button className="button primary wide" type="button" disabled={confirmApplication.isPending || !application.confirmation_digest} onClick={() => confirmApplication.mutate(application)}>{confirmApplication.isPending ? "正在完成应用" : "确认精确计划并创建 Contract"}</button></> : <button className="button primary wide" type="button" disabled={Boolean(release.data.withdrawn_at) || startApplication.isPending || !release.data.release_id} onClick={adopt}>{startApplication.isPending ? "正在生成计划" : "启动 Agent 应用计划"}</button>}{requestKey ? <p className="request-key mono">request key: {requestKey}</p> : null}</section>
               {release.data.publisher === user && !release.data.withdrawn_at ? (
                 <section className="panel">
                   <div className="panel-heading"><div><p className="panel-kicker">Publisher control</p><h2>撤回 release</h2></div></div>

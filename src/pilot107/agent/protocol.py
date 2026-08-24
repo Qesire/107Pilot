@@ -199,7 +199,12 @@ def parse_durable_turn_request(value: object) -> DurableAgentTurnRequest:
             and request["toolset_id"] == "a1-readonly"
         ) or (
             request["task_kind"]
-            in {"experiment_builder", "run_diagnosis_repair"}
+            in {
+                "experiment_builder",
+                "run_diagnosis_repair",
+                "market_application",
+                "template_publication",
+            }
             and request["prompt_profile_id"] == request["task_kind"]
             and request["toolset_id"] == "a2-project"
         )

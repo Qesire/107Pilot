@@ -4,6 +4,10 @@ import unittest
 from pathlib import Path
 
 from pilot107.adapters.slurm import InMemorySlurmBackend
+from pilot107.agent.market_sessions import (
+    MarketApplicationService,
+    SQLiteMarketSessionStore,
+)
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
@@ -40,6 +44,13 @@ class SuccessfulRunPublicationTests(unittest.TestCase):
             run_store=self.run_store,
             contract_service=self.contract_service,
         )
+        market_application_service = MarketApplicationService(
+            store=SQLiteMarketSessionStore(self.db_path),
+            contract_service=self.contract_service,
+            run_publications=self.publications,
+            template_market=None,
+            project_service=None,
+        )
         self.api = Pilot107HttpApi(
             store=self.run_store,
             evidence_query=EvidenceQueryService(
@@ -49,6 +60,7 @@ class SuccessfulRunPublicationTests(unittest.TestCase):
             run_service=self.run_service,
             contract_service=self.contract_service,
             run_publication_store=self.publications,
+            market_application_service=market_application_service,
             auth_required=True,
         )
 
@@ -73,6 +85,15 @@ class SuccessfulRunPublicationTests(unittest.TestCase):
                     "tags": ["ml", "demo"],
                     "reproduction_note": "请在采用后修改项目工作目录。",
                     "confirm_share": True,
+                    "share_manifest": {
+                        "description": True,
+                        "resource_summary": False,
+                        "result_summary": True,
+                        "contract_for_adaptation": True,
+                        "script": False,
+                        "evidence_previews": False,
+                        "small_assets": [],
+                    },
                 }
             ),
             headers=self._headers("alice"),
@@ -90,9 +111,34 @@ class SuccessfulRunPublicationTests(unittest.TestCase):
             f"/api/v1/market/items/{published.payload['publication_id']}",
             headers=self._headers("bob"),
         )
-        adopted = self.api.handle_post(
+        legacy_adopt = self.api.handle_post(
             f"/api/v1/market/items/{published.payload['publication_id']}/adopt",
             body=_json({"request_key": "bob-adopts-preprocess"}),
+            headers=self._headers("bob"),
+        )
+        started_application = self.api.handle_post(
+            "/api/v1/market/applications",
+            body=_json(
+                {
+                    "source_kind": "run_publication",
+                    "source_item_id": published.payload["publication_id"],
+                    "user_intent": "adapt the shared Contract into Bob's workspace",
+                    "request_key": "bob-reference-application",
+                }
+            ),
+            headers=self._headers("bob"),
+        )
+        adopted = self.api.handle_post(
+            f"/api/v1/market/applications/{started_application.payload['session_id']}/confirmation",
+            body=_json(
+                {
+                    "expected_version": started_application.payload["version"],
+                    "confirmation_digest": started_application.payload[
+                        "confirmation_digest"
+                    ],
+                    "request_key": "bob-adopts-preprocess",
+                }
+            ),
             headers=self._headers("bob"),
         )
         published_run = self.api.handle_get(
@@ -122,15 +168,31 @@ class SuccessfulRunPublicationTests(unittest.TestCase):
         self.assertNotIn("source_contract_id", detailed.payload)
         self.assertNotIn("workdir", unified_detail.payload)
         self.assertNotIn("contract_payload", unified_detail.payload)
+        self.assertTrue(
+            unified_detail.payload["share_manifest"]["contract_for_adaptation"]
+        )
+        self.assertEqual(
+            unified_detail.payload["share_manifest_digest"],
+            published.payload["share_manifest_digest"],
+        )
+        self.assertEqual(
+            unified_detail.payload["shared"]["result_summary"]["state"],
+            "SUCCEEDED",
+        )
         self.assertEqual(published_run.payload["publication"]["status"], "published")
         self.assertEqual(
             published_run.payload["publication"]["publication_id"],
             published.payload["publication_id"],
         )
-        self.assertEqual(adopted.status, 201)
+        self.assertEqual(legacy_adopt.status, 409)
+        self.assertEqual(
+            legacy_adopt.payload["error"]["code"],
+            "MARKET.AGENT_APPLICATION_REQUIRED",
+        )
+        self.assertEqual(adopted.status, 200)
         adopted_contract = self.contract_service.get(adopted.payload["target_contract_id"])
         self.assertEqual(adopted_contract.owner, "bob")
-        self.assertEqual(adopted_contract.derivation_reason, "run_publication_adoption")
+        self.assertEqual(adopted_contract.derivation_reason, "run_publication_adaptation")
         self.assertEqual(adopted_contract.parent_contract_id, run.contract_id)
         self.assertEqual(
             adopted_contract.payload["project"]["workdir"],

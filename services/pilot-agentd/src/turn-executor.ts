@@ -136,7 +136,9 @@ export class TurnExecutor {
       task_kind:
         request.task_kind === "interactive_readonly" ||
         request.task_kind === "experiment_builder" ||
-        request.task_kind === "run_diagnosis_repair"
+        request.task_kind === "run_diagnosis_repair" ||
+        request.task_kind === "market_application" ||
+        request.task_kind === "template_publication"
           ? "interactive"
           : request.task_kind,
     });
@@ -353,7 +355,13 @@ async function runAttempt(options: {
     sessionId: options.request.trace.correlation_id,
     toolExecution: "sequential",
     shouldStopAfterTurn: ({ toolResults }) =>
-      !["interactive_readonly", "experiment_builder", "run_diagnosis_repair"]
+      ![
+        "interactive_readonly",
+        "experiment_builder",
+        "run_diagnosis_repair",
+        "market_application",
+        "template_publication",
+      ]
         .includes(options.request.task_kind) ||
       toolResults.length === 0,
   });

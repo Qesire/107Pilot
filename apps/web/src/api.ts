@@ -53,6 +53,9 @@ import type {
   TemplateReviewQueueItem,
   MarketItem,
   MarketItemAdoption,
+  MarketApplicationSession,
+  MarketApplicationSourceKind,
+  TemplatePublicationSession,
   SuccessfulRunAdoption,
   SuccessfulRunMarketItem,
   SuccessfulRunPublicationInput,
@@ -603,6 +606,105 @@ export const api = {
     { request_key: requestKey },
     signal,
   ),
+  marketApplications: (user: string, signal?: AbortSignal) =>
+    getJson<{ items: MarketApplicationSession[] }>(
+      "/api/v1/market/applications",
+      user,
+      signal,
+    ),
+  marketApplication: (user: string, sessionId: string, signal?: AbortSignal) =>
+    getJson<MarketApplicationSession>(
+      `/api/v1/market/applications/${encodeURIComponent(sessionId)}`,
+      user,
+      signal,
+    ),
+  startMarketApplication: (
+    user: string,
+    input: {
+      source_kind: MarketApplicationSourceKind;
+      source_item_id: string;
+      user_intent: string;
+      request_key: string;
+    },
+    signal?: AbortSignal,
+  ) => sendJson<MarketApplicationSession>(
+    "/api/v1/market/applications",
+    user,
+    input,
+    signal,
+  ),
+  confirmMarketApplication: (
+    user: string,
+    sessionId: string,
+    input: {
+      expected_version: number;
+      confirmation_digest: string;
+      request_key: string;
+    },
+    signal?: AbortSignal,
+  ) => sendJson<MarketApplicationSession>(
+    `/api/v1/market/applications/${encodeURIComponent(sessionId)}/confirmation`,
+    user,
+    input,
+    signal,
+  ),
+  startTemplatePublication: (
+    user: string,
+    runId: string,
+    input: {
+      request_key: string;
+      title: string;
+      description: string;
+      visibility: MarketVisibility;
+      scope_key?: string | null;
+      compatibility: JsonObject;
+      publication: JsonObject;
+      source_evidence_ref?: string;
+      source_evidence_digest?: string;
+      environment?: string;
+      base_release_id?: string;
+    },
+    signal?: AbortSignal,
+  ) => sendJson<TemplatePublicationSession>(
+    `/api/v1/runs/${encodeURIComponent(runId)}/template-publication-sessions`,
+    user,
+    input,
+    signal,
+  ),
+  templatePublication: (user: string, sessionId: string, signal?: AbortSignal) =>
+    getJson<TemplatePublicationSession>(
+      `/api/v1/template-publication-sessions/${encodeURIComponent(sessionId)}`,
+      user,
+      signal,
+    ),
+  recordTemplateReproduction: (
+    user: string,
+    sessionId: string,
+    input: {
+      expected_version: number;
+      evidence_ref: string;
+      evidence_digest: string;
+      environment: string;
+      release_version: string;
+    },
+    signal?: AbortSignal,
+  ) => sendJson<TemplatePublicationSession>(
+    `/api/v1/template-publication-sessions/${encodeURIComponent(sessionId)}/responses`,
+    user,
+    input,
+    signal,
+  ),
+  confirmTemplatePublication: (
+    user: string,
+    sessionId: string,
+    input: { expected_version: number; confirmation_digest: string },
+    signal?: AbortSignal,
+  ) => sendJson<TemplatePublicationSession>(
+    `/api/v1/template-publication-sessions/${encodeURIComponent(sessionId)}/confirmation`,
+    user,
+    input,
+    signal,
+  ),
   withdrawMarketItem: (
     user: string,
     itemId: string,
@@ -696,7 +798,7 @@ export const api = {
     input: {
       profile: string;
       request_key: string;
-      profile_id?: "hpc-readonly-v1" | "platform_coach" | "experiment_builder" | "run_diagnosis_repair";
+      profile_id?: "hpc-readonly-v1" | "platform_coach" | "experiment_builder" | "run_diagnosis_repair" | "market_application" | "template_publication";
       source?: JsonObject;
     },
     signal?: AbortSignal,

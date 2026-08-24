@@ -4,6 +4,7 @@ from pilot107.core.market import MarketItemKind, MarketReadService
 from pilot107.core.pagination import CursorPosition
 from pilot107.core.run_publications import (
     RunPublicationRecord,
+    RunPublicationShareManifest,
     RunPublicationVisibility,
 )
 from pilot107.core.template_market import (
@@ -131,6 +132,10 @@ def _after(records, cursor, primary, secondary):
 
 
 def _run(publication_id: str, published_at: str) -> RunPublicationRecord:
+    share_manifest = RunPublicationShareManifest(
+        title=publication_id,
+        visibility=RunPublicationVisibility.CAMPUS,
+    )
     return RunPublicationRecord(
         publication_id=publication_id,
         source_run_id=f"run_{publication_id}",
@@ -148,6 +153,9 @@ def _run(publication_id: str, published_at: str) -> RunPublicationRecord:
         withdrawn_at=None,
         withdrawal_actor=None,
         withdrawal_reason=None,
+        share_manifest=share_manifest.as_payload(),
+        share_manifest_digest=share_manifest.manifest_digest,
+        shared_payload={"description": ""},
     )
 
 

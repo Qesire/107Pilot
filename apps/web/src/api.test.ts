@@ -105,6 +105,15 @@ describe("API transport", () => {
       tags: ["ml"],
       reproduction_note: "采用后替换自己的目录",
       confirm_share: true,
+      share_manifest: {
+        description: true,
+        resource_summary: false,
+        result_summary: true,
+        contract_for_adaptation: false,
+        script: false,
+        evidence_previews: false,
+        small_assets: [],
+      },
     });
     await api.adoptSuccessfulRun("bob", "runpub/a", "adopt-a");
     await api.marketItems("bob", { kind: "run_publication", q: "训练" });
@@ -130,6 +139,15 @@ describe("API transport", () => {
           tags: ["ml"],
           reproduction_note: "采用后替换自己的目录",
           confirm_share: true,
+          share_manifest: {
+            description: true,
+            resource_summary: false,
+            result_summary: true,
+            contract_for_adaptation: false,
+            script: false,
+            evidence_previews: false,
+            small_assets: [],
+          },
         }),
       }),
     );
@@ -157,6 +175,76 @@ describe("API transport", () => {
       7,
       "/api/v1/market/items/runpub%2Fa/withdraw",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ reason: "superseded" }) }),
+    );
+  });
+
+  it("uses typed market application and template publication sessions", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ session_id: "session-1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.startMarketApplication("bob", {
+      source_kind: "curated_template",
+      source_item_id: "release/a",
+      user_intent: "adapt privately",
+      request_key: "start-application",
+    });
+    await api.confirmMarketApplication("bob", "session/1", {
+      expected_version: 1,
+      confirmation_digest: "a".repeat(64),
+      request_key: "finish-application",
+    });
+    await api.startTemplatePublication("alice", "run/a", {
+      request_key: "start-publication",
+      title: "Reusable training",
+      description: "Sanitized bundle",
+      visibility: "campus",
+      compatibility: { partitions: ["Students"], gpu: false },
+      publication: { license: "MIT" },
+    });
+    await api.recordTemplateReproduction("alice", "publication/1", {
+      expected_version: 1,
+      evidence_ref: "evidence://runs/reproduction/manifest/manifest.json",
+      evidence_digest: "b".repeat(64),
+      environment: "docker",
+      release_version: "1.0.0",
+    });
+    await api.confirmTemplatePublication("alice", "publication/1", {
+      expected_version: 2,
+      confirmation_digest: "c".repeat(64),
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/market/applications",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          source_kind: "curated_template",
+          source_item_id: "release/a",
+          user_intent: "adapt privately",
+          request_key: "start-application",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/market/applications/session%2F1/confirmation",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/runs/run%2Fa/template-publication-sessions",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/v1/template-publication-sessions/publication%2F1/responses",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      "/api/v1/template-publication-sessions/publication%2F1/confirmation",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 

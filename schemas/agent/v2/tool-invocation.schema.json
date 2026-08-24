@@ -58,7 +58,9 @@
         {"type": "string", "const": "hpc-readonly-v1"},
         {"type": "string", "const": "platform_coach"},
         {"type": "string", "const": "experiment_builder"},
-        {"type": "string", "const": "run_diagnosis_repair"}
+        {"type": "string", "const": "run_diagnosis_repair"},
+        {"type": "string", "const": "market_application"},
+        {"type": "string", "const": "template_publication"}
       ]
     },
     "tool_name": {

@@ -60,4 +60,18 @@ RUN_PUBLICATION_MIGRATION = SchemaMigration(
 )
 
 
-RUN_PUBLICATION_MIGRATIONS = (*PLATFORM_MIGRATIONS, RUN_PUBLICATION_MIGRATION)
+RUN_PUBLICATION_SHARE_MANIFEST_MIGRATION = SchemaMigration(
+    migration_id="003d.002.run_publication_share_manifest",
+    statements=(
+        "ALTER TABLE run_publications ADD COLUMN share_manifest_json TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE run_publications ADD COLUMN share_manifest_digest TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE run_publications ADD COLUMN shared_payload_json TEXT NOT NULL DEFAULT '{}'",
+    ),
+)
+
+
+RUN_PUBLICATION_MIGRATIONS = (
+    *PLATFORM_MIGRATIONS,
+    RUN_PUBLICATION_MIGRATION,
+    RUN_PUBLICATION_SHARE_MANIFEST_MIGRATION,
+)

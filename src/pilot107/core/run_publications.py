@@ -8,6 +8,7 @@ When a source Run has a Contract, adopters receive a new private Contract.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -43,6 +44,55 @@ class RunPublicationError(ValueError):
 
 
 @dataclass(frozen=True)
+class RunPublicationShareManifest:
+    title: str
+    visibility: RunPublicationVisibility = RunPublicationVisibility.PRIVATE
+    scope_key: str | None = None
+    description: bool = True
+    resource_summary: bool = False
+    result_summary: bool = False
+    contract_for_adaptation: bool = False
+    script: bool = False
+    evidence_previews: bool = False
+    small_assets: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_text(self.title, field="title", limit=160, required=True)
+        _validate_scope(self.visibility, self.scope_key)
+        object.__setattr__(self, "small_assets", tuple(self.small_assets))
+        if len(self.small_assets) > 32 or any(
+            not isinstance(item, str)
+            or not item
+            or item.startswith("/")
+            or ".." in Path(item).parts
+            for item in self.small_assets
+        ):
+            raise RunPublicationError(
+                "small_assets contains an invalid relative path",
+                code="MARKET.INVALID_SHARE_MANIFEST",
+            )
+
+    @property
+    def manifest_digest(self) -> str:
+        return hashlib.sha256(_canonical_json(self.as_payload()).encode()).hexdigest()
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": "pilot107.run-publication-share-manifest/v1",
+            "visibility": self.visibility.value,
+            "scope_key": self.scope_key,
+            "title": self.title,
+            "description": self.description,
+            "resource_summary": self.resource_summary,
+            "result_summary": self.result_summary,
+            "contract_for_adaptation": self.contract_for_adaptation,
+            "script": self.script,
+            "evidence_previews": self.evidence_previews,
+            "small_assets": list(self.small_assets),
+        }
+
+
+@dataclass(frozen=True)
 class RunPublicationRecord:
     publication_id: str
     source_run_id: str
@@ -60,6 +110,9 @@ class RunPublicationRecord:
     withdrawn_at: str | None
     withdrawal_actor: str | None
     withdrawal_reason: str | None
+    share_manifest: dict[str, Any]
+    share_manifest_digest: str
+    shared_payload: dict[str, Any]
 
     @property
     def active(self) -> bool:
@@ -130,6 +183,7 @@ class RunPublicationStore:
         reproduction_note: str = "",
         request_key: str,
         confirmed: bool,
+        share_manifest: RunPublicationShareManifest | None = None,
     ) -> RunPublicationRecord:
         _validate_id(source_run_id, field="source_run_id")
         _validate_actor(owner)
@@ -139,12 +193,40 @@ class RunPublicationStore:
         _validate_text(reproduction_note, field="reproduction_note", limit=4000, required=False)
         _validate_scope(visibility, scope_key)
         normalized_tags = _normalize_tags(tags)
+        manifest = share_manifest or RunPublicationShareManifest(
+            title=title,
+            visibility=visibility,
+            scope_key=scope_key,
+            description=True,
+            contract_for_adaptation=True,
+        )
+        if (
+            manifest.title != title.strip()
+            or manifest.visibility is not visibility
+            or manifest.scope_key != scope_key
+        ):
+            raise RunPublicationError(
+                "share manifest does not match publication identity",
+                code="MARKET.INVALID_SHARE_MANIFEST",
+            )
         if confirmed is not True:
             raise RunPublicationError(
                 "owner confirmation is required before sharing a Run",
                 code="MARKET.CONFIRMATION_REQUIRED",
             )
         source_run = self._eligible_source_run(source_run_id=source_run_id, owner=owner)
+        shared_payload = _selected_share_payload(
+            source_run,
+            manifest=manifest,
+            description=description,
+            reproduction_note=reproduction_note,
+        )
+        forbidden_path = _first_forbidden_share_path(shared_payload)
+        if forbidden_path is not None:
+            raise RunPublicationError(
+                f"selected shared content is forbidden at {forbidden_path}",
+                code="MARKET.SHARE_MANIFEST_FORBIDDEN",
+            )
         now = utc_now_iso()
         with self.connect() as conn:
             existing_by_request = conn.execute(
@@ -174,13 +256,18 @@ class RunPublicationStore:
                 INSERT INTO run_publications (
                     publication_id, source_run_id, source_contract_id, owner,
                     title, description, visibility, scope_key, tags_json,
-                    reproduction_note, request_key, published_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    reproduction_note, request_key, published_at, updated_at,
+                    share_manifest_json, share_manifest_digest, shared_payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     publication_id,
                     source_run_id,
-                    source_run.contract_id,
+                    (
+                        source_run.contract_id
+                        if manifest.contract_for_adaptation
+                        else None
+                    ),
                     owner,
                     title.strip(),
                     description.strip(),
@@ -191,6 +278,9 @@ class RunPublicationStore:
                     request_key,
                     now,
                     now,
+                    _canonical_json(manifest.as_payload()),
+                    manifest.manifest_digest,
+                    _canonical_json(shared_payload),
                 ),
             )
             record = _row_to_publication(
@@ -394,6 +484,8 @@ class RunPublicationStore:
         adopter: str,
         request_key: str,
         course_scopes: frozenset[str] | set[str] | tuple[str, ...] = (),
+        target_payload: dict[str, Any] | None = None,
+        market_application_session_id: str | None = None,
     ) -> RunPublicationAdoptionRecord:
         _validate_actor(adopter)
         _validate_id(request_key, field="request_key")
@@ -427,9 +519,13 @@ class RunPublicationStore:
                 "the source Contract is no longer available",
                 code="MARKET.SOURCE_CONTRACT_UNAVAILABLE",
             ) from exc
-        target_payload = _rebase_adopter_workdir(source.payload, adopter=adopter)
+        resolved_target_payload = (
+            _rebase_adopter_workdir(source.payload, adopter=adopter)
+            if target_payload is None
+            else deepcopy(target_payload)
+        )
         try:
-            validation = self.contract_service.validate(target_payload)
+            validation = self.contract_service.validate(resolved_target_payload)
         except ContractError as exc:
             raise RunPublicationError(
                 f"the source Contract cannot be adopted: {exc}",
@@ -478,7 +574,7 @@ class RunPublicationStore:
                 self.contract_service.store.create_contract(
                     owner=adopter,
                     recipe_version_id=source.recipe_version_id,
-                    payload=target_payload,
+                    payload=resolved_target_payload,
                     field_sources=[
                         {
                             "field": "*",
@@ -487,12 +583,24 @@ class RunPublicationStore:
                             "source_run_id": publication.source_run_id,
                             "source_contract_id": source.contract_id,
                             "needs_user_confirmation": True,
-                            "adopter_workdir_rebased": target_payload != source.payload,
+                            "adopter_workdir_rebased": resolved_target_payload != source.payload,
+                            **(
+                                {
+                                    "market_application_session_id": market_application_session_id,
+                                    "assurance": "reference_only",
+                                }
+                                if market_application_session_id is not None
+                                else {}
+                            ),
                         }
                     ],
                     contract_id=record.target_contract_id,
                     parent_contract_id=source.contract_id,
-                    derivation_reason="run_publication_adoption",
+                    derivation_reason=(
+                        "run_publication_adaptation"
+                        if market_application_session_id is not None
+                        else "run_publication_adoption"
+                    ),
                     idempotent=True,
                     connection=conn,
                 )
@@ -580,6 +688,9 @@ def run_publication_payload(record: RunPublicationRecord) -> dict[str, Any]:
         "tags": list(record.tags),
         "reproduction_note": record.reproduction_note,
         "adoptable": record.adoptable,
+        "share_manifest": deepcopy(record.share_manifest),
+        "share_manifest_digest": record.share_manifest_digest,
+        "shared": deepcopy(record.shared_payload),
         "published_at": record.published_at,
         "updated_at": record.updated_at,
     }
@@ -628,6 +739,9 @@ def _row_to_publication(row: Any) -> RunPublicationRecord:
         withdrawal_reason=(
             None if row["withdrawal_reason"] is None else str(row["withdrawal_reason"])
         ),
+        share_manifest=json.loads(str(row["share_manifest_json"] or "{}")),
+        share_manifest_digest=str(row["share_manifest_digest"] or ""),
+        shared_payload=json.loads(str(row["shared_payload_json"] or "{}")),
     )
 
 
@@ -745,6 +859,66 @@ def _adoption_token(*, adopter: str, request_key: str) -> str:
     import hashlib
 
     return hashlib.sha256(f"{adopter}\0{request_key}".encode()).hexdigest()[:32]
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+_FORBIDDEN_SHARE_TEXT = (
+    re.compile(r"(?:ghp|github_pat|sk)[-_][A-Za-z0-9_-]{20,}", re.IGNORECASE),
+    re.compile(r"(?:password|passwd|secret|token|api[_-]?key)\s*[:= ]\s*\S+", re.IGNORECASE),
+    re.compile(r"/(?:public/)?home/[A-Za-z0-9._-]+(?:/|$)"),
+    re.compile(r"(?:unix://|ssh://|\bssh\b|[^\s]+\.sock\b)", re.IGNORECASE),
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+)
+
+
+def _selected_share_payload(
+    run: RunRecord,
+    *,
+    manifest: RunPublicationShareManifest,
+    description: str,
+    reproduction_note: str,
+) -> dict[str, Any]:
+    selected: dict[str, Any] = {}
+    if manifest.description:
+        selected["description"] = description
+        selected["reproduction_note"] = reproduction_note
+    if manifest.resource_summary:
+        selected["resource_summary"] = deepcopy(run.resource_plan)
+    if manifest.result_summary:
+        selected["result_summary"] = {
+            "state": run.state.value,
+            "exit_code": run.exit_code,
+        }
+    if manifest.script:
+        selected["script"] = run.script
+    if manifest.evidence_previews:
+        selected["evidence_previews"] = []
+    if manifest.small_assets:
+        selected["small_assets"] = list(manifest.small_assets)
+    return selected
+
+
+def _first_forbidden_share_path(value: object, *, path: str = "shared") -> str | None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            finding = _first_forbidden_share_path(child, path=f"{path}.{key}")
+            if finding is not None:
+                return finding
+        return None
+    if isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            finding = _first_forbidden_share_path(child, path=f"{path}[{index}]")
+            if finding is not None:
+                return finding
+        return None
+    if isinstance(value, str) and any(
+        pattern.search(value) for pattern in _FORBIDDEN_SHARE_TEXT
+    ):
+        return path
+    return None
 
 
 def _rebase_adopter_workdir(payload: dict[str, Any], *, adopter: str) -> dict[str, Any]:

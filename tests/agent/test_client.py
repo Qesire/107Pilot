@@ -329,6 +329,34 @@ def test_repair_profile_uses_the_closed_project_tool_pairing() -> None:
     }
 
 
+@pytest.mark.parametrize("profile_id", ["market_application", "template_publication"])
+def test_market_profiles_use_the_closed_project_tool_pairing(profile_id: str) -> None:
+    captured: dict[str, Any] = {}
+
+    def opener(request: urllib.request.Request, *, timeout: float) -> _Response:
+        del timeout
+        captured["json"] = json.loads(request.data or b"")
+        return _Response(_success_body())
+
+    request = agent_protocol.DurableAgentTurnRequest(
+        session_id="session-market",
+        turn_id="turn-1",
+        owner="alice",
+        state_version=3,
+        model_profile_id="campus-default",
+        message="prepare the market lifecycle in the isolated Workspace",
+        context_refs=("market:item-1",),
+        capability_token="opaque.capability.token",
+        profile_id=profile_id,
+    )
+
+    list(AgentdClient(_config(), opener=opener).stream_durable_turn(request))
+
+    assert captured["json"]["task_kind"] == profile_id
+    assert captured["json"]["prompt_profile_id"] == profile_id
+    assert captured["json"]["toolset_id"] == "a2-project"
+
+
 def test_stream_durable_turn_rejects_an_invalid_request_before_http() -> None:
     client = AgentdClient(
         _config(),

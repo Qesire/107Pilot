@@ -178,6 +178,18 @@ _AGENT_CHANGESET_PATH_PARAMETER = {
     "required": True,
     "schema": {"type": "string", "minLength": 1, "maxLength": 128},
 }
+_MARKET_APPLICATION_PATH_PARAMETER = {
+    "name": "session_id",
+    "in": "path",
+    "required": True,
+    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+}
+_TEMPLATE_PUBLICATION_SESSION_PATH_PARAMETER = {
+    "name": "session_id",
+    "in": "path",
+    "required": True,
+    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+}
 _AGENT_CHANGESET_SCOPE_PARAMETERS = [
     _AGENT_CHANGESET_PATH_PARAMETER,
     {
@@ -519,6 +531,69 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
             operation_id=operation_id,
             tags=["templates"],
             openapi_extra={"parameters": _TEMPLATE_RELEASE_PARAMETERS},
+        )
+
+    app.add_api_route(
+        "/api/v1/market/applications",
+        forward_get,
+        methods=["GET"],
+        operation_id="list_market_applications",
+        tags=["market"],
+    )
+    app.add_api_route(
+        "/api/v1/market/applications",
+        forward_post,
+        methods=["POST"],
+        operation_id="start_market_application",
+        tags=["market"],
+    )
+    app.add_api_route(
+        "/api/v1/market/applications/{session_id}",
+        forward_get,
+        methods=["GET"],
+        operation_id="get_market_application",
+        tags=["market"],
+        openapi_extra={"parameters": [_MARKET_APPLICATION_PATH_PARAMETER]},
+    )
+    app.add_api_route(
+        "/api/v1/market/applications/{session_id}/confirmation",
+        forward_post,
+        methods=["POST"],
+        operation_id="confirm_market_application",
+        tags=["market"],
+        openapi_extra={"parameters": [_MARKET_APPLICATION_PATH_PARAMETER]},
+    )
+    app.add_api_route(
+        "/api/v1/runs/{run_id}/template-publication-sessions",
+        forward_post,
+        methods=["POST"],
+        operation_id="start_template_publication_session",
+        tags=["market"],
+        openapi_extra={"parameters": [_RUN_PATH_PARAMETER]},
+    )
+    app.add_api_route(
+        "/api/v1/template-publication-sessions/{session_id}",
+        forward_get,
+        methods=["GET"],
+        operation_id="get_template_publication_session",
+        tags=["market"],
+        openapi_extra={
+            "parameters": [_TEMPLATE_PUBLICATION_SESSION_PATH_PARAMETER]
+        },
+    )
+    for action, operation_id in (
+        ("responses", "record_template_publication_reproduction"),
+        ("confirmation", "confirm_template_publication_session"),
+    ):
+        app.add_api_route(
+            f"/api/v1/template-publication-sessions/{{session_id}}/{action}",
+            forward_post,
+            methods=["POST"],
+            operation_id=operation_id,
+            tags=["market"],
+            openapi_extra={
+                "parameters": [_TEMPLATE_PUBLICATION_SESSION_PATH_PARAMETER]
+            },
         )
 
     app.add_api_route(

@@ -253,6 +253,8 @@ def _build_durable_turn_request(
         "platform_coach",
         "experiment_builder",
         "run_diagnosis_repair",
+        "market_application",
+        "template_publication",
     }:
         raise AgentdClientError(
             "pilot-agentd durable Turn profile is invalid",

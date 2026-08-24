@@ -209,6 +209,64 @@ class ProjectAgentService:
             publish_available=self.publisher is not None,
         )
 
+    def create_market_application_project(
+        self,
+        *,
+        owner: str,
+        source_item_id: str,
+        goal: str,
+        request_key: str,
+        contract_payload: Mapping[str, object],
+    ) -> ProjectAgentView:
+        """Materialize a market Contract plan in an isolated reviewable Workspace."""
+
+        project = self.store.create_project(
+            owner=owner,
+            origin=ExperimentProjectOrigin.TEMPLATE,
+            goal=goal,
+            request_key=request_key,
+            source=ProjectSource(
+                kind="template",
+                ref_id=source_item_id,
+                cluster_path=None,
+            ),
+        )
+        workspaces = self.store.list_workspaces(project.project_id, owner=owner)
+        workspace = workspaces[0] if workspaces else self._create_blank_workspace(project)
+        change_sets = self.store.list_change_sets(project.project_id, owner=owner)
+        if change_sets:
+            change_set = change_sets[0]
+        else:
+            change_set = self.apply_patch(
+                project_id=project.project_id,
+                workspace_id=workspace.workspace_id,
+                owner=owner,
+                relative_path="contract.json",
+                expected_source_digest=None,
+                operation="create",
+                content=json.dumps(
+                    contract_payload,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+            )
+        if change_set.state is WorkspaceChangeSetState.DRAFT:
+            self.execute_sandbox(
+                project_id=project.project_id,
+                workspace_id=workspace.workspace_id,
+                owner=owner,
+                change_set_id=change_set.change_set_id,
+                argv=("python", "-m", "json.tool", "contract.json"),
+                timeout=5,
+            )
+        return self.get_project(
+            project.project_id,
+            owner=owner,
+            workspace_id=workspace.workspace_id,
+        )
+
     def list_projects(self, *, owner: str, limit: int = 100) -> list[ProjectAgentView]:
         projects = self.store.list_projects(owner=owner, limit=limit)
         return [self.get_project(item.project_id, owner=owner) for item in projects]

@@ -64,6 +64,20 @@ def test_durable_turn_request_accepts_only_the_a1_readonly_pairing() -> None:
     assert "opaque.test.token" not in repr(parsed)
 
 
+@pytest.mark.parametrize("profile_id", ["market_application", "template_publication"])
+def test_market_profiles_use_the_closed_project_pairing(profile_id: str) -> None:
+    request = _durable_request()
+    request.update(
+        task_kind=profile_id,
+        prompt_profile_id=profile_id,
+        toolset_id="a2-project",
+    )
+
+    parsed = agent_protocol.parse_durable_turn_request(request)
+
+    assert parsed.profile_id == profile_id
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
