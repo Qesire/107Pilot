@@ -204,15 +204,27 @@ function ProjectReview({
     gpus,
     walltimeSeconds,
   });
+  const remediationSessionId = location.search.get("repair_session");
+  const sourceRunId = location.search.get("repair_run") ?? (
+    view.project.origin === "failed_run" && typeof view.project.source?.ref_id === "string"
+      ? view.project.source.ref_id
+      : null
+  );
   const startValidation = useMutation({
     mutationFn: async () => {
+      const binding = projectAgentProfileBinding({
+        origin: view.project.origin,
+        projectId: view.project.project_id,
+        workspaceId: view.workspace.workspace_id,
+        sourceRunId,
+        remediationSessionId,
+      });
       const session = await api.createAgentSession(user, {
         profile: "campus-default",
-        profile_id: "experiment_builder",
+        profile_id: binding.profile_id,
         request_key: `ui:builder-session:${crypto.randomUUID()}`,
         source: {
-          project_id: view.project.project_id,
-          workspace_id: view.workspace.workspace_id,
+          ...binding.source,
           resource_envelope: buildValidationEnvelope({
             owner: user,
             snapshotDigest: view.workspace.snapshot.digest,
@@ -230,17 +242,24 @@ function ProjectReview({
       await api.createAgentTurn(user, session.session_id, {
         request_key: `ui:builder-turn:${crypto.randomUUID()}`,
         expected_state_version: session.state_version,
-        message: (
-          "Review the bound Project, Workspace, Blueprint, ChangeSets, and sandbox results. "
-          + "If Slurm validation is needed, schedule one validation within the approved "
-          + "resource envelope, then end this Turn while the task runs."
-        ),
+        message: view.project.origin === "failed_run"
+          ? (
+            "Review the bound failed Run evidence, diagnosis, Project, Workspace, ChangeSets, "
+            + "and sandbox results. Repair only the diagnosed code in the isolated Workspace. "
+            + "If Slurm validation is needed, schedule one validation within the approved "
+            + "resource envelope, then end this Turn while the task runs."
+          )
+          : (
+            "Review the bound Project, Workspace, Blueprint, ChangeSets, and sandbox results. "
+            + "If Slurm validation is needed, schedule one validation within the approved "
+            + "resource envelope, then end this Turn while the task runs."
+          ),
       });
       return session;
     },
     onSuccess: (session) => navigate(withSearch("/agent", location.search, {
       mode: "conversation",
-      project: null,
+      project: view.project.project_id,
       session: session.session_id,
     })),
   });
@@ -445,6 +464,7 @@ function ProjectReview({
             || !partition.trim()
             || !qos.trim()
             || !validationInputValid
+            || (view.project.origin === "failed_run" && (!remediationSessionId || !sourceRunId))
           }
           onClick={() => startValidation.mutate()}
         >
@@ -519,6 +539,36 @@ function ProjectMutationError({ error }: { error: Error }) {
 
 export function originLabel(origin: AgentProjectOrigin): string {
   return ({ blank: "空白", existing: "现有目录", template: "模板", failed_run: "失败 Run" })[origin];
+}
+
+export function projectAgentProfileBinding(input: {
+  origin: AgentProjectOrigin;
+  projectId: string;
+  workspaceId: string;
+  sourceRunId?: string | null;
+  remediationSessionId?: string | null;
+}) {
+  if (input.origin === "failed_run") {
+    if (!input.sourceRunId || !input.remediationSessionId) {
+      throw new Error("失败 Run 修复工程缺少已批准的 Remediation 绑定");
+    }
+    return {
+      profile_id: "run_diagnosis_repair" as const,
+      source: {
+        project_id: input.projectId,
+        workspace_id: input.workspaceId,
+        run_id: input.sourceRunId,
+        remediation_session_id: input.remediationSessionId,
+      },
+    };
+  }
+  return {
+    profile_id: "experiment_builder" as const,
+    source: {
+      project_id: input.projectId,
+      workspace_id: input.workspaceId,
+    },
+  };
 }
 
 export function projectStateLabel(state: string): string {

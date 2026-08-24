@@ -8,6 +8,12 @@ import re
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from pilot107.agent.project import (
+    EXPERIMENT_BUILDER_PROFILE,
+    RUN_DIAGNOSIS_REPAIR_PROFILE,
+    ExperimentProjectOrigin,
+)
+from pilot107.agent.workspace import WorkspaceChangeSetState
 from pilot107.core.advice import AdviceResult
 from pilot107.core.contract_v2 import parse_expected_output
 from pilot107.core.contracts import ContractStore
@@ -32,10 +38,16 @@ from pilot107.core.run_store import (
     RunStore,
 )
 from pilot107.core.states import (
+    ACTIVE_JOB_RUN_STATES,
     TERMINAL_RUN_STATES,
     CollectionState,
     DiagnosisState,
     RunState,
+)
+from pilot107.services.project_agent_service import (
+    FormalProjectRun,
+    ProjectAgentService,
+    ProjectAgentView,
 )
 from pilot107.worker.evidence import EvidenceStore
 
@@ -97,12 +109,14 @@ class RemediationService:
         advice_service: AdviceService,
         contract_store: ContractStore | None = None,
         evidence_store: EvidenceStore | None = None,
+        project_agent_service: ProjectAgentService | None = None,
     ) -> None:
         self.run_store = run_store
         self.remediation_store = remediation_store
         self.advice_service = advice_service
         self.contract_store = contract_store
         self.evidence_store = evidence_store
+        self.project_agent_service = project_agent_service
 
     def create(
         self,
@@ -501,6 +515,394 @@ class RemediationService:
             usage=usage,
         )
         return updated, execution
+
+    def start_code_repair_project(
+        self,
+        session_id: str,
+        *,
+        proposal_id: str,
+        actor: str,
+        expected_version: int,
+        request_key: str,
+    ) -> ProjectAgentView:
+        """Adapt an approved code-repair proposal into the unified Project lifecycle."""
+
+        if self.project_agent_service is None:
+            raise RemediationServiceError(
+                "unified repair Project service is unavailable",
+                code="REMEDIATION.REPAIR_PROJECT_UNAVAILABLE",
+            )
+        session = self.remediation_store.get_session(session_id)
+        if session.owner != actor:
+            raise RemediationServiceError(
+                "session belongs to another owner",
+                code="AUTH.FORBIDDEN",
+            )
+        if session.version != expected_version:
+            raise RemediationConflict("remediation session version changed")
+        if session.state is not RemediationState.READY:
+            raise RemediationConflict("code repair Project requires an approved proposal")
+        proposal = self.remediation_store.get_proposal(proposal_id)
+        if proposal.session_id != session_id:
+            raise RemediationServiceError(
+                "proposal belongs to another session",
+                code="AUTH.FORBIDDEN",
+            )
+        if proposal.action_type != "create_repair_ticket" or not any(
+            item.proposal_id == proposal_id and item.decision == "approve"
+            for item in self.remediation_store.list_decisions(session_id)
+        ):
+            raise RemediationServiceError(
+                "proposal is not an approved code repair",
+                code="REMEDIATION.CODE_REPAIR_NOT_APPROVED",
+            )
+        source_run = self.run_store.get_run(session.source_run_id)
+        if source_run.owner != actor or source_run.state not in {
+            RunState.FAILED,
+            RunState.SUBMIT_FAILED,
+            RunState.COLLECTION_FAILED,
+            RunState.ORPHANED,
+        }:
+            raise RemediationServiceError(
+                "source Run is not eligible for code repair",
+                code="REMEDIATION.RUN_NOT_REPAIRABLE",
+            )
+        turn = self.remediation_store.get_turn(proposal.turn_id)
+        summary = turn.payload.get("summary")
+        goal = (
+            summary
+            if isinstance(summary, str) and summary.strip()
+            else f"Repair failed Run {source_run.run_id}"
+        )
+        return self.project_agent_service.create_failed_run_project(
+            owner=actor,
+            source_run_id=source_run.run_id,
+            source_workdir=source_run.workdir,
+            goal=goal,
+            request_key=request_key,
+        )
+
+    def observe_formal_project_run(
+        self,
+        *,
+        project_id: str,
+        workspace_id: str,
+        change_set_id: str,
+        agent_session_id: str,
+        actor: str,
+        formal: FormalProjectRun,
+    ) -> tuple[RemediationSession, ActionExecution] | None:
+        """Bind a repair-profile formal Run into the existing evaluator exactly once."""
+
+        projects = self.project_agent_service
+        if projects is None or projects.agent_session_service is None:
+            raise RemediationServiceError(
+                "unified repair Project service is unavailable",
+                code="REMEDIATION.REPAIR_PROJECT_UNAVAILABLE",
+            )
+        agent_session = projects.agent_session_service.store.get_session(
+            agent_session_id,
+            owner=actor,
+        )
+        if agent_session.profile_id == EXPERIMENT_BUILDER_PROFILE:
+            return None
+        if agent_session.profile_id != RUN_DIAGNOSIS_REPAIR_PROFILE:
+            raise RemediationServiceError(
+                "formal Project Run uses an unsupported Agent profile",
+                code="REMEDIATION.REPAIR_PROFILE_INVALID",
+            )
+        source = agent_session.source
+        remediation_session_id = source.get("remediation_session_id")
+        source_run_id = source.get("run_id")
+        if (
+            source.get("project_id") != project_id
+            or source.get("workspace_id") != workspace_id
+            or not isinstance(remediation_session_id, str)
+            or not isinstance(source_run_id, str)
+        ):
+            raise RemediationServiceError(
+                "repair Agent Session binding is invalid",
+                code="REMEDIATION.REPAIR_BINDING_INVALID",
+            )
+        session = self.remediation_store.get_session(remediation_session_id)
+        if session.owner != actor:
+            raise RemediationServiceError(
+                "session belongs to another owner",
+                code="AUTH.FORBIDDEN",
+            )
+        if session.source_run_id != source_run_id:
+            raise RemediationServiceError(
+                "repair source Run does not match Remediation",
+                code="REMEDIATION.REPAIR_BINDING_INVALID",
+            )
+        view = projects.get_project(project_id, owner=actor, workspace_id=workspace_id)
+        change_set = projects.store.get_change_set(change_set_id, owner=actor)
+        if (
+            view.project.origin is not ExperimentProjectOrigin.FAILED_RUN
+            or view.project.source is None
+            or view.project.source.kind != "failed_run"
+            or view.project.source.ref_id != source_run_id
+            or change_set.project_id != project_id
+            or change_set.workspace_id != workspace_id
+            or change_set.state is not WorkspaceChangeSetState.PUBLISHED
+        ):
+            raise RemediationServiceError(
+                "formal repair does not match a published failed-Run ChangeSet",
+                code="REMEDIATION.REPAIR_BINDING_INVALID",
+            )
+        run = formal.run
+        contract = formal.contract
+        if (
+            formal.approval.session_id != agent_session_id
+            or formal.approval.approved_by != actor
+            or formal.approval.change_set_digest != change_set.digest
+            or run.owner != actor
+            or run.contract_id != contract.contract_id
+            or run.lineage_reason != "agent_formal_run"
+            or run.state not in ACTIVE_JOB_RUN_STATES | TERMINAL_RUN_STATES
+            or contract.owner != actor
+            or contract.derivation_reason != "agent_formal_run"
+            or formal.watch.run_id != run.run_id
+            or formal.watch.owner != actor
+        ):
+            raise RemediationServiceError(
+                "formal repair Run approval binding is invalid",
+                code="REMEDIATION.REPAIR_FORMAL_BINDING_INVALID",
+            )
+        required_contract_binding = {
+            "field": "formal_run",
+            "source": "agent_formal_approval",
+            "approved_by": actor,
+            "project_id": project_id,
+            "workspace_id": workspace_id,
+            "session_id": agent_session_id,
+            "change_set_id": change_set_id,
+        }
+        if not any(
+            all(item.get(key) == value for key, value in required_contract_binding.items())
+            for item in contract.field_sources
+        ):
+            raise RemediationServiceError(
+                "formal repair Contract approval binding is invalid",
+                code="REMEDIATION.REPAIR_FORMAL_BINDING_INVALID",
+            )
+        approved_ids = {
+            item.proposal_id
+            for item in self.remediation_store.list_decisions(session.session_id)
+            if item.decision == "approve"
+        }
+        proposals = [
+            item
+            for item in self.remediation_store.list_proposals(session.session_id)
+            if item.proposal_id in approved_ids
+            and item.action_type == "create_repair_ticket"
+        ]
+        if len(proposals) != 1:
+            raise RemediationServiceError(
+                "Remediation has no unique approved code repair",
+                code="REMEDIATION.CODE_REPAIR_NOT_APPROVED",
+            )
+        proposal = proposals[0]
+        execution_id = "remexec_" + hashlib.sha256(
+            f"{session.session_id}\0{proposal.proposal_id}".encode()
+        ).hexdigest()[:32]
+        try:
+            existing = self.remediation_store.get_execution(execution_id)
+        except KeyError:
+            existing = None
+        if existing is not None:
+            if (
+                existing.session_id != session.session_id
+                or existing.proposal_id != proposal.proposal_id
+                or existing.derived_contract_id != contract.contract_id
+                or existing.derived_run_id != run.run_id
+            ):
+                raise RemediationConflict("code repair execution binding changed")
+            if session.state is RemediationState.PREPARING:
+                recovered_usage = RemediationUsage(
+                    attempts=session.usage.attempts + 1,
+                    submissions=session.usage.submissions + 1,
+                    wall_time_seconds=session.usage.wall_time_seconds,
+                    llm_calls=session.usage.llm_calls,
+                    llm_tokens=session.usage.llm_tokens,
+                )
+                session = self.remediation_store.transition(
+                    session.session_id,
+                    expected_version=session.version,
+                    expected_state=RemediationState.PREPARING,
+                    target_state=RemediationState.EXECUTING,
+                    usage=recovered_usage,
+                )
+            elif session.state is RemediationState.READY:
+                raise RemediationConflict(
+                    "code repair execution exists before Remediation preparation"
+                )
+            return session, existing
+        if session.state not in {RemediationState.READY, RemediationState.PREPARING}:
+            raise RemediationConflict("code repair Remediation is not executable")
+        exhausted = session.usage.exhausted_reason(session.budget)
+        if exhausted is not None:
+            if session.state is RemediationState.READY:
+                self.remediation_store.transition(
+                    session.session_id,
+                    expected_version=session.version,
+                    expected_state=RemediationState.READY,
+                    target_state=RemediationState.EXHAUSTED,
+                    stop_reason=exhausted,
+                )
+            raise RemediationServiceError(
+                f"remediation budget is exhausted: {exhausted}",
+                code="REMEDIATION.BUDGET_EXHAUSTED",
+            )
+        preparing = session
+        if session.state is RemediationState.READY:
+            preparing = self.remediation_store.transition(
+                session.session_id,
+                expected_version=session.version,
+                expected_state=RemediationState.READY,
+                target_state=RemediationState.PREPARING,
+            )
+        now = datetime.now(UTC).isoformat()
+        execution = self.remediation_store.append_execution(
+            ActionExecution(
+                execution_id=execution_id,
+                session_id=session.session_id,
+                proposal_id=proposal.proposal_id,
+                state="submitted",
+                derived_contract_id=contract.contract_id,
+                derived_run_id=run.run_id,
+                error_code=None,
+                error_message=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        usage = RemediationUsage(
+            attempts=session.usage.attempts + 1,
+            submissions=session.usage.submissions + 1,
+            wall_time_seconds=session.usage.wall_time_seconds,
+            llm_calls=session.usage.llm_calls,
+            llm_tokens=session.usage.llm_tokens,
+        )
+        updated = self.remediation_store.transition(
+            session.session_id,
+            expected_version=preparing.version,
+            expected_state=RemediationState.PREPARING,
+            target_state=RemediationState.EXECUTING,
+            usage=usage,
+        )
+        return updated, execution
+
+    def preflight_formal_project_run(
+        self,
+        *,
+        project_id: str,
+        workspace_id: str,
+        change_set_id: str,
+        agent_session_id: str,
+        actor: str,
+    ) -> None:
+        """Reject an invalid or over-budget repair before formal submission."""
+
+        projects = self.project_agent_service
+        if projects is None or projects.agent_session_service is None:
+            raise RemediationServiceError(
+                "unified repair Project service is unavailable",
+                code="REMEDIATION.REPAIR_PROJECT_UNAVAILABLE",
+            )
+        agent_session = projects.agent_session_service.store.get_session(
+            agent_session_id,
+            owner=actor,
+        )
+        if agent_session.profile_id == EXPERIMENT_BUILDER_PROFILE:
+            return
+        if agent_session.profile_id != RUN_DIAGNOSIS_REPAIR_PROFILE:
+            raise RemediationServiceError(
+                "formal Project Run uses an unsupported Agent profile",
+                code="REMEDIATION.REPAIR_PROFILE_INVALID",
+            )
+        source = agent_session.source
+        remediation_session_id = source.get("remediation_session_id")
+        source_run_id = source.get("run_id")
+        if (
+            source.get("project_id") != project_id
+            or source.get("workspace_id") != workspace_id
+            or not isinstance(remediation_session_id, str)
+            or not isinstance(source_run_id, str)
+        ):
+            raise RemediationServiceError(
+                "repair Agent Session binding is invalid",
+                code="REMEDIATION.REPAIR_BINDING_INVALID",
+            )
+        session = self.remediation_store.get_session(remediation_session_id)
+        if session.owner != actor:
+            raise RemediationServiceError(
+                "session belongs to another owner",
+                code="AUTH.FORBIDDEN",
+            )
+        view = projects.get_project(project_id, owner=actor, workspace_id=workspace_id)
+        change_set = projects.store.get_change_set(change_set_id, owner=actor)
+        if (
+            session.source_run_id != source_run_id
+            or view.project.origin is not ExperimentProjectOrigin.FAILED_RUN
+            or view.project.source is None
+            or view.project.source.kind != "failed_run"
+            or view.project.source.ref_id != source_run_id
+            or change_set.project_id != project_id
+            or change_set.workspace_id != workspace_id
+            or change_set.state is not WorkspaceChangeSetState.PUBLISHED
+        ):
+            raise RemediationServiceError(
+                "formal repair does not match a published failed-Run ChangeSet",
+                code="REMEDIATION.REPAIR_BINDING_INVALID",
+            )
+        approved_ids = {
+            item.proposal_id
+            for item in self.remediation_store.list_decisions(session.session_id)
+            if item.decision == "approve"
+        }
+        proposals = [
+            item
+            for item in self.remediation_store.list_proposals(session.session_id)
+            if item.proposal_id in approved_ids
+            and item.action_type == "create_repair_ticket"
+        ]
+        if len(proposals) != 1:
+            raise RemediationServiceError(
+                "Remediation has no unique approved code repair",
+                code="REMEDIATION.CODE_REPAIR_NOT_APPROVED",
+            )
+        proposal = proposals[0]
+        execution_id = "remexec_" + hashlib.sha256(
+            f"{session.session_id}\0{proposal.proposal_id}".encode()
+        ).hexdigest()[:32]
+        try:
+            existing = self.remediation_store.get_execution(execution_id)
+        except KeyError:
+            existing = None
+        if existing is not None:
+            if (
+                existing.session_id != session.session_id
+                or existing.proposal_id != proposal.proposal_id
+            ):
+                raise RemediationConflict("code repair execution binding changed")
+            return
+        if session.state is not RemediationState.READY:
+            raise RemediationConflict("code repair Remediation is not executable")
+        exhausted = session.usage.exhausted_reason(session.budget)
+        if exhausted is None:
+            return
+        self.remediation_store.transition(
+            session.session_id,
+            expected_version=session.version,
+            expected_state=RemediationState.READY,
+            target_state=RemediationState.EXHAUSTED,
+            stop_reason=exhausted,
+        )
+        raise RemediationServiceError(
+            f"remediation budget is exhausted: {exhausted}",
+            code="REMEDIATION.BUDGET_EXHAUSTED",
+        )
 
     def detail(self, session_id: str, *, owner: str) -> dict[str, Any]:
         session = self.remediation_store.get_session(session_id)

@@ -47,6 +47,34 @@ def test_capability_round_trip_is_canonical_and_secret_safe() -> None:
     assert "ssss" not in repr(signer)
 
 
+def test_repair_profile_capability_is_bound_to_one_project_workspace() -> None:
+    AgentCapabilityClaims, _, AgentCapabilitySigner = _api()
+    now = 1_786_662_000
+    signer = AgentCapabilitySigner(b"s" * 32, clock=lambda: now)
+    claims = AgentCapabilityClaims(
+        owner="alice",
+        session_id="session-repair",
+        turn_id="turn-repair",
+        state_version=3,
+        fencing_token=7,
+        profile_id="run_diagnosis_repair",
+        tools=frozenset({"project_get", "workspace_read", "workspace_patch"}),
+        max_invocations=8,
+        max_bytes=262_144,
+        expires_at=now + 60,
+        project_id="project-repair",
+        workspace_id="workspace-repair",
+        operations=frozenset({"read", "write"}),
+        max_commands=0,
+    )
+
+    verified = signer.verify(signer.sign(claims))
+
+    assert verified.profile_id == "run_diagnosis_repair"
+    assert verified.project_id == "project-repair"
+    assert verified.workspace_id == "workspace-repair"
+
+
 def test_capability_rejects_signature_tampering_and_malformed_tokens() -> None:
     _, AgentCapabilityError, AgentCapabilitySigner = _api()
     now = 1_786_662_000

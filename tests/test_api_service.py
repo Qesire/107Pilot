@@ -116,6 +116,17 @@ class ApiServiceTests(unittest.TestCase):
 
         self.assertIsNotNone(api.agent_tool_routes)
         self.assertIsNotNone(api.agent_session_routes)
+        assert api.agent_tool_routes is not None
+        self.assertIn(
+            "run_diagnosis_repair",
+            api.agent_tool_routes.gateway.profile_handlers,
+        )
+        self.assertIsNotNone(api.project_agent_routes)
+        assert api.project_agent_routes is not None
+        self.assertIs(
+            api.remediation_service.project_agent_service,
+            api.project_agent_routes.service,
+        )
         self.assertNotIn("f" * 32, repr(api))
 
     def test_formal_watch_uses_the_configured_cluster_connection(self) -> None:

@@ -27,7 +27,14 @@ from pilot107.core.pagination import (
 from pilot107.services.agent_session_service import AgentSessionService
 
 _SOURCE_KEYS = frozenset(
-    {"run_id", "project_id", "workspace_id", "evidence_id", "resource_envelope"}
+    {
+        "run_id",
+        "project_id",
+        "workspace_id",
+        "evidence_id",
+        "remediation_session_id",
+        "resource_envelope",
+    }
 )
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$")
 _PROTOCOL_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")

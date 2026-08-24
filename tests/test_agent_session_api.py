@@ -84,6 +84,37 @@ class AgentSessionApiTests(unittest.TestCase):
         self.assertEqual(bob_list.payload["items"], [])
         self.assertEqual(bob_get.status, 404)
 
+    def test_create_repair_profile_preserves_exact_authoritative_bindings(self) -> None:
+        response = self.api.handle_post(
+            "/api/v1/agent-sessions",
+            body=_json(
+                {
+                    "request_key": "repair-session",
+                    "model_profile_id": "faux-default",
+                    "profile_id": "run_diagnosis_repair",
+                    "source": {
+                        "project_id": "project-repair",
+                        "workspace_id": "workspace-repair",
+                        "run_id": "run-failed",
+                        "remediation_session_id": "remsession-repair",
+                    },
+                }
+            ),
+            headers=self.alice,
+        )
+
+        self.assertEqual(response.status, 201)
+        self.assertEqual(response.payload["profile_id"], "run_diagnosis_repair")
+        self.assertEqual(
+            response.payload["source"],
+            {
+                "project_id": "project-repair",
+                "workspace_id": "workspace-repair",
+                "run_id": "run-failed",
+                "remediation_session_id": "remsession-repair",
+            },
+        )
+
     def test_owner_override_unknown_fields_and_oversized_message_are_rejected(self) -> None:
         override = self.api.handle_post(
             "/api/v1/agent-sessions",

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from pilot107.agent.capabilities import AgentCapabilityClaims, AgentCapabilitySigner
+from pilot107.agent.project import is_project_agent_profile
 from pilot107.agent.protocol import AgentdClientError, AgentTurnEvent, DurableAgentTurnRequest
 from pilot107.agent.session import AgentTurnLease, AgentTurnState
 from pilot107.agent.store import AgentSessionStore
@@ -296,11 +297,13 @@ class AgentTurnWorker:
         source: Mapping[str, object],
     ) -> str:
         now = int(self._clock())
-        builder = profile_id == "experiment_builder"
-        project_id = source.get("project_id") if builder else None
-        workspace_id = source.get("workspace_id") if builder else None
-        if builder and (not isinstance(project_id, str) or not isinstance(workspace_id, str)):
-            raise ValueError("experiment_builder Session scope is invalid")
+        project_profile = is_project_agent_profile(profile_id)
+        project_id = source.get("project_id") if project_profile else None
+        workspace_id = source.get("workspace_id") if project_profile else None
+        if project_profile and (
+            not isinstance(project_id, str) or not isinstance(workspace_id, str)
+        ):
+            raise ValueError("Project Session scope is invalid")
         return self.capability_signer.sign(
             AgentCapabilityClaims(
                 owner=claim.owner,
@@ -309,14 +312,18 @@ class AgentTurnWorker:
                 state_version=claim.state_version,
                 fencing_token=claim.fencing_token,
                 profile_id=profile_id,
-                tools=_A2_PROJECT_TOOLS if builder else _A1_READ_TOOLS,
+                tools=_A2_PROJECT_TOOLS if project_profile else _A1_READ_TOOLS,
                 max_invocations=32,
                 max_bytes=1024 * 1024,
                 expires_at=now + min(self.lease_seconds, 120),
                 project_id=project_id if isinstance(project_id, str) else None,
                 workspace_id=workspace_id if isinstance(workspace_id, str) else None,
-                operations=frozenset({"read", "write", "validate"}) if builder else frozenset(),
-                max_commands=8 if builder else 0,
+                operations=(
+                    frozenset({"read", "write", "validate"})
+                    if project_profile
+                    else frozenset()
+                ),
+                max_commands=8 if project_profile else 0,
             )
         )
 

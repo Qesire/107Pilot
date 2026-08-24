@@ -66,7 +66,7 @@ def _envelope() -> AgentResourceEnvelope:
 
 
 class Harness:
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(self, tmp_path: Path, *, profile_id: str = "experiment_builder") -> None:
         self.clock = MutableClock()
         self.database = tmp_path / "pilot107.db"
         self.workspace = tmp_path / "workspace"
@@ -102,9 +102,20 @@ class Harness:
         self.session, _ = self.session_service.create_session(
             owner="alice",
             request_key="session-a3",
-            profile_id="experiment_builder",
+            profile_id=profile_id,
             model_profile_id="faux-default",
-            source={"project_id": "project-1", "workspace_id": "workspace-1"},
+            source={
+                "project_id": "project-1",
+                "workspace_id": "workspace-1",
+                **(
+                    {
+                        "run_id": "run-failed",
+                        "remediation_session_id": "remsession-repair",
+                    }
+                    if profile_id == "run_diagnosis_repair"
+                    else {}
+                ),
+            },
         )
         turn, _ = self.session_service.submit_message(
             session_id=self.session.session_id,
@@ -168,6 +179,18 @@ def test_schedule_dispatches_one_linked_run_and_releases_processing_lease(
     assert harness.run_service.enqueue_submission(
         persisted.linked_run_id
     ).state == "pending"
+
+
+def test_repair_profile_uses_the_same_bounded_validation_lifecycle(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path, profile_id="run_diagnosis_repair")
+
+    task, created = harness.schedule()
+
+    assert created is True
+    assert task.project_id == "project-1"
+    assert task.workspace_id == "workspace-1"
 
 
 def test_terminal_validation_wakes_exactly_one_followup_turn(tmp_path: Path) -> None:

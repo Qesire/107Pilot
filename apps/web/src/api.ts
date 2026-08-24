@@ -1,6 +1,7 @@
 import type {
   AgentEventPage,
   AgentProjectView,
+  FailedRunRepairProject,
   FormalProjectRun,
   FormalRunApproval,
   WorkspacePublication,
@@ -695,7 +696,7 @@ export const api = {
     input: {
       profile: string;
       request_key: string;
-      profile_id?: "hpc-readonly-v1" | "platform_coach" | "experiment_builder";
+      profile_id?: "hpc-readonly-v1" | "platform_coach" | "experiment_builder" | "run_diagnosis_repair";
       source?: JsonObject;
     },
     signal?: AbortSignal,
@@ -934,6 +935,17 @@ export const api = {
     `/api/v1/remediation-sessions/${encodeURIComponent(sessionId)}/execute`,
     user,
     { proposal_id: proposalId, expected_version: expectedVersion, submit: true },
+    signal,
+  ),
+  startRemediationRepairProject: (
+    user: string,
+    sessionId: string,
+    input: { proposal_id: string; expected_version: number; request_key: string },
+    signal?: AbortSignal,
+  ) => sendJson<FailedRunRepairProject>(
+    `/api/v1/remediation-sessions/${encodeURIComponent(sessionId)}/repair-project`,
+    user,
+    input,
     signal,
   ),
   terminalCommand: (

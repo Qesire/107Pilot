@@ -10,6 +10,11 @@ from types import MappingProxyType
 from typing import Any, Literal
 
 PROJECT_SCHEMA_VERSION = "pilot107.experiment-project-session/v1"
+EXPERIMENT_BUILDER_PROFILE = "experiment_builder"
+RUN_DIAGNOSIS_REPAIR_PROFILE = "run_diagnosis_repair"
+PROJECT_AGENT_PROFILES = frozenset(
+    {EXPERIMENT_BUILDER_PROFILE, RUN_DIAGNOSIS_REPAIR_PROFILE}
+)
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _VERSIONED_ID = re.compile(r"^[A-Za-z0-9._:@-]{1,256}$")
 _RESOURCE_HINTS = frozenset(
@@ -19,6 +24,10 @@ _RESOURCE_HINTS = frozenset(
 
 class ProjectConflict(RuntimeError):
     """Raised when a request key or optimistic version no longer matches."""
+
+
+def is_project_agent_profile(profile_id: str) -> bool:
+    return profile_id in PROJECT_AGENT_PROFILES
 
 
 class ExperimentProjectOrigin(StrEnum):

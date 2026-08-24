@@ -814,7 +814,10 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 store=agent_session_store,
                 signer=AgentCapabilitySigner(agent_capability_secret),
                 handlers=build_a1_read_handlers(read_context),
-                profile_handlers={"experiment_builder": project_handlers},
+                profile_handlers={
+                    "experiment_builder": project_handlers,
+                    "run_diagnosis_repair": project_handlers,
+                },
             )
         )
     terminal_service = (

@@ -244,6 +244,58 @@ def test_dispatch_persists_each_event_before_hint_and_completes(tmp_path: Path) 
     assert client.requests[0].capability_token not in repr(persisted)
 
 
+def test_repair_turn_receives_one_project_scoped_capability(tmp_path: Path) -> None:
+    clock = MutableClock()
+    database = tmp_path / "agent.db"
+    store = SQLiteAgentSessionStore(database, clock=clock)
+    control = SQLiteControlRepository(database, clock=clock)
+    session, _ = AgentSessionService(
+        store=store,
+        control_repository=control,
+    ).create_session(
+        owner="alice",
+        request_key="repair-session",
+        profile_id="run_diagnosis_repair",
+        model_profile_id="faux-default",
+        source={
+            "project_id": "project-repair",
+            "workspace_id": "workspace-repair",
+            "run_id": "run-failed",
+            "remediation_session_id": "remsession-repair",
+        },
+    )
+    turn, _ = AgentSessionService(
+        store=store,
+        control_repository=control,
+    ).submit_message(
+        session_id=session.session_id,
+        owner="alice",
+        request_key="repair-turn",
+        message="repair train.py",
+        expected_state_version=session.state_version,
+    )
+    events = _completed_script(turn.turn_id)
+    checkpoint = events[1].payload["checkpoint"]
+    assert isinstance(checkpoint, dict)
+    checkpoint["prompt_profile_id"] = "run_diagnosis_repair"
+    terminal_checkpoint = events[2].payload["checkpoint"]
+    assert isinstance(terminal_checkpoint, dict)
+    terminal_checkpoint["prompt_profile_id"] = "run_diagnosis_repair"
+    client = ScriptedAgentdClient(events)
+
+    result = _worker(store, control, client, clock).dispatch_due(limit=1)
+
+    assert result.succeeded == 1
+    [request] = client.requests
+    claims = AgentCapabilitySigner(
+        b"s" * 32, clock=clock.epoch
+    ).verify(request.capability_token)
+    assert claims.profile_id == "run_diagnosis_repair"
+    assert claims.project_id == "project-repair"
+    assert claims.workspace_id == "workspace-repair"
+    assert "workspace_patch" in claims.tools
+
+
 def test_transport_failure_interrupts_with_last_checkpoint_and_retries(
     tmp_path: Path,
 ) -> None:

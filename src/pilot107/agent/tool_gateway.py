@@ -14,6 +14,7 @@ from pilot107.agent.capabilities import (
     AgentCapabilityError,
     AgentCapabilitySigner,
 )
+from pilot107.agent.project import is_project_agent_profile
 from pilot107.agent.protocol import TOOL_RESULT_PROTOCOL_VERSION, ToolInvocation, ToolResult
 from pilot107.agent.session import AgentSessionConflict
 from pilot107.agent.store import AgentSessionStore
@@ -202,7 +203,7 @@ class AgentToolGateway:
                 "Agent tool invocation is not authorized",
                 code="AGENT.TOOL.UNAUTHORIZED",
             )
-        if claims.profile_id == "experiment_builder":
+        if is_project_agent_profile(claims.profile_id):
             required_operation = {
                 "project_get": "read",
                 "workspace_list": "read",

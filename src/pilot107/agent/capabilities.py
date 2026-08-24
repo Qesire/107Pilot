@@ -13,6 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
+from pilot107.agent.project import is_project_agent_profile
+
 _SIGNING_CONTEXT = b"pilot107-agent-capability-v1."
 _TOKEN_PART = re.compile(r"^[A-Za-z0-9_-]+$")
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -228,7 +230,7 @@ def _validate_claims(
             or claims.max_commands != 0
         ):
             raise ValueError("invalid read-only capability scope")
-    elif claims.profile_id == "experiment_builder":
+    elif is_project_agent_profile(claims.profile_id):
         for scoped_id in (claims.project_id, claims.workspace_id):
             if scoped_id is None or _IDENTIFIER.fullmatch(scoped_id) is None:
                 raise ValueError("invalid builder capability binding")

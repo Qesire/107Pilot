@@ -135,7 +135,8 @@ export class TurnExecutor {
       model_profile_id: request.model_profile_id,
       task_kind:
         request.task_kind === "interactive_readonly" ||
-        request.task_kind === "experiment_builder"
+        request.task_kind === "experiment_builder" ||
+        request.task_kind === "run_diagnosis_repair"
           ? "interactive"
           : request.task_kind,
     });
@@ -352,7 +353,8 @@ async function runAttempt(options: {
     sessionId: options.request.trace.correlation_id,
     toolExecution: "sequential",
     shouldStopAfterTurn: ({ toolResults }) =>
-      !["interactive_readonly", "experiment_builder"].includes(options.request.task_kind) ||
+      !["interactive_readonly", "experiment_builder", "run_diagnosis_repair"]
+        .includes(options.request.task_kind) ||
       toolResults.length === 0,
   });
   const unsubscribe = agent.subscribe(async (event: AgentEvent) => {

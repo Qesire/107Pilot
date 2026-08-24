@@ -39,12 +39,9 @@ const remediationCandidateStates = ["FAILED", "SUBMIT_FAILED", "COLLECTION_FAILE
 
 export function AgentPage({ user, location, navigate }: AgentPageProps) {
   const mode = agentPageMode(location.search);
-  const switchMode = (nextMode: AgentPageMode) => navigate(withSearch("/agent", location.search, {
-    mode: nextMode,
-    session: null,
-    project: null,
-    state: null,
-  }));
+  const switchMode = (nextMode: AgentPageMode) => navigate(
+    agentModeLocation(location.search, nextMode),
+  );
 
   return (
     <>
@@ -98,6 +95,20 @@ export function AgentPage({ user, location, navigate }: AgentPageProps) {
 }
 
 type AgentPageMode = "conversation" | "builder" | "repair";
+
+export function agentModeLocation(
+  search: URLSearchParams,
+  nextMode: AgentPageMode,
+): string {
+  const linkedProject = nextMode === "repair" ? null : search.get("project");
+  const linkedSession = linkedProject ? search.get("session") : null;
+  return withSearch("/agent", search, {
+    mode: nextMode,
+    session: linkedSession,
+    project: linkedProject,
+    state: null,
+  });
+}
 
 export function agentPageMode(search: URLSearchParams): AgentPageMode {
   const mode = search.get("mode");
@@ -294,7 +305,15 @@ function RemediationPanel({ user, location, navigate }: AgentPageProps) {
             emptyTitle="选择一个会话"
             emptyDetail="队列会保留审批、执行和评价的完整审计记录。"
           >
-            {detail.data ? <SessionDetail key={detail.data.session_id} user={user} session={detail.data} /> : null}
+            {detail.data ? (
+              <SessionDetail
+                key={detail.data.session_id}
+                user={user}
+                session={detail.data}
+                location={location}
+                navigate={navigate}
+              />
+            ) : null}
           </QueryBoundary>
         </section>
       </div>
@@ -363,7 +382,17 @@ function MutationError({ error }: { error: Error }) {
   );
 }
 
-function SessionDetail({ user, session }: { user: string; session: RemediationSession }) {
+function SessionDetail({
+  user,
+  session,
+  location,
+  navigate,
+}: {
+  user: string;
+  session: RemediationSession;
+  location: LocationState;
+  navigate: (path: string) => void;
+}) {
   const queryClient = useQueryClient();
   const health = useHealth(user);
   const llmConfigured = llmConfiguredFromHealth(health.data);
@@ -448,23 +477,27 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
     ),
     onSuccess: refresh,
   });
-  // create_repair_ticket proposals hand off to the M2 repair-ticket workflow
-  // instead of deriving a Run: executing them via the remediation execute API
-  // would fail (no contract candidate). We create the ticket directly, which
-  // binds the session's diagnoses + code context; the embedded
-  // RepairTicketPanel then drives fix → derived Run → resolve.
-  const createTicket = useMutation({
-    mutationFn: (proposal: RemediationProposal) => api.createRepairTicket(user, {
-      session_id: session.session_id,
-      request_key: `ui:${session.session_id}:${proposal.proposal_id}`,
-    }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["repair-tickets", user] });
-      refresh();
+  const startRepairProject = useMutation({
+    mutationFn: (proposal: RemediationProposal) => api.startRemediationRepairProject(
+      user,
+      session.session_id,
+      {
+        proposal_id: proposal.proposal_id,
+        expected_version: session.version,
+        request_key: `ui:repair-project:${session.session_id}:${proposal.proposal_id}`,
+      },
+    ),
+    onSuccess: (repair) => {
+      void queryClient.invalidateQueries({ queryKey: ["agent-projects", user] });
+      navigate(repairProjectLocation(location.search, {
+        projectId: repair.project.project_id,
+        remediationSessionId: repair.remediation_session_id,
+        sourceRunId: repair.source_run_id,
+      }));
     },
   });
   const error = advance.error ?? approve.error ?? reject.error ?? cancel.error
-    ?? takeover.error ?? execute.error ?? createTicket.error;
+    ?? takeover.error ?? execute.error ?? startRepairProject.error;
   const decided = new Set(session.decisions.filter((item) => item.decision === "approve").map((item) => item.proposal_id));
 
   return (
@@ -543,7 +576,7 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
                 ) : null}
                 {session.state === "ready" && approved ? (
                   proposal.action_type === "create_repair_ticket" ? (
-                    <button className="button primary" type="button" disabled={createTicket.isPending} onClick={() => createTicket.mutate(proposal)}><Wrench aria-hidden="true" size={15} />{createTicket.isPending ? "正在创建修复票据" : "创建修复票据"}</button>
+                    <button className="button primary" type="button" disabled={startRepairProject.isPending} onClick={() => startRepairProject.mutate(proposal)}><Wrench aria-hidden="true" size={15} />{startRepairProject.isPending ? "正在创建隔离工程" : "创建隔离修复工程"}</button>
                   ) : (
                     <button className="button primary" type="button" disabled={execute.isPending} onClick={() => execute.mutate(proposal)}><Play aria-hidden="true" size={15} />执行并提交派生 Run</button>
                   )
@@ -561,6 +594,20 @@ function SessionDetail({ user, session }: { user: string; session: RemediationSe
       ) : null}
     </div>
   );
+}
+
+export function repairProjectLocation(
+  search: URLSearchParams,
+  binding: { projectId: string; remediationSessionId: string; sourceRunId: string },
+): string {
+  return withSearch("/agent", search, {
+    mode: "builder",
+    project: binding.projectId,
+    session: null,
+    state: null,
+    repair_session: binding.remediationSessionId,
+    repair_run: binding.sourceRunId,
+  });
 }
 
 function ProposalDiff({ payload }: { payload: Record<string, unknown> }) {

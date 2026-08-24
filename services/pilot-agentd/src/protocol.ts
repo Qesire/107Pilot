@@ -390,12 +390,14 @@ export const DurableAgentTurnRequestSchema = Type.Object(
     task_kind: Type.Union([
       Type.Literal("interactive_readonly"),
       Type.Literal("experiment_builder"),
+      Type.Literal("run_diagnosis_repair"),
     ]),
     model_profile_id: Id,
     prompt_profile_id: Type.Union([
       Type.Literal("hpc-readonly-v1"),
       Type.Literal("platform_coach"),
       Type.Literal("experiment_builder"),
+      Type.Literal("run_diagnosis_repair"),
     ]),
     toolset_id: Type.Union([
       Type.Literal("a1-readonly"),
@@ -420,7 +422,11 @@ export type DurableAgentTurnRequest = Static<typeof DurableAgentTurnRequestSchem
 export type ExecutableAgentTurnRequest =
   | AgentTurnRequest
   | DurableAgentTurnRequest;
-export type ExecutableTaskKind = TaskKind | "interactive_readonly" | "experiment_builder";
+export type ExecutableTaskKind =
+  | TaskKind
+  | "interactive_readonly"
+  | "experiment_builder"
+  | "run_diagnosis_repair";
 
 export const A1_READ_TOOL_NAMES = [
   "platform_get_snapshot",
@@ -466,6 +472,7 @@ export const ToolInvocationSchema = Type.Object(
       Type.Literal("hpc-readonly-v1"),
       Type.Literal("platform_coach"),
       Type.Literal("experiment_builder"),
+      Type.Literal("run_diagnosis_repair"),
     ]),
     tool_name: ReadToolNameSchema,
     arguments: JsonObjectSchema,
@@ -694,8 +701,9 @@ export function parseDurableTurnRequest(value: unknown): DurableAgentTurnRequest
   const readonlyPair = value.task_kind === "interactive_readonly"
     && ["hpc-readonly-v1", "platform_coach"].includes(value.prompt_profile_id)
     && value.toolset_id === "a1-readonly";
-  const builderPair = value.task_kind === "experiment_builder"
-    && value.prompt_profile_id === "experiment_builder"
+  const builderPair = ["experiment_builder", "run_diagnosis_repair"]
+    .includes(value.task_kind)
+    && value.prompt_profile_id === value.task_kind
     && value.toolset_id === "a2-project";
   if (!readonlyPair && !builderPair) {
     throw new TypeError("durable turn request profile/toolset pairing is invalid");
@@ -722,7 +730,8 @@ export function parseToolInvocation(value: unknown): ToolInvocation {
   if (!Value.Check(ToolInvocationSchema, value)) {
     throw new TypeError(validationMessage("tool invocation", ToolInvocationSchema, value));
   }
-  const allowed = value.profile_id === "experiment_builder"
+  const allowed = ["experiment_builder", "run_diagnosis_repair"]
+    .includes(value.profile_id)
     ? A2_PROJECT_TOOL_NAMES
     : A1_READ_TOOL_NAMES;
   if (!(allowed as readonly string[]).includes(value.tool_name)) {

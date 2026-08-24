@@ -6,6 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from pilot107.agent.project import (
+    EXPERIMENT_BUILDER_PROFILE,
+    RUN_DIAGNOSIS_REPAIR_PROFILE,
+    is_project_agent_profile,
+)
 from pilot107.agent.session import AgentSessionRecord, AgentTurnRecord
 from pilot107.agent.store import AgentSessionStore
 from pilot107.agent.tasks import AgentResourceEnvelope
@@ -56,30 +61,46 @@ class AgentSessionService:
         source: Mapping[str, object],
         profile_id: str = "hpc-readonly-v1",
     ) -> tuple[AgentSessionRecord, bool]:
-        if profile_id not in {"hpc-readonly-v1", "platform_coach", "experiment_builder"}:
+        if profile_id not in {
+            "hpc-readonly-v1",
+            "platform_coach",
+            EXPERIMENT_BUILDER_PROFILE,
+            RUN_DIAGNOSIS_REPAIR_PROFILE,
+        }:
             raise ValueError("Agent profile is not supported")
-        if profile_id == "experiment_builder" and (
+        project_profile = is_project_agent_profile(profile_id)
+        expected_source_keys = (
+            {"project_id", "workspace_id"}
+            if profile_id == EXPERIMENT_BUILDER_PROFILE
+            else {
+                "project_id",
+                "workspace_id",
+                "run_id",
+                "remediation_session_id",
+            }
+        )
+        if project_profile and (
             set(source)
             not in (
-                {"project_id", "workspace_id"},
-                {"project_id", "workspace_id", "resource_envelope"},
+                expected_source_keys,
+                expected_source_keys | {"resource_envelope"},
             )
             or any(
                 not isinstance(source.get(key), str) or not source.get(key)
-                for key in ("project_id", "workspace_id")
+                for key in expected_source_keys
             )
         ):
-            raise ValueError("experiment_builder requires Project and Workspace bindings")
+            raise ValueError(f"{profile_id} requires its exact Project source bindings")
         normalized_source = dict(source)
         envelope_value = normalized_source.get("resource_envelope")
-        if profile_id != "experiment_builder" and envelope_value is not None:
-            raise ValueError("resource envelope requires experiment_builder profile")
-        if profile_id == "experiment_builder" and envelope_value is not None:
+        if not project_profile and envelope_value is not None:
+            raise ValueError("resource envelope requires a Project profile")
+        if project_profile and envelope_value is not None:
             if not isinstance(envelope_value, Mapping):
-                raise ValueError("experiment_builder resource envelope is invalid")
+                raise ValueError("Project resource envelope is invalid")
             envelope = AgentResourceEnvelope(**dict(envelope_value))
             if envelope.approved_by != owner:
-                raise ValueError("experiment_builder resource envelope owner is invalid")
+                raise ValueError("Project resource envelope owner is invalid")
             normalized_source["resource_envelope"] = _envelope_payload(envelope)
         return self.store.create_session(
             owner=owner,

@@ -276,7 +276,12 @@ def test_project_tool_handlers_reject_cross_project_workspace(tmp_path: Path) ->
         )
 
 
-def test_workspace_patch_requires_turn_bound_project_capability(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "profile_id", ["experiment_builder", "run_diagnosis_repair"]
+)
+def test_workspace_patch_requires_turn_bound_project_capability(
+    tmp_path: Path, profile_id: str
+) -> None:
     from pilot107.agent.capabilities import AgentCapabilityClaims, AgentCapabilitySigner
 
     now = datetime(2026, 8, 19, tzinfo=UTC)
@@ -284,7 +289,7 @@ def test_workspace_patch_requires_turn_bound_project_capability(tmp_path: Path) 
     session, _ = sessions.create_session(
         owner="alice",
         request_key="builder-session",
-        profile_id="experiment_builder",
+        profile_id=profile_id,
         model_profile_id="faux-default",
         source={"project_id": "project-one", "workspace_id": "workspace-one"},
     )
@@ -309,7 +314,13 @@ def test_workspace_patch_requires_turn_bound_project_capability(tmp_path: Path) 
                     called.append(owner)
                     or AgentReadResult(result={"ok": True}, evidence_refs=())
                 )
-            }
+            },
+            "run_diagnosis_repair": {
+                "workspace_patch": lambda owner, arguments: (
+                    called.append(owner)
+                    or AgentReadResult(result={"ok": True}, evidence_refs=())
+                )
+            },
         },
         clock=lambda: now,
     )
@@ -320,7 +331,7 @@ def test_workspace_patch_requires_turn_bound_project_capability(tmp_path: Path) 
             turn_id=turn.turn_id,
             state_version=lease.state_version,
             fencing_token=lease.fencing_token,
-            profile_id="experiment_builder",
+            profile_id=profile_id,
             tools=frozenset({"workspace_patch"}),
             max_invocations=4,
             max_bytes=64 * 1024,
@@ -339,7 +350,7 @@ def test_workspace_patch_requires_turn_bound_project_capability(tmp_path: Path) 
         session_id=session.session_id,
         turn_id=turn.turn_id,
         state_version=lease.state_version,
-        profile_id="experiment_builder",
+        profile_id=profile_id,
         tool_name="workspace_patch",
         arguments={
             "project_id": "project-one",

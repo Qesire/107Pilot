@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   agentPageMode,
+  agentModeLocation,
   defaultProvider,
   llmConfiguredFromHealth,
   proposalPatchRows,
   providerLabel,
+  repairProjectLocation,
   remediationStateLabel,
   remediationStateTone,
   sessionProviderValue,
@@ -40,6 +42,44 @@ describe("Agent page mode", () => {
     expect(agentPageMode(new URLSearchParams("mode=repair"))).toBe("repair");
     expect(agentPageMode(new URLSearchParams("mode=builder"))).toBe("builder");
     expect(agentPageMode(new URLSearchParams("mode=unknown"))).toBe("conversation");
+  });
+
+  it("keeps a validation Session bound when returning from conversation to Project review", () => {
+    const path = agentModeLocation(
+      new URLSearchParams(
+        "mode=conversation&project=project-repair&session=agentsession-repair"
+        + "&repair_session=remsession-repair&repair_run=run-failed",
+      ),
+      "builder",
+    );
+    const target = new URL(path, "http://pilot107.local");
+
+    expect(target.searchParams.get("mode")).toBe("builder");
+    expect(target.searchParams.get("project")).toBe("project-repair");
+    expect(target.searchParams.get("session")).toBe("agentsession-repair");
+    expect(target.searchParams.get("repair_session")).toBe("remsession-repair");
+    expect(target.searchParams.get("repair_run")).toBe("run-failed");
+  });
+});
+
+describe("failed Run repair navigation", () => {
+  it("keeps the approved remediation binding when opening the Project", () => {
+    const path = repairProjectLocation(
+      new URLSearchParams("mode=repair&session=remsession-old"),
+      {
+        projectId: "project-repair",
+        remediationSessionId: "remsession-repair",
+        sourceRunId: "run-failed",
+      },
+    );
+    const target = new URL(path, "http://pilot107.local");
+
+    expect(target.pathname).toBe("/agent");
+    expect(target.searchParams.get("mode")).toBe("builder");
+    expect(target.searchParams.get("project")).toBe("project-repair");
+    expect(target.searchParams.get("session")).toBeNull();
+    expect(target.searchParams.get("repair_session")).toBe("remsession-repair");
+    expect(target.searchParams.get("repair_run")).toBe("run-failed");
   });
 });
 

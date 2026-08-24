@@ -233,12 +233,16 @@ class Pilot107HttpApi:
             advice_service=self.agent_advice_service,
             contract_store=contract_store,
             evidence_store=evidence_store,
+            project_agent_service=project_agent_service,
         )
         self.remediation_routes = RemediationRoutes(self.remediation_service)
         self.repair_ticket_service = RepairTicketService(
             run_store=store,
             repair_ticket_store=RepairTicketStore(store.db_path),
             remediation_store=self.remediation_service.remediation_store,
+            project_store=(
+                None if project_agent_service is None else project_agent_service.store
+            ),
         )
         self.repair_ticket_routes = RepairTicketRoutes(self.repair_ticket_service)
         self.terminal_service = terminal_service
@@ -249,7 +253,12 @@ class Pilot107HttpApi:
             None if agent_session_service is None else AgentSessionRoutes(agent_session_service)
         )
         self.project_agent_routes = (
-            None if project_agent_service is None else ProjectAgentRoutes(project_agent_service)
+            None
+            if project_agent_service is None
+            else ProjectAgentRoutes(
+                project_agent_service,
+                formal_run_observer=self.remediation_service,
+            )
         )
         self.runtime_watch_routes = runtime_watch_routes
         self.observability_routes = observability_routes

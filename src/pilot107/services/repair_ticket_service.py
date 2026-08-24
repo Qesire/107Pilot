@@ -14,6 +14,7 @@ from pilot107.core.repair_ticket import (
 from pilot107.core.repair_ticket_store import RepairTicketStore
 
 if TYPE_CHECKING:
+    from pilot107.agent.project_store import ProjectStore
     from pilot107.core.remediation_store import RemediationStore
     from pilot107.core.run_store import RunStore
 
@@ -31,10 +32,12 @@ class RepairTicketService:
         run_store: RunStore,
         repair_ticket_store: RepairTicketStore,
         remediation_store: RemediationStore | None = None,
+        project_store: ProjectStore | None = None,
     ) -> None:
         self.run_store = run_store
         self.repair_ticket_store = repair_ticket_store
         self.remediation_store = remediation_store
+        self.project_store = project_store
 
     # ------------------------------------------------------------------
     # Ticket creation
@@ -94,7 +97,11 @@ class RepairTicketService:
         requested_change = _build_requested_change(diagnoses)
         # Carry the code-context window captured by the Agent so the ticket
         # is a self-contained handoff (source snippet + Slurm error evidence).
-        code_context = self._code_context_for_session(session_id)
+        code_context = self._code_context_for_session(
+            session_id,
+            owner=owner,
+            source_run_id=session.source_run_id,
+        )
         ticket = RepairTicket(
             ticket_id=ticket_id,
             owner=owner,
@@ -115,7 +122,13 @@ class RepairTicketService:
         created = self.repair_ticket_store.create_ticket(ticket)
         return created, True
 
-    def _code_context_for_session(self, session_id: str) -> dict[str, Any] | None:
+    def _code_context_for_session(
+        self,
+        session_id: str,
+        *,
+        owner: str,
+        source_run_id: str,
+    ) -> dict[str, Any] | None:
         """Extract the code-context bundle from the session's latest advice.
 
         The Agent stores ``code_context`` in the advice payload when the
@@ -130,6 +143,7 @@ class RepairTicketService:
             for turn in self.remediation_store.list_turns(session_id)
             if turn.advice_id
         ]
+        context: dict[str, Any] = {}
         for advice_id in reversed(advice_ids):
             try:
                 advice = self.run_store.get_agent_advice(advice_id)
@@ -137,7 +151,42 @@ class RepairTicketService:
                 continue
             code_context = advice.payload.get("code_context")
             if isinstance(code_context, dict) and code_context:
-                return code_context
+                context.update(code_context)
+                break
+        unified_project = self._unified_project_context(
+            owner=owner,
+            source_run_id=source_run_id,
+        )
+        if unified_project is not None:
+            context["unified_project"] = unified_project
+        return context or None
+
+    def _unified_project_context(
+        self,
+        *,
+        owner: str,
+        source_run_id: str,
+    ) -> dict[str, str] | None:
+        if self.project_store is None:
+            return None
+        for project in self.project_store.list_projects(owner=owner, limit=100):
+            if (
+                project.origin.value != "failed_run"
+                or project.source is None
+                or project.source.kind != "failed_run"
+                or project.source.ref_id != source_run_id
+            ):
+                continue
+            workspaces = self.project_store.list_workspaces(
+                project.project_id,
+                owner=owner,
+            )
+            if workspaces:
+                return {
+                    "project_id": project.project_id,
+                    "workspace_id": workspaces[0].workspace_id,
+                    "source_run_id": source_run_id,
+                }
         return None
 
     def create_direct(

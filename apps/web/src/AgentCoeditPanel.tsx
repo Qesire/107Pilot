@@ -108,7 +108,8 @@ export function AgentCoeditPanel({
         <p className="panel-kicker">Agent co-edit</p>
         <h2>描述需求，Agent 建议改动</h2>
         <p>
-          Agent 只读取当前 Contract；任何建议都需要你确认后才会写入 canonical。
+          Agent 只读取并建议修改当前 Contract；任何建议都需要你确认后才会写入 canonical。
+          代码修复会进入隔离 Project/ChangeSet，不在此处直接修改集群源码。
         </p>
       </header>
 

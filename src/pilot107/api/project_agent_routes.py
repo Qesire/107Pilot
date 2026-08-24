@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from typing import Protocol
 
 from pilot107.agent.project import ProjectConflict, blueprint_from_payload
 from pilot107.agent.publisher import WorkspacePublicationState, publication_payload
@@ -11,17 +12,49 @@ from pilot107.agent.sandbox import SandboxPolicyError
 from pilot107.agent.workspace import WorkspaceConflict, WorkspacePolicyError, change_set_payload
 from pilot107.api.http_types import ApiResponse
 from pilot107.core.identity import UserIdentity
+from pilot107.core.remediation import RemediationConflict
 from pilot107.services.project_agent_service import (
+    FormalProjectRun,
     ProjectAgentService,
     formal_project_run_payload,
     formal_run_approval_payload,
     project_view_payload,
 )
+from pilot107.services.remediation_service import RemediationServiceError
+
+
+class FormalRunObserver(Protocol):
+    def preflight_formal_project_run(
+        self,
+        *,
+        project_id: str,
+        workspace_id: str,
+        change_set_id: str,
+        agent_session_id: str,
+        actor: str,
+    ) -> object: ...
+
+    def observe_formal_project_run(
+        self,
+        *,
+        project_id: str,
+        workspace_id: str,
+        change_set_id: str,
+        agent_session_id: str,
+        actor: str,
+        formal: FormalProjectRun,
+    ) -> object: ...
 
 
 class ProjectAgentRoutes:
-    def __init__(self, service: ProjectAgentService) -> None:
+    def __init__(
+        self,
+        service: ProjectAgentService,
+        *,
+        formal_run_observer: FormalRunObserver | None = None,
+    ) -> None:
         self.service = service
+        self.formal_run_observer = formal_run_observer
 
     def handle_get(
         self,
@@ -281,6 +314,14 @@ class ProjectAgentRoutes:
                     return ApiResponse(
                         status=200, payload=formal_run_approval_payload(approval)
                     )
+                if self.formal_run_observer is not None:
+                    self.formal_run_observer.preflight_formal_project_run(
+                        project_id=project_id,
+                        workspace_id=workspace_id,
+                        change_set_id=parts[1],
+                        agent_session_id=session_id,
+                        actor=owner,
+                    )
                 formal = self.service.approve_and_submit_formal_run(
                     project_id=project_id,
                     workspace_id=workspace_id,
@@ -293,9 +334,23 @@ class ProjectAgentRoutes:
                     formal_contract_payload=contract_value,
                     approved_digest=_required_string(payload, "approved_digest"),
                 )
+                if self.formal_run_observer is not None:
+                    self.formal_run_observer.observe_formal_project_run(
+                        project_id=project_id,
+                        workspace_id=workspace_id,
+                        change_set_id=parts[1],
+                        agent_session_id=session_id,
+                        actor=owner,
+                        formal=formal,
+                    )
                 return ApiResponse(status=201, payload=formal_project_run_payload(formal))
             except KeyError:
                 return _error(404, "AGENT.PROJECT.NOT_FOUND", "Agent Project not found")
+            except RemediationConflict as exc:
+                return _error(409, "REMEDIATION.CONFLICT", str(exc))
+            except RemediationServiceError as exc:
+                status = 403 if exc.code == "AUTH.FORBIDDEN" else 409
+                return _error(status, exc.code, str(exc))
             except RuntimeError as exc:
                 if str(exc) == "formal Project Run services are unavailable":
                     return _error(503, "AGENT.FORMAL_RUN.UNAVAILABLE", str(exc))

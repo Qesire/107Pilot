@@ -170,6 +170,45 @@ class ProjectAgentService:
             publish_available=self.publisher is not None,
         )
 
+    def create_failed_run_project(
+        self,
+        *,
+        owner: str,
+        source_run_id: str,
+        source_workdir: str,
+        goal: str,
+        request_key: str,
+    ) -> ProjectAgentView:
+        """Import a failed Run's authoritative workdir into an isolated Project."""
+
+        if self.importer is None:
+            raise RuntimeError("Workspace importer is unavailable")
+        project = self.store.create_project(
+            owner=owner,
+            origin=ExperimentProjectOrigin.FAILED_RUN,
+            goal=goal,
+            request_key=request_key,
+            source=ProjectSource(
+                kind="failed_run",
+                ref_id=source_run_id,
+                cluster_path=None,
+            ),
+        )
+        existing = self.store.list_workspaces(project.project_id, owner=owner)
+        workspace = (
+            existing[0]
+            if existing
+            else self.importer.create(project, source_ref=source_workdir)
+        )
+        return ProjectAgentView(
+            project=project,
+            workspace=workspace,
+            change_sets=tuple(
+                self.store.list_change_sets(project.project_id, owner=owner)
+            ),
+            publish_available=self.publisher is not None,
+        )
+
     def list_projects(self, *, owner: str, limit: int = 100) -> list[ProjectAgentView]:
         projects = self.store.list_projects(owner=owner, limit=limit)
         return [self.get_project(item.project_id, owner=owner) for item in projects]

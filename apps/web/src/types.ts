@@ -369,7 +369,7 @@ export interface AgentSession {
   session_id: string;
   owner: string;
   request_key: string;
-  profile_id: "hpc-readonly-v1" | "platform_coach" | "experiment_builder";
+  profile_id: "hpc-readonly-v1" | "platform_coach" | "experiment_builder" | "run_diagnosis_repair";
   model_profile_id: string;
   source: JsonObject;
   state: AgentSessionState;
@@ -532,6 +532,12 @@ export interface AgentProjectView {
     sandbox_failures: number;
     publish_available: boolean;
   };
+}
+
+export interface FailedRunRepairProject extends AgentProjectView {
+  repair_profile: "run_diagnosis_repair";
+  remediation_session_id: string;
+  source_run_id: string;
 }
 
 export interface WorkspacePublication {

@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from pilot107.agent.project import RUN_DIAGNOSIS_REPAIR_PROFILE
 from pilot107.api.http_types import ApiResponse
 from pilot107.core.identity import UserIdentity
 from pilot107.core.pagination import (
@@ -21,6 +22,7 @@ from pilot107.core.remediation import (
     RemediationInvariantError,
     RemediationState,
 )
+from pilot107.services.project_agent_service import project_view_payload
 from pilot107.services.remediation_service import (
     RemediationService,
     RemediationServiceError,
@@ -181,7 +183,15 @@ class RemediationRoutes:
         if len(parts) != 3 or parts[0] != "remediation-sessions":
             return None
         session_id, action = parts[1], parts[2]
-        if action not in {"advance", "approve", "reject", "execute", "cancel", "takeover"}:
+        if action not in {
+            "advance",
+            "approve",
+            "reject",
+            "execute",
+            "cancel",
+            "takeover",
+            "repair-project",
+        }:
             return None
         payload, error = _json_body(body)
         if error is not None:
@@ -189,6 +199,23 @@ class RemediationRoutes:
         try:
             session = self.service.remediation_store.get_session(session_id)
             actor = identity.username if identity is not None else session.owner
+            if action == "repair-project":
+                project = self.service.start_code_repair_project(
+                    session_id,
+                    proposal_id=_required_string(payload, "proposal_id"),
+                    actor=actor,
+                    expected_version=_required_int(payload, "expected_version"),
+                    request_key=_required_string(payload, "request_key"),
+                )
+                response = project_view_payload(project)
+                response.update(
+                    {
+                        "repair_profile": RUN_DIAGNOSIS_REPAIR_PROFILE,
+                        "remediation_session_id": session_id,
+                        "source_run_id": session.source_run_id,
+                    }
+                )
+                return ApiResponse(status=201, payload=response)
             if action == "advance":
                 raw_provider = payload.get("provider")
                 updated = self.service.advance(

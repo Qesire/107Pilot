@@ -13,6 +13,7 @@ from contextlib import AbstractContextManager, suppress
 from typing import Any, Protocol, cast
 
 from pilot107.agent.config import AgentdClientConfig
+from pilot107.agent.project import is_project_agent_profile
 from pilot107.agent.protocol import (
     MAX_NDJSON_LINE_BYTES,
     AgentdClientError,
@@ -246,8 +247,13 @@ def _build_durable_turn_request(
     config: AgentdClientConfig,
     request: DurableAgentTurnRequest,
 ) -> dict[str, Any]:
-    builder = request.profile_id == "experiment_builder"
-    if request.profile_id not in {"hpc-readonly-v1", "platform_coach", "experiment_builder"}:
+    project_profile = is_project_agent_profile(request.profile_id)
+    if request.profile_id not in {
+        "hpc-readonly-v1",
+        "platform_coach",
+        "experiment_builder",
+        "run_diagnosis_repair",
+    }:
         raise AgentdClientError(
             "pilot-agentd durable Turn profile is invalid",
             code="invalid_request",
@@ -258,10 +264,10 @@ def _build_durable_turn_request(
         "turn_id": request.turn_id,
         "owner": request.owner,
         "state_version": request.state_version,
-        "task_kind": "experiment_builder" if builder else "interactive_readonly",
+        "task_kind": request.profile_id if project_profile else "interactive_readonly",
         "model_profile_id": request.model_profile_id,
         "prompt_profile_id": request.profile_id,
-        "toolset_id": "a2-project" if builder else "a1-readonly",
+        "toolset_id": "a2-project" if project_profile else "a1-readonly",
         "input": {
             "message": request.message,
             "context_refs": list(request.context_refs),

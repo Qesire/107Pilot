@@ -9,6 +9,8 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from pilot107.agent.project import is_project_agent_profile
+
 TURN_PROTOCOL_VERSION = "pilot107.agent-turn-request/v1"
 DURABLE_TURN_PROTOCOL_VERSION = "pilot107.agent-turn-request/v2"
 EVENT_PROTOCOL_VERSION = "pilot107.agent-turn-event/v1"
@@ -196,8 +198,9 @@ def parse_durable_turn_request(value: object) -> DurableAgentTurnRequest:
             and request["prompt_profile_id"] in {"hpc-readonly-v1", "platform_coach"}
             and request["toolset_id"] == "a1-readonly"
         ) or (
-            request["task_kind"] == "experiment_builder"
-            and request["prompt_profile_id"] == "experiment_builder"
+            request["task_kind"]
+            in {"experiment_builder", "run_diagnosis_repair"}
+            and request["prompt_profile_id"] == request["task_kind"]
             and request["toolset_id"] == "a2-project"
         )
         if not pairing:
@@ -275,7 +278,7 @@ def parse_tool_invocation(value: object) -> ToolInvocation:
         profile_id = _as_string(invocation["profile_id"], "profile_id")
         valid_tools = (
             _A2_PROJECT_TOOLS
-            if profile_id == "experiment_builder"
+            if is_project_agent_profile(profile_id)
             else _A1_READ_TOOLS
             if profile_id in {"hpc-readonly-v1", "platform_coach"}
             else set()

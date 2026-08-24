@@ -19,6 +19,15 @@ function builderRequest() {
   });
 }
 
+function repairRequest() {
+  return parseDurableTurnRequest({
+    ...durableRequest(),
+    task_kind: "run_diagnosis_repair",
+    prompt_profile_id: "run_diagnosis_repair",
+    toolset_id: "a2-project",
+  });
+}
+
 describe("A2 Project tools", () => {
   it("accepts only the experiment_builder pairing and tool names", () => {
     const request = builderRequest();
@@ -64,6 +73,15 @@ describe("A2 Project tools", () => {
       ...valid,
       patches: [{ ...valid.patches[0], shell: "rm -rf" }],
     })).toBe(false);
+  });
+
+  it("gives the repair profile the same closed Project tools", () => {
+    const request = repairRequest();
+    expect(request.task_kind).toBe("run_diagnosis_repair");
+    expect(request.prompt_profile_id).toBe("run_diagnosis_repair");
+    expect(createProjectTools(request, {
+      invoke: async () => successResult(),
+    }).map((tool) => tool.name)).toEqual([...A2_PROJECT_TOOL_NAMES]);
   });
 
   it("binds validation to the authoritative Turn and terminates immediately", async () => {

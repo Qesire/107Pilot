@@ -286,6 +286,49 @@ def test_stream_durable_turn_sends_the_exact_v2_authority_envelope() -> None:
     assert captured["request"].get_header("Authorization") == "Bearer internal-secret"
 
 
+def test_repair_profile_uses_the_closed_project_tool_pairing() -> None:
+    captured: dict[str, Any] = {}
+
+    def opener(request: urllib.request.Request, *, timeout: float) -> _Response:
+        del timeout
+        captured["json"] = json.loads(request.data or b"")
+        return _Response(_success_body())
+
+    request = agent_protocol.DurableAgentTurnRequest(
+        session_id="session-repair",
+        turn_id="turn-1",
+        owner="alice",
+        state_version=3,
+        model_profile_id="campus-default",
+        message="repair the diagnosed failure in the isolated Workspace",
+        context_refs=("run:run-failed", "remediation:remsession-repair"),
+        capability_token="opaque.capability.token",
+        profile_id="run_diagnosis_repair",
+    )
+
+    list(AgentdClient(_config(), opener=opener).stream_durable_turn(request))
+
+    assert captured["json"] == {
+        "schema_version": "pilot107.agent-turn-request/v2",
+        "session_id": "session-repair",
+        "turn_id": "turn-1",
+        "owner": "alice",
+        "state_version": 3,
+        "task_kind": "run_diagnosis_repair",
+        "model_profile_id": "campus-default",
+        "prompt_profile_id": "run_diagnosis_repair",
+        "toolset_id": "a2-project",
+        "input": {
+            "message": "repair the diagnosed failure in the isolated Workspace",
+            "context_refs": ["run:run-failed", "remediation:remsession-repair"],
+        },
+        "capability_token": "opaque.capability.token",
+        "checkpoint": None,
+        "limits": {"timeout_ms": 30_000, "max_output_tokens": 1_200},
+        "trace": {"correlation_id": "turn-1"},
+    }
+
+
 def test_stream_durable_turn_rejects_an_invalid_request_before_http() -> None:
     client = AgentdClient(
         _config(),

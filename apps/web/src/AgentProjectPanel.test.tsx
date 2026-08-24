@@ -7,6 +7,7 @@ import {
   isValidationEnvelopeInputValid,
   isChangeSetPublishable,
   originLabel,
+  projectAgentProfileBinding,
   riskLabel,
 } from "./AgentProjectPanel";
 import type { WorkspaceChangeSet } from "./types";
@@ -36,6 +37,24 @@ describe("Agent Project review presentation", () => {
     expect(originLabel("existing")).toBe("现有目录");
     expect(riskLabel("low")).toBe("低风险");
     expect(riskLabel("high")).toBe("高风险");
+  });
+
+  it("binds failed Run Projects to the repair profile and approved session", () => {
+    expect(projectAgentProfileBinding({
+      origin: "failed_run",
+      projectId: "project-repair",
+      workspaceId: "workspace-repair",
+      sourceRunId: "run-failed",
+      remediationSessionId: "remsession-repair",
+    })).toEqual({
+      profile_id: "run_diagnosis_repair",
+      source: {
+        project_id: "project-repair",
+        workspace_id: "workspace-repair",
+        run_id: "run-failed",
+        remediation_session_id: "remsession-repair",
+      },
+    });
   });
 
   it("distinguishes reviewable and failed ChangeSets", () => {

@@ -12,6 +12,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pilot107.agent.project import is_project_agent_profile
 from pilot107.agent.store import AgentSessionStore
 from pilot107.agent.task_store import AgentTaskStore
 from pilot107.agent.tasks import (
@@ -104,8 +105,8 @@ class AgentTaskService:
         turn = self.session_store.get_turn(turn_id, owner=owner)
         if turn.session_id != session.session_id:
             raise ValueError("AgentTask Turn does not belong to its Session")
-        if session.profile_id != "experiment_builder":
-            raise ValueError("Slurm validation requires experiment_builder profile")
+        if not is_project_agent_profile(session.profile_id):
+            raise ValueError("Slurm validation requires a Project profile")
         if (
             session.source.get("project_id") != project_id
             or session.source.get("workspace_id") != workspace_id
