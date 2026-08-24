@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from pilot107.agent.capabilities import AgentCapabilityClaims, AgentCapabilitySigner
 from pilot107.agent.project import is_project_agent_profile
+from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.protocol import AgentdClientError, AgentTurnEvent, DurableAgentTurnRequest
 from pilot107.agent.session import AgentTurnLease, AgentTurnState
 from pilot107.agent.store import AgentSessionStore
@@ -81,6 +82,7 @@ class AgentTurnWorker:
         control_repository: ControlRepository,
         agentd_client: AgentTurnClient,
         capability_signer: AgentCapabilitySigner,
+        project_store: ProjectStore | None = None,
         worker_id: str,
         lease_seconds: int = 120,
         max_attempts: int = 5,
@@ -95,6 +97,7 @@ class AgentTurnWorker:
         self.control_repository = control_repository
         self.agentd_client = agentd_client
         self.capability_signer = capability_signer
+        self.project_store = project_store
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
         self.max_attempts = max_attempts
@@ -207,7 +210,14 @@ class AgentTurnWorker:
                 retryable=True,
                 checkpoint=checkpoint,
             )
-        self._finish_terminal(message, claim, terminal, checkpoint)
+        self._finish_terminal(
+            message,
+            claim,
+            terminal,
+            checkpoint,
+            profile_id=session.profile_id,
+            source=session.source,
+        )
         return True
 
     def _finish_terminal(
@@ -216,6 +226,9 @@ class AgentTurnWorker:
         claim: AgentTurnLease,
         terminal: AgentTurnEvent,
         checkpoint: Mapping[str, object] | None,
+        *,
+        profile_id: str,
+        source: Mapping[str, object],
     ) -> None:
         if terminal.type == "turn_completed":
             usage = _object_or_empty(terminal.payload.get("usage"))
@@ -234,6 +247,12 @@ class AgentTurnWorker:
                 "status": "aborted" if cancelled else "failed",
                 "error": error,
             }
+            if error_code == "provider_unavailable":
+                self._block_generative_project(
+                    owner=claim.owner,
+                    profile_id=profile_id,
+                    source=source,
+                )
         self.store.complete_turn(
             claim.turn_id,
             claim=claim,
@@ -242,6 +261,20 @@ class AgentTurnWorker:
             outcome=outcome,
         )
         self._acknowledge(message)
+
+    def _block_generative_project(
+        self,
+        *,
+        owner: str,
+        profile_id: str,
+        source: Mapping[str, object],
+    ) -> None:
+        if self.project_store is None or not is_project_agent_profile(profile_id):
+            return
+        project_id = source.get("project_id")
+        if not isinstance(project_id, str):
+            raise ValueError("Project Session scope is invalid")
+        self.project_store.block_for_model_unavailability(project_id, owner=owner)
 
     def _cancel_and_complete(
         self,

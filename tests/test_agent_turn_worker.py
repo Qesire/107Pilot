@@ -8,6 +8,8 @@ import pytest
 
 from pilot107.agent.capabilities import AgentCapabilitySigner
 from pilot107.agent.client import AgentdClientError
+from pilot107.agent.project import ExperimentProjectState
+from pilot107.agent.project_store import SQLiteProjectStore
 from pilot107.agent.protocol import AgentTurnEvent, DurableAgentTurnRequest
 from pilot107.agent.session import AgentTurnState
 from pilot107.agent.store import SQLiteAgentSessionStore
@@ -352,6 +354,85 @@ def test_transport_failure_without_checkpoint_retries_without_inventing_one(
     interrupted = store.get_turn(turn.turn_id, owner="alice")
     assert interrupted.state is AgentTurnState.INTERRUPTED
     assert interrupted.final_checkpoint is None
+
+
+def test_provider_unavailable_blocks_only_the_scoped_generative_project(
+    tmp_path: Path,
+) -> None:
+    """Catch a failed generative Turn that leaves its Project deceptively active."""
+
+    clock = MutableClock()
+    database = tmp_path / "agent.db"
+    store = SQLiteAgentSessionStore(database, clock=clock)
+    control = SQLiteControlRepository(database, clock=clock)
+    projects = SQLiteProjectStore(database, clock=clock)
+    project = projects.create_project(
+        owner="alice",
+        origin="blank",
+        goal="generate an experiment",
+        request_key="model-unavailable-project",
+    )
+    session, _ = store.create_session(
+        owner="alice",
+        request_key="model-unavailable-session",
+        profile_id="experiment_builder",
+        model_profile_id="campus-default",
+        source={
+            "project_id": project.project_id,
+            "workspace_id": "workspace-model-unavailable",
+        },
+    )
+    turn, _ = AgentSessionService(
+        store=store,
+        control_repository=control,
+    ).submit_message(
+        session_id=session.session_id,
+        owner="alice",
+        request_key="model-unavailable-turn",
+        message="generate the experiment files",
+        expected_state_version=session.state_version,
+    )
+    client = ScriptedAgentdClient(
+        [
+            _event(
+                turn.turn_id,
+                1,
+                "turn_started",
+                {"model_profile_id": "campus-default", "task_kind": "interactive"},
+            ),
+            _event(
+                turn.turn_id,
+                2,
+                "turn_failed",
+                {
+                    "error": {
+                        "code": "provider_unavailable",
+                        "message": "The model provider is unavailable.",
+                        "retryable": False,
+                    }
+                },
+            ),
+        ]
+    )
+    worker = AgentTurnWorker(
+        store=store,
+        control_repository=control,
+        agentd_client=client,
+        capability_signer=AgentCapabilitySigner(b"s" * 32, clock=clock.epoch),
+        project_store=projects,
+        worker_id="agent-worker-model-unavailable",
+        lease_seconds=30,
+        clock=clock.epoch,
+    )
+
+    result = worker.dispatch_due(limit=1)
+
+    assert result.succeeded == 1
+    assert store.get_turn(turn.turn_id, owner="alice").state is AgentTurnState.FAILED
+    assert (
+        projects.get_project(project.project_id, owner="alice").state
+        is ExperimentProjectState.BLOCKED
+    )
 
 
 def test_event_is_durable_before_crash_and_replay_keeps_one_sequence(tmp_path: Path) -> None:

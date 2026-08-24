@@ -8,6 +8,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 target="${PILOT107_REAL107_SSH_TARGET:-}"
 workdir="${PILOT107_REAL107_WORKDIR:-}"
+control_path="${PILOT107_REAL107_SSH_CONTROL_PATH:-}"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 output_dir="${PILOT107_REAL107_JOB_OUTPUT_DIR:-$root/artifacts/probes/real107-jobs-$stamp}"
 
@@ -15,6 +16,7 @@ usage() {
   cat <<'EOF'
 Usage:
   PILOT107_REAL107_SSH_TARGET=<ssh-config-alias> \
+  PILOT107_REAL107_SSH_CONTROL_PATH=<active-control-socket> \
   PILOT107_REAL107_WORKDIR=<private-home>/pilot107-smoke-<label> \
   bash scripts/smoke-real107-ssh-jobs.sh
 
@@ -38,6 +40,10 @@ if [[ ! "$workdir" =~ ^(/public/home/[A-Za-z0-9._-]+|/home/[A-Za-z0-9._-]+/[A-Za
   echo "PILOT107_REAL107_WORKDIR must be a new private home/pilot107-smoke-* directory" >&2
   exit 2
 fi
+if [[ -z "$control_path" || "$control_path" != /* || ! -S "$control_path" ]]; then
+  echo "PILOT107_REAL107_SSH_CONTROL_PATH must name an existing absolute ControlMaster socket" >&2
+  exit 2
+fi
 if [[ -e "$output_dir" ]]; then
   echo "refusing to overwrite existing output directory: $output_dir" >&2
   exit 2
@@ -45,6 +51,8 @@ fi
 
 mkdir -p "$output_dir/jobs"
 ssh_options=(
+  -o ControlMaster=no
+  -o ControlPath="$control_path"
   -o BatchMode=yes
   -o ConnectTimeout=15
   -o ServerAliveInterval=10

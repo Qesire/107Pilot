@@ -1528,7 +1528,17 @@ def _sanitize_template_value(
     result = value.replace(owner, "{owner}")
     result = result.replace(source_run_id, "{source_run}")
     if source_job_id is not None:
-        result = result.replace(source_job_id, "{source_job}")
+        # Slurm job IDs are short decimal strings. A global replacement would
+        # corrupt unrelated Contract values such as recipe version ``1.0.0``
+        # when a source Run happened to receive job 1, making semantically
+        # equivalent bundles differ or fail validation. Redact the identifier
+        # only when the value is the ID itself or a canonical Slurm log name.
+        if result == source_job_id:
+            result = "{source_job}"
+        result = result.replace(
+            f"slurm-{source_job_id}.",
+            "slurm-{source_job}.",
+        )
     return result
 
 

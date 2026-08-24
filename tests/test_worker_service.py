@@ -150,6 +150,8 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertTrue(service.config.agent_a1_enabled)
         self.assertIsNotNone(service.stack.worker.agent_turn_worker)
         self.assertIsNotNone(service.stack.agent_session_service)
+        assert service.stack.worker.agent_turn_worker is not None
+        self.assertIsNotNone(service.stack.worker.agent_turn_worker.project_store)
 
     def test_worker_wires_formal_result_dispatch_after_runtime_watch(self) -> None:
         allowed_root = self.root / "cluster-home"

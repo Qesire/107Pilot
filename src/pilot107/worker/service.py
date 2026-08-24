@@ -44,6 +44,7 @@ from pilot107.adapters.ssh_relay import (
 from pilot107.agent.capabilities import AgentCapabilitySigner
 from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig
+from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.store import AgentSessionStore
 from pilot107.agent.store_factory import (
     DatabaseMode,
@@ -599,6 +600,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     )
     agent_session_service: AgentSessionService | None = None
     agent_session_store: AgentSessionStore | None = None
+    project_store: ProjectStore | None = None
     agent_turn_worker: AgentTurnWorker | None = None
     if agent_capability_secret is not None:
         if not (config.agentd_url and config.agentd_token and config.agentd_model_profile):
@@ -611,6 +613,10 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             store=agent_session_store,
             control_repository=control_repository,
         )
+        project_store = build_project_store(
+            sqlite_path=selection.sqlite_path,
+            postgres_dsn=selection.postgres_dsn,
+        )
         agent_turn_worker = AgentTurnWorker(
             store=agent_session_store,
             control_repository=control_repository,
@@ -622,6 +628,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
                 )
             ),
             capability_signer=AgentCapabilitySigner(agent_capability_secret),
+            project_store=project_store,
             worker_id=config.worker_id,
             lease_seconds=max(120, config.task_lease_seconds),
         )
@@ -653,10 +660,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     )
     agent_task_service: AgentTaskService | None = None
     if agent_session_store is not None and agent_session_service is not None:
-        project_store = build_project_store(
-            sqlite_path=config.db_path,
-            postgres_dsn=selection.postgres_dsn,
-        )
+        assert project_store is not None
 
         def resolve_agent_workspace(
             owner: str, workspace_id: str, snapshot_digest: str

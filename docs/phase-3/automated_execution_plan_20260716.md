@@ -75,6 +75,14 @@ bash scripts/check-sim-core.sh
 5. **R5 — CPU-only RC**：8C/16G profile、资源限制、离线包、SBOM、空目录恢复；
 6. **R6 — final gate**：全量回归、故障/负载/浏览器金路径、findings 与未上传 VM readiness manifest。
 
+## 2.2 2026-08-25 Agent 生命周期封版检查点
+
+- Task 11–20 已完成 leased observation、资源评价、持久 AgentTask、异步 Slurm validation、artifact-aware recovery、批准发布、正式 Run/Watch/result、repair/Market 生命周期统一及 PostgreSQL runtime wiring。
+- Task 21 使用四个环境专用入口封版；D0 source 与 D1 Docker runtime 必须在一个 Git SHA 同时通过，报告写入 `artifacts/acceptance/agent-lifecycle/<sha>/`。
+- D1 固定覆盖十二个生命周期场景和 100 idle Sessions、10 concurrent Turns、100 active Watches、connection command/byte budgets；模型不可用只阻塞对应生成式 Project，Run/Evidence/Watch 保持确定性可用。
+- S1 需要确认的 8C/16G VM、同 revision bundle 和公开 URL；R1 需要 target、owner、批准 root、authorization ID、确认 flag 与现存 ControlMaster。缺少条件记录 `not_run`，不得推断批准。
+- S1/R1 `not_run` 不否定 D0/D1 本机候选，但两者和校园身份/运维批准未通过前，校园生产始终 NO-GO。完整判定见 [`agent_lifecycle_acceptance_matrix.md`](agent_lifecycle_acceptance_matrix.md)。
+
 ### 2026-07-18 恢复检查点
 
 - R1 已完成：Remediation keyset/ETag/events、input/takeover、幂等与专用 action 边界；

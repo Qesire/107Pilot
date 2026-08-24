@@ -139,11 +139,14 @@ test("dirty source is not silently overwritten by a basic form update", async ({
 
 test("market release adoption opens the server-created canonical contract", async ({ page }) => {
   await page.goto("/market?user=alice");
-  await expect(page.getByRole("heading", { name: "从审核过的 release 开始" })).toBeVisible();
-  await page.getByRole("button", { name: "查看 release" }).click();
-  await expect(page).toHaveURL(/\/templates\/template_visual/);
+  await expect(page.getByRole("heading", { name: "作业与模板市场" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Verified Python CPU" })).toBeVisible();
+  await page.getByRole("button", { name: /查看条目/ }).click();
+  await expect(page).toHaveURL(/\/market\/curated_release_visual/);
   await expect(page.getByText("Canonical Contract payload", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "采用并进入 Studio" }).click();
+  await page.getByRole("button", { name: "启动 Agent 应用计划" }).click();
+  await expect(page.getByText("确认前 Contract 计划", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "确认精确计划并创建 Contract" }).click();
   await expect(page).toHaveURL(/\/studio\/contract_adopted_visual/);
 });
 
@@ -243,6 +246,24 @@ async function installMockApi(page, options = {}) {
     }
     if (url.pathname === "/api/v1/templates") {
       return json(route, { items: [templateMarketPayload()], page: { limit: 20, has_more: false, next_cursor: null } });
+    }
+    if (url.pathname === "/api/v1/market/items") {
+      return json(route, {
+        items: [unifiedMarketItemPayload()],
+        page: { limit: 20, has_more: false, next_cursor: null },
+      });
+    }
+    if (url.pathname === "/api/v1/market/items/curated_release_visual") {
+      return json(route, unifiedMarketItemPayload());
+    }
+    if (url.pathname === "/api/v1/market/applications" && request.method() === "POST") {
+      return json(route, marketApplicationPayload(), 201);
+    }
+    if (
+      url.pathname === "/api/v1/market/applications/market_application_visual/confirmation"
+      && request.method() === "POST"
+    ) {
+      return json(route, marketApplicationPayload({ completed: true }));
     }
     if (url.pathname === "/api/v1/templates/template_visual/releases/1.1.0") {
       return json(route, templateMarketPayload());
@@ -716,6 +737,60 @@ function templateMarketPayload() {
     withdrawn_at: null,
     withdrawal_reason: null,
     metrics: { adoption_count: 3, verification_passed: 2, verification_failed: 0, verification_expired: 0, success_rate: 1, latest_verification: null },
+  };
+}
+
+function unifiedMarketItemPayload() {
+  const release = templateMarketPayload();
+  return {
+    kind: "curated_template",
+    item_id: "curated_release_visual",
+    title: release.title,
+    description: release.description,
+    visibility: release.visibility,
+    scope_key: release.scope_key,
+    publisher: release.publisher,
+    published_at: release.published_at,
+    updated_at: release.published_at,
+    tags: release.publication.tags,
+    adoption: { available: true, reason: null },
+    withdrawn_at: null,
+    template: {
+      template_id: release.template_id,
+      release_version: release.release_version,
+      content_sha256: release.content_sha256,
+    },
+    contract_payload: release.payload,
+    compatibility: release.compatibility,
+    publication: release.publication,
+    metrics: release.metrics,
+  };
+}
+
+function marketApplicationPayload(options = {}) {
+  const completed = Boolean(options.completed);
+  return {
+    session_id: "market_application_visual",
+    owner: "alice",
+    request_key: "web-adopt-market-item-visual",
+    source_kind: "curated_template",
+    source_item_id: "curated_release_visual",
+    source_digest: "d".repeat(64),
+    assurance: "curated",
+    user_intent: "将此市场条目安全地应用到我的私有实验工程",
+    state: completed ? "completed" : "awaiting_confirmation",
+    version: completed ? 2 : 1,
+    project_id: "project_market_visual",
+    workspace_id: "workspace_market_visual",
+    change_set_id: "changeset_market_visual",
+    target_contract_id: completed ? "contract_adopted_visual" : null,
+    adoption_id: completed ? "adoption_visual" : null,
+    target_contract_payload: defaultStudioContract(),
+    plan_digest: "e".repeat(64),
+    confirmation_digest: "f".repeat(64),
+    change_set_digest: "a".repeat(64),
+    created_at: "2026-07-16T02:08:00Z",
+    updated_at: "2026-07-16T02:08:00Z",
   };
 }
 

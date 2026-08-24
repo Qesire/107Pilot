@@ -87,25 +87,23 @@ async function installFilesMock(page) {
 
 test.beforeEach(async ({ page }) => {
   await installFilesMock(page);
-  // Clear persisted layout once (not via addInitScript, which would also wipe
-  // it on reload and break the persistence test).
-  await page.goto("/files?user=alice");
-  await page.evaluate(() => window.localStorage.clear());
 });
 
-test("defaults to two independent panes rooted at home", async ({ page }) => {
+test("defaults to one column pane rooted at home", async ({ page }) => {
   await page.goto("/files?user=alice");
 
-  await expect(page.locator(".file-pane")).toHaveCount(2);
-  // Both panes list the home directory contents.
-  await expect(page.locator(".file-tile", { hasText: "readme.md" })).toHaveCount(2);
-  await expect(page.locator(".file-tile", { hasText: "docs" }).first()).toBeVisible();
+  await expect(page.locator(".file-pane")).toHaveCount(1);
+  await expect(page.locator(".miller-column").last()).toContainText("readme.md");
+  await expect(page.locator(".miller-column").last()).toContainText("docs");
 });
 
 test("panes navigate independently", async ({ page }) => {
   await page.goto("/files?user=alice");
+  await page.locator(".file-pane").getByTitle("横向拆分").click();
 
   const panes = page.locator(".file-pane");
+  await panes.nth(0).getByTitle("网格视图").click();
+  await panes.nth(1).getByTitle("网格视图").click();
   // Open "docs" in the first pane only.
   await panes.nth(0).locator(".file-tile", { hasText: "docs" }).dblclick();
 
@@ -117,18 +115,19 @@ test("panes navigate independently", async ({ page }) => {
 
 test("splitting adds a pane and the layout survives a reload", async ({ page }) => {
   await page.goto("/files?user=alice");
-  await expect(page.locator(".file-pane")).toHaveCount(2);
+  await expect(page.locator(".file-pane")).toHaveCount(1);
 
   // Split the first pane horizontally.
   await page.locator(".file-pane").nth(0).getByTitle("横向拆分").click();
-  await expect(page.locator(".file-pane")).toHaveCount(3);
+  await expect(page.locator(".file-pane")).toHaveCount(2);
 
   await page.reload();
-  await expect(page.locator(".file-pane")).toHaveCount(3);
+  await expect(page.locator(".file-pane")).toHaveCount(2);
 });
 
 test("closing a pane removes it but keeps at least one", async ({ page }) => {
   await page.goto("/files?user=alice");
+  await page.locator(".file-pane").getByTitle("横向拆分").click();
   await page.locator(".file-pane").nth(1).getByTitle("关闭窗格").click();
   await expect(page.locator(".file-pane")).toHaveCount(1);
 
@@ -141,6 +140,7 @@ test("grid view toggles to a list view per pane", async ({ page }) => {
   await page.goto("/files?user=alice");
   const firstPane = page.locator(".file-pane").nth(0);
 
+  await firstPane.getByTitle("网格视图").click();
   await expect(firstPane.locator(".filegrid")).toBeVisible();
   await firstPane.getByTitle("列表视图").click();
   await expect(firstPane.locator(".filepane-table")).toBeVisible();
@@ -150,6 +150,7 @@ test("grid view toggles to a list view per pane", async ({ page }) => {
 test("ctrl-click builds a multi-selection with an action bar", async ({ page }) => {
   await page.goto("/files?user=alice");
   const firstPane = page.locator(".file-pane").nth(0);
+  await firstPane.getByTitle("网格视图").click();
 
   await firstPane.locator(".file-tile", { hasText: "readme.md" }).click();
   await firstPane.locator(".file-tile", { hasText: "run.py" }).click({ modifiers: ["Control"] });
@@ -160,6 +161,7 @@ test("ctrl-click builds a multi-selection with an action bar", async ({ page }) 
 test("marquee drag over empty grid area selects the tiles it covers", async ({ page }) => {
   await page.goto("/files?user=alice");
   const firstPane = page.locator(".file-pane").nth(0);
+  await firstPane.getByTitle("网格视图").click();
 
   // Geometry-driven marquee: start in the grid's empty bottom strip and sweep
   // up-right across the first two tiles (data, docs) but not the rest.
@@ -169,7 +171,7 @@ test("marquee drag over empty grid area selects the tiles it covers", async ({ p
     const grid = el.querySelector(".filegrid").getBoundingClientRect();
     return {
       sx: Math.round(rects[0].left + 4),
-      sy: Math.round(grid.bottom - 4),
+      sy: Math.round(Math.min(grid.bottom - 4, window.innerHeight - 4)),
       tx: Math.round(rects[1].left + rects[1].width / 2),
       ty: Math.round(rects[0].top + 4),
     };
@@ -186,6 +188,9 @@ test("marquee drag over empty grid area selects the tiles it covers", async ({ p
 
 test("dragging a file onto another pane's directory moves it", async ({ page }) => {
   await page.goto("/files?user=alice");
+  await page.locator(".file-pane").getByTitle("横向拆分").click();
+  await page.locator(".file-pane").nth(0).getByTitle("网格视图").click();
+  await page.locator(".file-pane").nth(1).getByTitle("网格视图").click();
   // Wait for both panes to be fully rendered (4 tiles each) before dragging.
   await expect(page.locator(".file-tile")).toHaveCount(8);
   const panes = page.locator(".file-pane");

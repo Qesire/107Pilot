@@ -571,7 +571,8 @@ def test_equivalent_bundle_creates_verification_not_duplicate_release(
     with runs.connect() as connection:
         connection.execute(
             "UPDATE runs SET state = 'SUCCEEDED', terminal_state = 'COMPLETED', "
-            "exit_code = '0:0', collection_state = 'succeeded' WHERE run_id = ?",
+            "exit_code = '0:0', collection_state = 'succeeded', job_id = '101' "
+            "WHERE run_id = ?",
             (first_run.run_id,),
         )
     first = service.start_template_publication(
@@ -624,7 +625,8 @@ def test_equivalent_bundle_creates_verification_not_duplicate_release(
     with runs.connect() as connection:
         connection.execute(
             "UPDATE runs SET state = 'SUCCEEDED', terminal_state = 'COMPLETED', "
-            "exit_code = '0:0', collection_state = 'succeeded' WHERE run_id = ?",
+            "exit_code = '0:0', collection_state = 'succeeded', job_id = '1' "
+            "WHERE run_id = ?",
             (second_run.run_id,),
         )
 

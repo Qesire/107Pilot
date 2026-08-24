@@ -158,6 +158,10 @@ class ProjectStore(Protocol):
         self, *, owner: str, limit: int = 100
     ) -> list[ExperimentProjectSessionRecord]: ...
 
+    def block_for_model_unavailability(
+        self, project_id: str, *, owner: str
+    ) -> ExperimentProjectSessionRecord: ...
+
     def save_blueprint(
         self,
         project_id: str,
@@ -293,6 +297,32 @@ class SQLiteProjectStore:
                 (owner, limit),
             ).fetchall()
         return [_row_to_project(row) for row in rows]
+
+    def block_for_model_unavailability(
+        self, project_id: str, *, owner: str
+    ) -> ExperimentProjectSessionRecord:
+        """Idempotently block only a Project still doing generative work."""
+
+        _key(project_id, "project_id")
+        _key(owner, "owner")
+        now = self._now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE agent_experiment_projects
+                SET state = 'blocked', version = version + 1, updated_at = ?
+                WHERE project_id = ? AND owner = ?
+                  AND state IN ('drafting', 'editing', 'validating')
+                """,
+                (now, project_id, owner),
+            )
+            row = connection.execute(
+                "SELECT * FROM agent_experiment_projects WHERE project_id = ? AND owner = ?",
+                (project_id, owner),
+            ).fetchone()
+        if row is None:
+            raise KeyError(project_id)
+        return _row_to_project(row)
 
     def save_blueprint(
         self,

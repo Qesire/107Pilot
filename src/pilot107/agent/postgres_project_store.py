@@ -137,6 +137,34 @@ class PostgresProjectStore:
             ).fetchall()
         return [_row_to_project(row) for row in rows]
 
+    def block_for_model_unavailability(
+        self, project_id: str, *, owner: str
+    ) -> ExperimentProjectSessionRecord:
+        """Idempotently block only a Project still doing generative work."""
+
+        _key(project_id, "project_id")
+        _key(owner, "owner")
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                UPDATE agent_experiment_projects
+                SET state = 'blocked', version = version + 1, updated_at = %s
+                WHERE project_id = %s AND owner = %s
+                  AND state IN ('drafting', 'editing', 'validating')
+                RETURNING *
+                """,
+                (self._now(), project_id, owner),
+            ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    "SELECT * FROM agent_experiment_projects "
+                    "WHERE project_id = %s AND owner = %s",
+                    (project_id, owner),
+                ).fetchone()
+        if row is None:
+            raise KeyError(project_id)
+        return _row_to_project(row)
+
     def save_blueprint(
         self,
         project_id: str,

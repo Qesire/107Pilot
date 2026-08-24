@@ -112,6 +112,12 @@ def exercise_project_store_contract(store: ProjectStore) -> None:
     with pytest.raises(KeyError):
         store.get_project(created.project_id, owner="bob")
 
+    blocked = store.block_for_model_unavailability(created.project_id, owner="alice")
+    replayed_block = store.block_for_model_unavailability(created.project_id, owner="alice")
+    assert blocked.state.value == "blocked"
+    assert blocked.version == updated.version + 1
+    assert replayed_block == blocked
+
 
 def test_sqlite_project_store_satisfies_contract(tmp_path: Path) -> None:
     exercise_project_store_contract(SQLiteProjectStore(tmp_path / "projects.db"))

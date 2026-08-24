@@ -22,6 +22,8 @@ jobs:
       - run: uv sync --locked --extra dev --extra api
       - run: uv run ruff check src tests scripts
       - run: uv run mypy src
+      - name: Validate agent lifecycle acceptance manifests and fail-closed reports
+        run: uv run pytest tests/test_agent_lifecycle_acceptance.py -q
       - run: uv run pytest -q
 
   web:
