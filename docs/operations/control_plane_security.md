@@ -74,3 +74,26 @@ npm audit --offline --omit=dev --audit-level=high
 
 正式 RC 必须保存 CI run、漏洞数据库时间、镜像 digest 和 scan artifact；本机工具缺失或 offline
 0 findings 不能替代这些证据。
+
+## 持久化数据库边界
+
+API 与 Worker 启动时先解析一个明确的 `PILOT107_DATABASE_MODE`（`sqlite` 或
+`postgres`），然后才创建任何持久化仓库。PostgreSQL 模式要求业务域与控制面 DSN 指向同一
+server/database identity；缺少任一 DSN、指向不同数据库，或为 Runtime Watch/资源观测另行指定
+SQLite 文件都会以 `mixed durable stores` 失败关闭。Run、Contract、Remediation、Project、
+AgentSession/AgentTask、Runtime Watch、资源观测、模板/Run 发布、市场会话、修复票据、SSH 状态和
+控制面不会在同一进程中跨 SQLite/PostgreSQL 分裂。
+
+生产部署应由秘密挂载提供只读单行文件，并让 API 与 Worker 读取同一路径：
+
+```text
+PILOT107_DATABASE_MODE=postgres
+PILOT107_POSTGRES_DSN_FILE=/run/secrets/pilot107-postgres-dsn
+```
+
+`PILOT107_POSTGRES_DSN` 仅保留给隔离测试/本地迁移。inline 与 file 同时出现会被拒绝；DSN 字段从
+配置 `repr` 排除，且不得写入 Compose 渲染产物、日志、事件、命令 argv 或验收报告。Compose
+基础文件只声明容器内文件路径，实际 secret 挂载必须由部署环境或受控 override 提供。
+
+所有 PostgreSQL 业务迁移与控制迁移共用 checksum history 和事务级 advisory lock。API 与
+Worker 可并发启动，但迁移内容改变、数据库身份不一致或驱动缺失都必须阻止服务进入就绪状态。

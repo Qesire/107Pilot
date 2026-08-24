@@ -48,16 +48,19 @@ from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig
 from pilot107.agent.market_sessions import (
     MarketApplicationService,
-    SQLiteMarketSessionStore,
     TemplatePublicationService,
 )
 from pilot107.agent.publisher import WorkspacePublisher
 from pilot107.agent.read_tools import AgentReadContext, build_a1_read_handlers
 from pilot107.agent.sandbox import SandboxExecutor
 from pilot107.agent.store_factory import (
+    DatabaseMode,
+    DurableStoreSelection,
     build_agent_session_store,
     build_agent_task_store,
+    build_market_session_store,
     build_project_store,
+    resolve_durable_store_selection,
 )
 from pilot107.agent.tasks import AgentResourceEnvelope
 from pilot107.agent.tool_gateway import AgentToolGateway
@@ -96,8 +99,10 @@ from pilot107.core.postgres_domain_stores import (
     PostgresContractStore,
     PostgresPlatformSnapshotStore,
     PostgresRemediationStore,
+    PostgresRepairTicketStore,
     PostgresRunPublicationStore,
     PostgresRunStore,
+    PostgresSshConnectionStore,
     PostgresTemplateMarketStore,
     PostgresUploadSessionStore,
     PostgresUserEntitlementStore,
@@ -105,6 +110,7 @@ from pilot107.core.postgres_domain_stores import (
 from pilot107.core.preflight import LocalPathChecker
 from pilot107.core.proxy_auth import load_proxy_hmac_secret
 from pilot107.core.remediation_store import RemediationStore
+from pilot107.core.repair_ticket_store import RepairTicketStore
 from pilot107.core.run_publications import RunPublicationStore
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
@@ -140,6 +146,7 @@ class ApiServiceConfig:
     db_path: Path
     evidence_root: Path
     capsule_root: Path
+    database_mode: DatabaseMode = DatabaseMode.SQLITE
     control_postgres_dsn: str | None = field(default=None, repr=False)
     postgres_dsn: str | None = field(default=None, repr=False)
     backend: str = "none"
@@ -221,18 +228,20 @@ def config_from_env(
 ) -> ApiServiceConfig:
     values = os.environ if env is None else env
     root = project_root or Path(__file__).resolve().parents[3]
+    postgres_dsn = _load_postgres_dsn(values)
     compose_workdir = _path(values, "PILOT107_COMPOSE_WORKDIR", root / "simulator" / "compose")
     runtime_dir = root / "data" / "phase0"
     return ApiServiceConfig(
         db_path=_path(values, "PILOT107_DB_PATH", runtime_dir / "pilot107.db"),
         evidence_root=_path(values, "PILOT107_EVIDENCE_ROOT", runtime_dir / "evidence"),
         capsule_root=_path(values, "PILOT107_CAPSULE_ROOT", runtime_dir / "capsules"),
+        database_mode=_database_mode(values, postgres_dsn=postgres_dsn),
         control_postgres_dsn=(
             values.get("PILOT107_CONTROL_POSTGRES_DSN")
-            or values.get("PILOT107_POSTGRES_DSN")
+            or postgres_dsn
             or None
         ),
-        postgres_dsn=values.get("PILOT107_POSTGRES_DSN") or None,
+        postgres_dsn=postgres_dsn,
         backend=values.get("PILOT107_API_BACKEND") or values.get("PILOT107_BACKEND", "none"),
         allowed_roots=tuple(_split_csv(values.get("PILOT107_ALLOWED_ROOTS", ""))),
         command_timeout_seconds=_float(values, "PILOT107_COMMAND_TIMEOUT_SECONDS", 20.0),
@@ -362,6 +371,7 @@ def config_from_env(
 def _build_file_routes(
     config: ApiServiceConfig,
     ssh_relay_client: SshRelayClient | None,
+    selection: DurableStoreSelection,
     metrics: ControlPlaneMetrics | None = None,
 ) -> FileRoutes | None:
     """Wire the visual-filesystem routes for file-capable backends.
@@ -388,12 +398,13 @@ def _build_file_routes(
         return None
     staging_root = config.upload_staging_root or (config.db_path.parent / "upload-staging")
     upload_store: UploadSessionStore
-    if config.postgres_dsn is not None:
+    if selection.is_postgres:
+        assert selection.postgres_dsn is not None
         upload_store = PostgresUploadSessionStore(
-            config.postgres_dsn, compatibility_path=config.db_path
+            selection.postgres_dsn, compatibility_path=selection.sqlite_path
         )
     else:
-        upload_store = UploadSessionStore(config.db_path)
+        upload_store = UploadSessionStore(selection.sqlite_path)
     upload_service = FileUploadService(
         executor=executor,
         owner_roots=owner_roots,
@@ -406,34 +417,47 @@ def _build_file_routes(
 
 
 def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
+    selection = resolve_durable_store_selection(
+        database_mode=config.database_mode,
+        sqlite_path=config.db_path,
+        postgres_dsn=config.postgres_dsn,
+        control_postgres_dsn=config.control_postgres_dsn,
+    )
+    postgres_dsn = selection.postgres_dsn or ""
     agent_capability_secret = _load_agent_capability_secret(config)
-    if config.postgres_dsn is None:
-        store = RunStore(config.db_path)
-        contract_store = ContractStore(config.db_path)
-        platform_snapshot_store = PlatformSnapshotStore(config.db_path)
-        user_entitlement_store = UserEntitlementStore(config.db_path)
-        remediation_store = RemediationStore(config.db_path)
+    if not selection.is_postgres:
+        store = RunStore(selection.sqlite_path)
+        contract_store = ContractStore(selection.sqlite_path)
+        platform_snapshot_store = PlatformSnapshotStore(selection.sqlite_path)
+        user_entitlement_store = UserEntitlementStore(selection.sqlite_path)
+        remediation_store = RemediationStore(selection.sqlite_path)
+        repair_ticket_store = RepairTicketStore(selection.sqlite_path)
     else:
-        store = PostgresRunStore(config.postgres_dsn, compatibility_path=config.db_path)
+        assert postgres_dsn is not None
+        store = PostgresRunStore(postgres_dsn, compatibility_path=selection.sqlite_path)
         contract_store = PostgresContractStore(
-            config.postgres_dsn,
-            compatibility_path=config.db_path,
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
         )
         platform_snapshot_store = PostgresPlatformSnapshotStore(
-            config.postgres_dsn,
-            compatibility_path=config.db_path,
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
         )
         user_entitlement_store = PostgresUserEntitlementStore(
-            config.postgres_dsn,
-            compatibility_path=config.db_path,
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
         )
         remediation_store = PostgresRemediationStore(
-            config.postgres_dsn,
-            compatibility_path=config.db_path,
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
+        )
+        repair_ticket_store = PostgresRepairTicketStore(
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
         )
     control_repository = build_control_repository(
-        sqlite_path=config.db_path,
-        postgres_dsn=config.control_postgres_dsn,
+        sqlite_path=selection.sqlite_path,
+        postgres_dsn=selection.control_postgres_dsn,
     )
     metrics = ControlPlaneMetrics(
         control_repository=control_repository,
@@ -469,7 +493,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         contract_service,
         verified_container_digests=config.template_verified_container_digests,
     )
-    if config.postgres_dsn is None:
+    if not selection.is_postgres:
         template_market_store = TemplateMarketStore(
             config.db_path,
             publication_gate=publication_gate,
@@ -477,12 +501,12 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         )
     else:
         template_market_store = PostgresTemplateMarketStore(
-            config.postgres_dsn,
-            compatibility_path=config.db_path,
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
             publication_gate=publication_gate,
             contract_service=contract_service,
         )
-    if config.postgres_dsn is None:
+    if not selection.is_postgres:
         run_publication_store = RunPublicationStore(
             config.db_path,
             run_store=store,
@@ -490,8 +514,8 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         )
     else:
         run_publication_store = PostgresRunPublicationStore(
-            config.postgres_dsn,
-            compatibility_path=config.db_path,
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
             run_store=store,
             contract_service=contract_service,
         )
@@ -678,10 +702,10 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     workspace_reader = _build_workspace_reader(config)
     observation_store = (
         SQLiteObservabilityStore(config.db_path)
-        if config.postgres_dsn is None
+        if not selection.is_postgres
         else PostgresObservabilityStore(
-            config.postgres_dsn,
-            compatibility_path=config.db_path,
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
         )
     )
     observability_service = ObservabilityService(store=observation_store)
@@ -690,9 +714,9 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             config.db_path,
             segment_root=config.evidence_root / "runtime-watch-segments",
         )
-        if config.postgres_dsn is None
+        if not selection.is_postgres
         else PostgresRuntimeWatchStore(
-            config.postgres_dsn,
+            postgres_dsn,
             segment_root=config.evidence_root / "runtime-watch-segments",
         )
     )
@@ -702,7 +726,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     if agent_capability_secret is not None:
         agent_session_store = build_agent_session_store(
             sqlite_path=config.db_path,
-            postgres_dsn=config.postgres_dsn,
+            postgres_dsn=postgres_dsn,
         )
         read_context = AgentReadContext(
             platform_snapshot_store=platform_snapshot_store,
@@ -714,7 +738,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         )
         project_store = build_project_store(
             sqlite_path=config.db_path,
-            postgres_dsn=config.postgres_dsn,
+            postgres_dsn=postgres_dsn,
         )
         workspace_source: WorkspaceSourceReader | None = None
         workspace_owner_roots: tuple[str, ...] = ()
@@ -793,7 +817,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             agent_task_service = AgentTaskService(
                 store=build_agent_task_store(
                     sqlite_path=config.db_path,
-                    postgres_dsn=config.postgres_dsn,
+                    postgres_dsn=postgres_dsn,
                 ),
                 session_store=agent_session_store,
                 session_service=agent_session_service,
@@ -827,7 +851,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 },
             )
         )
-    market_session_store = SQLiteMarketSessionStore(config.db_path)
+    market_session_store = build_market_session_store(selection=selection)
     market_application_service = MarketApplicationService(
         store=market_session_store,
         contract_service=contract_service,
@@ -855,7 +879,12 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         else None
     )
 
-    file_routes = _build_file_routes(config, ssh_relay_client, metrics=metrics)
+    file_routes = _build_file_routes(
+        config,
+        ssh_relay_client,
+        selection,
+        metrics=metrics,
+    )
     return Pilot107HttpApi(
         store=store,
         control_repository=control_repository,
@@ -873,6 +902,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         contract_service=contract_service,
         contract_store=contract_store,
         remediation_store=remediation_store,
+        repair_ticket_store=repair_ticket_store,
         evidence_store=shared_evidence_store,
         terminal_service=terminal_service,
         file_routes=file_routes,
@@ -882,7 +912,14 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             else SshConnectionService(
                 config=ssh_relay_client.config,
                 client=ssh_relay_client,
-                store=SshConnectionStore(config.db_path),
+                store=(
+                    PostgresSshConnectionStore(
+                        postgres_dsn,
+                        compatibility_path=selection.sqlite_path,
+                    )
+                    if selection.is_postgres
+                    else SshConnectionStore(selection.sqlite_path)
+                ),
             )
         ),
         template_market_store=template_market_store,
@@ -1360,6 +1397,34 @@ def _build_llm_provider(
 def _path(values: Mapping[str, str], name: str, default: Path) -> Path:
     value = values.get(name)
     return Path(value).expanduser() if value else default
+
+
+def _database_mode(
+    values: Mapping[str, str], *, postgres_dsn: str | None
+) -> DatabaseMode:
+    configured = values.get("PILOT107_DATABASE_MODE")
+    inferred = "postgres" if postgres_dsn else "sqlite"
+    try:
+        return DatabaseMode(configured or inferred)
+    except ValueError as exc:
+        raise ValueError("PILOT107_DATABASE_MODE must be sqlite or postgres") from exc
+
+
+def _load_postgres_dsn(values: Mapping[str, str]) -> str | None:
+    inline = values.get("PILOT107_POSTGRES_DSN") or None
+    secret_file = values.get("PILOT107_POSTGRES_DSN_FILE") or None
+    if inline is not None and secret_file is not None:
+        raise ValueError("PostgreSQL DSN cannot use both inline and file sources")
+    if secret_file is None:
+        return inline
+    try:
+        raw = Path(secret_file).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError("PostgreSQL DSN file cannot be read") from exc
+    lines = raw.splitlines()
+    if len(lines) != 1 or not lines[0].strip() or "\0" in lines[0]:
+        raise ValueError("PostgreSQL DSN file must contain exactly one non-empty line")
+    return lines[0].strip()
 
 
 def _optional_path(

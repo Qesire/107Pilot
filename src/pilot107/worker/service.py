@@ -46,9 +46,11 @@ from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig
 from pilot107.agent.store import AgentSessionStore
 from pilot107.agent.store_factory import (
+    DatabaseMode,
     build_agent_session_store,
     build_agent_task_store,
     build_project_store,
+    resolve_durable_store_selection,
 )
 from pilot107.core.advice import AgentAdviceService, AgentPolicyEngine
 from pilot107.core.agent import AgentExplainService, OpenAICompatibleLLMProvider
@@ -123,6 +125,7 @@ from pilot107.worker.telemetry import (
 class WorkerServiceConfig:
     db_path: Path
     evidence_root: Path
+    database_mode: DatabaseMode = DatabaseMode.SQLITE
     control_postgres_dsn: str | None = field(default=None, repr=False)
     postgres_dsn: str | None = field(default=None, repr=False)
     backend: str = "docker-compose-command"
@@ -427,17 +430,19 @@ def config_from_env(
 ) -> WorkerServiceConfig:
     values = os.environ if env is None else env
     root = project_root or Path(__file__).resolve().parents[3]
+    postgres_dsn = _load_postgres_dsn(values)
     compose_workdir = _path(values, "PILOT107_COMPOSE_WORKDIR", root / "simulator" / "compose")
     runtime_dir = root / "data" / "phase0"
     return WorkerServiceConfig(
         db_path=_path(values, "PILOT107_DB_PATH", runtime_dir / "pilot107.db"),
         evidence_root=_path(values, "PILOT107_EVIDENCE_ROOT", runtime_dir / "evidence"),
+        database_mode=_database_mode(values, postgres_dsn=postgres_dsn),
         control_postgres_dsn=(
             values.get("PILOT107_CONTROL_POSTGRES_DSN")
-            or values.get("PILOT107_POSTGRES_DSN")
+            or postgres_dsn
             or None
         ),
-        postgres_dsn=values.get("PILOT107_POSTGRES_DSN") or None,
+        postgres_dsn=postgres_dsn,
         backend=values.get("PILOT107_WORKER_BACKEND")
         or values.get("PILOT107_BACKEND", "docker-compose-command"),
         allowed_roots=tuple(_split_csv(values.get("PILOT107_ALLOWED_ROOTS", ""))),
@@ -566,24 +571,31 @@ def config_from_env(
 
 
 def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
+    selection = resolve_durable_store_selection(
+        database_mode=config.database_mode,
+        sqlite_path=config.db_path,
+        postgres_dsn=config.postgres_dsn,
+        control_postgres_dsn=config.control_postgres_dsn,
+    )
+    postgres_dsn = selection.postgres_dsn or ""
     agent_capability_secret = _load_agent_capability_secret(config)
-    if config.postgres_dsn is None:
-        store = RunStore(config.db_path)
-        contract_store = ContractStore(config.db_path)
-        remediation_store = RemediationStore(config.db_path)
+    if not selection.is_postgres:
+        store = RunStore(selection.sqlite_path)
+        contract_store = ContractStore(selection.sqlite_path)
+        remediation_store = RemediationStore(selection.sqlite_path)
     else:
-        store = PostgresRunStore(config.postgres_dsn, compatibility_path=config.db_path)
+        store = PostgresRunStore(postgres_dsn, compatibility_path=selection.sqlite_path)
         contract_store = PostgresContractStore(
-            config.postgres_dsn,
-            compatibility_path=config.db_path,
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
         )
         remediation_store = PostgresRemediationStore(
-            config.postgres_dsn,
-            compatibility_path=config.db_path,
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
         )
     control_repository = build_control_repository(
-        sqlite_path=config.db_path,
-        postgres_dsn=config.control_postgres_dsn,
+        sqlite_path=selection.sqlite_path,
+        postgres_dsn=selection.control_postgres_dsn,
     )
     agent_session_service: AgentSessionService | None = None
     agent_session_store: AgentSessionStore | None = None
@@ -593,7 +605,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             raise ValueError("complete pilot-agentd configuration is required when A1 is enabled")
         agent_session_store = build_agent_session_store(
             sqlite_path=config.db_path,
-            postgres_dsn=config.postgres_dsn,
+            postgres_dsn=selection.postgres_dsn,
         )
         agent_session_service = AgentSessionService(
             store=agent_session_store,
@@ -643,7 +655,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     if agent_session_store is not None and agent_session_service is not None:
         project_store = build_project_store(
             sqlite_path=config.db_path,
-            postgres_dsn=config.postgres_dsn,
+            postgres_dsn=selection.postgres_dsn,
         )
 
         def resolve_agent_workspace(
@@ -663,7 +675,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         agent_task_service = AgentTaskService(
             store=build_agent_task_store(
                 sqlite_path=config.db_path,
-                postgres_dsn=config.postgres_dsn,
+                postgres_dsn=selection.postgres_dsn,
             ),
             session_store=agent_session_store,
             session_service=agent_session_service,
@@ -735,9 +747,9 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         segment_root = config.evidence_root / "runtime-watch-segments"
         runtime_store = (
             SQLiteRuntimeWatchStore(config.db_path, segment_root=segment_root)
-            if config.postgres_dsn is None
+            if not selection.is_postgres
             else PostgresRuntimeWatchStore(
-                config.postgres_dsn,
+                postgres_dsn,
                 segment_root=segment_root,
             )
         )
@@ -786,10 +798,10 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             )
         observation_store = (
             SQLiteObservabilityStore(config.db_path)
-            if config.postgres_dsn is None
+            if not selection.is_postgres
             else PostgresObservabilityStore(
-                config.postgres_dsn,
-                compatibility_path=config.db_path,
+                postgres_dsn,
+                compatibility_path=selection.sqlite_path,
             )
         )
         observability_collector = ObservabilityCollector(
@@ -1349,6 +1361,34 @@ def _load_agent_capability_secret(config: WorkerServiceConfig) -> bytes | None:
 def _path(values: Mapping[str, str], name: str, default: Path) -> Path:
     value = values.get(name)
     return Path(value).expanduser() if value else default
+
+
+def _database_mode(
+    values: Mapping[str, str], *, postgres_dsn: str | None
+) -> DatabaseMode:
+    configured = values.get("PILOT107_DATABASE_MODE")
+    inferred = "postgres" if postgres_dsn else "sqlite"
+    try:
+        return DatabaseMode(configured or inferred)
+    except ValueError as exc:
+        raise ValueError("PILOT107_DATABASE_MODE must be sqlite or postgres") from exc
+
+
+def _load_postgres_dsn(values: Mapping[str, str]) -> str | None:
+    inline = values.get("PILOT107_POSTGRES_DSN") or None
+    secret_file = values.get("PILOT107_POSTGRES_DSN_FILE") or None
+    if inline is not None and secret_file is not None:
+        raise ValueError("PostgreSQL DSN cannot use both inline and file sources")
+    if secret_file is None:
+        return inline
+    try:
+        raw = Path(secret_file).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError("PostgreSQL DSN file cannot be read") from exc
+    lines = raw.splitlines()
+    if len(lines) != 1 or not lines[0].strip() or "\0" in lines[0]:
+        raise ValueError("PostgreSQL DSN file must contain exactly one non-empty line")
+    return lines[0].strip()
 
 
 def _optional_path(

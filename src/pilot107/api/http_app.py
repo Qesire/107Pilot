@@ -177,6 +177,7 @@ class Pilot107HttpApi:
         metrics: ControlPlaneMetrics | None = None,
         contract_store: ContractStore | None = None,
         remediation_store: RemediationStore | None = None,
+        repair_ticket_store: RepairTicketStore | None = None,
         evidence_store: EvidenceStore | None = None,
         terminal_service: TerminalCommandService | None = None,
         ssh_connection_service: SshConnectionService | None = None,
@@ -244,7 +245,7 @@ class Pilot107HttpApi:
         self.remediation_routes = RemediationRoutes(self.remediation_service)
         self.repair_ticket_service = RepairTicketService(
             run_store=store,
-            repair_ticket_store=RepairTicketStore(store.db_path),
+            repair_ticket_store=repair_ticket_store or RepairTicketStore(store.db_path),
             remediation_store=self.remediation_service.remediation_store,
             project_store=(
                 None if project_agent_service is None else project_agent_service.store

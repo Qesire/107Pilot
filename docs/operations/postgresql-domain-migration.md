@@ -1,6 +1,7 @@
 # PostgreSQL 业务域迁移 Runbook
 
-`PILOT107_POSTGRES_DSN` 是生产业务数据库的唯一开关。设置它后，API 与
+`PILOT107_DATABASE_MODE=postgres` 是生产业务数据库模式开关。生产通过
+`PILOT107_POSTGRES_DSN_FILE` 提供 DSN；`PILOT107_POSTGRES_DSN` 仅用于隔离测试。设置后，API 与
 Worker 会同时使用 PostgreSQL 保存 Run、Contract、平台快照、权益快照、模板市场、
 修复会话及 control-plane 的 lease/outbox/trace。`PILOT107_CONTROL_POSTGRES_DSN`
 仍可用于旧的“只迁 control-plane”兼容模式，但不能和前者混用为两个不同数据库。
@@ -24,7 +25,8 @@ SQLite 继续只作为本地开发、离线演示和迁移回退证据库；生�
 4. 从运行节点执行（DSN 只经环境传递）：
 
    ```bash
-   export PILOT107_POSTGRES_DSN='postgresql://…'
+   export PILOT107_DATABASE_MODE=postgres
+   export PILOT107_POSTGRES_DSN_FILE='/run/secrets/pilot107-postgres-dsn'
    PYTHONPATH=src uv run python scripts/migrate-sqlite-domain-to-postgres.py \
      --sqlite-db /var/lib/pilot107/pilot107.db --source-quiesced
    ```
@@ -38,7 +40,7 @@ SQLite 继续只作为本地开发、离线演示和迁移回退证据库；生�
      --sqlite-db /var/lib/pilot107/pilot107.db --verify-only
    ```
 
-6. 为 API 和 Worker 同时设置同一个 `PILOT107_POSTGRES_DSN`，再启动 Worker，最后启动
+6. 为 API 和 Worker 同时设置同一个数据库模式和 DSN secret file，再启动 Worker，最后启动
    API。先执行只读 snapshot、模板进入 Studio、短作业提交/查询、完成后 Evidence 与
    capsule 收集、Agent 修复会话六条验证；每条都记录 run_id、Slurm job_id、request_id
    和数据库 migration ID。

@@ -1152,6 +1152,152 @@ _RUNTIME_ALERT_SCHEMA = _statements(
     "ON runtime_alerts(owner, run_id, created_at, alert_id)"
 )
 
+_RUN_PUBLICATION_SHARE_MANIFEST_SCHEMA = _statements(
+    "ALTER TABLE run_publications ADD COLUMN share_manifest_json TEXT NOT NULL DEFAULT '{}'"
+    "\n-- statement\n"
+    "ALTER TABLE run_publications ADD COLUMN share_manifest_digest TEXT NOT NULL DEFAULT ''"
+    "\n-- statement\n"
+    "ALTER TABLE run_publications ADD COLUMN shared_payload_json TEXT NOT NULL DEFAULT '{}'"
+)
+
+_MARKET_SESSION_SCHEMA = _statements(
+    """
+    CREATE TABLE template_publication_sessions (
+        session_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        request_key TEXT NOT NULL,
+        source_run_id TEXT NOT NULL,
+        source_contract_id TEXT NOT NULL,
+        source_digest TEXT NOT NULL,
+        bundle_digest TEXT NOT NULL,
+        draft_id TEXT,
+        state TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        reproduction_evidence_ref TEXT,
+        reproduction_evidence_digest TEXT,
+        reproduction_environment TEXT,
+        confirmation_digest TEXT,
+        review_id TEXT,
+        release_id TEXT,
+        release_version TEXT,
+        verification_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(owner, source_run_id),
+        UNIQUE(owner, request_key)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_template_publication_sessions_owner_created "
+    "ON template_publication_sessions(owner, created_at, session_id)"
+    "\n-- statement\n"
+    """
+    CREATE TABLE market_application_sessions (
+        session_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        request_key TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        source_item_id TEXT NOT NULL,
+        source_digest TEXT NOT NULL,
+        assurance TEXT NOT NULL,
+        user_intent TEXT NOT NULL,
+        state TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        project_id TEXT,
+        workspace_id TEXT,
+        change_set_id TEXT,
+        target_contract_id TEXT,
+        adoption_id TEXT,
+        detail_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(owner, request_key),
+        CHECK (source_kind IN ('curated_template', 'run_publication')),
+        CHECK (assurance IN ('curated', 'reference_only'))
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_market_application_sessions_owner_created "
+    "ON market_application_sessions(owner, created_at, session_id)"
+)
+
+_REPAIR_TICKET_SCHEMA = _statements(
+    """
+    CREATE TABLE artifact_manifests (
+        manifest_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        run_id TEXT,
+        revision TEXT NOT NULL,
+        dirty_diff_digest TEXT,
+        bundle_digest TEXT,
+        remote_workdir TEXT,
+        local_test_summary TEXT,
+        disclosure TEXT NOT NULL DEFAULT 'metadata_only',
+        created_at TEXT NOT NULL,
+        CHECK (disclosure IN ('metadata_only', 'summary'))
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_artifact_manifests_owner "
+    "ON artifact_manifests(owner, created_at DESC)"
+    "\n-- statement\n"
+    "CREATE INDEX idx_artifact_manifests_run "
+    "ON artifact_manifests(run_id, created_at DESC)"
+    "\n-- statement\n"
+    """
+    CREATE TABLE repair_tickets (
+        ticket_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'open',
+        source_run_id TEXT NOT NULL,
+        source_contract_id TEXT,
+        session_id TEXT,
+        diagnosis_ids_json TEXT NOT NULL DEFAULT '[]',
+        cited_facts_json TEXT NOT NULL DEFAULT '[]',
+        code_context_json TEXT,
+        requested_change TEXT,
+        no_go_constraints_json TEXT NOT NULL DEFAULT '[]',
+        resolution_manifest_id TEXT REFERENCES artifact_manifests(manifest_id),
+        resolution_run_id TEXT,
+        resolution_comparison_json TEXT,
+        abandon_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK (state IN ('open', 'resolved', 'abandoned'))
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_repair_tickets_owner_state "
+    "ON repair_tickets(owner, state, updated_at DESC, ticket_id DESC)"
+    "\n-- statement\n"
+    "CREATE INDEX idx_repair_tickets_source_run "
+    "ON repair_tickets(source_run_id, created_at)"
+    "\n-- statement\n"
+    "CREATE INDEX idx_repair_tickets_session "
+    "ON repair_tickets(session_id, created_at)"
+)
+
+_SSH_CONNECTION_SCHEMA = _statements(
+    """
+    CREATE TABLE ssh_connection_sessions (
+        connection_id TEXT PRIMARY KEY,
+        portal_owner TEXT NOT NULL,
+        slurm_user TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        status_code TEXT NOT NULL,
+        message TEXT NOT NULL,
+        authenticated_at TEXT,
+        expires_at TEXT,
+        checked_at TEXT,
+        revision INTEGER NOT NULL CHECK(revision > 0),
+        CHECK(state IN (
+            'active', 'auth_required', 'revoked', 'expired', 'unavailable'
+        ))
+    )
+    """
+)
+
 _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.001.postgres_domain_schema", _DOMAIN_SCHEMA),
     ("004a.002.run_publications", _RUN_PUBLICATION_SCHEMA),
@@ -1171,6 +1317,10 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.016.agent_tasks", _AGENT_TASK_SCHEMA),
     ("004a.017.workflow_manifests", _WORKFLOW_MANIFEST_SCHEMA),
     ("004a.018.agent_workspace_publications", _AGENT_WORKSPACE_PUBLICATION_SCHEMA),
+    ("004a.019.run_publication_share_manifest", _RUN_PUBLICATION_SHARE_MANIFEST_SCHEMA),
+    ("004a.020.market_sessions", _MARKET_SESSION_SCHEMA),
+    ("004a.021.repair_tickets", _REPAIR_TICKET_SCHEMA),
+    ("004a.022.ssh_connection_sessions", _SSH_CONNECTION_SCHEMA),
 )
 
 
@@ -1237,6 +1387,8 @@ def domain_table_names() -> tuple[str, ...]:
         "template_verifications",
         "run_publications",
         "run_publication_adoptions",
+        "template_publication_sessions",
+        "market_application_sessions",
         "remediation_sessions",
         "remediation_turns",
         "remediation_action_proposals",
@@ -1261,6 +1413,9 @@ def domain_table_names() -> tuple[str, ...]:
         "resource_observations",
         "observation_cycles",
         "observation_run_targets",
+        "artifact_manifests",
+        "repair_tickets",
+        "ssh_connection_sessions",
     )
 
 

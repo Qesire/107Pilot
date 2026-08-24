@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from pilot107.agent.market_sessions import SQLiteMarketSessionStore
 from pilot107.agent.project_store import SQLiteProjectStore
 from pilot107.agent.store import SQLiteAgentSessionStore
 from pilot107.agent.task_store import SQLiteAgentTaskStore
@@ -22,8 +23,10 @@ from pilot107.core.postgres_domain_migration import (
 from pilot107.core.postgres_domain_schema import domain_table_names, persisted_table_names
 from pilot107.core.postgres_domain_stores import _translate_sql
 from pilot107.core.remediation_store import RemediationStore
+from pilot107.core.repair_ticket_store import RepairTicketStore
 from pilot107.core.run_publications import RunPublicationStore
 from pilot107.core.run_store import RunStore
+from pilot107.core.ssh_connections import SshConnectionStore
 from pilot107.core.template_market import TemplateMarketStore
 from pilot107.core.user_entitlement_store import UserEntitlementStore
 from pilot107.observability.store import SQLiteObservabilityStore
@@ -66,6 +69,8 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
                 "template_releases",
                 "run_publications",
                 "run_publication_adoptions",
+                "market_application_sessions",
+                "template_publication_sessions",
                 "remediation_sessions",
                 "agent_sessions",
                 "agent_turns",
@@ -80,6 +85,9 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
                 "runtime_alerts",
                 "observation_cycles",
                 "observation_run_targets",
+                "artifact_manifests",
+                "repair_tickets",
+                "ssh_connection_sessions",
             }.issubset(names)
         )
         self.assertEqual(len(names), len(domain_table_names()))
@@ -96,7 +104,10 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
             UserEntitlementStore(database)
             TemplateMarketStore(database)
             RunPublicationStore(database, run_store=run_store)
+            SQLiteMarketSessionStore(database)
             RemediationStore(database)
+            RepairTicketStore(database)
+            SshConnectionStore(database)
             UploadSessionStore(database)
             SQLiteAgentSessionStore(database)
             SQLiteProjectStore(database)

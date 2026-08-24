@@ -16,8 +16,10 @@ import importlib
 import re
 import sqlite3
 from pathlib import Path
+from threading import RLock
 from typing import Any, cast
 
+from pilot107.agent.market_sessions import SQLiteMarketSessionStore
 from pilot107.agent.postgres_store import PostgresAgentSessionStore
 from pilot107.core.contracts import ContractService, ContractStore
 from pilot107.core.file_uploads import UploadSessionStore
@@ -25,8 +27,10 @@ from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.postgres_control_repository import PostgresDriverUnavailable
 from pilot107.core.postgres_domain_schema import initialize_postgres_domain_schema
 from pilot107.core.remediation_store import RemediationStore
+from pilot107.core.repair_ticket_store import RepairTicketStore
 from pilot107.core.run_publications import RunPublicationStore
 from pilot107.core.run_store import RunStore
+from pilot107.core.ssh_connections import SshConnectionStore
 from pilot107.core.template_market import TemplateMarketStore
 from pilot107.core.template_policy import TemplatePublicationGate
 from pilot107.core.user_entitlement_store import UserEntitlementStore
@@ -193,14 +197,42 @@ class PostgresUploadSessionStore(_PostgresDomainStore, UploadSessionStore):
         return cast(sqlite3.Connection, self._postgres_connect())
 
 
+class PostgresMarketSessionStore(_PostgresDomainStore, SQLiteMarketSessionStore):
+    def __init__(self, dsn: str, *, compatibility_path: Path) -> None:
+        self._configure_postgres(dsn=dsn, compatibility_path=compatibility_path)
+
+    def connect(self) -> sqlite3.Connection:
+        return cast(sqlite3.Connection, self._postgres_connect())
+
+
+class PostgresRepairTicketStore(_PostgresDomainStore, RepairTicketStore):
+    def __init__(self, dsn: str, *, compatibility_path: Path) -> None:
+        self._configure_postgres(dsn=dsn, compatibility_path=compatibility_path)
+
+    def connect(self) -> sqlite3.Connection:
+        return cast(sqlite3.Connection, self._postgres_connect())
+
+
+class PostgresSshConnectionStore(_PostgresDomainStore, SshConnectionStore):
+    def __init__(self, dsn: str, *, compatibility_path: Path) -> None:
+        self._lock = RLock()
+        self._configure_postgres(dsn=dsn, compatibility_path=compatibility_path)
+
+    def _connect(self) -> sqlite3.Connection:
+        return cast(sqlite3.Connection, self._postgres_connect())
+
+
 __all__ = [
     "PostgresAgentSessionStore",
     "PostgresContractStore",
     "PostgresDomainStoreError",
+    "PostgresMarketSessionStore",
     "PostgresPlatformSnapshotStore",
     "PostgresRemediationStore",
+    "PostgresRepairTicketStore",
     "PostgresRunPublicationStore",
     "PostgresRunStore",
+    "PostgresSshConnectionStore",
     "PostgresTemplateMarketStore",
     "PostgresUploadSessionStore",
     "PostgresUserEntitlementStore",
