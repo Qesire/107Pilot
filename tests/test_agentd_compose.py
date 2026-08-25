@@ -138,6 +138,12 @@ def test_python_services_receive_only_agentd_model_configuration(
     assert environment["PILOT107_AGENTD_URL"] == "http://pilot-agentd:8091"
     assert "PILOT107_AGENTD_TOKEN" in environment
     assert "PILOT107_AGENTD_MODEL_PROFILE" in environment
+    assert environment["PILOT107_AGENTD_TIMEOUT_SECONDS"] == (
+        "${PILOT107_AGENTD_TIMEOUT_SECONDS:-60}"
+    )
+    assert environment["PILOT107_AGENTD_MAX_OUTPUT_TOKENS"] == (
+        "${PILOT107_AGENTD_MAX_OUTPUT_TOKENS:-1200}"
+    )
     assert not any(key.startswith("PILOT107_LLM_") for key in environment)
     assert service["depends_on"]["pilot-agentd"] == {"condition": "service_healthy"}
 
