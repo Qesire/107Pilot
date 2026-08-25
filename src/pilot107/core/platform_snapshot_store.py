@@ -23,6 +23,7 @@ from pilot107.core.schema_migrations import apply_schema_migrations
 
 _OWNER = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _SNAPSHOT_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+VM_SLURM_SOURCE_NAME = "vm-slurm"
 
 class PlatformSnapshotStoreError(ValueError):
     def __init__(self, message: str, *, code: str) -> None:
@@ -100,6 +101,13 @@ class PlatformSnapshotRecord:
                     command.pop("stdout", None)
                     command.pop("stderr", None)
         return {**self.summary_payload(at=at), "snapshot": payload}
+
+
+@dataclass(frozen=True)
+class AuthoritativeSnapshotSelection:
+    record: PlatformSnapshotRecord
+    authority_id: str
+    warnings: tuple[str, ...]
 
 
 class PlatformSnapshotStore:
@@ -234,6 +242,38 @@ class PlatformSnapshotStore:
             ).fetchone()
         return None if row is None else _row_to_record(row)
 
+    def latest_usable(
+        self,
+        *,
+        owner: str,
+        source_name: str = VM_SLURM_SOURCE_NAME,
+        at: datetime | None = None,
+    ) -> AuthoritativeSnapshotSelection | None:
+        _validate_owner(owner)
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM platform_snapshots "
+                "WHERE owner = ? AND source_name = ? "
+                "ORDER BY captured_at DESC, snapshot_id DESC",
+                (owner, source_name),
+            ).fetchall()
+        for row in rows:
+            record = _row_to_record(row)
+            if not _has_healthy_slurm_capacity(record):
+                continue
+            warnings: list[str] = []
+            if record.collection_status is SnapshotCollectionStatus.PARTIAL:
+                warnings.append("partial_ancillary_facts")
+            freshness = record.freshness(at=at)
+            if freshness is SnapshotFreshness.STALE:
+                warnings.append("stale_authoritative_snapshot")
+            return AuthoritativeSnapshotSelection(
+                record=record,
+                authority_id=source_name,
+                warnings=tuple(warnings),
+            )
+        return None
+
     def list_page(
         self,
         *,
@@ -287,6 +327,31 @@ class PlatformSnapshotStore:
                 secondary=str(last["snapshot_id"]),
             )
         return items, next_position
+
+
+def _has_healthy_slurm_capacity(record: PlatformSnapshotRecord) -> bool:
+    command_results = record.payload.get("command_results")
+    partitions = record.payload.get("partitions")
+    nodes = record.payload.get("nodes")
+    if (
+        not isinstance(command_results, list)
+        or not isinstance(partitions, list)
+        or not partitions
+        or not isinstance(nodes, list)
+        or not nodes
+    ):
+        return False
+    statuses = {
+        item.get("name"): item.get("returncode")
+        for item in command_results
+        if isinstance(item, dict)
+        and isinstance(item.get("name"), str)
+        and isinstance(item.get("returncode"), int)
+        and not isinstance(item.get("returncode"), bool)
+    }
+    return statuses.get("scontrol_show_part") == 0 and (
+        statuses.get("scontrol_show_nodes") == 0 or statuses.get("sinfo_pipe") == 0
+    )
 
 
 def _row_to_record(row: sqlite3.Row) -> PlatformSnapshotRecord:

@@ -6,7 +6,9 @@ from pathlib import Path
 
 from pilot107.core.platform_snapshot import (
     CommandObservation,
+    NodeSnapshot,
     ObservationSourceType,
+    PartitionSnapshot,
     PlatformSnapshot,
     PlatformSnapshotScope,
 )
@@ -17,6 +19,8 @@ from pilot107.core.platform_snapshot_store import (
     SnapshotFreshness,
 )
 from pilot107.core.run_store import RunStore
+
+_VM_SLURM_SOURCE_NAME = "vm-slurm"
 
 
 class PlatformSnapshotStoreTests(unittest.TestCase):
@@ -146,6 +150,99 @@ class PlatformSnapshotStoreTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.code, "PLATFORM_SNAPSHOT.IDEMPOTENCY_CONFLICT")
 
+    def test_latest_usable_keeps_partial_snapshot_with_healthy_slurm_capacity(self) -> None:
+        healthy = self.store.create(
+            owner="alice",
+            snapshot=_slurm_snapshot(
+                "snapshot_vm_healthy",
+                "2026-07-15T00:00:00+00:00",
+                conda_returncode=127,
+            ),
+            source_type=ObservationSourceType.CLI,
+            source_name=_VM_SLURM_SOURCE_NAME,
+            expires_at="2026-07-15T02:00:00+00:00",
+        )
+        self.store.create(
+            owner="alice",
+            snapshot=_snapshot("snapshot_vm_degraded", "2026-07-15T00:10:00+00:00"),
+            source_type=ObservationSourceType.CLI,
+            source_name=_VM_SLURM_SOURCE_NAME,
+            expires_at="2026-07-15T02:10:00+00:00",
+        )
+        self.store.create(
+            owner="alice",
+            snapshot=_slurm_snapshot(
+                "snapshot_rest_newest",
+                "2026-07-15T00:20:00+00:00",
+            ),
+            source_type=ObservationSourceType.REST,
+            source_name="slurm-rest-diagnostic",
+            expires_at="2026-07-15T02:20:00+00:00",
+        )
+
+        selection = self.store.latest_usable(
+            owner="alice",
+            at=datetime(2026, 7, 15, 1, tzinfo=UTC),
+        )
+
+        self.assertIsNotNone(selection)
+        assert selection is not None
+        self.assertEqual(selection.record.snapshot_id, healthy.snapshot_id)
+        self.assertEqual(selection.authority_id, _VM_SLURM_SOURCE_NAME)
+        self.assertEqual(selection.warnings, ("partial_ancillary_facts",))
+
+    def test_latest_usable_marks_last_healthy_snapshot_stale(self) -> None:
+        self.store.create(
+            owner="alice",
+            snapshot=_slurm_snapshot(
+                "snapshot_vm_stale",
+                "2026-07-15T00:00:00+00:00",
+            ),
+            source_type=ObservationSourceType.CLI,
+            source_name=_VM_SLURM_SOURCE_NAME,
+            expires_at="2026-07-15T00:30:00+00:00",
+        )
+
+        selection = self.store.latest_usable(
+            owner="alice",
+            at=datetime(2026, 7, 15, 1, tzinfo=UTC),
+        )
+
+        self.assertIsNotNone(selection)
+        assert selection is not None
+        self.assertEqual(selection.record.snapshot_id, "snapshot_vm_stale")
+        self.assertEqual(selection.warnings, ("stale_authoritative_snapshot",))
+
+    def test_latest_usable_returns_none_without_healthy_slurm_capacity(self) -> None:
+        self.store.create(
+            owner="alice",
+            snapshot=_snapshot("snapshot_vm_empty", "2026-07-15T00:00:00+00:00"),
+            source_type=ObservationSourceType.CLI,
+            source_name=_VM_SLURM_SOURCE_NAME,
+            expires_at="2026-07-15T02:00:00+00:00",
+        )
+
+        self.assertIsNone(self.store.latest_usable(owner="alice"))
+
+    def test_latest_usable_accepts_sinfo_as_the_node_probe_fallback(self) -> None:
+        self.store.create(
+            owner="alice",
+            snapshot=_slurm_snapshot(
+                "snapshot_vm_sinfo",
+                "2026-07-15T00:00:00+00:00",
+                node_probe_name="sinfo_pipe",
+            ),
+            source_type=ObservationSourceType.CLI,
+            source_name=_VM_SLURM_SOURCE_NAME,
+            expires_at="2026-07-15T02:00:00+00:00",
+        )
+
+        selection = self.store.latest_usable(owner="alice")
+
+        self.assertIsNotNone(selection)
+        assert selection is not None
+        self.assertEqual(selection.record.snapshot_id, "snapshot_vm_sinfo")
+
     def test_migration_coexists_with_existing_run_database(self) -> None:
         run_store = RunStore(self.db_path)
         run_store.create_run(
@@ -182,6 +279,69 @@ def _snapshot(snapshot_id: str, captured_at: str) -> PlatformSnapshot:
                 stdout="anode16\n",
                 stderr="",
             ),
+        ),
+    )
+
+
+def _slurm_snapshot(
+    snapshot_id: str,
+    captured_at: str,
+    *,
+    conda_returncode: int = 0,
+    node_probe_name: str = "scontrol_show_nodes",
+) -> PlatformSnapshot:
+    node_probe_argv = (
+        ("sinfo", "-h", "-o", "%N|%P|%t|%c|%m|%G|%E")
+        if node_probe_name == "sinfo_pipe"
+        else ("scontrol", "show", "nodes")
+    )
+    command_results = (
+        CommandObservation(
+            name="scontrol_show_part",
+            argv=("scontrol", "show", "part"),
+            returncode=0,
+            stdout="PartitionName=CPU-RC State=UP Nodes=worker-1\n",
+            stderr="",
+        ),
+        CommandObservation(
+            name=node_probe_name,
+            argv=node_probe_argv,
+            returncode=0,
+            stdout="NodeName=worker-1 CPUTot=6 RealMemory=10240 State=IDLE\n",
+            stderr="",
+        ),
+        CommandObservation(
+            name="conda_env_list_json",
+            argv=("conda", "env", "list", "--json"),
+            returncode=conda_returncode,
+            stdout="{\"envs\": []}" if conda_returncode == 0 else "",
+            stderr="" if conda_returncode == 0 else "command unavailable",
+        ),
+    )
+    return PlatformSnapshot(
+        snapshot_id=snapshot_id,
+        scope=PlatformSnapshotScope.LOGIN_NODE,
+        captured_at=captured_at,
+        collector_version="test.v1",
+        command_results=command_results,
+        partitions=(
+            PartitionSnapshot(
+                name="CPU-RC",
+                nodes="worker-1",
+                total_cpus=6,
+                total_nodes=1,
+            ),
+        ),
+        nodes=(
+            NodeSnapshot(
+                node_name="worker-1",
+                partitions=("CPU-RC",),
+                cpus_total=6,
+                memory_mb=10_240,
+            ),
+        ),
+        limitations=(
+            ("conda env list unavailable",) if conda_returncode != 0 else ()
         ),
     )
 
