@@ -94,7 +94,10 @@ from pilot107.core.platform import (
     load_capability_profile,
 )
 from pilot107.core.platform_snapshot import ObservationSourceType
-from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
+from pilot107.core.platform_snapshot_store import (
+    VM_SLURM_SOURCE_NAME,
+    PlatformSnapshotStore,
+)
 from pilot107.core.postgres_domain_stores import (
     PostgresContractStore,
     PostgresPlatformSnapshotStore,
@@ -585,8 +588,10 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             return
         snapshot_freshness_monitor.record_success()
 
-    # Initial collection at startup (non-blocking on failure)
-    _collect_and_store_snapshot()
+    # REST is diagnostic-only for command-gateway deployments; the VM-local
+    # CLI collection below is their sole platform-fact authority.
+    if config.backend != "command-gateway":
+        _collect_and_store_snapshot()
 
     # --- A-1b: Login-node CLI snapshot auto-collect via command-gateway ---
     # The slurmrestd REST path (A-1) only yields a simulator-scope snapshot and
@@ -627,7 +632,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                     owner=user,
                     username=user,
                     source_type=ObservationSourceType.CLI,
-                    source_name="command-gateway-auto",
+                    source_name=VM_SLURM_SOURCE_NAME,
                     home=home,
                     ttl_seconds=300,
                 )
@@ -653,9 +658,10 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     def _refresh_loop() -> None:
         while True:
             threading.Event().wait(timeout=300.0)
-            _collect_and_store_snapshot()
             if config.backend == "command-gateway":
                 _collect_and_store_login_snapshots()
+            else:
+                _collect_and_store_snapshot()
 
     refresh_thread = threading.Thread(
         target=_refresh_loop, name="slurmrest-snapshot-refresh", daemon=True

@@ -145,3 +145,50 @@ def test_build_api_service_uses_slurm_username_as_snapshot_owner(
     assert "pilot107-system" not in captured_owners, (
         "must not store startup snapshot under pilot107-system"
     )
+
+
+def test_command_gateway_uses_only_vm_slurm_cli_as_authority(
+    cpu_rc_env, monkeypatch
+):
+    monkeypatch.setenv("PILOT107_API_BACKEND", "command-gateway")
+    monkeypatch.setenv("PILOT107_ALLOWED_ROOTS", "/public/home/alice")
+    monkeypatch.setenv("PILOT107_SLURM_USER_NAME", "alice")
+    service_module = _reload_service_module()
+    rest_collections: list[str] = []
+    login_collections: list[dict[str, object]] = []
+
+    class StubRestCollector:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def collect(self, *, captured_at=None):
+            rest_collections.append(captured_at or "startup")
+            raise AssertionError("REST must not collect command-gateway authority facts")
+
+    class StubPlatformSnapshotService:
+        def __init__(self, *, collector):
+            self.collector = collector
+
+        def collect_and_store_login_snapshot(self, **kwargs):
+            login_collections.append(dict(kwargs))
+            return None
+
+    monkeypatch.setattr(
+        service_module,
+        "SlurmrestSnapshotCollector",
+        StubRestCollector,
+    )
+    monkeypatch.setattr(
+        service_module,
+        "PlatformSnapshotService",
+        StubPlatformSnapshotService,
+    )
+
+    with contextlib.suppress(Exception):
+        service_module.build_api_service(service_module.config_from_env())
+
+    assert rest_collections == []
+    assert len(login_collections) == 1
+    assert login_collections[0]["owner"] == "alice"
+    assert login_collections[0]["source_type"].value == "cli"
+    assert login_collections[0]["source_name"] == "vm-slurm"
