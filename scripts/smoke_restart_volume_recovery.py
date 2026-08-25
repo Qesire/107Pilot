@@ -29,6 +29,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,19 +45,26 @@ HEADERS = {"Content-Type": "application/json", "X-Pilot107-User": "alice"}
 SSL_CONTEXT = ssl._create_unverified_context() if BASE_URL.startswith("https://") else None
 
 
+def _new_recovery_paths() -> tuple[str, str]:
+    scope = f"pilot107-restart-recovery-{uuid.uuid4().hex}"
+    return f"{scope}/pre/result.txt", f"{scope}/post/result.txt"
+
+
 def main() -> int:
     try:
+        pre_rel, post_rel = _new_recovery_paths()
+
         # 1. Submit a success run and wait for SUCCEEDED + capsule ready.
         command = (
             "hostname\n"
             "echo restart-recovery-pre\n"
-            "mkdir -p pilot107-restart-recovery-pre\n"
-            "echo ok > pilot107-restart-recovery-pre/result.txt\n"
+            f"mkdir -p {Path(pre_rel).parent}\n"
+            f"echo ok > {pre_rel}\n"
         )
         pre = _create_submit_and_wait(
             command=command,
             expected_state="SUCCEEDED",
-            expected_outputs=["pilot107-restart-recovery-pre/result.txt"],
+            expected_outputs=[pre_rel],
         )
         pre_run_id = pre["run_id"]
         pre = _wait_capsule_ready(pre_run_id)
@@ -126,20 +134,24 @@ def main() -> int:
         new_command = (
             "hostname\n"
             "echo restart-recovery-post\n"
-            "mkdir -p pilot107-restart-recovery-post\n"
-            "echo ok > pilot107-restart-recovery-post/result.txt\n"
+            f"mkdir -p {Path(post_rel).parent}\n"
+            f"echo ok > {post_rel}\n"
         )
         post = _create_submit_and_wait(
             command=new_command,
             expected_state="SUCCEEDED",
-            expected_outputs=["pilot107-restart-recovery-post/result.txt"],
+            expected_outputs=[post_rel],
         )
         post_run_id = post["run_id"]
         post = _wait_capsule_ready(post_run_id)
         _assert_state(post, "post-restart")
 
         # 6. Assert output evidence attribution for the post-restart run.
-        _assert_post_restart_inventory(post_run_id)
+        _assert_post_restart_inventory(
+            post_run_id,
+            pre_rel=pre_rel,
+            post_rel=post_rel,
+        )
 
         print(f"restart-volume-recovery ok pre_restart={pre_run_id} post_restart={post_run_id}")
         return 0
@@ -213,7 +225,12 @@ def _contract(command: str, *, expected_outputs: list[str]) -> dict:
     }
 
 
-def _assert_post_restart_inventory(post_run_id: str) -> None:
+def _assert_post_restart_inventory(
+    post_run_id: str,
+    *,
+    pre_rel: str,
+    post_rel: str,
+) -> None:
     """Verify the post-restart run's outputs/inventory.json attributes files correctly.
 
     The post-restart run shares the workdir with the pre-restart run, so the
@@ -242,9 +259,6 @@ def _assert_post_restart_inventory(post_run_id: str) -> None:
         )
     inventory = json.loads(payload["content"])
     files_by_path = {item["relative_path"]: item for item in inventory.get("files", [])}
-
-    post_rel = "pilot107-restart-recovery-post/result.txt"
-    pre_rel = "pilot107-restart-recovery-pre/result.txt"
 
     post_entry = files_by_path.get(post_rel)
     if post_entry is None:
