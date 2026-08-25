@@ -259,6 +259,24 @@ class PublicationRelayClient(FakeRelayClient):
         return CommandResult(0, self.outputs.pop(0), "")
 
 
+class SearchRelayClient(FakeRelayClient):
+    def __init__(self, config: SshRelayConfig, outputs: list[dict[str, object]]) -> None:
+        super().__init__(config)
+        self.outputs = outputs
+        self.file_shell_commands: list[str] = []
+
+    def run_file_shell(
+        self,
+        shell_command: str,
+        *,
+        stdin: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> CommandResult:
+        del stdin, timeout_seconds
+        self.file_shell_commands.append(shell_command)
+        return CommandResult(0, json.dumps(self.outputs.pop(0)) + "\n", "")
+
+
 def test_ssh_publication_relay_exposes_typed_digest_and_compare_swap(tmp_path: Path) -> None:
     client = PublicationRelayClient(
         relay_config(tmp_path),
@@ -315,6 +333,85 @@ def test_ssh_file_manifest_preserves_special_file_types(tmp_path: Path) -> None:
     assert "stat.S_ISSOCK" in client.file_shell
     command = shlex.split(client.file_shell)
     compile(command[2], "<ssh-file-manifest>", "exec")
+
+
+def test_ssh_file_search_uses_bounded_remote_projection_and_signed_cursor(
+    tmp_path: Path,
+) -> None:
+    client = SearchRelayClient(
+        relay_config(tmp_path),
+        [
+            {
+                "items": [
+                    {
+                        "path": "/public/home/alice/models/a.bin",
+                        "relative_path": "models/a.bin",
+                        "type": "file",
+                        "size": 7,
+                        "mtime": 123,
+                    }
+                ],
+                "incomplete": True,
+                "stack": [{"relative_dir": "models", "index": 1}],
+                "warnings": [],
+            },
+            {"items": [], "incomplete": False, "stack": [], "warnings": []},
+        ],
+    )
+    executor = SshRelayExecutor(client)
+
+    first = executor.search_files(
+        root="/public/home/alice",
+        q="model",
+        kind="all",
+        size_min=None,
+        size_max=None,
+        mtime_from=None,
+        mtime_to=None,
+        limit=20,
+        cursor=None,
+        scan_limit=1000,
+        time_limit_ms=750,
+        owner="alice",
+    )
+    second = executor.search_files(
+        root="/public/home/alice",
+        q="model",
+        kind="all",
+        size_min=None,
+        size_max=None,
+        mtime_from=None,
+        mtime_to=None,
+        limit=20,
+        cursor=first.next_cursor,
+        scan_limit=1000,
+        time_limit_ms=750,
+        owner="alice",
+    )
+
+    assert first.items[0].relative_path == "models/a.bin"
+    assert first.next_cursor is not None
+    assert second.next_cursor is None
+    for command in client.file_shell_commands:
+        tokens = shlex.split(command)
+        assert tokens[:2] == ["python3", "-c"]
+        compile(tokens[2], "<ssh-file-search>", "exec")
+
+    with pytest.raises(RuntimeError, match="invalid search cursor"):
+        executor.search_files(
+            root="/public/home/alice",
+            q="model",
+            kind="all",
+            size_min=None,
+            size_max=None,
+            mtime_from=None,
+            mtime_to=None,
+            limit=20,
+            cursor=f"{first.next_cursor}tampered",
+            scan_limit=1000,
+            time_limit_ms=750,
+            owner="alice",
+        )
 
 
 def resource_plan() -> ResourcePlan:

@@ -10,6 +10,7 @@ password, OTP, private key, or agent socket.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -23,8 +24,14 @@ from pilot107.adapters.slurm import (
     CommandResult,
     DiskUsage,
     FileEntry,
+    FileSearchEntry,
+    FileSearchPage,
     FileStat,
+    SlurmSubmissionRejected,
     SlurmTransportError,
+    _decode_local_search_cursor,
+    _encode_local_search_cursor,
+    _validate_local_search_stack,
 )
 from pilot107.core.identity import is_safe_username
 from pilot107.core.path_policy import OwnerRootPolicyError, resolve_owner_roots
@@ -35,6 +42,92 @@ _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _SAFE_SLURM_ATOM = re.compile(r"^[A-Za-z0-9_.:+/@=%,-]+$")
 _SAFE_FORMAT = re.compile(r"^[A-Za-z0-9%|,._:+@=-]+$")
 _BASE64_ALPHABET = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
+
+_SSH_FILE_SEARCH_SCRIPT = r"""
+import json
+import os
+import posixpath
+import sys
+import time
+
+request = json.loads(sys.argv[1])
+root = sys.argv[2]
+stack = request["stack"]
+query = request["q"]
+kind_filter = request["kind"]
+size_min = request["size_min"]
+size_max = request["size_max"]
+mtime_from = request["mtime_from"]
+mtime_to = request["mtime_to"]
+limit = request["limit"]
+scan_limit = request["scan_limit"]
+time_limit_ms = request["time_limit_ms"]
+started = time.monotonic()
+scanned = 0
+items = []
+warnings = []
+
+while stack and len(items) < limit:
+    if scanned >= scan_limit or (time.monotonic() - started) * 1000 >= time_limit_ms:
+        break
+    frame = stack[-1]
+    relative_dir = frame["relative_dir"]
+    directory = posixpath.join(root, relative_dir) if relative_dir else root
+    try:
+        with os.scandir(directory) as handle:
+            entries = sorted(handle, key=lambda entry: entry.name)
+    except OSError:
+        if len(warnings) < 20:
+            warnings.append("unreadable directory: " + (relative_dir or "."))
+        stack.pop()
+        continue
+    index = frame["index"]
+    if index >= len(entries):
+        stack.pop()
+        continue
+    entry = entries[index]
+    frame["index"] = index + 1
+    scanned += 1
+    try:
+        info = entry.stat(follow_symlinks=False)
+        is_directory = entry.is_dir(follow_symlinks=False)
+        is_file = entry.is_file(follow_symlinks=False)
+    except OSError:
+        continue
+    if not is_directory and not is_file:
+        continue
+    relative_path = posixpath.join(relative_dir, entry.name) if relative_dir else entry.name
+    entry_kind = "directory" if is_directory else "file"
+    if is_directory:
+        stack.append({"relative_dir": relative_path, "index": 0})
+    if query not in entry.name.casefold() and query not in relative_path.casefold():
+        continue
+    if kind_filter != "all" and kind_filter != entry_kind:
+        continue
+    if size_min is not None and info.st_size < size_min:
+        continue
+    if size_max is not None and info.st_size > size_max:
+        continue
+    mtime = int(info.st_mtime)
+    if mtime_from is not None and mtime < mtime_from:
+        continue
+    if mtime_to is not None and mtime > mtime_to:
+        continue
+    items.append({
+        "path": posixpath.join(root, relative_path),
+        "relative_path": relative_path,
+        "type": entry_kind,
+        "size": info.st_size,
+        "mtime": mtime,
+    })
+
+print(json.dumps({
+    "items": items,
+    "incomplete": bool(stack),
+    "stack": stack,
+    "warnings": warnings,
+}, separators=(",", ":")))
+"""
 
 
 class SshSessionState(StrEnum):
@@ -370,6 +463,7 @@ class SshRelayExecutor:
     def __init__(self, client: SshRelayClient) -> None:
         self.client = client
         self.config = client.config
+        self._search_cursor_key = os.urandom(32)
 
     def run(
         self,
@@ -688,6 +782,161 @@ class SshRelayExecutor:
             for item in decoded
             if isinstance(item, dict)
         ]
+
+    def search_files(
+        self,
+        *,
+        root: str,
+        q: str,
+        kind: str,
+        size_min: int | None,
+        size_max: int | None,
+        mtime_from: int | None,
+        mtime_to: int | None,
+        limit: int,
+        cursor: str | None,
+        scan_limit: int,
+        time_limit_ms: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> FileSearchPage:
+        self._require_file_owner(owner)
+        safe_root = _validate_remote_path(
+            root, roots=self.config.expanded_owner_roots()
+        )
+        normalized_query = q.strip().casefold()
+        if kind not in {"file", "directory", "all"}:
+            raise SlurmSubmissionRejected("kind must be file, directory, or all")
+        if not 1 <= limit <= 100:
+            raise SlurmSubmissionRejected("limit must be between 1 and 100")
+        if not 1 <= scan_limit <= 100_000:
+            raise SlurmSubmissionRejected("scan_limit must be between 1 and 100000")
+        if not 1 <= time_limit_ms <= 10_000:
+            raise SlurmSubmissionRejected("time_limit_ms must be between 1 and 10000")
+        for name, value in (
+            ("size_min", size_min),
+            ("size_max", size_max),
+            ("mtime_from", mtime_from),
+            ("mtime_to", mtime_to),
+        ):
+            if value is not None and value < 0:
+                raise SlurmSubmissionRejected(f"{name} must be non-negative")
+        if size_min is not None and size_max is not None and size_min > size_max:
+            raise SlurmSubmissionRejected("size_min cannot exceed size_max")
+        if mtime_from is not None and mtime_to is not None and mtime_from > mtime_to:
+            raise SlurmSubmissionRejected("mtime_from cannot exceed mtime_to")
+        binding = {
+            "owner": owner,
+            "root": safe_root,
+            "q": normalized_query,
+            "kind": kind,
+            "size_min": size_min,
+            "size_max": size_max,
+            "mtime_from": mtime_from,
+            "mtime_to": mtime_to,
+        }
+        if cursor:
+            state = _decode_local_search_cursor(cursor, self._search_cursor_key)
+            if state.get("binding") != binding:
+                raise SlurmSubmissionRejected("search cursor does not match request")
+            raw_stack = state.get("stack")
+            if not isinstance(raw_stack, list):
+                raise SlurmSubmissionRejected("invalid search cursor")
+            stack = _validate_local_search_stack(raw_stack)
+        else:
+            stack = [{"relative_dir": "", "index": 0}]
+        request = {
+            "stack": stack,
+            "q": normalized_query,
+            "kind": kind,
+            "size_min": size_min,
+            "size_max": size_max,
+            "mtime_from": mtime_from,
+            "mtime_to": mtime_to,
+            "limit": limit,
+            "scan_limit": scan_limit,
+            "time_limit_ms": time_limit_ms,
+        }
+        command = " ".join(
+            shlex.quote(token)
+            for token in (
+                "python3",
+                "-c",
+                _SSH_FILE_SEARCH_SCRIPT,
+                json.dumps(request, separators=(",", ":")),
+                safe_root,
+            )
+        )
+        result = self._file_shell(command, timeout_seconds=timeout_seconds)
+        if result.returncode != 0:
+            raise SlurmTransportError("SSH.SEARCH_FILES_FAILED")
+        raw_payload = result.stdout.strip().splitlines()
+        try:
+            payload = json.loads(raw_payload[-1] if raw_payload else "")
+        except json.JSONDecodeError as exc:
+            raise SlurmTransportError("SSH.SEARCH_FILES_INVALID") from exc
+        if not isinstance(payload, dict):
+            raise SlurmTransportError("SSH.SEARCH_FILES_INVALID")
+        raw_items = payload.get("items")
+        raw_warnings = payload.get("warnings")
+        raw_stack = payload.get("stack")
+        if (
+            not isinstance(raw_items, list)
+            or not isinstance(raw_warnings, list)
+            or not isinstance(raw_stack, list)
+        ):
+            raise SlurmTransportError("SSH.SEARCH_FILES_INVALID")
+        next_stack = _validate_local_search_stack(raw_stack)
+        items: list[FileSearchEntry] = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                raise SlurmTransportError("SSH.SEARCH_FILES_INVALID")
+            relative_path = item.get("relative_path")
+            entry_type = item.get("type")
+            if (
+                not isinstance(relative_path, str)
+                or relative_path.startswith("/")
+                or ".." in PurePosixPath(relative_path).parts
+                or entry_type not in {"file", "directory"}
+            ):
+                raise SlurmTransportError("SSH.SEARCH_FILES_INVALID")
+            expected_path = (
+                f"/{relative_path}"
+                if safe_root == "/"
+                else f"{safe_root.rstrip('/')}/{relative_path}"
+            )
+            if item.get("path") != expected_path:
+                raise SlurmTransportError("SSH.SEARCH_FILES_INVALID")
+            try:
+                size = int(item["size"])
+                mtime = int(item["mtime"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise SlurmTransportError("SSH.SEARCH_FILES_INVALID") from exc
+            items.append(
+                FileSearchEntry(
+                    path=expected_path,
+                    relative_path=relative_path,
+                    type=entry_type,
+                    size=size,
+                    mtime=mtime,
+                )
+            )
+        incomplete = bool(payload.get("incomplete", False))
+        if incomplete != bool(next_stack):
+            raise SlurmTransportError("SSH.SEARCH_FILES_INVALID")
+        return FileSearchPage(
+            items=tuple(items),
+            incomplete=incomplete,
+            next_cursor=(
+                _encode_local_search_cursor(
+                    {"binding": binding, "stack": next_stack},
+                    self._search_cursor_key,
+                )
+                if incomplete
+                else None
+            ),
+            warnings=tuple(str(item) for item in raw_warnings[:20]),
+        )
 
     def make_dir(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
