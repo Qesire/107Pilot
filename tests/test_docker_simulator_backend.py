@@ -19,6 +19,8 @@ class FakeDockerExecutor:
         self.calls: list[tuple[list[str], str | None, str | None]] = []
         self.writes: list[tuple[str, str, str]] = []
         self.squeue_output = ""
+        self.squeue_returncode = 0
+        self.squeue_stderr = ""
         self.sacct_output = "9001|alice|COMPLETED|0:0\n"
 
     def realpath(self, path: str, *, timeout_seconds: float = 10.0) -> str:
@@ -57,7 +59,11 @@ class FakeDockerExecutor:
             case "sbatch":
                 return CommandResult(0, "9001\n", "")
             case "squeue":
-                return CommandResult(0, self.squeue_output, "")
+                return CommandResult(
+                    self.squeue_returncode,
+                    self.squeue_output,
+                    self.squeue_stderr,
+                )
             case "sacct":
                 return CommandResult(0, self.sacct_output, "")
             case "scancel":
@@ -121,6 +127,23 @@ class DockerSimulatorCommandBackendTests(unittest.TestCase):
         self.assertEqual(executor.writes[0][2], "alice")
         self.assertEqual(executor.calls[0][0][0], "sbatch")
         self.assertEqual(executor.calls[0][2], "alice")
+
+    def test_finished_job_falls_back_to_sacct_when_squeue_rejects_job_id(
+        self,
+    ) -> None:
+        executor = FakeDockerExecutor()
+        executor.squeue_returncode = 1
+        executor.squeue_stderr = "slurm_load_jobs error: Invalid job id specified\n"
+        executor.sacct_output = "9001|alice|CANCELLED by 11001|0:0\n"
+        backend = DockerSimulatorCommandBackend(
+            executor=executor,  # type: ignore[arg-type]
+            allowed_roots=["/public/home/alice"],
+        )
+
+        snapshot = backend.get_job(user="alice", job_id="9001")
+
+        self.assertEqual(snapshot.run_state, RunState.CANCELLED)
+        self.assertEqual([call[0][0] for call in executor.calls], ["squeue", "sacct"])
 
     def test_submit_uses_unique_script_path_for_idempotency_key(self) -> None:
         executor = FakeDockerExecutor()

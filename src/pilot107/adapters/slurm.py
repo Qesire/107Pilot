@@ -1909,6 +1909,8 @@ class CommandSubmitBackend:
             timeout_seconds=self.timeout_seconds,
         )
         if result.returncode != 0:
+            if _squeue_reports_inactive_job(result):
+                return self._get_finished_job(user=user, job_id=job_id)
             raise SlurmTransportError(result.stderr.strip() or "squeue failed")
         if not result.stdout.strip():
             return self._get_finished_job(user=user, job_id=job_id)
@@ -2036,6 +2038,8 @@ class DockerSimulatorCommandBackend:
             timeout_seconds=self.timeout_seconds,
         )
         if result.returncode != 0:
+            if _squeue_reports_inactive_job(result):
+                return self._get_finished_job(user=user, job_id=job_id)
             raise SlurmTransportError(result.stderr.strip() or "squeue failed")
         if not result.stdout.strip():
             return self._get_finished_job(user=user, job_id=job_id)
@@ -2320,6 +2324,11 @@ def _require_accounting_owner(*, owner: str, user: str) -> None:
         raise SlurmTransportError("sacct did not populate job owner yet")
     if owner != user:
         raise SlurmAuthError("job is not owned by user")
+
+
+def _squeue_reports_inactive_job(result: CommandResult) -> bool:
+    detail = f"{result.stdout}\n{result.stderr}".casefold()
+    return "invalid job id specified" in detail
 
 
 def _aggregate_command_job_rows(
