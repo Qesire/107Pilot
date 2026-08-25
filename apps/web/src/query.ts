@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api } from "./api";
+import type { AgentTask } from "./types";
 import {
   cpuAllocation,
   jobsByState,
@@ -414,6 +415,22 @@ export function useAgentSessions(user: string) {
     queryFn: ({ signal }) => api.agentSessions(user, signal),
     refetchInterval: 10_000,
   });
+}
+
+export function useAgentSessionTasks(user: string, sessionId: string | null) {
+  return useQuery({
+    queryKey: ["agent-tasks", user, sessionId],
+    queryFn: ({ signal }) => api.agentSessionTasks(user, sessionId ?? "", signal),
+    enabled: Boolean(sessionId),
+    retry: false,
+    refetchInterval: (query) => agentTaskPollInterval(query.state.data?.items ?? []),
+  });
+}
+
+export function agentTaskPollInterval(tasks: readonly AgentTask[]): number | false {
+  return tasks.some((task) => task.state === "pending" || task.state === "running")
+    ? 2_000
+    : false;
 }
 
 export function useAgentProjects(user: string) {

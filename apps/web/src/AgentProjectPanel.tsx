@@ -3,8 +3,20 @@ import { FileDiff, FlaskConical, FolderGit2, Plus, ShieldCheck } from "lucide-re
 import { useEffect, useState } from "react";
 import { api, ApiRequestError } from "./api";
 import { QueryBoundary, StatusBadge, formatTimestamp } from "./components";
-import { useAgentChangeSetDiff, useAgentProject, useAgentProjects } from "./query";
-import type { AgentProjectOrigin, FormalRunApproval, JsonObject, WorkspaceChangeSet } from "./types";
+import {
+  useAgentChangeSetDiff,
+  useAgentProject,
+  useAgentProjects,
+  useAgentSessionTasks,
+} from "./query";
+import type {
+  AgentProjectOrigin,
+  AgentTask,
+  FormalRunApproval,
+  FormalRunCandidate,
+  JsonObject,
+  WorkspaceChangeSet,
+} from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
 import { AgentTaskPanel } from "./AgentTaskPanel";
@@ -185,16 +197,14 @@ function ProjectReview({
   const queryClient = useQueryClient();
   const [partition, setPartition] = useState("debug");
   const [qos, setQos] = useState("normal");
-  const [cpus, setCpus] = useState(1);
+  const [cpus, setCpus] = useState(4);
   const [memoryMib, setMemoryMib] = useState(1024);
   const [gpus, setGpus] = useState(0);
   const [gpuType, setGpuType] = useState("a100");
   const [walltimeSeconds, setWalltimeSeconds] = useState(300);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [publishTarget, setPublishTarget] = useState("");
-  const [validationContractId, setValidationContractId] = useState("");
-  const [validationRunId, setValidationRunId] = useState("");
-  const [validationEvidenceRef, setValidationEvidenceRef] = useState("");
+  const [formalCandidate, setFormalCandidate] = useState<FormalRunCandidate | null>(null);
   const [formalWorkdir, setFormalWorkdir] = useState("");
   const [formalCommand, setFormalCommand] = useState("python main.py");
   const [formalApproval, setFormalApproval] = useState<FormalRunApproval | null>(null);
@@ -212,6 +222,15 @@ function ProjectReview({
       : null
   );
   const taskSessionId = boundProjectSessionId(location.search, view.project.project_id);
+  const tasks = useAgentSessionTasks(user, taskSessionId);
+  const candidateBinding = taskSessionId ? {
+    projectId: view.project.project_id,
+    workspaceId: view.workspace.workspace_id,
+    sessionId: taskSessionId,
+  } : null;
+  const validationTask = candidateBinding
+    ? formalCandidateTask(tasks.data?.items ?? [], candidateBinding)
+    : null;
   const startValidation = useMutation({
     mutationFn: async () => {
       const binding = projectAgentProfileBinding({
@@ -268,12 +287,16 @@ function ProjectReview({
   const [selectedChangeSet, setSelectedChangeSet] = useState<string | null>(
     view.change_sets[0]?.change_set_id ?? null,
   );
+  const changeSetVersionKey = view.change_sets
+    .map((item) => `${item.change_set_id}:${item.version}:${item.state}`)
+    .join("|");
   useEffect(() => {
     setSelectedChangeSet(view.change_sets[0]?.change_set_id ?? null);
     setPublishConfirmed(false);
+    setFormalCandidate(null);
     setFormalApproval(null);
     setFormalConfirmed(false);
-  }, [view.project.project_id, view.change_sets]);
+  }, [view.project.project_id, changeSetVersionKey]);
   const diff = useAgentChangeSetDiff(
     user,
     view.project.project_id,
@@ -298,16 +321,56 @@ function ProjectReview({
       void queryClient.invalidateQueries({ queryKey: ["agent-projects", user] });
     },
   });
-  const sessionId = location.search.get("session") ?? "";
+  const sessionId = taskSessionId ?? "";
+  const invalidateFormalApproval = () => {
+    setFormalApproval(null);
+    setFormalConfirmed(false);
+  };
+  useEffect(() => {
+    if (
+      formalCandidate
+      && formalCandidate.validation_task_id !== validationTask?.task_id
+    ) {
+      setFormalCandidate(null);
+      setFormalApproval(null);
+      setFormalConfirmed(false);
+    }
+  }, [formalCandidate, validationTask?.task_id]);
+  const generateFormalCandidate = useMutation({
+    mutationFn: () => {
+      if (!selected || !validationTask || !sessionId) {
+        throw new Error("需要当前工程已成功的验证任务");
+      }
+      return api.formalRunCandidate(user, selected.change_set_id, {
+        project_id: view.project.project_id,
+        workspace_id: view.workspace.workspace_id,
+        session_id: sessionId,
+        validation_task_id: validationTask.task_id,
+      });
+    },
+    onSuccess: (candidate) => {
+      const defaults = formalCandidateDefaults(candidate);
+      setFormalCandidate(candidate);
+      setFormalWorkdir(defaults.workdir);
+      setFormalCommand(defaults.command);
+      setPartition(defaults.partition);
+      setQos(defaults.qos);
+      setCpus(defaults.cpus);
+      setMemoryMib(defaults.memoryMib);
+      setGpus(defaults.gpus);
+      setWalltimeSeconds(defaults.walltimeSeconds);
+      invalidateFormalApproval();
+    },
+  });
   const formalInput = () => {
-    if (!selected) throw new Error("请选择已发布的 ChangeSet");
+    if (!selected || !formalCandidate) throw new Error("请先生成正式运行候选");
     return {
       project_id: view.project.project_id,
       workspace_id: view.workspace.workspace_id,
       session_id: sessionId,
-      validation_contract_id: validationContractId.trim(),
-      validation_run_id: validationRunId.trim(),
-      validation_evidence_refs: [validationEvidenceRef.trim()],
+      validation_contract_id: formalCandidate.validation_contract_id,
+      validation_run_id: formalCandidate.validation_run_id,
+      validation_evidence_refs: formalCandidate.validation_evidence_refs,
       formal_contract: buildFormalContract({
         name: view.project.goal,
         workdir: formalWorkdir,
@@ -319,6 +382,11 @@ function ProjectReview({
         gpus,
         gpuType,
         walltimeSeconds,
+        ...(blueprint ? {
+          expectedOutputs: blueprint.expected_outputs
+            .filter((output) => output.required)
+            .map((output) => output.path),
+        } : {}),
       }),
     };
   };
@@ -413,18 +481,37 @@ function ProjectReview({
             <h3 id="formal-run-heading">生成正式 Contract 并提交 Run</h3>
             <p className="muted">审批摘要同时绑定发布快照、验证 Evidence 和正式资源；提交时会重新运行 preflight。</p>
           </div>
-          <div className="agent-validation-grid">
-            <label>Agent Session ID<input value={sessionId} readOnly /></label>
-            <label>验证 Contract ID<input value={validationContractId} onChange={(event) => { setValidationContractId(event.target.value); setFormalApproval(null); }} /></label>
-            <label>验证 Run ID<input value={validationRunId} onChange={(event) => { setValidationRunId(event.target.value); setFormalApproval(null); }} /></label>
-            <label>验证 Evidence ref<input value={validationEvidenceRef} onChange={(event) => { setValidationEvidenceRef(event.target.value); setFormalApproval(null); }} /></label>
-            <label>正式工作目录<input value={formalWorkdir} placeholder={`/public/home/${user}/project`} onChange={(event) => { setFormalWorkdir(event.target.value); setFormalApproval(null); }} /></label>
-            <label>正式命令<input value={formalCommand} onChange={(event) => { setFormalCommand(event.target.value); setFormalApproval(null); }} /></label>
-          </div>
           <button
             type="button"
             className="button secondary"
-            disabled={previewFormalRun.isPending || !sessionId || !validationContractId.trim() || !validationRunId.trim() || !validationEvidenceRef.trim() || !formalWorkdir.trim() || !formalCommand.trim() || !validationInputValid}
+            disabled={
+              generateFormalCandidate.isPending
+              || !candidateBinding
+              || !canGenerateFormalCandidate(selected, validationTask, candidateBinding)
+            }
+            onClick={() => generateFormalCandidate.mutate()}
+          >
+            {generateFormalCandidate.isPending ? "正在推导候选" : "生成正式运行候选"}
+          </button>
+          {!validationTask ? <p className="muted">等待当前工程的 Slurm 验证成功并回写 Evidence。</p> : null}
+          {formalCandidate ? (
+            <>
+              <div className="formal-lineage" aria-label="验证来源链">
+                <div><span>AgentTask</span><code>{formalCandidate.validation_task_id}</code></div>
+                <div><span>Validation Contract</span><code>{formalCandidate.validation_contract_id}</code></div>
+                <div><span>Validation Run</span><code>{formalCandidate.validation_run_id}</code></div>
+                <div><span>Evidence</span><code>{formalCandidate.validation_evidence_refs.join(" · ")}</code></div>
+              </div>
+              <div className="agent-validation-grid">
+                <label>正式工作目录<input value={formalWorkdir} readOnly /></label>
+                <label>正式命令<input value={formalCommand} onChange={(event) => { setFormalCommand(event.target.value); invalidateFormalApproval(); }} /></label>
+              </div>
+            </>
+          ) : null}
+          <button
+            type="button"
+            className="button secondary"
+            disabled={previewFormalRun.isPending || !formalCandidate || !sessionId || !formalWorkdir.trim() || !formalCommand.trim() || !validationInputValid}
             onClick={() => previewFormalRun.mutate()}
           >
             {previewFormalRun.isPending ? "正在重算" : "生成精确审批摘要"}
@@ -441,6 +528,7 @@ function ProjectReview({
           {submitFormalRun.data ? <p role="status">正式 Run <a href={`/runs/${encodeURIComponent(submitFormalRun.data.run.run_id)}`}>{submitFormalRun.data.run.run_id}</a> 已提交，Job {submitFormalRun.data.run.job_id}；Runtime Watch 已建立。</p> : null}
           {previewFormalRun.error ? <ProjectMutationError error={previewFormalRun.error} /> : null}
           {submitFormalRun.error ? <ProjectMutationError error={submitFormalRun.error} /> : null}
+          {generateFormalCandidate.error ? <ProjectMutationError error={generateFormalCandidate.error} /> : null}
         </section>
       ) : null}
       <section className="agent-validation-approval" aria-labelledby="validation-envelope-heading">
@@ -450,13 +538,13 @@ function ProjectReview({
           <p className="muted">额度绑定当前 snapshot，一小时后过期；不会授权正式实验提交或发布。</p>
         </div>
         <div className="agent-validation-grid">
-          <label>Partition<input value={partition} onChange={(event) => setPartition(event.target.value)} /></label>
-          <label>QoS<input value={qos} onChange={(event) => setQos(event.target.value)} /></label>
-          <label>CPU<input type="number" min={1} value={cpus} onChange={(event) => setCpus(Number(event.target.value))} /></label>
-          <label>内存 MiB<input type="number" min={1} value={memoryMib} onChange={(event) => setMemoryMib(Number(event.target.value))} /></label>
-          <label>GPU<input type="number" min={0} value={gpus} onChange={(event) => setGpus(Number(event.target.value))} /></label>
-          {gpus > 0 ? <label>GPU 类型<input value={gpuType} onChange={(event) => setGpuType(event.target.value)} /></label> : null}
-          <label>Walltime 秒<input type="number" min={1} max={31_536_000} value={walltimeSeconds} onChange={(event) => setWalltimeSeconds(Number(event.target.value))} /></label>
+          <label>Partition<input value={partition} onChange={(event) => { setPartition(event.target.value); invalidateFormalApproval(); }} /></label>
+          <label>QoS<input value={qos} onChange={(event) => { setQos(event.target.value); invalidateFormalApproval(); }} /></label>
+          <label>CPU<input type="number" min={1} value={cpus} onChange={(event) => { setCpus(Number(event.target.value)); invalidateFormalApproval(); }} /></label>
+          <label>内存 MiB<input type="number" min={1} value={memoryMib} onChange={(event) => { setMemoryMib(Number(event.target.value)); invalidateFormalApproval(); }} /></label>
+          <label>GPU<input type="number" min={0} value={gpus} onChange={(event) => { setGpus(Number(event.target.value)); invalidateFormalApproval(); }} /></label>
+          {gpus > 0 ? <label>GPU 类型<input value={gpuType} onChange={(event) => { setGpuType(event.target.value); invalidateFormalApproval(); }} /></label> : null}
+          <label>Walltime 秒<input type="number" min={1} max={31_536_000} value={walltimeSeconds} onChange={(event) => { setWalltimeSeconds(Number(event.target.value)); invalidateFormalApproval(); }} /></label>
         </div>
         <button
           type="button"
@@ -496,7 +584,11 @@ function ProjectReview({
                 type="button"
                 key={item.change_set_id}
                 className={item.change_set_id === selectedChangeSet ? "active" : undefined}
-                onClick={() => setSelectedChangeSet(item.change_set_id)}
+                onClick={() => {
+                  setSelectedChangeSet(item.change_set_id);
+                  setFormalCandidate(null);
+                  invalidateFormalApproval();
+                }}
               >
                 <span>
                   <StatusBadge label={changeSetStateLabel(item.state)} tone={changeSetTone(item)} />
@@ -663,6 +755,7 @@ export function buildFormalContract(input: {
   gpus: number;
   gpuType: string;
   walltimeSeconds: number;
+  expectedOutputs?: string[];
 }): JsonObject {
   const hours = Math.floor(input.walltimeSeconds / 3600);
   const minutes = Math.floor((input.walltimeSeconds % 3600) / 60);
@@ -670,7 +763,10 @@ export function buildFormalContract(input: {
   return {
     recipe_version_id: "recipe_python_cpu@1.0.0",
     project: { name: input.name.slice(0, 128), workdir: input.workdir.trim() },
-    entry: { command: input.command.trim(), expected_outputs: ["result.txt"] },
+    entry: {
+      command: input.command.trim(),
+      expected_outputs: input.expectedOutputs?.length ? input.expectedOutputs : ["result.txt"],
+    },
     resources: {
       partition: input.partition.trim(),
       qos: input.qos.trim(),
@@ -683,6 +779,70 @@ export function buildFormalContract(input: {
       time_limit: [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":"),
     },
   };
+}
+
+interface FormalCandidateBinding {
+  projectId: string;
+  workspaceId: string;
+  sessionId: string;
+}
+
+export function formalCandidateTask(
+  tasks: readonly AgentTask[],
+  binding: FormalCandidateBinding,
+): AgentTask | null {
+  return [...tasks]
+    .filter((task) => (
+      task.project_id === binding.projectId
+      && task.workspace_id === binding.workspaceId
+      && task.session_id === binding.sessionId
+      && task.state === "succeeded"
+      && task.result?.status === "succeeded"
+      && Boolean(task.linked_run_id)
+      && task.result.evidence_refs.length > 0
+    ))
+    .sort((left, right) => (
+      right.updated_at.localeCompare(left.updated_at)
+      || right.task_id.localeCompare(left.task_id)
+    ))[0] ?? null;
+}
+
+export function canGenerateFormalCandidate(
+  changeSet: WorkspaceChangeSet,
+  task: AgentTask | null,
+  binding: FormalCandidateBinding,
+): boolean {
+  return changeSet.state === "published"
+    && task !== null
+    && formalCandidateTask([task], binding)?.task_id === task.task_id;
+}
+
+export function formalCandidateDefaults(candidate: FormalRunCandidate) {
+  const hints = candidate.resource_hints;
+  return {
+    workdir: candidate.published_workdir,
+    command: candidate.default_command,
+    partition: typeof hints.partition === "string" ? hints.partition : "CPU-RC",
+    qos: typeof hints.qos === "string" ? hints.qos : "qos_cpu_rc",
+    cpus: integerHint(hints.cpus_per_task, 4),
+    memoryMib: integerHint(hints.memory_mib, 4096),
+    gpus: integerHint(hints.gpus, 0),
+    walltimeSeconds: typeof hints.time_limit === "string"
+      ? parseTimeLimit(hints.time_limit, 600)
+      : 600,
+  };
+}
+
+function integerHint(value: string | number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) ? value : fallback;
+}
+
+function parseTimeLimit(value: string, fallback: number): number {
+  const match = /^(\d{2,4}):(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return fallback;
+  const [, hours = "0", minutes = "0", seconds = "0"] = match;
+  const result = Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
+  return Number(minutes) < 60 && Number(seconds) < 60 && result > 0 ? result : fallback;
 }
 
 export function isValidationEnvelopeInputValid(input: {

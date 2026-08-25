@@ -2368,3 +2368,34 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 .agent-task-error { background: var(--red-soft); color: var(--red); }
 .agent-task-followup { color: var(--ink-faint); font-size: 0.78rem; }
 .agent-task-card > .button { justify-self: start; }
+.formal-lineage {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--teal);
+  border-radius: 12px;
+  background: var(--line);
+}
+.formal-lineage > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(130px, 0.42fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  background: var(--surface-soft);
+  padding: 9px 11px;
+}
+.formal-lineage span {
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 700;
+}
+.formal-lineage code {
+  overflow-wrap: anywhere;
+  color: var(--teal);
+  font-size: 11px;
+}
+@media (max-width: 520px) {
+  .formal-lineage > div { grid-template-columns: 1fr; gap: 4px; }
+}

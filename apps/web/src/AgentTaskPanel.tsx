@@ -1,17 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CircleX, FlaskConical } from "lucide-react";
 import { api, ApiRequestError } from "./api";
 import { QueryBoundary, StatusBadge, formatTimestamp } from "./components";
+import { useAgentSessionTasks } from "./query";
+export { agentTaskPollInterval } from "./query";
 import type { AgentTask } from "./types";
 
 export function AgentTaskPanel({ user, sessionId }: { user: string; sessionId: string }) {
   const queryClient = useQueryClient();
-  const tasks = useQuery({
-    queryKey: ["agent-tasks", user, sessionId],
-    queryFn: ({ signal }) => api.agentSessionTasks(user, sessionId, signal),
-    refetchInterval: (query) => agentTaskPollInterval(query.state.data?.items ?? []),
-    retry: false,
-  });
+  const tasks = useAgentSessionTasks(user, sessionId);
   const cancel = useMutation({
     mutationFn: ({ taskId, expectedVersion }: { taskId: string; expectedVersion: number }) => (
       api.cancelAgentTask(user, taskId, expectedVersion)
@@ -114,10 +111,6 @@ export function AgentTaskPanel({ user, sessionId }: { user: string; sessionId: s
       ) : null}
     </section>
   );
-}
-
-export function agentTaskPollInterval(tasks: AgentTask[]): number | false {
-  return tasks.some((task) => task.state === "pending" || task.state === "running") ? 2_000 : false;
 }
 
 export function agentTaskCancellation(
