@@ -109,6 +109,7 @@ def normalize_slurm_state(raw_state: str | list[str]) -> tuple[RunState, list[st
     flags = [raw_state] if isinstance(raw_state, str) else list(raw_state)
     normalized_flags = [flag.upper() for flag in flags if flag]
     for flag in normalized_flags:
-        if flag in SLURM_TO_RUN_STATE:
-            return SLURM_TO_RUN_STATE[flag], normalized_flags
+        lookup_flag = "CANCELLED" if flag.startswith("CANCELLED BY ") else flag
+        if lookup_flag in SLURM_TO_RUN_STATE:
+            return SLURM_TO_RUN_STATE[lookup_flag], normalized_flags
     return RunState.UNKNOWN, normalized_flags
