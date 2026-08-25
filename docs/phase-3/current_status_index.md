@@ -2,6 +2,14 @@
 
 快照日期：2026-08-25
 
+## 2026-08-25 VM 演示部署收口
+
+- 最新 Agent lifecycle 已以 revision `2322506af112e570896b7b1d3b2d6e9473b65942` 部署到 `https://114.214.241.31:8443/`；systemd enabled/active，11 个服务运行，VM-local Slurm `anode16` 配置为 6 CPU / 10240 MiB。
+- 模型固定为网关实际提供的 `qwen3.8-reasoner`，最多 3 次空响应重试；网关未暴露参数规模，不能把 27B 记为已验证。
+- 完整 AgentTask 闭环通过：Task `task-581dab…` → Run `run_agent_6e430e…` → Slurm Job 23 → 19 项 Evidence → ready Capsule `capsule_213787…` → 后续 Turn。
+- 成功/失败/取消三态、镜像修订绑定、不删卷重启恢复、外部 Files 手输路径/搜索及 Agent 工程页均通过。机读证据见 `artifacts/acceptance/vm-demo/2322506af112/deployment-summary.json`。
+- 环境仍为单 VM Docker Slurm simulator + fixed_user=alice。它证明了对实际 Slurm 进程和作业对象的演示接入，不等同校园 107 集群、多用户身份或生产验收。
+
 ## 2026-08-25 Agent 生命周期候选
 
 - A1–A5 已从只读 Turn 扩展为统一 Project 生命周期：隔离 workspace 编辑、异步 Slurm 验证、artifact-aware DAG/array recovery、批准后发布、正式 Run/Runtime Watch/结果解释、失败 Run repair 与 Market application/publication 已接通。
@@ -9,7 +17,7 @@
 - 模型 provider 不可用会把对应生成式 Project 幂等置为 `blocked`；持久 Run、Evidence 和 Runtime Watch 的确定性查询仍可用。5 GiB 大文件保持 metadata-only，不进入本地 workspace copy。
 - 四环境验收合同与唯一事实源见 [`agent_lifecycle_acceptance_matrix.md`](agent_lifecycle_acceptance_matrix.md)。D0/D1 必须在同一 Git SHA 上由机读 report 同时判定 `PASS`；S1/R1 未执行不否定本机候选，但继续阻断校园生产。
 
-当前环境：本机 D0/D1。
+当前环境：本机 D0/D1 + S1 演示 VM；R1 校园 107 未执行。
 
 当前主线边界：统一 agent lifecycle candidate；校园多用户生产 **NO-GO**。
 
@@ -50,7 +58,8 @@
 | Web production build | passed（static bundle 已与源码同步，CI 含 drift 检查） |
 | Compose contracts | base/competition/CPU-RC/slurm-host/app-node passed |
 | Agent lifecycle candidate | A1–A5 unified lifecycle implementation complete；D0/D1 结果以同 SHA `agent-lifecycle/<sha>/{source,runtime}-report.json` 为准 |
-| S1 / R1 lifecycle gate | 最新 lifecycle revision `not_run`，等待 S1 bundle/host 与 R1 明确授权；校园生产 NO-GO |
+| S1 / R1 lifecycle gate | 最新 lifecycle revision `2322506af112` 已完成 S1 演示 VM 验收；R1 校园 107 未执行；校园生产 NO-GO |
+| Source acceptance (2322506) | 12/12 PASS：1407 pytest passed、24 skipped、36 subtests；179 Vitest；24 Playwright；Ruff/mypy/typecheck/build/Compose/drift 全绿 |
 | Source acceptance (d3ceb4c, seal mode) | 12/12 PASS：uv_sync、npm_ci、ruff、mypy、pytest、typecheck、vitest、playwright、build、static_drift、compose_config、sync_drift |
 | Runtime acceptance (d3ceb4c, seal mode) | 10/10 PASS：manifest_validate、import_images、start_stack、compose_readiness、check_cpu_rc、auto_capsule、rule_remediation、restart_recovery、image_binding、report |
 | Local seal acceptance (d3ceb4c) | d3ceb4c 验收证据已全绿（source 12/12 + runtime 10/10，同一 SHA，seal mode）；round-4..7 P1 + round-8 P1 + round-8 P2-1..P2-4 + round-11 P1-1（baseline stat/OSError 区分 ENOENT）/ P1-2（提交阶段续租 + unparseable lease fail-closed）/ P1-3（build 脚本真正构建 Slurm Dockerfile + 移除 /dev/urandom + 锁定 uv/slurm-wlm + 双 clean-build rootfs content hash 对比）已闭环；当前判定：已构建 bundle GO / 模拟 Slurm 功能闭环 GO / baseline 异常归因与多 dispatcher 租约 GO / app 镜像跨 build 可复现性 GO（rootfs content hash 双 build 一致）/ slurm 镜像非 slurm-wlm apt 包仍有残余漂移（base digest + slurm-wlm 版本已锁，practical-vs-mathematical 权衡） |
@@ -76,7 +85,7 @@
 
 - D0：本机单元、契约、权限、迁移测试；
 - D1：本机 Docker Slurm simulator live behavior；
-- S1：早期 CPU-RC revision 曾在 8C/16G VM 通过 G3（见 `s1_vm_deployment_evidence_20260718.md`）；最新 agent lifecycle revision 尚未重部署，当前为 `not_run`；
+- S1：最新 revision `2322506af112` 已在同一 8C/16G 级 VM 完成演示部署与 AgentTask/Slurm/Evidence/Capsule/恢复/浏览器验收（见 `s1_vm_deployment_evidence_20260718.md`）；
 - R0：开发者个人 SSH 辅助只读 probe；
 - R1：107Pilot 真实平台集成，当前不具备条件；
 - 校园多用户生产：NO-GO。
@@ -88,4 +97,5 @@ Docker、fake/replay LLM 和本地 command gateway 的结果不得表述为真�
 1. Run、Remediation、Template 等业务 Store 仍以 SQLite 为主，尚未完成全领域 PostgreSQL parity/接线；
 2. Prometheus 长期 retention/firing 与在线供应链扫描仍需目标运维/CI 环境验证；
 3. CPU-RC 早期 revision 已在 S1 (8C/16G VM) 部署并通过 G3 功能链；发布 revision `d3ceb4cd43b77c7cee9d10768db7ada324b02ed0` 的 source acceptance (12/12) + runtime acceptance (10/10) 已在同一 SHA 全绿（seal mode）；round-4..7 P1 + round-8 P1 + round-8 P2-1..P2-4 + round-11 P1-1（baseline stat/OSError 区分 ENOENT）/ P1-2（提交阶段续租 + unparseable lease fail-closed）/ P1-3（build 脚本真正构建 Slurm Dockerfile + 移除 /dev/urandom + 锁定 uv/slurm-wlm + 双 clean-build rootfs content hash 对比）已闭环；当前判定：已构建 bundle GO / 模拟 Slurm 功能闭环 GO / baseline 异常归因与多 dispatcher 租约 GO / app 镜像跨 build 可复现性 GO（rootfs content hash 双 build 一致）/ slurm 镜像非 slurm-wlm apt 包仍有残余漂移（base digest + slurm-wlm 版本已锁，practical-vs-mathematical 权衡）；
-4. 最新 agent lifecycle revision 的 S1 与 R1 均为 `not_run`；真实身份、真实 107 和校园运维批准未验证，校园生产保持 NO-GO。
+4. 最新 agent lifecycle revision 的 S1 演示 VM 已通过；R1 仍为 `not_run`，真实身份、校园 107 和校园运维批准未验证，校园生产保持 NO-GO；
+5. npm audit 仍报告 1 个 moderate、2 个 high；自签证书、VM registry/DNS/NTP 预检告警以及 Agentd lifecycle schema golden 夹具缺少 `cancel_requested` 的既存测试漂移仍需后续处理。

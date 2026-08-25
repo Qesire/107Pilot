@@ -12,6 +12,37 @@
 
 > **环境边界声明**: 本验收在 Docker Slurm simulator + 单台 CPU VM + fixed_user=alice 边界内完成。不构成真实 107 平台验收,亦非校园多用户生产环境验证。所有并发测试使用单一身份 alice。
 
+## 2026-08-25 演示部署收口
+
+本节取代本文中“最新 Agent lifecycle 尚未部署”的后续旧状态，但不改变环境边界：演示对象是 VM 上实际运行的 `slurmctld/slurmd/slurmdbd` 和数字 Slurm Job，不是校园 107 集群。107Pilot 通过 `docker-compose-command` 调度后端把该 VM-local Slurm 当作本次演示的真实 Slurm 对象。
+
+- 最终代码修订：`2322506af112e570896b7b1d3b2d6e9473b65942`。
+- 最终 bundle：`107pilot-cpu-rc-2322506af112-20260825T070152Z`；SHA-256 `c1332f8b4f6ec64e76da67971f90648cffcffc2fc17141dbc4d59199e061659d`。
+- systemd：`pilot107-cpu-rc.service` 已 enabled/active，WorkingDirectory 为 `/root/107pilot-cpu-rc-2322506af112-20260825T070152Z`。
+- 运行态：11 个服务全部 running；带 healthcheck 的 7 个服务均 healthy；`anode16` 为 6 CPU、10240 MiB、`CPU-RC` 分区。
+- 外部入口：`https://114.214.241.31:8443/` 与 `/healthz` 均 HTTP 200，health body 为 `{"status":"ok"}`。
+- 模型固定为网关暴露的 `qwen3.8-reasoner`，空响应最多进行 3 次无副作用 provider 尝试。网关未提供参数规模元数据，因此不能把“27B”尺寸表述为已验证事实。
+- Bubblewrap：API/worker 运行镜像包含 `bubblewrap`，API 服务提供可写、受限的 `/tmp` tmpfs；Workspace sandbox `sandbox-cc1f79856bdcaff9a8a4ddf4` 实际执行成功。
+
+### AgentTask → Slurm → Evidence → Capsule
+
+- Session：`session-11593d24-301f-45cb-9831-ff158ce786d5`。
+- AgentTask：`task-581dab2d5b53e49b58bd45ec08e6a82fe077d6a163d1c5015bb80b5cb327ed8e`。
+- Linked Run：`run_agent_6e430e5c5983a1d0704516cfe5a850fcd1e38bd8`，backend=`docker-compose-command`，Slurm Job `23`，state=`SUCCEEDED`。
+- Evidence：19 个对象；Capsule `capsule_213787c26b3a4a11b79a5bf331691330` ready。
+- Ready outbox 已唤醒后续 Turn：`turn-47c584c5-6c07-44bb-addc-c219497b45b2`。
+
+### 运行、恢复与浏览器验收
+
+- 三态 smoke：成功 `run_b58e5628a4f14ac38442adf6ef0ad4a3:24`，失败 `run_c0dec4c6b1fe49ad9a02269352d8dba1:25`，取消 `run_0e66c4ac6950437aa5f39a318d2a665f:26`；三者 Capsule 均生成。
+- 不删卷重启恢复：重启前 `run_fae5ebf9abc34980bbd146023a69bff5` 保留，重启后 `run_99698eabb1dd4d128166d4ef501ce8c6` 成功。
+- 外部浏览器：Files 手工输入深层路径通过；按 `result.txt` 搜索返回文件并定位父目录；Agent 工程页可见最终 ChangeSet 与异步 Slurm 验证入口。
+- 完整源门禁：1407 passed、24 skipped、36 subtests；179 Vitest；24 Playwright；Ruff、mypy、typecheck、build、static drift、Compose config、sync drift 全部通过。
+
+机读摘要：`artifacts/acceptance/vm-demo/2322506af112/deployment-summary.json`。浏览器截图：`artifacts/qa/vm-final-files.png`、`artifacts/qa/vm-final-agent.png`。
+
+残余边界：自签证书；fixed_user=alice；npm audit 仍报告 1 个 moderate、2 个 high；VM registry/DNS 与 NTP 状态会令预检产生环境告警；校园身份、校园 107 资源和多用户生产仍为 NO-GO。
+
 ## 部署环境
 
 - VM: 8 vCPU Intel Xeon (Icelake), 15 GiB RAM + 4 GiB swap, 146 GB disk (131 GB free), Ubuntu 24.04.4 LTS, kernel 6.8.0-106-generic x86_64
@@ -119,7 +150,7 @@ Phase A 四缺口修复后重部到 VM (revision `a91b9765def1`)，让设计中�
 |---|---|---|
 | A-1 Slurm 实时事实 | 新增 `slurmrest_snapshot.py` 采集器 + `service.py` 启动时采集 + 5min 后台刷新；owner 用 `config.slurm_username` (alice)；collector 接受 `slurm_token` (JWT)；compose.yml 传 `PILOT107_SLURM_TOKEN` 到 api 容器 | `/api/v1/platform/capabilities` 的 `latest_snapshot` 非 null ✓; `counts: {partitions:1, nodes:1}` (CPU-RC 分区 + anode16 节点 4CPU) ✓; `source_type:rest`, `freshness:fresh` ✓ |
 | A-2 模板市场 seed | 新增 `template_market_seed.py` 完整发布流 (create_draft→submit_review→decide_review→publish), 幂等 (skip 已发布 + resume editable stale draft + refresh stale payload), 容错 (gate-blocked 记录不中断); 系统 bootstrap reviewer 注入 | 启动日志 `published=5 gate_blocked=0` ✓; `GET /api/v1/templates` 返回 5 个模板 (学生 CPU/结构化 Preflight/健壮 Slurm/Python CPU/Fail-closed 合并) ✓ |
-| A-3 LLM 接入 | `.env.cpu-rc.example` 加 USTC glm-5.2-107 模板; VM `.env.cpu-rc` 注入真实 apiKey (sk-4J_...); `api.ts` `advanceRemediationSession` 默认发 `provider=local`; `AgentPage.tsx` 加 provider 选择器 | env 配置 ✓; LLM endpoint 可达 (status 200, 返回模型列表) ✓; UI provider 选择器已部署 (web 测试 74 pass) |
+| A-3 LLM 接入 | `.env.cpu-rc.example` 加 USTC glm-5.2-107 模板; VM `.env.cpu-rc` 注入真实 apiKey（不在证据中记录）; `api.ts` `advanceRemediationSession` 默认发 `provider=local`; `AgentPage.tsx` 加 provider 选择器 | env 配置 ✓; LLM endpoint 可达 (status 200, 返回模型列表) ✓; UI provider 选择器已部署 (web 测试 74 pass) |
 | A-4 workspace 绑 job | 新增 `RunPicker.tsx` 纯组件; `AgentPage.tsx` 空状态改内联 RunPicker (filter FAILED); `pages.tsx` `TerminalCollaborationPage` 空状态改内联 RunPicker; `QueryBoundary.emptyDetail` 放宽为 ReactNode | 代码完成 (web 测试 74 pass); 浏览器视觉验证待人工 |
 
 ### 测试基线
