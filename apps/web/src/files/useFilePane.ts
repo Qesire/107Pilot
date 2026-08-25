@@ -20,6 +20,7 @@ export type InlineFormMode = "mkdir" | "newfile" | null;
 
 export interface UseFilePaneResult {
   paneId: string;
+  home: string;
   cwd: string;
   entries: FileEntry[];
   isPending: boolean;
@@ -263,6 +264,7 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
 
   return {
     paneId,
+    home,
     cwd,
     entries,
     isPending: listing.isPending,

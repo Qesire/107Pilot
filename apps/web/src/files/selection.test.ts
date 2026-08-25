@@ -10,6 +10,7 @@ import {
   normalizeDir,
   parentPath,
   pathSegments,
+  resolvePanePath,
   selectAllPaths,
   sortEntries,
   toggleSelection,
@@ -96,6 +97,54 @@ describe("clampToHome", () => {
 
   it("does not treat prefix siblings as inside home", () => {
     expect(clampToHome("/public/home/alice2", "/public/home/alice")).toBe("/public/home/alice");
+  });
+});
+
+describe("resolvePanePath", () => {
+  it("resolves absolute and relative paths inside home", () => {
+    expect(
+      resolvePanePath(
+        "/public/home/alice/project",
+        "/public/home/alice",
+        "/public/home/alice",
+      ),
+    ).toBe("/public/home/alice/project");
+    expect(
+      resolvePanePath(
+        "../data",
+        "/public/home/alice/project",
+        "/public/home/alice",
+      ),
+    ).toBe("/public/home/alice/data");
+  });
+
+  it("normalizes repeated separators and dot segments lexically", () => {
+    expect(
+      resolvePanePath(
+        "./results//today/../final/",
+        "/public/home/alice/project",
+        "/public/home/alice",
+      ),
+    ).toBe("/public/home/alice/project/results/final");
+  });
+
+  it("rejects paths escaping the owner root", () => {
+    expect(() =>
+      resolvePanePath(
+        "../../bob",
+        "/public/home/alice/project",
+        "/public/home/alice",
+      ),
+    ).toThrow("路径超出授权目录");
+  });
+
+  it("rejects empty and NUL-containing input", () => {
+    expect(() =>
+      resolvePanePath("   ", "/public/home/alice", "/public/home/alice"),
+    ).toThrow("请输入路径");
+    expect(() =>
+      resolvePanePath("data\0secret", "/public/home/alice", "/public/home/alice"),
+    ).toThrow("路径包含无效字符");
   });
 });
 

@@ -48,6 +48,35 @@ export function clampToHome(path: string, home: string): string {
   return target === root || target.startsWith(root + "/") ? target : root;
 }
 
+function normalizePosixPath(path: string): string {
+  const segments: string[] = [];
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return `/${segments.join("/")}`;
+}
+
+/** Resolve manual pane input lexically while preserving the owner boundary. */
+export function resolvePanePath(input: string, cwd: string, home: string): string {
+  if (input.includes("\0")) throw new Error("路径包含无效字符");
+  const value = input.trim();
+  if (!value) throw new Error("请输入路径");
+
+  const candidate = value.startsWith("/")
+    ? value
+    : `${normalizeDir(cwd)}/${value}`;
+  const resolved = normalizePosixPath(candidate);
+  if (clampToHome(resolved, home) !== resolved) {
+    throw new Error("路径超出授权目录");
+  }
+  return resolved;
+}
+
 /**
  * Miller-column directory chain for a cwd: every directory from `home`
  * (inclusive) down to `cwd` (inclusive). When `cwd` is not underneath

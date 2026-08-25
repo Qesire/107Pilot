@@ -3,7 +3,6 @@ import Selecto from "react-selecto";
 import {
   ArrowLeft,
   ArrowRight,
-  ChevronRight,
   Columns3,
   Copy,
   Download,
@@ -30,7 +29,8 @@ import { FileGrid } from "./FileGrid";
 import { useFilesManager } from "./FilesManagerContext";
 import { MillerColumns } from "./MillerColumns";
 import { MoveDialog } from "./MoveDialog";
-import { isArchiveName, clampToHome, pathSegments } from "./selection";
+import { PathBar } from "./PathBar";
+import { isArchiveName } from "./selection";
 import { useFilePane } from "./useFilePane";
 
 function FileListView({
@@ -435,16 +435,13 @@ export function FilePane({
           </button>
         </div>
 
-        <nav className="filepane-breadcrumb" aria-label="路径">
-          {pathSegments(pane.cwd)
-            .filter((seg) => clampToHome(seg.path, homePath) === seg.path)
-            .map((seg, idx) => (
-              <span key={seg.path} className="crumb">
-                {idx > 0 && <ChevronRight size={11} aria-hidden="true" />}
-                <button type="button" onClick={() => pane.navigateTo(seg.path)}>{seg.label}</button>
-              </span>
-            ))}
-        </nav>
+        <PathBar
+          cwd={pane.cwd}
+          home={pane.home}
+          isPending={pane.isPending}
+          isError={pane.isError}
+          onNavigate={pane.navigateTo}
+        />
 
         <div className="filepane-tools">
           <button
