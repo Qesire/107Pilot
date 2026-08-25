@@ -206,6 +206,77 @@ class CommandGatewayTests(unittest.TestCase):
         with self.assertRaisesRegex(gateway.GatewayError, "arguments not allowed"):
             gateway._run({"argv": ["sinfo", "-R"]}, config)
 
+    def test_allows_exact_platform_snapshot_probes(self) -> None:
+        config = gateway.GatewayConfig(
+            token=None,
+            allowed_roots=["/public/home/{user}"],
+        )
+        accepted = (
+            ["scontrol", "show", "part"],
+            ["scontrol", "show", "nodes"],
+            ["sinfo", "-h", "-o", "%N|%P|%t|%c|%m|%G|%E"],
+            ["conda", "env", "list", "--json"],
+            ["df", "-P", "-h", "/public", "/public/home/alice"],
+        )
+
+        with _mock_ownership(), mock.patch.object(gateway.subprocess, "run") as fake_run:
+            fake_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+            for argv in accepted:
+                result = gateway._run({"argv": argv, "user": "alice"}, config)
+                self.assertEqual(result["returncode"], 0)
+
+        executed = [
+            call.args[0]
+            for call in fake_run.call_args_list
+            if call.args and call.args[0][0] == "gosu"
+        ]
+        self.assertEqual(executed, [["gosu", "alice", *argv] for argv in accepted])
+
+    def test_platform_snapshot_probes_reject_widened_arguments(self) -> None:
+        config = gateway.GatewayConfig(
+            token=None,
+            allowed_roots=["/public/home/{user}"],
+        )
+        rejected = (
+            ["scontrol", "show", "secrets"],
+            ["sinfo", "-R"],
+            ["conda", "run", "python"],
+            ["df", "-P", "-h", "/public", "/etc"],
+            ["df", "-P", "-h", "/public", "/public/home/bob"],
+        )
+
+        with _mock_ownership():
+            for argv in rejected:
+                with self.subTest(argv=argv), self.assertRaisesRegex(
+                    gateway.GatewayError, "arguments not allowed"
+                ):
+                    gateway._run({"argv": argv, "user": "alice"}, config)
+
+    def test_missing_optional_conda_is_a_127_observation(self) -> None:
+        config = gateway.GatewayConfig(token=None, allowed_roots=["/public"])
+
+        with _mock_ownership(), mock.patch.object(
+            gateway.subprocess,
+            "run",
+            side_effect=FileNotFoundError("conda"),
+        ):
+            result = gateway._run(
+                {
+                    "argv": ["conda", "env", "list", "--json"],
+                    "user": "alice",
+                },
+                config,
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "returncode": 127,
+                "stdout": "",
+                "stderr": "conda: command not found\n",
+            },
+        )
+
     def test_allows_only_bounded_observability_sstat_projection(self) -> None:
         config = gateway.GatewayConfig(token=None, allowed_roots=["/public/home/alice"])
         fields = "JobID,NTasks,AllocTRES,AveCPU,MaxRSS,TRESUsageInTot,TRESUsageOutTot"

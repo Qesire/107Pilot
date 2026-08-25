@@ -27,6 +27,7 @@ from typing import Any
 
 ALLOWED_COMMANDS = {
     "date",
+    "df",
     "env",
     "find",
     "hostname",
@@ -47,6 +48,7 @@ ALLOWED_COMMANDS = {
     "test",
     "which",
     "whoami",
+    "conda",
 }
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
@@ -437,15 +439,24 @@ def _run(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
         safe_cwd = _authorize_path(str(cwd), config, user=username)
 
     timeout = _timeout(payload)
-    completed = subprocess.run(
-        command,
-        cwd=safe_cwd,
-        input=None if payload.get("stdin") is None else str(payload.get("stdin")),
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=safe_cwd,
+            input=None if payload.get("stdin") is None else str(payload.get("stdin")),
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        if argv == ["conda", "env", "list", "--json"]:
+            return {
+                "returncode": 127,
+                "stdout": "",
+                "stderr": "conda: command not found\n",
+            }
+        raise
     return {
         "returncode": completed.returncode,
         "stdout": completed.stdout,
@@ -466,7 +477,6 @@ def _validate_command(
         "python": ["python", "-V"],
         "which": ["which", "python"],
         "whoami": ["whoami"],
-        "sinfo": ["sinfo", "-h", "-o", "%P|%c|%m|%G|%T"],
     }
     expected = exact_commands.get(argv[0])
     if expected is not None and argv != expected:
@@ -494,13 +504,31 @@ def _validate_command(
             raise GatewayError("command arguments not allowed: sstat")
     if argv[0] == "scontrol":
         show_config = argv == ["scontrol", "show", "config"]
+        show_partitions = argv == ["scontrol", "show", "part"]
+        show_nodes = argv == ["scontrol", "show", "nodes"]
         show_job = (
             len(argv) == 5
             and argv[1:4] == ["-o", "show", "job"]
             and re.fullmatch(r"[A-Za-z0-9_.+-]+", argv[4]) is not None
         )
-        if not show_config and not show_job:
+        if not show_config and not show_partitions and not show_nodes and not show_job:
             raise GatewayError("command arguments not allowed: scontrol")
+    if argv[0] == "sinfo" and argv not in (
+        ["sinfo", "-h", "-o", "%P|%c|%m|%G|%T"],
+        ["sinfo", "-h", "-o", "%N|%P|%t|%c|%m|%G|%E"],
+    ):
+        raise GatewayError("command arguments not allowed: sinfo")
+    if argv[0] == "conda" and argv != ["conda", "env", "list", "--json"]:
+        raise GatewayError("command arguments not allowed: conda")
+    if argv[0] == "df":
+        expected = (
+            ["df", "-P", "-h", "/public", f"/public/home/{user}"]
+            if user is not None
+            else None
+        )
+        if expected is None or argv != expected:
+            raise GatewayError("command arguments not allowed: df")
+        _authorize_path(argv[4], config, user=user)
 
 
 def _write_text(payload: dict[str, Any], config: GatewayConfig) -> None:
