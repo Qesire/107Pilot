@@ -17,6 +17,7 @@ from pilot107.agent.project import (
     ExperimentProjectSessionRecord,
     ProjectBlueprint,
     ProjectSource,
+    blueprint_from_payload,
 )
 from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.publisher import (
@@ -676,6 +677,7 @@ class ProjectAgentService:
     def build_tool_handlers(self) -> dict[str, AgentReadHandler]:
         return {
             "project_get": self._tool_project_get,
+            "project_blueprint_save": self._tool_project_blueprint_save,
             "workspace_list": self._tool_workspace_list,
             "workspace_read": self._tool_workspace_read,
             "workspace_patch": self._tool_workspace_patch,
@@ -729,6 +731,36 @@ class ProjectAgentService:
         return AgentReadResult(
             result=project_view_payload(view),
             evidence_refs=(f"project:{project_id}",),
+        )
+
+    def _tool_project_blueprint_save(
+        self, owner: str, arguments: Mapping[str, object]
+    ) -> AgentReadResult:
+        _closed(
+            arguments,
+            {"project_id", "workspace_id", "expected_version", "blueprint"},
+        )
+        project_id, workspace_id = _scope(arguments)
+        self._workspace(project_id, workspace_id, owner)
+        expected_version = arguments.get("expected_version")
+        raw_blueprint = arguments.get("blueprint")
+        if (
+            isinstance(expected_version, bool)
+            or not isinstance(expected_version, int)
+            or expected_version < 1
+            or not isinstance(raw_blueprint, Mapping)
+        ):
+            raise _tool_error("Blueprint arguments are invalid", "AGENT.TOOL.INVALID")
+        self.save_blueprint(
+            project_id,
+            owner=owner,
+            expected_version=expected_version,
+            blueprint=blueprint_from_payload(raw_blueprint),
+        )
+        view = self.get_project(project_id, owner=owner, workspace_id=workspace_id)
+        return AgentReadResult(
+            result=project_view_payload(view),
+            evidence_refs=(f"project:{project_id}:blueprint",),
         )
 
     def _tool_workspace_list(self, owner: str, arguments: Mapping[str, object]) -> AgentReadResult:

@@ -446,6 +446,7 @@ export const A1_READ_TOOL_NAMES = [
 
 export const A2_PROJECT_TOOL_NAMES = [
   "project_get",
+  "project_blueprint_save",
   "workspace_list",
   "workspace_read",
   "workspace_patch",

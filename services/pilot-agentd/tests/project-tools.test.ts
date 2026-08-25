@@ -28,6 +28,41 @@ function repairRequest() {
   });
 }
 
+const HEAT_BLUEPRINT = {
+  goal: "Verify second-order convergence for a 2D heat equation solver.",
+  entrypoints: ["scripts/run_experiment.sh"],
+  files: [
+    { path: "src/heat2d.c", purpose: "OpenMP solver", classification: "editable" },
+    { path: "scripts/run_experiment.sh", purpose: "Slurm entrypoint", classification: "editable" },
+  ],
+  validations: [
+    {
+      validation_id: "static-project-check",
+      execution: "sandbox",
+      argv: ["python3", "scripts/validate_project.py"],
+      expected_outputs: [],
+    },
+    {
+      validation_id: "heat-slurm-validation",
+      execution: "slurm",
+      argv: ["bash", "scripts/run_experiment.sh"],
+      expected_outputs: ["convergence.json", "scaling.json", "report.md"],
+    },
+  ],
+  contract_intent: {
+    recipe_version_id: "recipe_python_cpu@1.0.0",
+    resource_hints: { cpus_per_task: 4, gpus: 0, time_limit: "00:10:00" },
+  },
+  expected_outputs: [
+    { path: "convergence.json", kind: "json", required: true },
+    { path: "report.md", kind: "file", required: true },
+  ],
+  dependencies: [
+    { name: "gcc", version: ">=12", source: "system" },
+  ],
+  open_questions: [],
+};
+
 describe("A2 Project tools", () => {
   it("accepts only the experiment_builder pairing and tool names", () => {
     const request = builderRequest();
@@ -72,6 +107,42 @@ describe("A2 Project tools", () => {
     expect(Value.Check(patch.parameters, {
       ...valid,
       patches: [{ ...valid.patches[0], shell: "rm -rf" }],
+    })).toBe(false);
+  });
+
+  it("exposes a closed, typed Blueprint save tool", () => {
+    const tools = createProjectTools(builderRequest(), {
+      invoke: async () => successResult(),
+    });
+    const save = tools.find((tool) => tool.name === "project_blueprint_save");
+    if (save === undefined) throw new Error("missing project_blueprint_save");
+    const valid = {
+      project_id: "project-1",
+      workspace_id: "workspace-1",
+      expected_version: 1,
+      blueprint: HEAT_BLUEPRINT,
+    };
+
+    expect(Value.Check(save.parameters, valid)).toBe(true);
+    expect(Value.Check(save.parameters, { ...valid, project_id: "project-2" })).toBe(true);
+    expect(Value.Check(save.parameters, { ...valid, extra: true })).toBe(false);
+    expect(Value.Check(save.parameters, {
+      ...valid,
+      blueprint: { ...HEAT_BLUEPRINT, entrypoints: ["/tmp/run.sh"] },
+    })).toBe(false);
+    expect(Value.Check(save.parameters, {
+      ...valid,
+      blueprint: {
+        ...HEAT_BLUEPRINT,
+        contract_intent: {
+          ...HEAT_BLUEPRINT.contract_intent,
+          resource_hints: { nodes: 2 },
+        },
+      },
+    })).toBe(false);
+    expect(Value.Check(save.parameters, {
+      ...valid,
+      blueprint: { ...HEAT_BLUEPRINT, unknown: true },
     })).toBe(false);
   });
 

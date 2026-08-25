@@ -206,6 +206,7 @@ class AgentToolGateway:
         if is_project_agent_profile(claims.profile_id):
             required_operation = {
                 "project_get": "read",
+                "project_blueprint_save": "write",
                 "workspace_list": "read",
                 "workspace_read": "read",
                 "workspace_diff": "read",

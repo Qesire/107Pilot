@@ -13,6 +13,7 @@ from pilot107.agent.project import (
     ProjectContractIntent,
     ProjectFile,
     ProjectValidation,
+    blueprint_payload,
 )
 from pilot107.agent.project_store import SQLiteProjectStore
 from pilot107.agent.protocol import TOOL_INVOCATION_PROTOCOL_VERSION, ToolInvocation
@@ -272,6 +273,73 @@ def test_project_tool_handlers_reject_cross_project_workspace(tmp_path: Path) ->
                 "project_id": first.project.project_id,
                 "workspace_id": second.workspace.workspace_id,
                 "path": "main.py",
+            },
+        )
+
+
+def test_project_blueprint_tool_saves_typed_blueprint_and_enforces_binding(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    first = service.create_project(
+        owner="alice", origin="blank", goal="heat", request_key="heat-one"
+    )
+    second = service.create_project(
+        owner="alice", origin="blank", goal="other", request_key="heat-two"
+    )
+    blueprint = ProjectBlueprint(
+        goal="Verify second-order heat diffusion convergence.",
+        entrypoints=("scripts/run_experiment.sh",),
+        files=(
+            ProjectFile(
+                path="src/heat2d.c", purpose="OpenMP solver", classification="editable"
+            ),
+        ),
+        validations=(
+            ProjectValidation(
+                validation_id="static-project-check",
+                execution="sandbox",
+                argv=("python3", "scripts/validate_project.py"),
+                expected_outputs=(),
+            ),
+            ProjectValidation(
+                validation_id="heat-slurm-validation",
+                execution="slurm",
+                argv=("bash", "scripts/run_experiment.sh"),
+                expected_outputs=("convergence.json", "scaling.json", "report.md"),
+            ),
+        ),
+        contract_intent=ProjectContractIntent(
+            recipe_version_id="recipe_python_cpu@1.0.0",
+            resource_hints={"cpus_per_task": 4, "gpus": 0},
+        ),
+        expected_outputs=(),
+        dependencies=(),
+        open_questions=(),
+    )
+    handler = service.build_tool_handlers()["project_blueprint_save"]
+
+    result = handler(
+        "alice",
+        {
+            "project_id": first.project.project_id,
+            "workspace_id": first.workspace.workspace_id,
+            "expected_version": first.project.version,
+            "blueprint": blueprint_payload(blueprint),
+        },
+    )
+
+    assert result.result["project"]["blueprint"]["entrypoints"] == [
+        "scripts/run_experiment.sh"
+    ]
+    with pytest.raises(Exception, match="Workspace"):
+        handler(
+            "alice",
+            {
+                "project_id": first.project.project_id,
+                "workspace_id": second.workspace.workspace_id,
+                "expected_version": first.project.version + 1,
+                "blueprint": blueprint_payload(blueprint),
             },
         )
 

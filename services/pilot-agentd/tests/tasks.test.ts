@@ -60,6 +60,23 @@ function onlyTool(kind: "explain" | "contract_patch" | "remediation_plan") {
 }
 
 describe("task profiles", () => {
+  it("orders the experiment builder through Blueprint, diff, sandbox, and one validation", () => {
+    const request = {
+      ...durableRequest(),
+      task_kind: "experiment_builder" as const,
+      prompt_profile_id: "experiment_builder" as const,
+      toolset_id: "a2-project" as const,
+    };
+    const task = prepareTask(request, {
+      readToolGateway: { invoke: async () => { throw new Error("not executed"); } },
+    });
+
+    expect(task.systemPrompt).toMatch(/save a complete Blueprint/i);
+    expect(task.systemPrompt).toMatch(/inspect the final unified diff/i);
+    expect(task.systemPrompt).toMatch(/at most one approved Slurm validation/i);
+    expect(task.systemPrompt).toMatch(/end after scheduling/i);
+  });
+
   it("registers the bounded read tools only for an authorized durable Turn", () => {
     const request = durableRequest();
     const task = prepareTask(request, {

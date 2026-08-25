@@ -317,6 +317,7 @@ def test_repair_turn_receives_one_project_scoped_capability(tmp_path: Path) -> N
     assert claims.project_id == "project-repair"
     assert claims.workspace_id == "workspace-repair"
     assert "workspace_patch" in claims.tools
+    assert "project_blueprint_save" in claims.tools
 
 
 def test_transport_failure_interrupts_with_last_checkpoint_and_retries(

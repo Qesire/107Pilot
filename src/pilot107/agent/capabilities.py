@@ -32,6 +32,7 @@ _A1_TOOLS = frozenset(
 _A2_TOOLS = frozenset(
     {
         "project_get",
+        "project_blueprint_save",
         "workspace_list",
         "workspace_read",
         "workspace_patch",
@@ -239,7 +240,10 @@ def _validate_claims(
             or not 0 <= claims.max_commands <= 64
         ):
             raise ValueError("invalid builder capability scope")
-        if "workspace_patch" in claims.tools and "write" not in claims.operations:
+        if (
+            {"project_blueprint_save", "workspace_patch"} & claims.tools
+            and "write" not in claims.operations
+        ):
             raise ValueError("builder write tool lacks write operation")
         if "sandbox_exec" in claims.tools and (
             "validate" not in claims.operations or claims.max_commands < 1

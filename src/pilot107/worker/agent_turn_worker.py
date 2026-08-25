@@ -29,6 +29,7 @@ _A1_EVIDENCE_TOOLS = frozenset({"evidence_read"})
 _A2_PROJECT_TOOLS = frozenset(
     {
         "project_get",
+        "project_blueprint_save",
         "workspace_list",
         "workspace_read",
         "workspace_patch",

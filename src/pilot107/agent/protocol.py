@@ -84,6 +84,7 @@ _A1_READ_TOOLS = {
 }
 _A2_PROJECT_TOOLS = {
     "project_get",
+    "project_blueprint_save",
     "workspace_list",
     "workspace_read",
     "workspace_patch",

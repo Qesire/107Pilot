@@ -99,6 +99,10 @@
         },
         {
           "type": "string",
+          "const": "project_blueprint_save"
+        },
+        {
+          "type": "string",
           "const": "workspace_list"
         },
         {
