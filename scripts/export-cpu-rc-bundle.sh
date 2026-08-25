@@ -109,6 +109,8 @@ for script in \
   smoke-restart-volume-recovery.sh \
   smoke_restart_volume_recovery.py \
   smoke_competition_web.py \
+  smoke-vm-agent-task.py \
+  smoke-vm-agent-task.sh \
   start-cpu-rc.sh \
   stop-cpu-rc.sh \
   verify-cpu-rc-image-binding.sh
@@ -218,6 +220,8 @@ assert_required_files_exist() {
     "scripts/smoke-cpu-rc-remediation.sh"
     "scripts/smoke-auto-capsule.sh"
     "scripts/smoke-restart-volume-recovery.sh"
+    "scripts/smoke-vm-agent-task.py"
+    "scripts/smoke-vm-agent-task.sh"
     "scripts/preflight-cpu-rc-vm.sh"
     "scripts/import-cpu-rc-images.sh"
     "scripts/init-local-secrets.sh"

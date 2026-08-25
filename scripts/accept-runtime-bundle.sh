@@ -24,7 +24,9 @@
 #   6. auto_capsule        — Worker auto-Capsule WITHOUT explicit POST.
 #   7. rule_remediation    — rule-evaluated diagnosis → HTTP remediation session.
 #   8. restart_recovery    — docker compose down + restart preserves volume state.
-#   9. report              — JSON report; exit 1 if any step FAILED.
+#   9. image_binding       — running containers match the manifest image IDs.
+#  10. agent_task_lifecycle — Project Sandbox → AgentTask → Slurm → Evidence.
+#  11. report              — JSON report; exit 1 if any step FAILED.
 #
 # Exit-code mapping (preserved from Phase 1):
 #   rc=0   → PASS
@@ -409,6 +411,10 @@ step_image_binding() {
        bash scripts/verify-cpu-rc-image-binding.sh >"$out" )
 }
 
+step_agent_task_lifecycle() {
+  ( cd "$bundle_root" && bash scripts/smoke-vm-agent-task.sh )
+}
+
 STEPS=(
   "manifest_validate|step_manifest_validate"
   "import_images|step_import_images"
@@ -419,6 +425,7 @@ STEPS=(
   "rule_remediation|step_rule_remediation"
   "restart_recovery|step_restart_recovery"
   "image_binding|step_image_binding"
+  "agent_task_lifecycle|step_agent_task_lifecycle"
   "report|step_report"
 )
 
