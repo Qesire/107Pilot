@@ -38,7 +38,17 @@ _FORBIDDEN_JSON_KEYS = {
     "schema",
     "tools",
 }
-_TASK_KINDS = {"interactive", "explain", "contract_patch", "remediation_plan"}
+_TASK_KINDS = {
+    "interactive",
+    "explain",
+    "contract_patch",
+    "remediation_plan",
+    "interactive_readonly",
+    "experiment_builder",
+    "run_diagnosis_repair",
+    "market_application",
+    "template_publication",
+}
 _ERROR_CODES = {
     "provider_auth",
     "provider_rate_limited",

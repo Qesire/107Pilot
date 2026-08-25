@@ -61,10 +61,30 @@
                   "type": "string",
                   "const": "contract_patch"
                 },
-                {
-                  "type": "string",
-                  "const": "remediation_plan"
-                }
+                    {
+                      "type": "string",
+                      "const": "remediation_plan"
+                    },
+                    {
+                      "type": "string",
+                      "const": "interactive_readonly"
+                    },
+                    {
+                      "type": "string",
+                      "const": "experiment_builder"
+                    },
+                    {
+                      "type": "string",
+                      "const": "run_diagnosis_repair"
+                    },
+                    {
+                      "type": "string",
+                      "const": "market_application"
+                    },
+                    {
+                      "type": "string",
+                      "const": "template_publication"
+                    }
               ]
             }
           },

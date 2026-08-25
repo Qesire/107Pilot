@@ -379,6 +379,20 @@ describe("terminal event invariant", () => {
     expect(Value.Check(AgentTurnEventSchema, { ...started(), payload: {} })).toBe(false);
   });
 
+  it.each([
+    "interactive_readonly",
+    "experiment_builder",
+    "run_diagnosis_repair",
+  ] as const)("accepts the real durable task kind %s", (taskKind) => {
+    expect(Value.Check(AgentTurnEventSchema, {
+      ...started(),
+      payload: {
+        model_profile_id: "faux-default",
+        task_kind: taskKind,
+      },
+    })).toBe(true);
+  });
+
   it("requires observability metadata on turn_completed", () => {
     expect(
       Value.Check(AgentTurnEventSchema, {

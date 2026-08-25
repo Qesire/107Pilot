@@ -390,6 +390,27 @@ def test_turn_failed_accepts_bounded_pi_terminal_codes(code: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "task_kind",
+    ["interactive_readonly", "experiment_builder", "run_diagnosis_repair"],
+)
+def test_turn_started_accepts_real_durable_task_kinds(task_kind: str) -> None:
+    payload = copy.deepcopy(_valid_payloads()["turn_started"])
+    payload["task_kind"] = task_kind
+
+    events = list(
+        parse_event_lines(
+            "turn-1",
+            [
+                _line(_event(1, "turn_started", payload)),
+                _line(_event(2, "turn_completed", _completed_payload())),
+            ],
+        )
+    )
+
+    assert events[0].payload["task_kind"] == task_kind
+
+
+@pytest.mark.parametrize(
     ("event_type", "mutate"),
     [
         ("turn_started", lambda payload: payload.__setitem__("task_kind", "unknown")),

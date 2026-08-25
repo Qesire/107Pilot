@@ -142,14 +142,7 @@ export class TurnExecutor {
     const startedAt = Date.now();
     await sink.emit("turn_started", {
       model_profile_id: request.model_profile_id,
-      task_kind:
-        request.task_kind === "interactive_readonly" ||
-        request.task_kind === "experiment_builder" ||
-        request.task_kind === "run_diagnosis_repair" ||
-        request.task_kind === "market_application" ||
-        request.task_kind === "template_publication"
-          ? "interactive"
-          : request.task_kind,
+      task_kind: request.task_kind,
     });
 
     let runtime: ModelRuntime | undefined;

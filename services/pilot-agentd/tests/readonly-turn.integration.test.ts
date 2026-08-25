@@ -143,7 +143,7 @@ describe("durable readonly Turn", () => {
     ]);
     expect(events[0]).toMatchObject({
       type: "turn_started",
-      payload: { task_kind: "interactive" },
+      payload: { task_kind: "interactive_readonly" },
     });
     expect(events.slice(-2).map((event) => event.type)).toEqual([
       "checkpoint",
@@ -328,6 +328,10 @@ describe("durable readonly Turn", () => {
     );
 
     expect(runtime.faux.state.callCount).toBe(12);
+    expect(events[0]).toMatchObject({
+      type: "turn_started",
+      payload: { task_kind: "experiment_builder" },
+    });
     expect(terminal(events)).toMatchObject({ type: "turn_completed" });
   });
 });
