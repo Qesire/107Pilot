@@ -143,13 +143,14 @@ def _queued_turn(
     *,
     owner: str = "alice",
     suffix: str = "1",
+    source: dict[str, str] | None = None,
 ):
     session, _ = store.create_session(
         owner=owner,
         request_key=f"session-{suffix}",
         profile_id="hpc-readonly-v1",
         model_profile_id="faux-default",
-        source={"run_id": f"run-{suffix}"},
+        source={"run_id": f"run-{suffix}"} if source is None else source,
     )
     service = AgentSessionService(store=store, control_repository=control)
     turn, _ = service.submit_message(
@@ -225,16 +226,12 @@ def test_dispatch_persists_each_event_before_hint_and_completes(tmp_path: Path) 
     assert claims.fencing_token == 1
     assert claims.tools == frozenset(
         {
-                "platform_get_snapshot",
-                "platform_observation_get",
-                "account_observation_get",
-            "workspace_list",
-            "workspace_search",
-            "workspace_read",
+            "platform_get_snapshot",
+            "platform_observation_get",
+            "account_observation_get",
             "run_get",
             "run_log_read",
-                "evidence_read",
-                "run_resources_get",
+            "run_resources_get",
         }
     )
     persisted, _ = store.list_events_page(
@@ -244,6 +241,30 @@ def test_dispatch_persists_each_event_before_hint_and_completes(tmp_path: Path) 
         limit=100,
     )
     assert client.requests[0].capability_token not in repr(persisted)
+
+
+def test_platform_only_turn_claims_no_unbound_resource_tools(tmp_path: Path) -> None:
+    clock = MutableClock()
+    database = tmp_path / "agent.db"
+    store = SQLiteAgentSessionStore(database, clock=clock)
+    control = SQLiteControlRepository(database, clock=clock)
+    _, turn = _queued_turn(store, control, source={})
+    client = ScriptedAgentdClient(_completed_script(turn.turn_id))
+
+    result = _worker(store, control, client, clock).dispatch_due(limit=1)
+
+    assert result.succeeded == 1
+    assert client.requests[0].context_refs == ()
+    claims = AgentCapabilitySigner(b"s" * 32, clock=clock.epoch).verify(
+        client.requests[0].capability_token
+    )
+    assert claims.tools == frozenset(
+        {
+            "platform_get_snapshot",
+            "platform_observation_get",
+            "account_observation_get",
+        }
+    )
 
 
 def test_repair_turn_receives_one_project_scoped_capability(tmp_path: Path) -> None:

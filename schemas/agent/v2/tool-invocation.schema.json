@@ -79,18 +79,6 @@
         },
         {
           "type": "string",
-          "const": "workspace_list"
-        },
-        {
-          "type": "string",
-          "const": "workspace_search"
-        },
-        {
-          "type": "string",
-          "const": "workspace_read"
-        },
-        {
-          "type": "string",
           "const": "run_get"
         },
         {

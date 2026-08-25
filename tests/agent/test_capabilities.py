@@ -75,6 +75,15 @@ def test_repair_profile_capability_is_bound_to_one_project_workspace() -> None:
     assert verified.workspace_id == "workspace-repair"
 
 
+def test_readonly_capability_rejects_workspace_tools() -> None:
+    _, AgentCapabilityError, AgentCapabilitySigner = _api()
+    now = 1_786_662_000
+    signer = AgentCapabilitySigner(b"s" * 32, clock=lambda: now)
+
+    with pytest.raises(AgentCapabilityError):
+        signer.sign(replace(_claims(now), tools=frozenset({"workspace_read"})))
+
+
 def test_capability_rejects_signature_tampering_and_malformed_tokens() -> None:
     _, AgentCapabilityError, AgentCapabilitySigner = _api()
     now = 1_786_662_000

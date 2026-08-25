@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Value } from "typebox/value";
 
+import { visibleReadToolNames } from "../src/read-tools.js";
 import { prepareTask } from "../src/tasks.js";
 import {
   durableRequest,
@@ -73,18 +74,48 @@ describe("task profiles", () => {
       "platform_get_snapshot",
       "platform_observation_get",
       "account_observation_get",
-      "workspace_list",
-      "workspace_search",
-      "workspace_read",
       "run_get",
       "run_log_read",
-      "evidence_read",
       "run_resources_get",
     ]);
     expect(task.constrained).toBe(false);
     expect(JSON.parse(task.userMessage)).toEqual({ data: request.input });
     expect(task.userMessage).not.toContain(request.capability_token);
     expect(task.systemPrompt).toMatch(/read-only.*tools/i);
+  });
+
+  it("derives the read-only catalog from durable resource bindings", () => {
+    const platformRequest = durableRequest({
+      input: { message: "inspect the platform", context_refs: [] },
+    });
+    const runRequest = durableRequest();
+    const evidenceRequest = durableRequest({
+      input: {
+        message: "inspect one evidence object",
+        context_refs: ["evidence:run-1:object-1"],
+      },
+    });
+
+    expect(visibleReadToolNames(platformRequest)).toEqual([
+      "platform_get_snapshot",
+      "platform_observation_get",
+      "account_observation_get",
+    ]);
+    expect(visibleReadToolNames(runRequest)).toEqual([
+      "platform_get_snapshot",
+      "platform_observation_get",
+      "account_observation_get",
+      "run_get",
+      "run_log_read",
+      "run_resources_get",
+    ]);
+    expect(visibleReadToolNames(evidenceRequest)).toEqual([
+      "platform_get_snapshot",
+      "platform_observation_get",
+      "account_observation_get",
+      "evidence_read",
+    ]);
+    expect(visibleReadToolNames(platformRequest)).not.toContain("workspace_list");
   });
 
   it("fails closed when a durable Turn has no private Tool Gateway", () => {

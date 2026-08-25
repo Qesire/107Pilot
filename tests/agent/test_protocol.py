@@ -138,6 +138,25 @@ def test_tool_invocation_rejects_unknown_tools_and_authority_fields() -> None:
         agent_protocol.parse_tool_invocation(authority)
 
 
+def test_workspace_tools_are_invalid_for_a1_but_remain_valid_for_a2() -> None:
+    readonly = _tool_invocation()
+    readonly.update(
+        tool_name="workspace_read",
+        arguments={"workspace": "guessed", "path": "README.md"},
+    )
+
+    with pytest.raises(ValueError, match="invalid tool invocation"):
+        agent_protocol.parse_tool_invocation(readonly)
+
+    project = _tool_invocation()
+    project.update(
+        profile_id="experiment_builder",
+        tool_name="workspace_read",
+        arguments={"workspace": "workspace-1", "path": "README.md"},
+    )
+    assert agent_protocol.parse_tool_invocation(project).tool_name == "workspace_read"
+
+
 def _usage() -> dict[str, int | None]:
     return {
         "input_tokens": 12,

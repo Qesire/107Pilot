@@ -13,7 +13,17 @@ import {
 type A1ToolName = (typeof A1_READ_TOOL_NAMES)[number];
 
 const BoundedId = Type.String({ minLength: 1, maxLength: 4_096 });
-const Workspace = Type.String({ minLength: 1, maxLength: 4_096 });
+
+const PLATFORM_READ_TOOL_NAMES = [
+  "platform_get_snapshot",
+  "platform_observation_get",
+  "account_observation_get",
+] as const satisfies readonly A1ToolName[];
+const RUN_READ_TOOL_NAMES = [
+  "run_get",
+  "run_log_read",
+  "run_resources_get",
+] as const satisfies readonly A1ToolName[];
 
 const ARGUMENT_SCHEMAS = {
   platform_get_snapshot: Type.Object({}, { additionalProperties: false }),
@@ -23,21 +33,6 @@ const ARGUMENT_SCHEMAS = {
   ),
   account_observation_get: Type.Object(
     { connection_id: BoundedId },
-    { additionalProperties: false },
-  ),
-  workspace_list: Type.Object(
-    { workspace: Workspace },
-    { additionalProperties: false },
-  ),
-  workspace_search: Type.Object(
-    {
-      workspace: Workspace,
-      query: Type.String({ minLength: 1, maxLength: 256 }),
-    },
-    { additionalProperties: false },
-  ),
-  workspace_read: Type.Object(
-    { workspace: Workspace, path: BoundedId },
     { additionalProperties: false },
   ),
   run_get: Type.Object(
@@ -66,9 +61,6 @@ const TOOL_DESCRIPTIONS = {
   platform_get_snapshot: "Read the latest safe platform snapshot for this owner.",
   platform_observation_get: "Read the latest persisted platform resource observation.",
   account_observation_get: "Read the caller's latest persisted account observation.",
-  workspace_list: "List bounded tracked paths in an authorized workspace.",
-  workspace_search: "Search bounded text in an authorized workspace.",
-  workspace_read: "Read bounded UTF-8 text from an authorized workspace file.",
   run_get: "Read the safe state and resource summary for one owned Run.",
   run_log_read: "Read a bounded stdout or stderr page for one owned Run.",
   evidence_read: "Read a bounded preview of one owned evidence object.",
@@ -85,11 +77,26 @@ export interface ReadToolGateway {
   ): Promise<ToolResult>;
 }
 
+export function visibleReadToolNames(
+  request: DurableAgentTurnRequest,
+): readonly A1ToolName[] {
+  const names: A1ToolName[] = [...PLATFORM_READ_TOOL_NAMES];
+  if (request.input.context_refs.some((reference) => reference.startsWith("run:"))) {
+    names.push(...RUN_READ_TOOL_NAMES);
+  }
+  if (
+    request.input.context_refs.some((reference) => reference.startsWith("evidence:"))
+  ) {
+    names.push("evidence_read");
+  }
+  return names;
+}
+
 export function createReadOnlyTools(
   request: DurableAgentTurnRequest,
   gateway: ReadToolGateway,
 ): AgentTool[] {
-  return A1_READ_TOOL_NAMES.map((name) => ({
+  return visibleReadToolNames(request).map((name) => ({
     name,
     label: name,
     description: TOOL_DESCRIPTIONS[name],

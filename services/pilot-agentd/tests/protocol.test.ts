@@ -279,6 +279,25 @@ describe("Tool Gateway envelopes", () => {
       }),
     ).toThrow(/invalid tool result/i);
   });
+
+  it("keeps Workspace tools in A2 and rejects them from A1", () => {
+    expect(() =>
+      parseToolInvocation({
+        ...toolInvocation(),
+        tool_name: "workspace_read",
+        arguments: { workspace: "guessed", path: "README.md" },
+      }),
+    ).toThrow(/profile\/tool pairing/i);
+
+    expect(
+      parseToolInvocation({
+        ...toolInvocation(),
+        profile_id: "experiment_builder",
+        tool_name: "workspace_read",
+        arguments: { workspace: "workspace-1", path: "README.md" },
+      }).tool_name,
+    ).toBe("workspace_read");
+  });
 });
 
 describe("AgentCheckpoint", () => {

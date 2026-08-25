@@ -17,20 +17,15 @@ from pilot107.agent.store import AgentSessionStore
 from pilot107.core.control_repository import ControlRepository, OutboxMessage
 from pilot107.services.agent_session_service import AGENT_TURN_TOPIC
 
-_A1_READ_TOOLS = frozenset(
+_A1_PLATFORM_TOOLS = frozenset(
     {
         "platform_get_snapshot",
         "platform_observation_get",
         "account_observation_get",
-        "workspace_list",
-        "workspace_search",
-        "workspace_read",
-        "run_get",
-        "run_log_read",
-        "evidence_read",
-        "run_resources_get",
     }
 )
+_A1_RUN_TOOLS = frozenset({"run_get", "run_log_read", "run_resources_get"})
+_A1_EVIDENCE_TOOLS = frozenset({"evidence_read"})
 _A2_PROJECT_TOOLS = frozenset(
     {
         "project_get",
@@ -159,6 +154,7 @@ class AgentTurnWorker:
             return True
 
         session = self.store.get_session(claim.session_id, owner=claim.owner)
+        context_refs = _context_refs(session.source)
         request = DurableAgentTurnRequest(
             session_id=claim.session_id,
             turn_id=turn_id,
@@ -166,8 +162,13 @@ class AgentTurnWorker:
             state_version=claim.state_version,
             model_profile_id=session.model_profile_id,
             message=current.message,
-            context_refs=_context_refs(session.source),
-            capability_token=self._capability(claim, session.profile_id, session.source),
+            context_refs=context_refs,
+            capability_token=self._capability(
+                claim,
+                session.profile_id,
+                session.source,
+                context_refs=context_refs,
+            ),
             checkpoint=current.final_checkpoint,
             profile_id=session.profile_id,
         )
@@ -328,6 +329,8 @@ class AgentTurnWorker:
         claim: AgentTurnLease,
         profile_id: str,
         source: Mapping[str, object],
+        *,
+        context_refs: tuple[str, ...],
     ) -> str:
         now = int(self._clock())
         project_profile = is_project_agent_profile(profile_id)
@@ -345,7 +348,11 @@ class AgentTurnWorker:
                 state_version=claim.state_version,
                 fencing_token=claim.fencing_token,
                 profile_id=profile_id,
-                tools=_A2_PROJECT_TOOLS if project_profile else _A1_READ_TOOLS,
+                tools=(
+                    _A2_PROJECT_TOOLS
+                    if project_profile
+                    else _a1_tools_for_context_refs(context_refs)
+                ),
                 max_invocations=32,
                 max_bytes=1024 * 1024,
                 expires_at=now + min(self.lease_seconds, 120),
@@ -400,6 +407,15 @@ def _context_refs(source: Mapping[str, Any]) -> tuple[str, ...]:
         if isinstance(value, str) and value:
             refs.append(f"{key.removesuffix('_id')}:{value}")
     return tuple(refs)
+
+
+def _a1_tools_for_context_refs(context_refs: tuple[str, ...]) -> frozenset[str]:
+    tools = set(_A1_PLATFORM_TOOLS)
+    if any(reference.startswith("run:") for reference in context_refs):
+        tools.update(_A1_RUN_TOOLS)
+    if any(reference.startswith("evidence:") for reference in context_refs):
+        tools.update(_A1_EVIDENCE_TOOLS)
+    return frozenset(tools)
 
 
 def _object_or_none(value: object) -> dict[str, object] | None:
