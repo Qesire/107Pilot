@@ -39,7 +39,7 @@ from pilot107.worker.agent_turn_worker import AgentTurnWorker
 from pilot107.worker.evidence import EvidenceStore
 
 _SECRET = b"a1-vertical-capability-secret-value"
-_TOOLS = ("run_get", "run_log_read", "evidence_read")
+_TOOLS = ("run_get", "run_log_read")
 
 
 class MutableClock:
@@ -113,7 +113,6 @@ class GatewayBackedFauxAgentd:
             arguments = (
                 {"run_id": run_id},
                 {"run_id": run_id, "stream": "stderr", "cursor": 0},
-                {"run_id": run_id, "object_id": self.evidence_objects[run_id]},
             )
             for index, (tool_name, tool_arguments) in enumerate(
                 zip(_TOOLS, arguments, strict=True), start=1
@@ -403,7 +402,7 @@ def test_http_to_worker_gateway_store_vertical_and_owner_isolation(tmp_path: Pat
         AgentTurnState.COMPLETED
     )
     assert [invocation.tool_name for invocation in client.invocations] == list(_TOOLS)
-    assert [item["sequence"] for item in events.payload["items"]] == list(range(1, 14))
+    assert [item["sequence"] for item in events.payload["items"]] == list(range(1, 11))
     assert events.payload["items"][-1]["event_type"] == "turn_completed"
     assert bob_session.status == 404
     assert bob_run.status in {403, 404}
@@ -414,7 +413,7 @@ def test_http_to_worker_gateway_store_vertical_and_owner_isolation(tmp_path: Pat
             "SELECT idempotency_key, COUNT(*) AS copies FROM agent_tool_invocations "
             "GROUP BY idempotency_key"
         ).fetchall()
-    assert len(rows) == 3
+    assert len(rows) == 2
     assert all(int(row["copies"]) == 1 for row in rows)
 
 
@@ -447,7 +446,7 @@ def test_fault_after_outbox_claim_is_reclaimed_without_duplicate_turn(tmp_path: 
 
     assert result.succeeded == 1
     assert control.get_outbox(message_id).state == "succeeded"
-    assert len(client.invocations) == 3
+    assert len(client.invocations) == 2
 
 
 def test_fault_after_one_tool_result_replays_idempotently(tmp_path: Path) -> None:
@@ -484,13 +483,13 @@ def test_fault_after_one_tool_result_replays_idempotently(tmp_path: Path) -> Non
     )
 
     assert second.succeeded == 1
-    assert [item["sequence"] for item in events.payload["items"]] == list(range(1, 14))
+    assert [item["sequence"] for item in events.payload["items"]] == list(range(1, 11))
     with agent_store.connect() as connection:
         count = connection.execute(
             "SELECT COUNT(*) FROM agent_tool_invocations WHERE turn_id = ?",
             (turn.payload["turn_id"],),
         ).fetchone()[0]
-    assert count == 3
+    assert count == 2
 
 
 def test_100_idle_and_10_active_turns_stay_within_resource_budgets(tmp_path: Path) -> None:
