@@ -77,7 +77,22 @@ class CpuReleaseCandidateProfileTests(unittest.TestCase):
 
         self.assertIn("REPLACE_WITH_RANDOM_GATEWAY_TOKEN", env)
         self.assertIn("PILOT107_API_IMAGE=pilot107/api:cpu-rc", env)
+        self.assertIn("PILOT107_LLM_MODEL=qwen3.8-reasoner", env)
+        self.assertIn("PILOT107_LLM_TIMEOUT_SECONDS=300", env)
+        self.assertIn("PILOT107_LLM_MAX_TOKENS=12000", env)
+        self.assertIn("PILOT107_LLM_MAX_ATTEMPTS=3", env)
+        self.assertIn("PILOT107_AGENTD_TIMEOUT_SECONDS=300", env)
+        self.assertIn("PILOT107_AGENTD_MAX_OUTPUT_TOKENS=12000", env)
         self.assertEqual(profile["schema"], "pilot107.capability_profile.v1")
+
+    def test_slurm_runtime_image_can_compile_openmp_scientific_jobs(self) -> None:
+        dockerfile = (ROOT / "simulator/images/slurm/Dockerfile").read_text()
+        runtime = dockerfile.split(
+            "FROM ubuntu:24.04@sha256:"
+            "4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90"
+        )[-1]
+
+        self.assertRegex(runtime, r"(?m)^\s+gcc\s+\\$")
 
     def test_fresh_accounting_profile_is_seeded_before_controller_validation(self) -> None:
         script = (ROOT / "scripts/apply-cpu-rc-profile.sh").read_text()

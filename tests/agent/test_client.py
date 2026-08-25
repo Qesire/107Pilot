@@ -137,6 +137,8 @@ def test_config_loader_reads_only_agentd_names_and_redacts_the_token() -> None:
             "PILOT107_AGENTD_URL": "http://pilot-agentd:8091/",
             "PILOT107_AGENTD_TOKEN": "never-represent-this-secret",
             "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
+            "PILOT107_AGENTD_TIMEOUT_SECONDS": "300",
+            "PILOT107_AGENTD_MAX_OUTPUT_TOKENS": "12000",
             "PILOT107_LLM_API_KEY": "must-not-be-read",
         }
     )
@@ -144,10 +146,14 @@ def test_config_loader_reads_only_agentd_names_and_redacts_the_token() -> None:
     config = config_from_env(env)
 
     assert config.base_url == "http://pilot-agentd:8091"
+    assert config.timeout_seconds == 300
+    assert config.max_output_tokens == 12_000
     assert set(env.reads) == {
         "PILOT107_AGENTD_URL",
         "PILOT107_AGENTD_TOKEN",
         "PILOT107_AGENTD_MODEL_PROFILE",
+        "PILOT107_AGENTD_TIMEOUT_SECONDS",
+        "PILOT107_AGENTD_MAX_OUTPUT_TOKENS",
     }
     assert "never-represent-this-secret" not in repr(config)
     assert "must-not-be-read" not in repr(config)

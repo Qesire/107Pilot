@@ -58,10 +58,14 @@ def config_from_env(
         "url": f"{prefix}URL",
         "token": f"{prefix}TOKEN",
         "profile": f"{prefix}MODEL_PROFILE",
+        "timeout": f"{prefix}TIMEOUT_SECONDS",
+        "max_output_tokens": f"{prefix}MAX_OUTPUT_TOKENS",
     }
     url = values.get(names["url"])
     token = values.get(names["token"])
     profile = values.get(names["profile"])
+    raw_timeout = values.get(names["timeout"])
+    raw_max_output_tokens = values.get(names["max_output_tokens"])
     configured_values = (
         (names["url"], url),
         (names["token"], token),
@@ -71,10 +75,26 @@ def config_from_env(
     if missing:
         raise ValueError(f"missing required Agentd configuration: {', '.join(missing)}")
     assert url is not None and token is not None and profile is not None
+    try:
+        timeout_seconds = (
+            60.0 if raw_timeout is None or not raw_timeout.strip() else float(raw_timeout)
+        )
+    except ValueError:
+        raise ValueError(f"{names['timeout']} must be numeric") from None
+    try:
+        max_output_tokens = (
+            1_200
+            if raw_max_output_tokens is None or not raw_max_output_tokens.strip()
+            else int(raw_max_output_tokens)
+        )
+    except ValueError:
+        raise ValueError(f"{names['max_output_tokens']} must be an integer") from None
     return AgentdClientConfig(
         base_url=url,
         token=token,
         model_profile_id=profile,
+        timeout_seconds=timeout_seconds,
+        max_output_tokens=max_output_tokens,
     )
 
 

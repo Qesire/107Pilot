@@ -163,6 +163,8 @@ services:
       PILOT107_AGENTD_LISTEN_PORT: 8091
       PILOT107_AGENTD_TOKEN: ${PILOT107_AGENTD_TOKEN:-sim-agentd-token}
       PILOT107_AGENTD_MODEL_PROFILE: ${PILOT107_AGENTD_MODEL_PROFILE:-campus-default}
+      PILOT107_AGENTD_TIMEOUT_SECONDS: ${PILOT107_AGENTD_TIMEOUT_SECONDS:-60}
+      PILOT107_AGENTD_MAX_OUTPUT_TOKENS: ${PILOT107_AGENTD_MAX_OUTPUT_TOKENS:-1200}
       PILOT107_AGENTD_FAUX_SCENARIO: ${PILOT107_AGENTD_FAUX_SCENARIO:-}
       PILOT107_AGENTD_TOOL_GATEWAY_URL: http://pilot107-api:8080/internal/v1/agent-tools/invoke
       PILOT107_LLM_BASE_URL: ${PILOT107_LLM_BASE_URL:-}
@@ -245,6 +247,8 @@ services:
       PILOT107_AGENTD_URL: http://pilot-agentd:8091
       PILOT107_AGENTD_TOKEN: ${PILOT107_AGENTD_TOKEN:-sim-agentd-token}
       PILOT107_AGENTD_MODEL_PROFILE: ${PILOT107_AGENTD_MODEL_PROFILE:-campus-default}
+      PILOT107_AGENTD_TIMEOUT_SECONDS: ${PILOT107_AGENTD_TIMEOUT_SECONDS:-60}
+      PILOT107_AGENTD_MAX_OUTPUT_TOKENS: ${PILOT107_AGENTD_MAX_OUTPUT_TOKENS:-1200}
       # Disabled by default.  When enabled, the API reads only source windows
       # selected from evidence through an existing user-authenticated SSH
       # ControlMaster; it never stores a password or MFA code.
