@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from pilot107.adapters.slurm import InMemorySlurmBackend
+from pilot107.agent.project import (
+    ProjectBlueprint,
+    ProjectContractIntent,
+    ProjectValidation,
+)
 from pilot107.agent.project_store import SQLiteProjectStore
 from pilot107.agent.publisher import (
     WorkspacePublication,
@@ -17,6 +23,13 @@ from pilot107.agent.publisher import (
 )
 from pilot107.agent.sandbox import SandboxExecutor
 from pilot107.agent.store import SQLiteAgentSessionStore
+from pilot107.agent.task_store import SQLiteAgentTaskStore
+from pilot107.agent.tasks import (
+    AgentResourceEnvelope,
+    AgentTaskRequest,
+    AgentTaskResult,
+    AgentTaskState,
+)
 from pilot107.agent.workspace import (
     AgentWorkspaceRecord,
     WorkspaceApproval,
@@ -115,6 +128,7 @@ class A4Harness:
             clock=self.clock,
         )
         self.session_store = SQLiteAgentSessionStore(self.database, clock=self.clock)
+        self.task_store = SQLiteAgentTaskStore(self.database, clock=self.clock)
         self.session_service = AgentSessionService(
             store=self.session_store, control_repository=self.control
         )
@@ -147,6 +161,7 @@ class A4Harness:
             "validation/result.json",
             '{"checks":"passed"}\n',
         )
+        self.validation_task = self._create_validation_task()
         self.service = ProjectAgentService(
             store=self.project_store,
             workspace_root=tmp_path / "workspaces",
@@ -161,6 +176,7 @@ class A4Harness:
             runtime_watch_service=self.watch_service,
             agent_session_service=self.session_service,
             evidence_binder=self.evidence_binder,
+            agent_task_store=self.task_store,
         )
 
     def contract_payload(self, name: str) -> dict[str, object]:
@@ -210,6 +226,55 @@ class A4Harness:
             approved_digest=preview.approval_digest,
         )
 
+    def _create_validation_task(self):
+        envelope = AgentResourceEnvelope(
+            partition="debug",
+            qos="normal",
+            cpus=4,
+            memory_mib=4096,
+            gpu_type=None,
+            gpus=0,
+            walltime_seconds=600,
+            max_tasks=1,
+            max_submissions=1,
+            workspace_snapshot_digest="a" * 64,
+            expires_at="2026-08-19T01:00:00Z",
+            approved_by="alice",
+        )
+        task, _ = self.task_store.create_task(
+            owner="alice",
+            session_id=self.session.session_id,
+            turn_id="turn-a4-validation",
+            project_id=self.project_id,
+            workspace_id="workspace-a4",
+            task_kind="slurm_validation",
+            request_key="a4-validation-task",
+            request=AgentTaskRequest(
+                partition="debug",
+                qos="normal",
+                cpus=4,
+                memory_mib=4096,
+                gpu_type=None,
+                gpus=0,
+                walltime_seconds=600,
+                tasks=1,
+                submissions=1,
+                workspace_snapshot_digest="a" * 64,
+                payload={"script": "bash scripts/run_experiment.sh"},
+            ),
+            envelope=envelope,
+        )
+        lease = self.task_store.claim_task(
+            task.task_id, owner="alice", worker_id="a4-task-worker", lease_seconds=60
+        )
+        assert lease is not None
+        self.task_store.link_run(task.task_id, lease=lease, run_id=self.validation_run.run_id)
+        return self.task_store.complete_task(
+            task.task_id,
+            lease=lease,
+            result=AgentTaskResult.succeeded((self.validation_ref,)),
+        )
+
     def _create_published_project(self, tmp_path: Path) -> None:
         project = self.project_store.create_project(
             owner="alice",
@@ -218,6 +283,31 @@ class A4Harness:
             request_key="a4-project",
         )
         project_id = project.project_id
+        self.project_store.save_blueprint(
+            project_id,
+            "alice",
+            project.version,
+            ProjectBlueprint(
+                goal="Verify heat diffusion convergence and CPU scaling.",
+                entrypoints=("scripts/run_experiment.sh",),
+                files=(),
+                validations=(
+                    ProjectValidation(
+                        validation_id="heat-slurm-validation",
+                        execution="slurm",
+                        argv=("bash", "scripts/run_experiment.sh"),
+                        expected_outputs=("convergence.json", "scaling.json", "report.md"),
+                    ),
+                ),
+                contract_intent=ProjectContractIntent(
+                    recipe_version_id="recipe_python_cpu@1.0.0",
+                    resource_hints={"cpus_per_task": 4, "gpus": 0},
+                ),
+                expected_outputs=(),
+                dependencies=(),
+                open_questions=(),
+            ),
+        )
         local_root = tmp_path / "workspaces" / "alice" / "workspace-a4"
         local_root.mkdir(parents=True)
         (local_root / "main.py").write_text("print('formal')\n")
@@ -342,6 +432,70 @@ def test_formal_run_binds_approved_changeset_contract_and_validation(
     assert formal.watch.run_id == formal.run.run_id
     assert formal.run.job_id is not None
     assert formal.approval.approval_digest in str(formal.contract.field_sources)
+
+
+def test_formal_candidate_derives_validation_lineage_from_succeeded_agent_task(
+    harness: A4Harness,
+) -> None:
+    candidate = harness.service.prepare_formal_run_candidate(
+        project_id=harness.project_id,
+        workspace_id="workspace-a4",
+        change_set_id="changeset-a4",
+        session_id=harness.session.session_id,
+        validation_task_id=harness.validation_task.task_id,
+        owner="alice",
+    )
+
+    assert candidate.validation_contract_id == harness.validation_contract.contract_id
+    assert candidate.validation_run_id == harness.validation_run.run_id
+    assert candidate.validation_evidence_refs == (harness.validation_ref,)
+    assert candidate.published_workdir == "/public/home/alice/a4-project"
+    assert candidate.default_command == "bash scripts/run_experiment.sh"
+    assert candidate.resource_hints == {"cpus_per_task": 4, "gpus": 0}
+
+
+class _OneTaskStore:
+    def __init__(self, task) -> None:
+        self.task = task
+
+    def get_task(self, task_id: str, *, owner: str):
+        del task_id, owner
+        return self.task
+
+
+@pytest.mark.parametrize(
+    "task_patch",
+    [
+        {"state": AgentTaskState.PENDING, "result": None, "linked_run_id": None},
+        {
+            "state": AgentTaskState.FAILED,
+            "result": AgentTaskResult(
+                status="failed", evidence_refs=(), error_code="validation_failed", message=None
+            ),
+        },
+        {"owner": "bob"},
+        {"session_id": "session-other"},
+        {"project_id": "project-other"},
+        {"workspace_id": "workspace-other"},
+        {"result": AgentTaskResult.succeeded(())},
+    ],
+)
+def test_formal_candidate_rejects_untrusted_or_unbound_agent_tasks(
+    harness: A4Harness, task_patch: dict[str, object]
+) -> None:
+    harness.service.agent_task_store = _OneTaskStore(
+        replace(harness.validation_task, **task_patch)
+    )
+
+    with pytest.raises(ValueError, match="AgentTask|Evidence|lineage"):
+        harness.service.prepare_formal_run_candidate(
+            project_id=harness.project_id,
+            workspace_id="workspace-a4",
+            change_set_id="changeset-a4",
+            session_id=harness.session.session_id,
+            validation_task_id=harness.validation_task.task_id,
+            owner="alice",
+        )
 
 
 def test_formal_approval_rejects_resource_change_and_replays_one_run(
@@ -610,6 +764,33 @@ def test_formal_run_http_flow_requires_preview_digest(harness: A4Harness) -> Non
     assert submitted is not None and submitted.status == 201
     assert submitted.payload["run"]["lineage_reason"] == "agent_formal_run"
     assert submitted.payload["watch"]["run_id"] == submitted.payload["run"]["run_id"]
+
+
+def test_formal_candidate_http_derives_lineage_and_rejects_injected_ids(
+    harness: A4Harness,
+) -> None:
+    routes = ProjectAgentRoutes(harness.service)
+    body = {
+        "project_id": harness.project_id,
+        "workspace_id": "workspace-a4",
+        "session_id": harness.session.session_id,
+        "validation_task_id": harness.validation_task.task_id,
+    }
+    response = routes.handle_post(
+        ["agent-changesets", "changeset-a4", "formal-run-candidate"],
+        body=json.dumps(body).encode(),
+        identity=UserIdentity(username="alice"),
+    )
+    injected = routes.handle_post(
+        ["agent-changesets", "changeset-a4", "formal-run-candidate"],
+        body=json.dumps({**body, "validation_run_id": "run-injected"}).encode(),
+        identity=UserIdentity(username="alice"),
+    )
+
+    assert response is not None and response.status == 200
+    assert response.payload["validation_run_id"] == harness.validation_run.run_id
+    assert response.payload["published_workdir"] == "/public/home/alice/a4-project"
+    assert injected is not None and injected.status == 400
 
 
 def replace_resource(payload: dict[str, object], *, cpus: int) -> dict[str, object]:

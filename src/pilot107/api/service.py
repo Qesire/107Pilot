@@ -782,6 +782,14 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             store=agent_session_store,
             control_repository=control_repository,
         )
+        agent_task_store = (
+            None
+            if run_service is None
+            else build_agent_task_store(
+                sqlite_path=config.db_path,
+                postgres_dsn=postgres_dsn,
+            )
+        )
         project_agent_service = ProjectAgentService(
             store=project_store,
             workspace_root=config.db_path.parent / "agent-workspaces",
@@ -803,9 +811,11 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 store=store,
                 evidence_root=config.evidence_root,
             ),
+            agent_task_store=agent_task_store,
         )
         project_handlers = project_agent_service.build_tool_handlers()
         if run_service is not None:
+            assert agent_task_store is not None
 
             def resolve_agent_workspace(
                 owner: str, workspace_id: str, snapshot_digest: str
@@ -822,10 +832,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 return Path(roots[0])
 
             agent_task_service = AgentTaskService(
-                store=build_agent_task_store(
-                    sqlite_path=config.db_path,
-                    postgres_dsn=postgres_dsn,
-                ),
+                store=agent_task_store,
                 session_store=agent_session_store,
                 session_service=agent_session_service,
                 run_service=run_service,

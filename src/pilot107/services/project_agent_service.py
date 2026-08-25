@@ -6,10 +6,12 @@ import hashlib
 import hmac
 import json
 import os
+import shlex
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any
 
 from pilot107.agent.project import (
@@ -28,6 +30,8 @@ from pilot107.agent.publisher import (
 )
 from pilot107.agent.sandbox import SandboxExecutionResult, SandboxExecutor
 from pilot107.agent.session import AgentTurnRecord
+from pilot107.agent.task_store import AgentTaskStore
+from pilot107.agent.tasks import AgentTaskState
 from pilot107.agent.tool_gateway import AgentReadHandler, AgentReadResult, AgentToolGatewayError
 from pilot107.agent.workspace import (
     AgentWorkspaceRecord,
@@ -82,6 +86,20 @@ class FormalRunApproval:
 
 
 @dataclass(frozen=True)
+class FormalRunCandidate:
+    validation_task_id: str
+    validation_contract_id: str
+    validation_run_id: str
+    validation_evidence_refs: tuple[str, ...]
+    published_workdir: str
+    default_command: str
+    resource_hints: Mapping[str, str | int]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "resource_hints", MappingProxyType(dict(self.resource_hints)))
+
+
+@dataclass(frozen=True)
 class FormalProjectRun:
     approval: FormalRunApproval
     contract: ContractRecord
@@ -111,6 +129,7 @@ class ProjectAgentService:
         runtime_watch_service: RuntimeWatchService | RuntimeWatchRegistrar | None = None,
         agent_session_service: AgentSessionService | None = None,
         evidence_binder: EvidenceBinder | None = None,
+        agent_task_store: AgentTaskStore | None = None,
     ) -> None:
         self.store = store
         self.workspace_root = workspace_root.resolve()
@@ -123,6 +142,7 @@ class ProjectAgentService:
         self.runtime_watch_service = runtime_watch_service
         self.agent_session_service = agent_session_service
         self.evidence_binder = evidence_binder
+        self.agent_task_store = agent_task_store
         self.editor = WorkspaceEditor(store=store)
 
     def create_project(
@@ -548,6 +568,98 @@ class ProjectAgentService:
             session_id=session_id,
         )
 
+    def prepare_formal_run_candidate(
+        self,
+        *,
+        project_id: str,
+        workspace_id: str,
+        change_set_id: str,
+        session_id: str,
+        validation_task_id: str,
+        owner: str,
+    ) -> FormalRunCandidate:
+        """Derive trusted validation lineage and formal defaults from one AgentTask."""
+
+        contract_service, run_service, _, session_service, evidence_binder = (
+            self._formal_services()
+        )
+        if self.agent_task_store is None:
+            raise RuntimeError("AgentTask store is unavailable")
+        self._workspace(project_id, workspace_id, owner)
+        session = session_service.store.get_session(session_id, owner=owner)
+        if (
+            session.source.get("project_id") != project_id
+            or session.source.get("workspace_id") != workspace_id
+        ):
+            raise ValueError("AgentTask Session lineage is not bound to the Project")
+
+        task = self.agent_task_store.get_task(validation_task_id, owner=owner)
+        if (
+            task.owner != owner
+            or task.session_id != session_id
+            or task.project_id != project_id
+            or task.workspace_id != workspace_id
+            or task.state is not AgentTaskState.SUCCEEDED
+            or task.result is None
+            or task.result.status != "succeeded"
+            or task.linked_run_id is None
+        ):
+            raise ValueError("AgentTask lineage is not successful and fully bound")
+        if not task.result.evidence_refs:
+            raise ValueError("AgentTask Evidence is missing")
+        linked_run_id = task.linked_run_id
+        assert linked_run_id is not None
+
+        change_set = self.store.get_change_set(change_set_id, owner=owner)
+        publication = self.store.get_workspace_publication(change_set_id, owner=owner)
+        if (
+            change_set.project_id != project_id
+            or change_set.workspace_id != workspace_id
+            or change_set.state is not WorkspaceChangeSetState.PUBLISHED
+            or publication.state is not WorkspacePublicationState.PUBLISHED
+            or publication.project_id != project_id
+            or publication.workspace_id != workspace_id
+            or publication.approved_digest != change_set.digest
+            or publication.approved_by != owner
+        ):
+            raise ValueError("formal Run candidate requires the published ChangeSet")
+
+        validation_run = run_service.store.get_run(linked_run_id)
+        validation_contract_id = validation_run.contract_id
+        if validation_contract_id is None:
+            raise ValueError("AgentTask validation Run lacks Contract lineage")
+        validation_contract = contract_service.get(validation_contract_id)
+        if (
+            validation_run.owner != owner
+            or validation_contract.owner != owner
+            or validation_run.state is not RunState.SUCCEEDED
+            or validation_run.result_status is not ResultStatus.COMPLETE
+        ):
+            raise ValueError("AgentTask validation Run lineage is not successful")
+        bundle = evidence_binder.bind(validation_run.run_id, task.result.evidence_refs)
+        if not bundle.objects or bundle.rejected_refs:
+            raise ValueError("AgentTask Evidence is incomplete or untrusted")
+
+        project = self.store.get_project(project_id, owner=owner)
+        if project.blueprint is None:
+            raise ValueError("formal Run candidate requires a saved Blueprint")
+        validations = tuple(
+            validation
+            for validation in project.blueprint.validations
+            if validation.execution == "slurm"
+        )
+        if len(validations) != 1:
+            raise ValueError("Blueprint must contain exactly one Slurm validation")
+        return FormalRunCandidate(
+            validation_task_id=task.task_id,
+            validation_contract_id=validation_contract.contract_id,
+            validation_run_id=validation_run.run_id,
+            validation_evidence_refs=task.result.evidence_refs,
+            published_workdir=publication.target_root,
+            default_command=shlex.join(validations[0].argv),
+            resource_hints=project.blueprint.contract_intent.resource_hints,
+        )
+
     def approve_and_submit_formal_run(
         self,
         *,
@@ -917,6 +1029,18 @@ def project_view_payload(view: ProjectAgentView) -> dict[str, Any]:
 
 def formal_run_approval_payload(value: FormalRunApproval) -> dict[str, str]:
     return asdict(value)
+
+
+def formal_run_candidate_payload(value: FormalRunCandidate) -> dict[str, Any]:
+    return {
+        "validation_task_id": value.validation_task_id,
+        "validation_contract_id": value.validation_contract_id,
+        "validation_run_id": value.validation_run_id,
+        "validation_evidence_refs": list(value.validation_evidence_refs),
+        "published_workdir": value.published_workdir,
+        "default_command": value.default_command,
+        "resource_hints": dict(value.resource_hints),
+    }
 
 
 def formal_project_run_payload(value: FormalProjectRun) -> dict[str, Any]:

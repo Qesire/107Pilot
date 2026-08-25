@@ -634,6 +634,23 @@ export interface FormalRunApproval {
   session_id: string;
 }
 
+export interface FormalRunCandidate {
+  validation_task_id: string;
+  validation_contract_id: string;
+  validation_run_id: string;
+  validation_evidence_refs: string[];
+  published_workdir: string;
+  default_command: string;
+  resource_hints: Record<string, string | number>;
+}
+
+export interface FormalRunCandidateRequest {
+  project_id: string;
+  workspace_id: string;
+  session_id: string;
+  validation_task_id: string;
+}
+
 export interface FormalProjectRun {
   approval: FormalRunApproval;
   contract: ContractRecordPayload;

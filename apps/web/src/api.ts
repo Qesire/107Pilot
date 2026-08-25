@@ -4,6 +4,8 @@ import type {
   FailedRunRepairProject,
   FormalProjectRun,
   FormalRunApproval,
+  FormalRunCandidate,
+  FormalRunCandidateRequest,
   WorkspacePublication,
   AgentSession,
   AgentTask,
@@ -925,6 +927,17 @@ export const api = {
     signal?: AbortSignal,
   ) => sendJson<WorkspacePublication>(
     `/api/v1/agent-changesets/${encodeURIComponent(changeSetId)}/publish`,
+    user,
+    input,
+    signal,
+  ),
+  formalRunCandidate: (
+    user: string,
+    changeSetId: string,
+    input: FormalRunCandidateRequest,
+    signal?: AbortSignal,
+  ) => sendJson<FormalRunCandidate>(
+    `/api/v1/agent-changesets/${encodeURIComponent(changeSetId)}/formal-run-candidate`,
     user,
     input,
     signal,

@@ -18,6 +18,7 @@ from pilot107.services.project_agent_service import (
     ProjectAgentService,
     formal_project_run_payload,
     formal_run_approval_payload,
+    formal_run_candidate_payload,
     project_view_payload,
 )
 from pilot107.services.remediation_service import RemediationServiceError
@@ -261,6 +262,34 @@ class ProjectAgentRoutes:
                 raise
             except (TypeError, ValueError, WorkspacePolicyError) as exc:
                 return _error(400, "AGENT.WORKSPACE.INVALID_REQUEST", str(exc))
+        if (
+            len(parts) == 3
+            and parts[0] == "agent-changesets"
+            and parts[2] == "formal-run-candidate"
+        ):
+            payload, error = _body(body)
+            if error is not None:
+                return error
+            try:
+                _closed(
+                    payload,
+                    {"project_id", "workspace_id", "session_id", "validation_task_id"},
+                )
+                candidate = self.service.prepare_formal_run_candidate(
+                    project_id=_required_string(payload, "project_id"),
+                    workspace_id=_required_string(payload, "workspace_id"),
+                    change_set_id=parts[1],
+                    session_id=_required_string(payload, "session_id"),
+                    validation_task_id=_required_string(payload, "validation_task_id"),
+                    owner=owner,
+                )
+                return ApiResponse(status=200, payload=formal_run_candidate_payload(candidate))
+            except KeyError:
+                return _error(404, "AGENT.PROJECT.NOT_FOUND", "Agent Project not found")
+            except RuntimeError as exc:
+                return _error(503, "AGENT.TASK.UNAVAILABLE", str(exc))
+            except (TypeError, ValueError) as exc:
+                return _error(400, "AGENT.PROJECT.INVALID_REQUEST", str(exc))
         if (
             len(parts) == 3
             and parts[0] == "agent-changesets"

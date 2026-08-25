@@ -487,6 +487,28 @@ describe("API transport", () => {
     );
   });
 
+  it("derives a formal Run candidate from one AgentTask without caller lineage IDs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}));
+    vi.stubGlobal("fetch", fetchMock);
+    const input = {
+      project_id: "project-1",
+      workspace_id: "workspace-1",
+      session_id: "session-1",
+      validation_task_id: "task-1",
+    };
+
+    await api.formalRunCandidate("alice", "changeset/1", input);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/agent-changesets/changeset%2F1/formal-run-candidate",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+        body: JSON.stringify(input),
+      }),
+    );
+  });
+
   it("surfaces owner-scoped Agent Session misses without adding an owner override", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
       error: { code: "AGENT.SESSION.NOT_FOUND", message: "Agent Session not found" },
