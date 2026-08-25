@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import tarfile
 import tempfile
 import unittest
@@ -33,6 +34,117 @@ def _mock_ownership() -> Iterator[None]:
 
 
 class CommandGatewayTests(unittest.TestCase):
+    def test_search_files_matches_name_and_relative_path_without_following_symlinks(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "public/home/alice"
+            (root / "models/v1").mkdir(parents=True)
+            (root / "models/v1/weights.bin").write_bytes(b"123")
+            (root / "model-link").symlink_to(root / "models", target_is_directory=True)
+            config = gateway.GatewayConfig(token=None, allowed_roots=[str(root)])
+
+            page = gateway._search_files(
+                {
+                    "root": str(root),
+                    "owner": "alice",
+                    "q": "MODEL",
+                    "kind": "all",
+                    "limit": 100,
+                    "cursor": None,
+                    "scan_limit": 1000,
+                    "time_limit_ms": 1000,
+                },
+                config,
+            )
+
+            self.assertEqual(
+                [item["relative_path"] for item in page["items"]],
+                ["models", "models/v1", "models/v1/weights.bin"],
+            )
+
+    def test_search_files_rejects_outside_root_and_oversized_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "alice"
+            root.mkdir()
+            config = gateway.GatewayConfig(
+                token="cursor-secret", allowed_roots=[str(root)]
+            )
+
+            with self.assertRaisesRegex(gateway.GatewayError, "outside allowed roots"):
+                gateway._search_files(
+                    {"root": str(Path(tmp) / "bob"), "owner": "alice", "q": "x"},
+                    config,
+                )
+            with self.assertRaisesRegex(gateway.GatewayError, "limit"):
+                gateway._search_files(
+                    {"root": str(root), "owner": "alice", "q": "x", "limit": 101},
+                    config,
+                )
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO creation requires POSIX")
+    def test_search_files_omits_symlinks_and_special_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "alice"
+            root.mkdir()
+            (root / "ordinary.txt").write_text("ok", encoding="utf-8")
+            (root / "ordinary-link").symlink_to(root / "ordinary.txt")
+            os.mkfifo(root / "ordinary-pipe")
+            config = gateway.GatewayConfig(token=None, allowed_roots=[str(root)])
+
+            page = gateway._search_files(
+                {"root": str(root), "owner": "alice", "q": "ordinary", "kind": "all"},
+                config,
+            )
+
+            self.assertEqual(
+                [item["relative_path"] for item in page["items"]], ["ordinary.txt"]
+            )
+
+    def test_search_files_budget_returns_bound_cursor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "alice"
+            root.mkdir()
+            for index in range(5):
+                (root / f"model-{index}.txt").write_text(str(index), encoding="utf-8")
+            alternate_root = root / "z-alternate"
+            alternate_root.mkdir()
+            config = gateway.GatewayConfig(
+                token="cursor-secret", allowed_roots=[str(root)]
+            )
+            request = {
+                "root": str(root),
+                "owner": "alice",
+                "q": "model",
+                "kind": "file",
+                "limit": 100,
+                "scan_limit": 2,
+                "time_limit_ms": 1000,
+            }
+
+            first = gateway._search_files(request, config)
+
+            self.assertTrue(first["incomplete"])
+            self.assertIsInstance(first["next_cursor"], str)
+            self.assertEqual(len(first["items"]), 2)
+            second = gateway._search_files(
+                {**request, "cursor": first["next_cursor"], "scan_limit": 100}, config
+            )
+            self.assertFalse(second["incomplete"])
+            self.assertEqual(
+                [item["relative_path"] for item in first["items"] + second["items"]],
+                [f"model-{index}.txt" for index in range(5)],
+            )
+            for changed in (
+                {"owner": "bob"},
+                {"root": str(alternate_root)},
+                {"q": "other"},
+            ):
+                with self.assertRaisesRegex(gateway.GatewayError, "cursor"):
+                    gateway._search_files(
+                        {**request, **changed, "cursor": first["next_cursor"]}, config
+                    )
+
     def test_rejects_wrong_bearer_token(self) -> None:
         config = gateway.GatewayConfig(token="expected", allowed_roots=["/public/home/alice"])
 

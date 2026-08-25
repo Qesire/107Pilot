@@ -14,8 +14,10 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from pilot107.adapters.slurm import (
+    HttpCommandGatewayExecutor,
     LocalFileOpsExecutor,
     SlurmSubmissionRejected,
     SlurmTransportError,
@@ -58,6 +60,74 @@ class LocalFileOpsExecutorTests(unittest.TestCase):
         self.assertEqual(
             self.executor.file_sha256(path=str(target), owner="alice"), expected
         )
+
+    def test_search_files_matches_relative_path_and_filters_kind_and_size(self) -> None:
+        (self.root / "Models").mkdir()
+        (self.root / "Models" / "tiny.bin").write_bytes(b"1")
+        (self.root / "Models" / "weights.bin").write_bytes(b"12345")
+        (self.root / "model-link").symlink_to(
+            self.root / "Models", target_is_directory=True
+        )
+
+        page = self.executor.search_files(
+            root=str(self.root),
+            q="model",
+            kind="file",
+            size_min=2,
+            size_max=10,
+            mtime_from=None,
+            mtime_to=None,
+            limit=100,
+            cursor=None,
+            scan_limit=1000,
+            time_limit_ms=1000,
+            owner="alice",
+        )
+
+        self.assertEqual(
+            [item.relative_path for item in page.items], ["Models/weights.bin"]
+        )
+        self.assertFalse(page.incomplete)
+        self.assertIsNone(page.next_cursor)
+
+    def test_http_search_files_uses_fixed_projection_and_parses_page(self) -> None:
+        executor = HttpCommandGatewayExecutor(base_url="http://gateway.invalid")
+        response = {
+            "items": [
+                {
+                    "path": "/public/home/alice/models/a.bin",
+                    "relative_path": "models/a.bin",
+                    "type": "file",
+                    "size": 7,
+                    "mtime": 123,
+                }
+            ],
+            "incomplete": True,
+            "next_cursor": "opaque",
+            "warnings": ["unreadable: private"],
+        }
+        with mock.patch.object(executor, "_request", return_value=response) as request:
+            page = executor.search_files(
+                root="/public/home/alice",
+                q="model",
+                kind="all",
+                size_min=None,
+                size_max=None,
+                mtime_from=None,
+                mtime_to=None,
+                limit=20,
+                cursor=None,
+                scan_limit=10000,
+                time_limit_ms=750,
+                owner="alice",
+            )
+
+        self.assertEqual(page.items[0].relative_path, "models/a.bin")
+        self.assertEqual(page.next_cursor, "opaque")
+        self.assertEqual(page.warnings, ("unreadable: private",))
+        self.assertEqual(request.call_args.args[0], "/search_files")
+        self.assertEqual(request.call_args.args[1]["owner"], "alice")
+        self.assertEqual(request.call_args.args[1]["scan_limit"], 10000)
 
     def test_append_offset_writes_at_end(self) -> None:
         target = self.root / "append.bin"

@@ -7,8 +7,10 @@ import argparse
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import os
+import posixpath
 import pwd
 import re
 import shutil
@@ -73,6 +75,8 @@ class GatewayConfig:
         self._rate_lock = threading.Lock()
         self._rate_buckets: dict[str, tuple[float, int]] = {}
         self._audit_lock = threading.Lock()
+        seed = token.encode("utf-8") if token else os.urandom(32)
+        self._cursor_key = hashlib.sha256(b"pilot107-file-search\0" + seed).digest()
 
 
 def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
@@ -121,6 +125,9 @@ def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
                     status = 200
                 elif self.path.rstrip("/") == "/list_dir":
                     response = _list_dir(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/search_files":
+                    response = _search_files(payload, config)
                     status = 200
                 elif self.path.rstrip("/") == "/mkdir":
                     _make_dir(payload, config)
@@ -619,6 +626,214 @@ def _list_dir(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
             }
         )
     return {"path": path, "entries": entries}
+
+
+def _search_files(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    root = _authorize_path(str(payload.get("root", "")), config, user=owner)
+    target = Path(root)
+    if not target.is_dir():
+        raise GatewayError(f"not a directory: {root}", status=404)
+
+    query = str(payload.get("q", "")).strip().casefold()
+    kind = str(payload.get("kind", "all"))
+    if kind not in {"file", "directory", "all"}:
+        raise GatewayError("kind must be file, directory, or all")
+    limit = _bounded_integer(payload, "limit", default=100, minimum=1, maximum=100)
+    scan_limit = _bounded_integer(
+        payload, "scan_limit", default=10_000, minimum=1, maximum=100_000
+    )
+    time_limit_ms = _bounded_integer(
+        payload, "time_limit_ms", default=750, minimum=1, maximum=10_000
+    )
+    size_min = _optional_nonnegative_integer(payload, "size_min")
+    size_max = _optional_nonnegative_integer(payload, "size_max")
+    mtime_from = _optional_nonnegative_integer(payload, "mtime_from")
+    mtime_to = _optional_nonnegative_integer(payload, "mtime_to")
+    if size_min is not None and size_max is not None and size_min > size_max:
+        raise GatewayError("size_min cannot exceed size_max")
+    if mtime_from is not None and mtime_to is not None and mtime_from > mtime_to:
+        raise GatewayError("mtime_from cannot exceed mtime_to")
+
+    binding = {
+        "owner": owner,
+        "root": root,
+        "q": query,
+        "kind": kind,
+        "size_min": size_min,
+        "size_max": size_max,
+        "mtime_from": mtime_from,
+        "mtime_to": mtime_to,
+    }
+    raw_cursor = payload.get("cursor")
+    if raw_cursor is None or raw_cursor == "":
+        stack: list[dict[str, Any]] = [{"relative_dir": "", "index": 0}]
+    elif isinstance(raw_cursor, str):
+        cursor_payload = _decode_search_cursor(raw_cursor, config._cursor_key)
+        if cursor_payload.get("binding") != binding:
+            raise GatewayError("search cursor does not match request")
+        raw_stack = cursor_payload.get("stack")
+        if not isinstance(raw_stack, list):
+            raise GatewayError("invalid search cursor")
+        stack = []
+        for frame in raw_stack:
+            if not isinstance(frame, dict):
+                raise GatewayError("invalid search cursor")
+            relative_dir = frame.get("relative_dir")
+            index = frame.get("index")
+            if (
+                not isinstance(relative_dir, str)
+                or relative_dir.startswith("/")
+                or ".." in Path(relative_dir).parts
+                or not isinstance(index, int)
+                or index < 0
+            ):
+                raise GatewayError("invalid search cursor")
+            stack.append({"relative_dir": relative_dir, "index": index})
+    else:
+        raise GatewayError("cursor must be a string")
+
+    started = time.monotonic()
+    scanned = 0
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    while stack and len(items) < limit:
+        if (
+            scanned >= scan_limit
+            or (time.monotonic() - started) * 1000 >= time_limit_ms
+        ):
+            break
+        frame = stack[-1]
+        relative_dir = str(frame["relative_dir"])
+        directory = target / relative_dir if relative_dir else target
+        try:
+            with os.scandir(directory) as handle:
+                entries = sorted(handle, key=lambda entry: entry.name)
+        except OSError:
+            warnings.append(
+                "unreadable directory: " + (relative_dir if relative_dir else ".")
+            )
+            stack.pop()
+            continue
+        index = int(frame["index"])
+        if index >= len(entries):
+            stack.pop()
+            continue
+        entry = entries[index]
+        frame["index"] = index + 1
+        scanned += 1
+        try:
+            info = entry.stat(follow_symlinks=False)
+            is_directory = entry.is_dir(follow_symlinks=False)
+            is_file = entry.is_file(follow_symlinks=False)
+        except OSError:
+            continue
+        if not is_directory and not is_file:
+            continue
+        relative_path = (
+            posixpath.join(relative_dir, entry.name) if relative_dir else entry.name
+        )
+        entry_kind = "directory" if is_directory else "file"
+        if is_directory:
+            stack.append({"relative_dir": relative_path, "index": 0})
+        if query not in entry.name.casefold() and query not in relative_path.casefold():
+            continue
+        if kind != "all" and kind != entry_kind:
+            continue
+        if size_min is not None and info.st_size < size_min:
+            continue
+        if size_max is not None and info.st_size > size_max:
+            continue
+        mtime = int(info.st_mtime)
+        if mtime_from is not None and mtime < mtime_from:
+            continue
+        if mtime_to is not None and mtime > mtime_to:
+            continue
+        items.append(
+            {
+                "path": str(target / relative_path),
+                "relative_path": relative_path,
+                "type": entry_kind,
+                "size": info.st_size,
+                "mtime": mtime,
+            }
+        )
+
+    incomplete = bool(stack)
+    next_cursor = (
+        _encode_search_cursor({"binding": binding, "stack": stack}, config._cursor_key)
+        if incomplete
+        else None
+    )
+    return {
+        "root": root,
+        "items": items,
+        "incomplete": incomplete,
+        "next_cursor": next_cursor,
+        "warnings": warnings,
+    }
+
+
+def _bounded_integer(
+    payload: dict[str, Any],
+    name: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = payload.get(name, default)
+    if isinstance(raw, bool):
+        raise GatewayError(f"{name} must be an integer")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise GatewayError(f"{name} must be an integer") from exc
+    if value < minimum or value > maximum:
+        raise GatewayError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _optional_nonnegative_integer(payload: dict[str, Any], name: str) -> int | None:
+    raw = payload.get(name)
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, bool):
+        raise GatewayError(f"{name} must be a non-negative integer")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise GatewayError(f"{name} must be a non-negative integer") from exc
+    if value < 0:
+        raise GatewayError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _encode_search_cursor(payload: dict[str, Any], key: bytes) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    body = base64.urlsafe_b64encode(raw).rstrip(b"=")
+    signature = hmac.new(key, body, hashlib.sha256).digest()
+    encoded_signature = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+    return body.decode("ascii") + "." + encoded_signature
+
+
+def _decode_search_cursor(cursor: str, key: bytes) -> dict[str, Any]:
+    try:
+        body_text, signature_text = cursor.split(".", 1)
+        body = body_text.encode("ascii")
+        signature = base64.urlsafe_b64decode(
+            signature_text + "=" * (-len(signature_text) % 4)
+        )
+        expected = hmac.new(key, body, hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("signature mismatch")
+        raw = base64.urlsafe_b64decode(body + b"=" * (-len(body) % 4))
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise GatewayError("invalid search cursor") from exc
+    if not isinstance(decoded, dict):
+        raise GatewayError("invalid search cursor")
+    return decoded
 
 
 def _make_dir(payload: dict[str, Any], config: GatewayConfig) -> None:

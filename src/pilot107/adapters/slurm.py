@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import posixpath
@@ -9,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -346,6 +348,39 @@ class FileEntry:
 
 
 @dataclass(frozen=True)
+class FileSearchRequest:
+    owner: str
+    root: str
+    q: str
+    kind: str
+    size_min: int | None
+    size_max: int | None
+    mtime_from: int | None
+    mtime_to: int | None
+    limit: int
+    cursor: str | None
+    scan_limit: int
+    time_limit_ms: int
+
+
+@dataclass(frozen=True)
+class FileSearchEntry:
+    path: str
+    relative_path: str
+    type: str
+    size: int
+    mtime: int
+
+
+@dataclass(frozen=True)
+class FileSearchPage:
+    items: tuple[FileSearchEntry, ...]
+    incomplete: bool
+    next_cursor: str | None
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class FileStat:
     path: str
     type: str
@@ -405,6 +440,25 @@ class FileOpsExecutor(Protocol):
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
     ) -> list[FileEntry]:
         """List a directory's entries."""
+
+    def search_files(
+        self,
+        *,
+        root: str,
+        q: str,
+        kind: str,
+        size_min: int | None,
+        size_max: int | None,
+        mtime_from: int | None,
+        mtime_to: int | None,
+        limit: int,
+        cursor: str | None,
+        scan_limit: int,
+        time_limit_ms: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> FileSearchPage:
+        """Search names and relative paths within an authorized bounded root."""
 
     def make_dir(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
@@ -632,6 +686,72 @@ class HttpCommandGatewayExecutor:
             if isinstance(item, dict)
         ]
 
+    def search_files(
+        self,
+        *,
+        root: str,
+        q: str,
+        kind: str,
+        size_min: int | None,
+        size_max: int | None,
+        mtime_from: int | None,
+        mtime_to: int | None,
+        limit: int,
+        cursor: str | None,
+        scan_limit: int,
+        time_limit_ms: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> FileSearchPage:
+        payload = self._request(
+            "/search_files",
+            {
+                "root": root,
+                "q": q,
+                "kind": kind,
+                "size_min": size_min,
+                "size_max": size_max,
+                "mtime_from": mtime_from,
+                "mtime_to": mtime_to,
+                "limit": limit,
+                "cursor": cursor,
+                "scan_limit": scan_limit,
+                "time_limit_ms": time_limit_ms,
+                "owner": owner,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        raw_items = payload.get("items")
+        if not isinstance(raw_items, list):
+            raise SlurmTransportError("gateway search_files response missing items")
+        raw_warnings = payload.get("warnings", [])
+        if not isinstance(raw_warnings, list):
+            raise SlurmTransportError(
+                "gateway search_files response has invalid warnings"
+            )
+        raw_cursor = payload.get("next_cursor")
+        if raw_cursor is not None and not isinstance(raw_cursor, str):
+            raise SlurmTransportError(
+                "gateway search_files response has invalid cursor"
+            )
+        return FileSearchPage(
+            items=tuple(
+                FileSearchEntry(
+                    path=str(item.get("path", "")),
+                    relative_path=str(item.get("relative_path", "")),
+                    type=str(item.get("type", "other")),
+                    size=int(item.get("size", 0)),
+                    mtime=int(item.get("mtime", 0)),
+                )
+                for item in raw_items
+                if isinstance(item, dict)
+            ),
+            incomplete=bool(payload.get("incomplete", False)),
+            next_cursor=raw_cursor,
+            warnings=tuple(str(item) for item in raw_warnings),
+        )
+
     def make_dir(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
     ) -> None:
@@ -850,6 +970,55 @@ def _directory_apparent_size(root: Path) -> int:
     return total
 
 
+def _encode_local_search_cursor(payload: dict[str, Any], key: bytes) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    body = base64.urlsafe_b64encode(raw).rstrip(b"=")
+    signature = hmac.new(key, body, hashlib.sha256).digest()
+    return (
+        body.decode("ascii")
+        + "."
+        + base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+    )
+
+
+def _decode_local_search_cursor(cursor: str, key: bytes) -> dict[str, Any]:
+    try:
+        body_text, signature_text = cursor.split(".", 1)
+        body = body_text.encode("ascii")
+        signature = base64.urlsafe_b64decode(
+            signature_text + "=" * (-len(signature_text) % 4)
+        )
+        expected = hmac.new(key, body, hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("signature mismatch")
+        raw = base64.urlsafe_b64decode(body + b"=" * (-len(body) % 4))
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise SlurmSubmissionRejected("invalid search cursor") from exc
+    if not isinstance(payload, dict):
+        raise SlurmSubmissionRejected("invalid search cursor")
+    return payload
+
+
+def _validate_local_search_stack(raw_stack: list[Any]) -> list[dict[str, Any]]:
+    stack: list[dict[str, Any]] = []
+    for frame in raw_stack:
+        if not isinstance(frame, dict):
+            raise SlurmSubmissionRejected("invalid search cursor")
+        relative_dir = frame.get("relative_dir")
+        index = frame.get("index")
+        if (
+            not isinstance(relative_dir, str)
+            or relative_dir.startswith("/")
+            or ".." in Path(relative_dir).parts
+            or not isinstance(index, int)
+            or index < 0
+        ):
+            raise SlurmSubmissionRejected("invalid search cursor")
+        stack.append({"relative_dir": relative_dir, "index": index})
+    return stack
+
+
 class LocalFileOpsExecutor:
     """File primitives against the local filesystem (tests / local backend).
 
@@ -860,6 +1029,7 @@ class LocalFileOpsExecutor:
 
     def __init__(self, *, allowed_roots: list[str]) -> None:
         self.allowed_roots = [root.rstrip("/") or "/" for root in allowed_roots]
+        self._search_cursor_key = os.urandom(32)
 
     def _authorize(self, path: str) -> Path:
         resolved = Path(path).resolve()
@@ -963,6 +1133,152 @@ class LocalFileOpsExecutor:
                 )
             )
         return entries
+
+    def search_files(
+        self,
+        *,
+        root: str,
+        q: str,
+        kind: str,
+        size_min: int | None,
+        size_max: int | None,
+        mtime_from: int | None,
+        mtime_to: int | None,
+        limit: int,
+        cursor: str | None,
+        scan_limit: int,
+        time_limit_ms: int,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> FileSearchPage:
+        del timeout_seconds
+        target = self._authorize(root)
+        if not target.is_dir():
+            raise SlurmTransportError(f"not a directory: {root}")
+        normalized_query = q.strip().casefold()
+        if kind not in {"file", "directory", "all"}:
+            raise SlurmSubmissionRejected("kind must be file, directory, or all")
+        if not 1 <= limit <= 100:
+            raise SlurmSubmissionRejected("limit must be between 1 and 100")
+        if not 1 <= scan_limit <= 100_000:
+            raise SlurmSubmissionRejected("scan_limit must be between 1 and 100000")
+        if not 1 <= time_limit_ms <= 10_000:
+            raise SlurmSubmissionRejected("time_limit_ms must be between 1 and 10000")
+        for name, value in (
+            ("size_min", size_min),
+            ("size_max", size_max),
+            ("mtime_from", mtime_from),
+            ("mtime_to", mtime_to),
+        ):
+            if value is not None and value < 0:
+                raise SlurmSubmissionRejected(f"{name} must be non-negative")
+        if size_min is not None and size_max is not None and size_min > size_max:
+            raise SlurmSubmissionRejected("size_min cannot exceed size_max")
+        if mtime_from is not None and mtime_to is not None and mtime_from > mtime_to:
+            raise SlurmSubmissionRejected("mtime_from cannot exceed mtime_to")
+        binding = {
+            "owner": owner,
+            "root": str(target),
+            "q": normalized_query,
+            "kind": kind,
+            "size_min": size_min,
+            "size_max": size_max,
+            "mtime_from": mtime_from,
+            "mtime_to": mtime_to,
+        }
+        if cursor:
+            state = _decode_local_search_cursor(cursor, self._search_cursor_key)
+            if state.get("binding") != binding:
+                raise SlurmSubmissionRejected("search cursor does not match request")
+            raw_stack = state.get("stack")
+            if not isinstance(raw_stack, list):
+                raise SlurmSubmissionRejected("invalid search cursor")
+            stack = _validate_local_search_stack(raw_stack)
+        else:
+            stack = [{"relative_dir": "", "index": 0}]
+
+        started = time.monotonic()
+        scanned = 0
+        items: list[FileSearchEntry] = []
+        warnings: list[str] = []
+        while stack and len(items) < limit:
+            if (
+                scanned >= scan_limit
+                or (time.monotonic() - started) * 1000 >= time_limit_ms
+            ):
+                break
+            frame = stack[-1]
+            relative_dir = str(frame["relative_dir"])
+            directory = target / relative_dir if relative_dir else target
+            try:
+                with os.scandir(directory) as handle:
+                    entries = sorted(handle, key=lambda entry: entry.name)
+            except OSError:
+                warnings.append(
+                    "unreadable directory: " + (relative_dir if relative_dir else ".")
+                )
+                stack.pop()
+                continue
+            index = int(frame["index"])
+            if index >= len(entries):
+                stack.pop()
+                continue
+            entry = entries[index]
+            frame["index"] = index + 1
+            scanned += 1
+            try:
+                info = entry.stat(follow_symlinks=False)
+                is_directory = entry.is_dir(follow_symlinks=False)
+                is_file = entry.is_file(follow_symlinks=False)
+            except OSError:
+                continue
+            if not is_directory and not is_file:
+                continue
+            relative_path = (
+                posixpath.join(relative_dir, entry.name) if relative_dir else entry.name
+            )
+            entry_kind = "directory" if is_directory else "file"
+            if is_directory:
+                stack.append({"relative_dir": relative_path, "index": 0})
+            if (
+                normalized_query not in entry.name.casefold()
+                and normalized_query not in relative_path.casefold()
+            ):
+                continue
+            if kind != "all" and kind != entry_kind:
+                continue
+            if size_min is not None and info.st_size < size_min:
+                continue
+            if size_max is not None and info.st_size > size_max:
+                continue
+            mtime = int(info.st_mtime)
+            if mtime_from is not None and mtime < mtime_from:
+                continue
+            if mtime_to is not None and mtime > mtime_to:
+                continue
+            items.append(
+                FileSearchEntry(
+                    path=str(target / relative_path),
+                    relative_path=relative_path,
+                    type=entry_kind,
+                    size=info.st_size,
+                    mtime=mtime,
+                )
+            )
+        incomplete = bool(stack)
+        next_cursor = (
+            _encode_local_search_cursor(
+                {"binding": binding, "stack": stack}, self._search_cursor_key
+            )
+            if incomplete
+            else None
+        )
+        return FileSearchPage(
+            items=tuple(items),
+            incomplete=incomplete,
+            next_cursor=next_cursor,
+            warnings=tuple(warnings),
+        )
 
     def make_dir(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
