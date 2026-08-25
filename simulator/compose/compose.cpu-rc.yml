@@ -24,8 +24,8 @@ services:
       - ./slurm-cpu-rc/slurm.conf:/etc/slurm/slurm.conf:ro
 
   worker-1:
-    cpus: 8.0
-    mem_limit: 15g
+    cpus: 6.0
+    mem_limit: 10g
     volumes:
       - ./slurm-cpu-rc/slurm.conf:/etc/slurm/slurm.conf:ro
 

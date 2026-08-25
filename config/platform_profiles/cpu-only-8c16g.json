@@ -21,12 +21,12 @@
   "qos": [
     {
       "name": "qos_cpu_rc",
-      "max_cpus": 8,
+      "max_cpus": 6,
       "max_gpus": 0,
-      "max_memory_gb": 15,
+      "max_memory_gb": 10,
       "max_wall_hours": 4,
-      "source_authority": "vm-measured-8c15g-demo",
-      "notes": ["The VM has 8 vCPU and about 15.6 GiB Linux-visible memory; the Slurm demo group advertises 8 CPU and 15 GiB after rounding."]
+      "source_authority": "vm-demo-6c10g",
+      "notes": ["The VM-local Slurm demo group advertises 6 CPU and 10 GiB, reserving the remaining host capacity for control-plane services."]
     }
   ],
   "rest": {
@@ -40,7 +40,7 @@
     "partial_payload_with_errors": false
   },
   "dynamic_facts": [
-    "The target VM envelope is 8 vCPU and about 15.6 GiB Linux-visible memory; its single Slurm demo node exposes 8 CPU and 15 GiB."
+    "The target VM has 8 vCPU and about 15.6 GiB Linux-visible memory; its single Slurm demo node exposes the bounded 6-CPU/10-GiB job envelope."
   ],
   "limitations": [
     "This is a local/VM release-candidate profile, not a real 107 capability claim.",

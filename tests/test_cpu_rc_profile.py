@@ -21,15 +21,15 @@ class CpuReleaseCandidateProfileTests(unittest.TestCase):
         self.assertEqual(profile.default_qos, "qos_cpu_rc")
         self.assertTrue(all(not partition.gpu_types for partition in profile.partitions))
         self.assertTrue(all(qos.max_gpus == 0 for qos in profile.qos))
-        self.assertEqual(max(qos.max_cpus or 0 for qos in profile.qos), 8)
-        self.assertEqual(max(qos.max_memory_gb or 0 for qos in profile.qos), 15)
+        self.assertEqual(max(qos.max_cpus or 0 for qos in profile.qos), 6)
+        self.assertEqual(max(qos.max_memory_gb or 0 for qos in profile.qos), 10)
 
     def test_slurm_and_compose_envelopes_do_not_expose_gpu_resources(self) -> None:
         slurm = (ROOT / "simulator/compose/slurm-cpu-rc/slurm.conf").read_text()
         compose = (ROOT / "simulator/compose/compose.cpu-rc.yml").read_text()
 
-        self.assertIn("NodeName=anode16 CPUs=8", slurm)
-        self.assertIn("RealMemory=15360", slurm)
+        self.assertIn("NodeName=anode16 CPUs=6", slurm)
+        self.assertIn("RealMemory=10240", slurm)
         self.assertIn("PartitionName=CPU-RC", slurm)
         self.assertNotIn("GresTypes", slurm)
         self.assertNotIn("GPU", slurm)
@@ -41,8 +41,8 @@ class CpuReleaseCandidateProfileTests(unittest.TestCase):
             "/opt/pilot107/config/platform_profiles/cpu-only-8c16g.json",
             compose,
         )
-        self.assertIn("cpus: 8.0", compose)
-        self.assertIn("mem_limit: 15g", compose)
+        self.assertIn("cpus: 6.0", compose)
+        self.assertIn("mem_limit: 10g", compose)
         self.assertNotIn("worker-2:", compose)
         self.assertIn("slurmctld-state:/var/spool/slurm/ctld", compose)
         self.assertNotIn("cgroup: host", compose)
@@ -84,7 +84,8 @@ class CpuReleaseCandidateProfileTests(unittest.TestCase):
 
         self.assertIn("exec -T slurmdbd sacctmgr", script)
         self.assertLess(script.index("add qos qos_cpu_rc"), script.index("scontrol ping"))
-        self.assertIn("MaxTRESPerJob=cpu=8,mem=15G", script)
+        self.assertIn("MaxTRESPerJob=cpu=6,mem=10G", script)
+        self.assertIn("GrpTRES=cpu=6,mem=10G", script)
         self.assertIn("set QOS=qos_cpu_rc || true", script)
         self.assertIn("set DefaultQOS=qos_cpu_rc || true", script)
 

@@ -30,7 +30,7 @@ run_sacctmgr() {
 run_sacctmgr add cluster "$cluster_name" || true
 run_sacctmgr add account competition Cluster="$cluster_name" Description=Competition Organization=pilot107 || true
 run_sacctmgr add qos qos_cpu_rc || true
-run_sacctmgr modify qos qos_cpu_rc set MaxWall=04:00:00 MaxTRESPerJob=cpu=8,mem=15G GrpTRES=cpu=8,mem=15G || true
+run_sacctmgr modify qos qos_cpu_rc set MaxWall=04:00:00 MaxTRESPerJob=cpu=6,mem=10G GrpTRES=cpu=6,mem=10G || true
 run_sacctmgr add user alice Account=competition Cluster="$cluster_name" || true
 run_sacctmgr modify user alice set DefaultAccount=competition || true
 run_sacctmgr modify user where user=alice account=competition cluster="$cluster_name" set QOS=qos_cpu_rc || true
