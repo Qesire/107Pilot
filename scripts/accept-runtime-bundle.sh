@@ -420,6 +420,20 @@ step_agent_task_lifecycle() {
   ( cd "$bundle_root" && bash scripts/smoke-vm-agent-task.sh )
 }
 
+step_heat_diffusion_agent_demo() {
+  if [[ "${PILOT107_SKIP_HEAT_DIFFUSION_AGENT_DEMO:-0}" == "1" ]]; then
+    if [[ "$seal_mode" == "1" ]]; then
+      echo "heat-diffusion Agent demo cannot be skipped in seal mode" >&2
+      return 1
+    fi
+    echo "heat-diffusion Agent demo explicitly skipped for non-seal acceptance"
+    return 0
+  fi
+  ( cd "$bundle_root" \
+    && PILOT107_HEAT_SMOKE_AUTO_APPROVE=1 \
+       bash scripts/smoke-vm-heat-diffusion-agent.sh )
+}
+
 STEPS=(
   "manifest_validate|step_manifest_validate"
   "import_images|step_import_images"
@@ -432,6 +446,7 @@ STEPS=(
   "restart_recovery|step_restart_recovery"
   "image_binding|step_image_binding"
   "agent_task_lifecycle|step_agent_task_lifecycle"
+  "heat_diffusion_agent_demo|step_heat_diffusion_agent_demo"
   "report|step_report"
 )
 

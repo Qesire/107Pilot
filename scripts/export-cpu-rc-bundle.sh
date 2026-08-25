@@ -111,6 +111,8 @@ for script in \
   smoke_competition_web.py \
   smoke-vm-agent-task.py \
   smoke-vm-agent-task.sh \
+  smoke-vm-heat-diffusion-agent.py \
+  smoke-vm-heat-diffusion-agent.sh \
   smoke-vm-slurm-authority.py \
   smoke-vm-slurm-authority.sh \
   start-cpu-rc.sh \
@@ -224,6 +226,8 @@ assert_required_files_exist() {
     "scripts/smoke-restart-volume-recovery.sh"
     "scripts/smoke-vm-agent-task.py"
     "scripts/smoke-vm-agent-task.sh"
+    "scripts/smoke-vm-heat-diffusion-agent.py"
+    "scripts/smoke-vm-heat-diffusion-agent.sh"
     "scripts/smoke-vm-slurm-authority.py"
     "scripts/smoke-vm-slurm-authority.sh"
     "scripts/preflight-cpu-rc-vm.sh"
