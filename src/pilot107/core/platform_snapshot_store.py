@@ -109,6 +109,20 @@ class AuthoritativeSnapshotSelection:
     authority_id: str
     warnings: tuple[str, ...]
 
+    def summary_payload(self, *, at: datetime | None = None) -> dict[str, Any]:
+        return {
+            **self.record.summary_payload(at=at),
+            "authority_id": self.authority_id,
+            "warnings": list(self.warnings),
+        }
+
+    def safe_payload(self, *, at: datetime | None = None) -> dict[str, Any]:
+        return {
+            **self.record.safe_payload(at=at),
+            "authority_id": self.authority_id,
+            "warnings": list(self.warnings),
+        }
+
 
 class PlatformSnapshotStore:
     def __init__(self, db_path: Path) -> None:

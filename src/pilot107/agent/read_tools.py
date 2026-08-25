@@ -146,10 +146,14 @@ def _platform_snapshot(
     store = context.platform_snapshot_store
     if store is None:
         raise _error("AGENT.TOOL.UNAVAILABLE", "Platform snapshot reader is unavailable")
-    record = store.latest(owner=owner)
-    if record is None:
-        raise _error("AGENT.TOOL.NOT_FOUND", "Platform snapshot was not found")
-    payload = record.safe_payload()
+    selection = store.latest_usable(owner=owner)
+    if selection is None:
+        raise _error(
+            "AGENT.TOOL.PLATFORM_FACTS_UNAVAILABLE",
+            "Authoritative VM Slurm facts are unavailable",
+        )
+    record = selection.record
+    payload = selection.safe_payload()
     _require_serialized_bound(payload, _MAX_PLATFORM_BYTES)
     return AgentReadResult(
         result=payload,

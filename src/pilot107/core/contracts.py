@@ -26,7 +26,6 @@ from pilot107.core.platform_preflight import (
     validate_platform_snapshot_resource_plan,
     validate_user_entitlement_resource_plan,
 )
-from pilot107.core.platform_snapshot import PlatformSnapshotScope
 from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.resources import (
     ArraySpec,
@@ -96,6 +95,7 @@ class ContractValidationResult:
     findings: list[PreflightFinding]
     effective_request: dict[str, Any]
     risk_lint: list[dict[str, Any]]
+    platform_snapshot: dict[str, Any] | None = None
 
 
 class ContractError(ValueError):
@@ -785,13 +785,13 @@ class ContractService:
         result = self.validate(contract.payload)
         if self.platform_snapshot_store is None and self.user_entitlement_store is None:
             return result
-        platform_snapshot = (
+        platform_selection = (
             None
             if self.platform_snapshot_store is None
-            else self.platform_snapshot_store.latest(
-                owner=contract.owner,
-                scope=PlatformSnapshotScope.LOGIN_NODE,
-            )
+            else self.platform_snapshot_store.latest_usable(owner=contract.owner)
+        )
+        platform_snapshot = (
+            None if platform_selection is None else platform_selection.record
         )
         entitlement = (
             None
@@ -817,6 +817,11 @@ class ContractService:
             findings=findings,
             effective_request=result.effective_request,
             risk_lint=result.risk_lint,
+            platform_snapshot=(
+                None
+                if platform_selection is None
+                else platform_selection.summary_payload()
+            ),
         )
 
     def to_submit_request(
@@ -895,6 +900,7 @@ def validation_payload(result: ContractValidationResult) -> dict[str, Any]:
         "findings": [_finding_payload(finding) for finding in result.findings],
         "effective_request": result.effective_request,
         "risk_lint": result.risk_lint,
+        "platform_snapshot": result.platform_snapshot,
         "configuration_snapshot_id": "phase0_static",
         "observed_at": utc_now_iso(),
     }

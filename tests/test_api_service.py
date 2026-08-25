@@ -8,6 +8,8 @@ from unittest.mock import patch
 from pilot107.adapters.slurm import SimulatorPathChecker
 from pilot107.api.service import build_api_service, config_from_env
 from pilot107.core.platform_snapshot import (
+    CommandObservation,
+    NodeSnapshot,
     ObservationSourceType,
     PartitionSnapshot,
     PlatformSnapshot,
@@ -530,10 +532,27 @@ class ApiServiceTests(unittest.TestCase):
                 scope=PlatformSnapshotScope.LOGIN_NODE,
                 captured_at=now.isoformat(),
                 collector_version="test.v1",
+                command_results=(
+                    CommandObservation(
+                        name="scontrol_show_part",
+                        argv=("scontrol", "show", "part"),
+                        returncode=0,
+                        stdout="PartitionName=debug State=DOWN Nodes=worker-1\n",
+                        stderr="",
+                    ),
+                    CommandObservation(
+                        name="scontrol_show_nodes",
+                        argv=("scontrol", "show", "nodes"),
+                        returncode=0,
+                        stdout="NodeName=worker-1 CPUTot=4 State=IDLE\n",
+                        stderr="",
+                    ),
+                ),
                 partitions=(PartitionSnapshot(name="debug", state_raw="DOWN"),),
+                nodes=(NodeSnapshot(node_name="worker-1", cpus_total=4),),
             ),
-            source_type=ObservationSourceType.SIMULATOR,
-            source_name="docker-sim",
+            source_type=ObservationSourceType.CLI,
+            source_name="vm-slurm",
             expires_at=(now + timedelta(minutes=5)).isoformat(),
         )
         created = api.handle_post(

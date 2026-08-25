@@ -1715,8 +1715,10 @@ class Pilot107HttpApi:
             return _invalid_query_response(exc)
         payload = self.capability_profile.to_payload()
         if owner is not None and self.platform_snapshot_store is not None:
-            latest = self.platform_snapshot_store.latest(owner=owner)
-            payload["latest_snapshot"] = None if latest is None else latest.summary_payload()
+            latest = self.platform_snapshot_store.latest_usable(owner=owner)
+            payload["latest_snapshot"] = (
+                None if latest is None else latest.summary_payload()
+            )
         else:
             payload["latest_snapshot"] = None
         if owner is not None and self.user_entitlement_store is not None:
@@ -1810,17 +1812,21 @@ class Pilot107HttpApi:
             _reject_unknown_params(params, {"owner", "scope"})
             owner = _query_owner(params, identity)
             snapshot_scope = _optional_query_enum(params, "scope", PlatformSnapshotScope)
-            record = self.platform_snapshot_store.latest(owner=owner, scope=snapshot_scope)
+            selection = (
+                None
+                if snapshot_scope not in {None, PlatformSnapshotScope.LOGIN_NODE}
+                else self.platform_snapshot_store.latest_usable(owner=owner)
+            )
         except PermissionError:
             return _forbidden_query_response()
         except ValueError as exc:
             return _invalid_query_response(exc)
-        if record is None:
+        if selection is None:
             return ApiResponse(
                 status=404,
-                payload={"error": {"code": "platform_snapshot_not_found"}},
+                payload={"error": {"code": "platform_facts_unavailable"}},
             )
-        return ApiResponse(status=200, payload=record.safe_payload())
+        return ApiResponse(status=200, payload=selection.safe_payload())
 
     def _dynamic_resource_findings(
         self,
@@ -1830,13 +1836,11 @@ class Pilot107HttpApi:
     ) -> list[PreflightFinding]:
         findings: list[PreflightFinding] = []
         if self.platform_snapshot_store is not None:
+            selection = self.platform_snapshot_store.latest_usable(owner=owner)
             findings.extend(
                 validate_platform_snapshot_resource_plan(
                     resource_plan,
-                    self.platform_snapshot_store.latest(
-                        owner=owner,
-                        scope=PlatformSnapshotScope.LOGIN_NODE,
-                    ),
+                    None if selection is None else selection.record,
                 )
             )
         if self.user_entitlement_store is not None:

@@ -3,6 +3,7 @@ import tempfile
 import threading
 import unittest
 import urllib.request
+from datetime import UTC, datetime, timedelta
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -12,7 +13,9 @@ from pilot107.api.http_app import Pilot107HttpApi, make_handler
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
 from pilot107.core.platform_snapshot import (
     CommandObservation,
+    NodeSnapshot,
     ObservationSourceType,
+    PartitionSnapshot,
     PlatformSnapshot,
     PlatformSnapshotScope,
 )
@@ -34,6 +37,7 @@ class ProductReadModelTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         root = Path(self._tmp.name)
+        self.root = root
         self.db_path = root / "pilot107.db"
         self.run_store = RunStore(self.db_path)
         self.contract_store = ContractStore(self.db_path)
@@ -383,12 +387,12 @@ class ProductReadModelTests(unittest.TestCase):
     def test_platform_snapshot_detail_is_safe_and_capabilities_reference_latest(self) -> None:
         record = self.platform_snapshot_store.create(
             owner="alice",
-            snapshot=_platform_snapshot(
+            snapshot=_authoritative_platform_snapshot(
                 "snapshot_api_detail",
                 "2026-07-15T00:00:00+00:00",
             ),
             source_type=ObservationSourceType.CLI,
-            source_name="login-node",
+            source_name="vm-slurm",
             expires_at="2026-07-16T00:00:00+00:00",
         )
 
@@ -414,6 +418,93 @@ class ProductReadModelTests(unittest.TestCase):
             capabilities.payload["latest_snapshot"]["snapshot_id"],
             record.snapshot_id,
         )
+
+    def test_authoritative_snapshot_identity_is_shared_by_all_consumers(self) -> None:
+        from pilot107.agent.read_tools import AgentReadContext, build_a1_read_handlers
+
+        now = datetime.now(UTC)
+        healthy = self.platform_snapshot_store.create(
+            owner="alice",
+            snapshot=_authoritative_platform_snapshot(
+                "snapshot_vm_shared",
+                now.isoformat(),
+            ),
+            source_type=ObservationSourceType.CLI,
+            source_name="vm-slurm",
+            expires_at=(now + timedelta(minutes=5)).isoformat(),
+        )
+        self.platform_snapshot_store.create(
+            owner="alice",
+            snapshot=_platform_snapshot(
+                "snapshot_vm_empty_newer",
+                (now + timedelta(seconds=1)).isoformat(),
+            ),
+            source_type=ObservationSourceType.CLI,
+            source_name="vm-slurm",
+            expires_at=(now + timedelta(minutes=5, seconds=1)).isoformat(),
+        )
+        self.platform_snapshot_store.create(
+            owner="alice",
+            snapshot=_authoritative_platform_snapshot(
+                "snapshot_rest_newest",
+                (now + timedelta(seconds=2)).isoformat(),
+            ),
+            source_type=ObservationSourceType.REST,
+            source_name="slurm-rest-diagnostic",
+            expires_at=(now + timedelta(minutes=5, seconds=2)).isoformat(),
+        )
+
+        latest = self.api.handle_get(
+            "/api/v1/platform/snapshots/latest?scope=login_node",
+            headers=self.alice_headers,
+        )
+        capabilities = self.api.handle_get(
+            "/api/v1/platform/capabilities",
+            headers=self.alice_headers,
+        )
+        context = AgentReadContext(
+            platform_snapshot_store=self.platform_snapshot_store,
+            run_store=self.run_store,
+            evidence_query=EvidenceQueryService(
+                store=self.run_store,
+                evidence_store=EvidenceStore(self.root / "agent-evidence"),
+            ),
+            workspace_reader=None,
+        )
+        agent = build_a1_read_handlers(context)["platform_get_snapshot"]("alice", {})
+        contract_service = ContractService(
+            catalog=RecipeCatalog(store=self.contract_store),
+            store=self.contract_store,
+            platform_snapshot_store=self.platform_snapshot_store,
+        )
+        contract = contract_service.create(owner="alice", payload=_contract_payload())
+        preflight = contract_service.preflight(contract)
+
+        identities = (
+            latest.payload,
+            capabilities.payload["latest_snapshot"],
+            agent.result,
+            preflight.platform_snapshot,
+        )
+        for identity in identities:
+            self.assertIsNotNone(identity)
+            assert identity is not None
+            self.assertEqual(identity["authority_id"], "vm-slurm")
+            self.assertEqual(identity["snapshot_id"], healthy.snapshot_id)
+            self.assertEqual(identity["content_sha256"], healthy.content_sha256)
+
+    def test_product_latest_reports_authoritative_facts_unavailable(self) -> None:
+        response = self.api.handle_get(
+            "/api/v1/platform/snapshots/latest?scope=login_node",
+            headers=self.alice_headers,
+        )
+
+        self.assertEqual(response.status, 404)
+        self.assertEqual(
+            response.payload["error"]["code"],
+            "platform_facts_unavailable",
+        )
+        self.assertIn("request_id", response.payload["error"])
 
     def test_user_entitlement_read_models_are_safe_and_owner_scoped(self) -> None:
         alice = self.user_entitlement_store.create(
@@ -603,6 +694,59 @@ def _platform_snapshot(snapshot_id: str, captured_at: str) -> PlatformSnapshot:
                 stderr="",
             ),
         ),
+    )
+
+
+def _authoritative_platform_snapshot(
+    snapshot_id: str,
+    captured_at: str,
+) -> PlatformSnapshot:
+    return PlatformSnapshot(
+        snapshot_id=snapshot_id,
+        scope=PlatformSnapshotScope.LOGIN_NODE,
+        captured_at=captured_at,
+        collector_version="test.api.v1",
+        command_results=(
+            CommandObservation(
+                name="scontrol_show_part",
+                argv=("scontrol", "show", "part"),
+                returncode=0,
+                stdout="PartitionName=debug State=UP Nodes=worker-1\n",
+                stderr="",
+            ),
+            CommandObservation(
+                name="scontrol_show_nodes",
+                argv=("scontrol", "show", "nodes"),
+                returncode=0,
+                stdout="NodeName=worker-1 CPUTot=6 RealMemory=10240 State=IDLE\n",
+                stderr="",
+            ),
+            CommandObservation(
+                name="conda_env_list_json",
+                argv=("conda", "env", "list", "--json"),
+                returncode=127,
+                stdout="",
+                stderr="command unavailable",
+            ),
+        ),
+        partitions=(
+            PartitionSnapshot(
+                name="debug",
+                nodes="worker-1",
+                state_raw="UP",
+                total_cpus=6,
+                total_nodes=1,
+            ),
+        ),
+        nodes=(
+            NodeSnapshot(
+                node_name="worker-1",
+                partitions=("debug",),
+                cpus_total=6,
+                memory_mb=10_240,
+            ),
+        ),
+        limitations=("conda env list unavailable",),
     )
 
 

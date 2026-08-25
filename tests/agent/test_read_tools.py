@@ -8,6 +8,7 @@ import pytest
 
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.core.code_context import LocalWorkspaceReader
+from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.run_store import RunStore
 from pilot107.worker.evidence import EvidenceStore
 
@@ -97,6 +98,21 @@ def test_workspace_search_returns_bounded_snippets(tmp_path: Path) -> None:
         {"path": "README.md", "line": 2, "snippet": "needle here"}
     ]
     assert result.evidence_refs == (f"workspace:{workspace}:README.md:2",)
+
+
+def test_platform_snapshot_reports_authoritative_facts_unavailable(
+    tmp_path: Path,
+) -> None:
+    context, build_handlers, error_type, _, _ = _context(tmp_path)
+    context = replace(
+        context,
+        platform_snapshot_store=PlatformSnapshotStore(tmp_path / "platform.db"),
+    )
+
+    with pytest.raises(error_type) as caught:
+        build_handlers(context)["platform_get_snapshot"]("alice", {})
+
+    assert caught.value.code == "AGENT.TOOL.PLATFORM_FACTS_UNAVAILABLE"
 
 
 @pytest.mark.parametrize(("count", "truncated"), [(500, False), (501, True)])
