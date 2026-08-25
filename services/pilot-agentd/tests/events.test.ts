@@ -260,4 +260,28 @@ describe("Pi event normalization", () => {
     });
     expect(events).toEqual([]);
   });
+
+  it("uses readable text when Pi tool details are empty", async () => {
+    const events: AgentTurnEvent[] = [];
+    const sink = new TurnEventSink("turn-1", (event) => events.push(event), fixedClock);
+
+    await mapPiEvent({
+      type: "tool_execution_end",
+      toolCallId: "call-1",
+      toolName: "workspace_list",
+      result: {
+        content: [{ type: "text", text: "No Workspace is bound." }],
+        details: {},
+      },
+      isError: true,
+    }, sink);
+
+    expect(events[0]).toMatchObject({
+      type: "tool_call_completed",
+      payload: {
+        result: "No Workspace is bound.",
+        is_error: true,
+      },
+    });
+  });
 });

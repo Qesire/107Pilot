@@ -131,6 +131,44 @@ describe("A2 Project tools", () => {
     });
     expect(result.terminate).toBe(true);
   });
+
+  it("returns a readable, sanitized structured Project tool failure", async () => {
+    const tools = createProjectTools(builderRequest(), {
+      invoke: async () => ({
+        schema_version: "pilot107.agent-tool-result/v1",
+        invocation_id: "inv-private",
+        result: null,
+        error: {
+          code: "workspace_not_bound",
+          message: "No Workspace is bound.",
+          retryable: false,
+          stack: "private stack",
+          authorization: "Bearer private-secret",
+        },
+        evidence_refs: [],
+        bytes_returned: 0,
+      }),
+    });
+    const tool = tools.find((candidate) => candidate.name === "project_get");
+    if (tool === undefined) throw new Error("missing project_get");
+
+    const result = await tool.execute("call-project", {
+      project_id: "project-1",
+      workspace_id: "workspace-1",
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "No Workspace is bound." }],
+      details: {
+        error: {
+          code: "workspace_not_bound",
+          message: "No Workspace is bound.",
+          retryable: false,
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("private");
+  });
 });
 
 function successResult(): ToolResult {

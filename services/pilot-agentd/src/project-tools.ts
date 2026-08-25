@@ -6,7 +6,7 @@ import {
   type DurableAgentTurnRequest,
   type JsonObject,
 } from "./protocol.js";
-import type { ReadToolGateway } from "./read-tools.js";
+import { toolFailureResult, type ReadToolGateway } from "./read-tools.js";
 
 type ProjectToolName = (typeof A2_PROJECT_TOOL_NAMES)[number];
 const Id = Type.String({ minLength: 1, maxLength: 128 });
@@ -109,8 +109,11 @@ export function createProjectTools(
         argumentsWithBinding,
         signal ?? new AbortController().signal,
       );
-      if (result.error !== null || result.result === null) {
-        throw new Error("The Project tool request failed.");
+      if (result.error !== null) {
+        return toolFailureResult(result.error);
+      }
+      if (result.result === null) {
+        throw new Error("The Project tool returned an invalid success envelope.");
       }
       return {
         content: [{ type: "text", text: JSON.stringify(result.result) }],

@@ -175,12 +175,30 @@ function jsonObject(value: unknown): JsonObject {
 
 function resultValue(result: unknown): JsonValue {
   if (isRecord(result) && "details" in result && result.details !== undefined) {
-    return sanitizeJsonValue(result.details);
+    const details = sanitizeJsonValue(result.details);
+    if (hasObjectFields(details)) return details;
   }
   if (isRecord(result) && "content" in result) {
-    return sanitizeJsonValue(result.content);
+    return textContent(result.content);
   }
   return sanitizeJsonValue(result);
+}
+
+function hasObjectFields(value: JsonValue): value is Record<string, JsonValue> {
+  return isRecord(value) && Object.keys(value).length > 0;
+}
+
+function textContent(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return sanitizePublicText(
+    content
+      .filter(
+        (item): item is { type: "text"; text: string } =>
+          isRecord(item) && item.type === "text" && typeof item.text === "string",
+      )
+      .map((item) => item.text)
+      .join(""),
+  );
 }
 
 function progressText(partialResult: unknown): string {

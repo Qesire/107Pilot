@@ -1,6 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type, type TSchema } from "typebox";
 
+import { sanitizePublicText } from "./checkpoint.js";
 import {
   A1_READ_TOOL_NAMES,
   type DurableAgentTurnRequest,
@@ -77,6 +78,30 @@ export interface ReadToolGateway {
   ): Promise<ToolResult>;
 }
 
+export interface PublicToolError {
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+}
+
+export function toolFailureResult(error: ToolResult["error"]): {
+  content: Array<{ type: "text"; text: string }>;
+  details: { error: PublicToolError };
+} {
+  if (error === null) {
+    throw new Error("The tool returned an invalid failure envelope.");
+  }
+  const publicError: PublicToolError = {
+    code: error.code,
+    message: sanitizePublicText(error.message),
+    retryable: error.retryable,
+  };
+  return {
+    content: [{ type: "text", text: publicError.message }],
+    details: { error: publicError },
+  };
+}
+
 export function visibleReadToolNames(
   request: DurableAgentTurnRequest,
 ): readonly A1ToolName[] {
@@ -110,8 +135,11 @@ export function createReadOnlyTools(
         params as JsonObject,
         signal ?? new AbortController().signal,
       );
-      if (result.error !== null || result.result === null) {
-        throw new Error("The read tool request failed.");
+      if (result.error !== null) {
+        return toolFailureResult(result.error);
+      }
+      if (result.result === null) {
+        throw new Error("The read tool returned an invalid success envelope.");
       }
       const details = {
         result: structuredClone(result.result),
