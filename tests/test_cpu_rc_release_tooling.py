@@ -151,3 +151,64 @@ fi
     assert completed.returncode == 1
     assert "refusing to export a bundle with untracked files" in completed.stderr
     assert "services/pilot-agentd/injected.js" in completed.stderr
+
+
+def test_vm_slurm_authority_smoke_is_exported_and_required() -> None:
+    exporter = (ROOT / "scripts/export-cpu-rc-bundle.sh").read_text()
+
+    for name in ("smoke-vm-slurm-authority.py", "smoke-vm-slurm-authority.sh"):
+        assert exporter.count(name) >= 2
+
+
+def test_vm_slurm_authority_is_a_strict_pre_agent_runtime_gate() -> None:
+    acceptance = (ROOT / "scripts/accept-runtime-bundle.sh").read_text()
+    smoke = ROOT / "scripts/smoke-vm-slurm-authority.py"
+    wrapper = ROOT / "scripts/smoke-vm-slurm-authority.sh"
+
+    assert smoke.is_file()
+    assert wrapper.is_file()
+    assert "scripts/smoke-vm-slurm-authority.sh" in acceptance
+    assert acceptance.index("check_cpu_rc|step_check_cpu_rc") < acceptance.index(
+        "vm_slurm_authority|step_vm_slurm_authority"
+    )
+    assert acceptance.index(
+        "vm_slurm_authority|step_vm_slurm_authority"
+    ) < acceptance.index("agent_task_lifecycle|step_agent_task_lifecycle")
+    assert 'KNOWN_SKIP_STEPS=""' in acceptance
+    assert "exit 77" not in wrapper.read_text()
+    assert "return 77" not in smoke.read_text()
+
+
+def test_vm_slurm_authority_smoke_checks_every_consumer_identity() -> None:
+    source = (ROOT / "scripts/smoke-vm-slurm-authority.py").read_text()
+
+    for token in (
+        "/platform/snapshots/latest",
+        "/platform/capabilities",
+        "platform_get_snapshot",
+        "authority_id",
+        "snapshot_id",
+        "content_sha256",
+        "partition_count",
+        "node_count",
+        "consumer_ids_equal",
+    ):
+        assert token in source
+
+
+def test_vm_slurm_authority_wrapper_reports_missing_url_as_json() -> None:
+    env = os.environ.copy()
+    env.pop("PILOT107_COMPETITION_BASE_URL", None)
+    env.pop("PILOT107_PUBLIC_URL", None)
+
+    completed = subprocess.run(
+        ["bash", str(ROOT / "scripts/smoke-vm-slurm-authority.sh")],
+        capture_output=True,
+        check=False,
+        env=env,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stderr == ""
+    assert json.loads(completed.stdout)["status"] == "FAIL"

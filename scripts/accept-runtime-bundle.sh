@@ -21,12 +21,13 @@
 #   4. compose_readiness   — compose config validation + container health wait.
 #   5. check_cpu_rc        — partition assertion + success/fail/cancel + Evidence
 #                            + explicit Capsule (bash scripts/check-cpu-rc.sh).
-#   6. auto_capsule        — Worker auto-Capsule WITHOUT explicit POST.
-#   7. rule_remediation    — rule-evaluated diagnosis → HTTP remediation session.
-#   8. restart_recovery    — docker compose down + restart preserves volume state.
-#   9. image_binding       — running containers match the manifest image IDs.
-#  10. agent_task_lifecycle — Project Sandbox → AgentTask → Slurm → Evidence.
-#  11. report              — JSON report; exit 1 if any step FAILED.
+#   6. vm_slurm_authority  — public consumers share healthy VM Slurm facts.
+#   7. auto_capsule        — Worker auto-Capsule WITHOUT explicit POST.
+#   8. rule_remediation    — rule-evaluated diagnosis → HTTP remediation session.
+#   9. restart_recovery    — docker compose down + restart preserves volume state.
+#  10. image_binding       — running containers match the manifest image IDs.
+#  11. agent_task_lifecycle — Project Sandbox → AgentTask → Slurm → Evidence.
+#  12. report              — JSON report; exit 1 if any step FAILED.
 #
 # Exit-code mapping (preserved from Phase 1):
 #   rc=0   → PASS
@@ -377,6 +378,10 @@ step_check_cpu_rc() {
   ( cd "$bundle_root" && bash scripts/check-cpu-rc.sh )
 }
 
+step_vm_slurm_authority() {
+  ( cd "$bundle_root" && bash scripts/smoke-vm-slurm-authority.sh )
+}
+
 step_auto_capsule() {
   ( cd "$bundle_root" && bash scripts/smoke-auto-capsule.sh )
 }
@@ -421,6 +426,7 @@ STEPS=(
   "start_stack|step_start_stack"
   "compose_readiness|step_compose_readiness"
   "check_cpu_rc|step_check_cpu_rc"
+  "vm_slurm_authority|step_vm_slurm_authority"
   "auto_capsule|step_auto_capsule"
   "rule_remediation|step_rule_remediation"
   "restart_recovery|step_restart_recovery"
