@@ -143,6 +143,21 @@
         ]
       }
     },
+    "/api/v1/agent-sessions/{session_id}/tasks": {
+      "get": {
+        "operationId": "list_agent_session_tasks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "agent"
+        ]
+      }
+    },
     "/api/v1/agent-sessions/{session_id}/turns": {
       "post": {
         "operationId": "create_agent_turn",
@@ -178,6 +193,36 @@
         ]
       }
     },
+    "/api/v1/agent-tasks/{task_id}": {
+      "get": {
+        "operationId": "get_agent_task",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "agent"
+        ]
+      }
+    },
+    "/api/v1/agent-tasks/{task_id}/cancel": {
+      "post": {
+        "operationId": "cancel_agent_task",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true
+          }
+        ],
+        "tags": [
+          "agent"
+        ]
+      }
+    },
     "/api/v1/agent-workspaces/{workspace_id}/patch": {
       "post": {
         "operationId": "patch_agent_workspace",
@@ -205,6 +250,61 @@
         ],
         "tags": [
           "agent"
+        ]
+      }
+    },
+    "/api/v1/files/search": {
+      "get": {
+        "operationId": "search_files",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "root",
+            "required": true
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "size_min",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "size_max",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "mtime_from",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "mtime_to",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false
+          }
+        ],
+        "tags": [
+          "files"
         ]
       }
     },

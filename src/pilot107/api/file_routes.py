@@ -115,6 +115,74 @@ class FileRoutes:
                 },
             )
 
+        # GET /files/search?root=&q=&kind=&size_min=&size_max=&mtime_from=&mtime_to=
+        if len(parts) == 2 and parts[1] == "search":
+            root = _first_param(params, "root")
+            if not root:
+                return _error(400, "FILES.INVALID_QUERY", "root is required")
+            query = _first_param(params, "q") or ""
+            kind = _first_param(params, "kind") or "all"
+            if kind not in {"file", "directory", "all"}:
+                return _error(
+                    400,
+                    "FILES.INVALID_QUERY",
+                    "kind must be file, directory, or all",
+                )
+            try:
+                limit = _strict_nonnegative_int_param(params, "limit", default=100)
+                size_min = _strict_optional_nonnegative_int_param(params, "size_min")
+                size_max = _strict_optional_nonnegative_int_param(params, "size_max")
+                mtime_from = _strict_optional_timestamp_param(params, "mtime_from")
+                mtime_to = _strict_optional_timestamp_param(params, "mtime_to")
+            except ValueError as exc:
+                return _error(400, "FILES.INVALID_QUERY", str(exc))
+            if not 1 <= limit <= 100:
+                return _error(400, "FILES.INVALID_QUERY", "limit must be within 1..100")
+            if size_min is not None and size_max is not None and size_min > size_max:
+                return _error(
+                    400,
+                    "FILES.INVALID_QUERY",
+                    "size_min cannot exceed size_max",
+                )
+            if mtime_from is not None and mtime_to is not None and mtime_from > mtime_to:
+                return _error(
+                    400,
+                    "FILES.INVALID_QUERY",
+                    "mtime_from cannot exceed mtime_to",
+                )
+            try:
+                page = self.executor.search_files(
+                    root=root,
+                    q=query,
+                    kind=kind,
+                    size_min=size_min,
+                    size_max=size_max,
+                    mtime_from=mtime_from,
+                    mtime_to=mtime_to,
+                    limit=limit,
+                    cursor=_first_param(params, "cursor"),
+                    scan_limit=10_000,
+                    time_limit_ms=750,
+                    owner=owner,
+                )
+            except SlurmSubmissionRejected as exc:
+                return _error(403, "FILES.PATH_FORBIDDEN", str(exc))
+            except SlurmTransportError as exc:
+                message = str(exc)
+                if "not a directory" in message or "does not exist" in message:
+                    return _error(404, "FILES.ROOT_NOT_FOUND", message)
+                return _error(502, "FILES.SEARCH_FAILED", message)
+            return ApiResponse(
+                status=200,
+                payload={
+                    "root": root,
+                    "items": [asdict(item) for item in page.items],
+                    "incomplete": page.incomplete,
+                    "next_cursor": page.next_cursor,
+                    "warnings": list(page.warnings),
+                },
+            )
+
         # GET /files/content?path=&offset=&length=
         if len(parts) == 2 and parts[1] == "content":
             path = _first_param(params, "path")
@@ -653,6 +721,46 @@ def _int_param(params: Mapping[str, list[str]], key: str, *, default: int) -> in
         return int(raw)
     except ValueError:
         return default
+
+
+def _strict_nonnegative_int_param(
+    params: Mapping[str, list[str]], key: str, *, default: int
+) -> int:
+    raw = _first_param(params, key)
+    if raw is None:
+        return default
+    if not raw.isdecimal():
+        raise ValueError(f"{key} must be a non-negative integer")
+    return int(raw)
+
+
+def _strict_optional_nonnegative_int_param(
+    params: Mapping[str, list[str]], key: str
+) -> int | None:
+    raw = _first_param(params, key)
+    if raw is None:
+        return None
+    if not raw.isdecimal():
+        raise ValueError(f"{key} must be a non-negative integer")
+    return int(raw)
+
+
+def _strict_optional_timestamp_param(
+    params: Mapping[str, list[str]], key: str
+) -> int | None:
+    raw = _first_param(params, key)
+    if raw is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError(f"{key} must be an ISO 8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{key} must include a timezone offset")
+    timestamp = int(parsed.timestamp())
+    if timestamp < 0:
+        raise ValueError(f"{key} must not be before 1970-01-01")
+    return timestamp
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:

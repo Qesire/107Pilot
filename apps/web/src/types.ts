@@ -417,6 +417,63 @@ export interface AgentEventPage {
   };
 }
 
+export type AgentTaskState =
+  | "pending"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "auth_required";
+
+export interface AgentTaskResourceEnvelope {
+  partition: string;
+  qos: string;
+  cpus: number;
+  memory_mib: number;
+  gpu_type: string | null;
+  gpus: number;
+  walltime_seconds: number;
+  max_tasks: number;
+  max_submissions: number;
+  workspace_snapshot_digest: string;
+  expires_at: string;
+  approved_by: string;
+}
+
+export interface AgentTaskResult {
+  status: "succeeded" | "failed" | "cancelled" | "auth_required";
+  evidence_refs: string[];
+  error_code: string | null;
+  message: string | null;
+}
+
+export interface AgentTaskLease {
+  owner: string;
+  expires_at: string;
+  fencing_token: number;
+}
+
+export interface AgentTask {
+  schema_version: "pilot107.agent-task/v1";
+  task_id: string;
+  owner: string;
+  session_id: string;
+  turn_id: string;
+  project_id: string;
+  workspace_id: string;
+  task_kind: "slurm_validation";
+  state: AgentTaskState;
+  version: number;
+  request_key: string;
+  cancel_requested: boolean;
+  resource_envelope: AgentTaskResourceEnvelope;
+  linked_run_id: string | null;
+  result: AgentTaskResult | null;
+  lease: AgentTaskLease | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export type AgentProjectOrigin = "blank" | "template" | "existing" | "failed_run";
 export type AgentProjectState =
   | "drafting"
@@ -1163,6 +1220,22 @@ export interface FileEntry {
 export interface FileListResponse {
   path: string;
   entries: FileEntry[];
+}
+
+export interface FileSearchEntry {
+  path: string;
+  relative_path: string;
+  type: "file" | "directory";
+  size: number;
+  mtime: number;
+}
+
+export interface FileSearchResponse {
+  root: string;
+  items: FileSearchEntry[];
+  incomplete: boolean;
+  next_cursor: string | null;
+  warnings: string[];
 }
 
 export interface FileContentResponse {

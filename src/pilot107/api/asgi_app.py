@@ -160,6 +160,12 @@ _AGENT_TURN_PATH_PARAMETER = {
     "required": True,
     "schema": {"type": "string", "minLength": 1, "maxLength": 128},
 }
+_AGENT_TASK_PATH_PARAMETER = {
+    "name": "task_id",
+    "in": "path",
+    "required": True,
+    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+}
 _AGENT_PROJECT_PATH_PARAMETER = {
     "name": "project_id",
     "in": "path",
@@ -217,6 +223,60 @@ _OBSERVABILITY_CONNECTION_PARAMETER = {
     "required": True,
     "schema": {"type": "string", "minLength": 1, "maxLength": 128},
 }
+_FILE_SEARCH_PARAMETERS = [
+    {
+        "name": "root",
+        "in": "query",
+        "required": True,
+        "schema": {"type": "string", "minLength": 1},
+    },
+    {
+        "name": "q",
+        "in": "query",
+        "required": False,
+        "schema": {"type": "string"},
+    },
+    {
+        "name": "kind",
+        "in": "query",
+        "required": False,
+        "schema": {
+            "type": "string",
+            "enum": ["file", "directory", "all"],
+            "default": "all",
+        },
+    },
+    *[
+        {
+            "name": name,
+            "in": "query",
+            "required": False,
+            "schema": {"type": "integer", "minimum": 0},
+        }
+        for name in ("size_min", "size_max")
+    ],
+    *[
+        {
+            "name": name,
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string", "format": "date-time"},
+        }
+        for name in ("mtime_from", "mtime_to")
+    ],
+    {
+        "name": "limit",
+        "in": "query",
+        "required": False,
+        "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 100},
+    },
+    {
+        "name": "cursor",
+        "in": "query",
+        "required": False,
+        "schema": {"type": "string"},
+    },
+]
 
 
 def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
@@ -682,6 +742,30 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
             ]
         },
     )
+    app.add_api_route(
+        "/api/v1/agent-sessions/{session_id}/tasks",
+        forward_get,
+        methods=["GET"],
+        operation_id="list_agent_session_tasks",
+        tags=["agent"],
+        openapi_extra={"parameters": [_AGENT_SESSION_PATH_PARAMETER]},
+    )
+    app.add_api_route(
+        "/api/v1/agent-tasks/{task_id}",
+        forward_get,
+        methods=["GET"],
+        operation_id="get_agent_task",
+        tags=["agent"],
+        openapi_extra={"parameters": [_AGENT_TASK_PATH_PARAMETER]},
+    )
+    app.add_api_route(
+        "/api/v1/agent-tasks/{task_id}/cancel",
+        forward_post,
+        methods=["POST"],
+        operation_id="cancel_agent_task",
+        tags=["agent"],
+        openapi_extra={"parameters": [_AGENT_TASK_PATH_PARAMETER]},
+    )
 
     app.add_api_route(
         "/api/v1/agent-projects",
@@ -926,6 +1010,15 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
         methods=["GET"],
         operation_id="stream_observability_events",
         tags=["observability"],
+    )
+
+    app.add_api_route(
+        "/api/v1/files/search",
+        forward_get,
+        methods=["GET"],
+        operation_id="search_files",
+        tags=["files"],
+        openapi_extra={"parameters": _FILE_SEARCH_PARAMETERS},
     )
 
     # Routes migrate to explicit OpenAPI operations incrementally while sharing

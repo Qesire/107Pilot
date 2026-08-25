@@ -322,6 +322,7 @@ def agent_task_payload(value: AgentTaskRecord) -> dict[str, Any]:
         "state": value.state.value,
         "version": value.version,
         "request_key": value.request_key,
+        "cancel_requested": value.cancel_requested,
         "resource_envelope": {
             "partition": envelope.partition,
             "qos": envelope.qos,

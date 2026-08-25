@@ -722,6 +722,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     )
     agent_tool_routes: AgentToolRoutes | None = None
     agent_session_service: AgentSessionService | None = None
+    agent_task_service: AgentTaskService | None = None
     project_agent_service: ProjectAgentService | None = None
     if agent_capability_secret is not None:
         agent_session_store = build_agent_session_store(
@@ -940,6 +941,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         ),
         agent_tool_routes=agent_tool_routes,
         agent_session_service=agent_session_service,
+        agent_task_service=agent_task_service,
         project_agent_service=project_agent_service,
         market_application_service=market_application_service,
         template_publication_service=template_publication_service,

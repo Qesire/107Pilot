@@ -6,6 +6,37 @@ afterEach(() => {
 });
 
 describe("API transport", () => {
+  it("encodes bounded file search filters and the opaque cursor", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      root: "/public/home/alice",
+      items: [],
+      incomplete: false,
+      next_cursor: null,
+      warnings: [],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.fileSearch("alice", {
+      root: "/public/home/alice",
+      q: "模型 one",
+      kind: "file",
+      size_min: 2,
+      size_max: 100,
+      mtime_from: "2026-08-25T00:00:00+08:00",
+      mtime_to: "2026-08-26T00:00:00+08:00",
+      limit: 20,
+      cursor: "opaque+/=",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/files/search?root=%2Fpublic%2Fhome%2Falice&q=%E6%A8%A1%E5%9E%8B+one&kind=file&size_min=2&size_max=100&mtime_from=2026-08-25T00%3A00%3A00%2B08%3A00&mtime_to=2026-08-26T00%3A00%3A00%2B08%3A00&limit=20&cursor=opaque%2B%2F%3D",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ "X-Pilot107-User": "alice" }),
+      }),
+    );
+  });
+
   it("reads and checks the current user's SSH platform connection", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ items: [] }))
@@ -425,6 +456,34 @@ describe("API transport", () => {
       6,
       "/api/v1/agent-sessions/session%2F1/events?after_event_id=7&limit=100",
       expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("uses encoded owner-scoped AgentTask lifecycle routes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.agentSessionTasks("alice", "session/1");
+    await api.agentTask("alice", "task/1");
+    await api.cancelAgentTask("alice", "task/1", 3);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/agent-sessions/session%2F1/tasks",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/agent-tasks/task%2F1",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/agent-tasks/task%2F1/cancel",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ expected_version: 3 }),
+      }),
     );
   });
 

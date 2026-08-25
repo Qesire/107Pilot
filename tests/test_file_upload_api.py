@@ -17,6 +17,8 @@ from pathlib import Path
 from pilot107.adapters.slurm import (
     DiskUsage,
     FileEntry,
+    FileSearchEntry,
+    FileSearchPage,
     FileStat,
     SlurmSubmissionRejected,
 )
@@ -54,6 +56,7 @@ class FakeExecutor:
         self.files: dict[str, bytearray] = {}
         self.dirs: set[str] = {"/public/home/alice"}
         self.extract_calls: list[tuple[str, str]] = []
+        self.search_calls: list[dict[str, object]] = []
 
     def _check(self, path: str) -> None:
         if path.startswith("/forbidden"):
@@ -98,6 +101,25 @@ class FakeExecutor:
             FileEntry(name=name, type=kind, size=0, mtime=0)
             for name, kind in sorted(names.items())
         ]
+
+    def search_files(self, **kwargs) -> FileSearchPage:
+        root = str(kwargs["root"])
+        self._check(root)
+        self.search_calls.append(kwargs)
+        return FileSearchPage(
+            items=(
+                FileSearchEntry(
+                    path=f"{root.rstrip('/')}/models/weights.bin",
+                    relative_path="models/weights.bin",
+                    type="file",
+                    size=7,
+                    mtime=1_700_000_000,
+                ),
+            ),
+            incomplete=True,
+            next_cursor="opaque-next",
+            warnings=("unreadable directory: private",),
+        )
 
     def make_dir(self, *, path, owner, timeout_seconds=30.0) -> None:
         self._check(path)
@@ -186,6 +208,48 @@ class FileUploadApiTests(unittest.TestCase):
     @staticmethod
     def _headers(user: str) -> dict[str, str]:
         return {"X-Pilot107-User": user}
+
+    def test_search_route_returns_bounded_owner_scoped_page(self) -> None:
+        response = self.api.handle_get(
+            "/api/v1/files/search?root=/public/home/alice&q=model&kind=file&limit=20",
+            headers=self._headers("alice"),
+        )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.payload["root"], "/public/home/alice")
+        self.assertEqual(response.payload["items"][0]["relative_path"], "models/weights.bin")
+        self.assertTrue(response.payload["incomplete"])
+        self.assertEqual(response.payload["next_cursor"], "opaque-next")
+        call = self.executor.search_calls[-1]
+        self.assertEqual(call["owner"], "alice")
+        self.assertEqual(call["scan_limit"], 10_000)
+        self.assertEqual(call["time_limit_ms"], 750)
+
+    def test_search_route_rejects_invalid_filters(self) -> None:
+        invalid_queries = (
+            "q=x&limit=101",
+            "q=x&limit=not-a-number",
+            "q=x&kind=symlink",
+            "q=x&size_min=-1",
+            "q=x&size_min=10&size_max=2",
+            "q=x&mtime_from=2026-08-25T12%3A00%3A00",
+        )
+        for query in invalid_queries:
+            with self.subTest(query=query):
+                response = self.api.handle_get(
+                    f"/api/v1/files/search?root=/public/home/alice&{query}",
+                    headers=self._headers("alice"),
+                )
+                self.assertEqual(response.status, 400, response.payload)
+
+    def test_search_route_rejects_forbidden_root(self) -> None:
+        response = self.api.handle_get(
+            "/api/v1/files/search?root=/forbidden/bob&q=x",
+            headers=self._headers("alice"),
+        )
+
+        self.assertEqual(response.status, 403)
+        self.assertEqual(response.payload["error"]["code"], "FILES.PATH_FORBIDDEN")
 
     # -- tus helpers -------------------------------------------------------
 

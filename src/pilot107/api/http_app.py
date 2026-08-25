@@ -21,6 +21,7 @@ from pilot107.agent.market_sessions import (
 )
 from pilot107.agent.store import SQLiteAgentSessionStore
 from pilot107.api.agent_session_routes import AgentSessionRoutes
+from pilot107.api.agent_task_routes import AgentTaskRoutes
 from pilot107.api.agent_tool_routes import AgentToolRoutes
 from pilot107.api.evidence_query import EvidencePreviewUnavailable, EvidenceQueryService
 from pilot107.api.file_routes import FileRoutes
@@ -135,6 +136,7 @@ from pilot107.core.template_verification import TemplateVerificationService
 from pilot107.core.terminal import TerminalCommandError, TerminalCommandService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
 from pilot107.services.agent_session_service import AgentSessionService
+from pilot107.services.agent_task_service import AgentTaskService
 from pilot107.services.project_agent_service import ProjectAgentService
 from pilot107.services.remediation_service import RemediationService
 from pilot107.services.repair_ticket_service import RepairTicketService
@@ -184,6 +186,7 @@ class Pilot107HttpApi:
         file_routes: FileRoutes | None = None,
         agent_tool_routes: AgentToolRoutes | None = None,
         agent_session_service: AgentSessionService | None = None,
+        agent_task_service: AgentTaskService | None = None,
         project_agent_service: ProjectAgentService | None = None,
         market_application_service: MarketApplicationService | None = None,
         template_publication_service: TemplatePublicationService | None = None,
@@ -258,6 +261,9 @@ class Pilot107HttpApi:
         self.agent_tool_routes = agent_tool_routes
         self.agent_session_routes = (
             None if agent_session_service is None else AgentSessionRoutes(agent_session_service)
+        )
+        self.agent_task_routes = (
+            None if agent_task_service is None else AgentTaskRoutes(agent_task_service)
         )
         self.project_agent_routes = (
             None
@@ -379,6 +385,14 @@ class Pilot107HttpApi:
             )
             if agent_session_response is not None:
                 return agent_session_response
+        if self.agent_task_routes is not None:
+            agent_task_response = self.agent_task_routes.handle_get(
+                parts,
+                params=params,
+                identity=identity,
+            )
+            if agent_task_response is not None:
+                return agent_task_response
         if self.project_agent_routes is not None:
             project_agent_response = self.project_agent_routes.handle_get(
                 parts,
@@ -1007,6 +1021,14 @@ class Pilot107HttpApi:
             )
             if agent_session_response is not None:
                 return agent_session_response
+        if self.agent_task_routes is not None:
+            agent_task_response = self.agent_task_routes.handle_post(
+                parts,
+                body=body,
+                identity=identity,
+            )
+            if agent_task_response is not None:
+                return agent_task_response
         if self.project_agent_routes is not None:
             project_agent_response = self.project_agent_routes.handle_post(
                 parts,

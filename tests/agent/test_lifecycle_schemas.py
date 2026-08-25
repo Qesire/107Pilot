@@ -98,6 +98,7 @@ GOLDENS: dict[str, dict[str, Any]] = {
         "state": "pending",
         "version": 0,
         "request_key": "validate-1",
+        "cancel_requested": False,
         "resource_envelope": {
             "partition": "debug",
             "qos": "normal",

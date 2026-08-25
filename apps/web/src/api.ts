@@ -6,6 +6,7 @@ import type {
   FormalRunApproval,
   WorkspacePublication,
   AgentSession,
+  AgentTask,
   AgentTurn,
   AgentExplanation,
   ArchiveResponse,
@@ -18,6 +19,7 @@ import type {
   FileContentResponse,
   FileEntry,
   FileListResponse,
+  FileSearchResponse,
   HealthReady,
   MarketVisibility,
   PagePayload,
@@ -819,6 +821,29 @@ export const api = {
       user,
       signal,
     ),
+  agentSessionTasks: (user: string, sessionId: string, signal?: AbortSignal) =>
+    getJson<{ items: AgentTask[] }>(
+      `/api/v1/agent-sessions/${encodeURIComponent(sessionId)}/tasks`,
+      user,
+      signal,
+    ),
+  agentTask: (user: string, taskId: string, signal?: AbortSignal) =>
+    getJson<AgentTask>(
+      `/api/v1/agent-tasks/${encodeURIComponent(taskId)}`,
+      user,
+      signal,
+    ),
+  cancelAgentTask: (
+    user: string,
+    taskId: string,
+    expectedVersion: number,
+    signal?: AbortSignal,
+  ) => sendJson<AgentTask>(
+    `/api/v1/agent-tasks/${encodeURIComponent(taskId)}/cancel`,
+    user,
+    { expected_version: expectedVersion },
+    signal,
+  ),
   createAgentTurn: (
     user: string,
     sessionId: string,
@@ -1142,6 +1167,35 @@ export const api = {
       })),
     } satisfies FileListResponse;
   },
+  fileSearch: (
+    user: string,
+    input: {
+      root: string;
+      q: string;
+      kind: "file" | "directory" | "all";
+      size_min?: number;
+      size_max?: number;
+      mtime_from?: string;
+      mtime_to?: string;
+      limit: number;
+      cursor?: string | null;
+    },
+    signal?: AbortSignal,
+  ) => getJson<FileSearchResponse>(
+    queryPath("/api/v1/files/search", {
+      root: input.root,
+      q: input.q,
+      kind: input.kind,
+      size_min: input.size_min === undefined ? undefined : String(input.size_min),
+      size_max: input.size_max === undefined ? undefined : String(input.size_max),
+      mtime_from: input.mtime_from,
+      mtime_to: input.mtime_to,
+      limit: String(input.limit),
+      cursor: input.cursor ?? undefined,
+    }),
+    user,
+    signal,
+  ),
   fileContent: (
     user: string,
     path: string,
