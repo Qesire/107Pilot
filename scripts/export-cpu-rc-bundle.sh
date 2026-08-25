@@ -167,7 +167,7 @@ manifest = {
     "release_revision": revision,
     "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "evidence_scope": "D1 local CPU-only profile; not VM and not real 107",
-    "target": {"host_cpu": 8, "host_memory_gib": 16, "slurm_cpu": 4, "slurm_memory_gib": 6},
+    "target": {"host_cpu": 8, "host_memory_gib": 16, "slurm_cpu": 6, "slurm_memory_gib": 10},
     "capability_profile": "config/platform_profiles/cpu-only-8c16g.json",
     "control_migrations": ["003g.001", "003g.002"],
     "images": records,

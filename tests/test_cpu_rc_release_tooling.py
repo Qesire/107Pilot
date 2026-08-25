@@ -26,6 +26,13 @@ def test_cpu_rc_binding_requires_all_eleven_services() -> None:
     assert "pilot-agentd" in acceptance
 
 
+def test_cpu_rc_manifest_declares_the_bounded_vm_slurm_capacity() -> None:
+    exporter = (ROOT / "scripts/export-cpu-rc-bundle.sh").read_text()
+
+    assert '"slurm_cpu": 6' in exporter
+    assert '"slurm_memory_gib": 10' in exporter
+
+
 def test_systemd_installer_exit_trap_expands_the_temp_path() -> None:
     script = (ROOT / "scripts/install-systemd-units.sh").read_text()
 
