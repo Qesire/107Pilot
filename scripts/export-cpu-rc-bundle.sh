@@ -267,6 +267,9 @@ assert_required_files_exist() {
 assert_required_files_exist
 tar -C "$out_root" -czf "$archive" "$bundle_name"
 sha256sum "$archive" >"$archive.sha256"
+latest_tmp="$(mktemp "$out_root/.LATEST_CPU_RC.XXXXXX")"
+printf '%s\n' "$bundle_name" >"$latest_tmp"
+mv -- "$latest_tmp" "$out_root/LATEST_CPU_RC.txt"
 
 echo "bundle_dir=$work_dir"
 echo "bundle_archive=$archive"

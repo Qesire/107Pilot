@@ -33,6 +33,13 @@ def test_cpu_rc_manifest_declares_the_bounded_vm_slurm_capacity() -> None:
     assert '"slurm_memory_gib": 10' in exporter
 
 
+def test_cpu_rc_export_refreshes_latest_bundle_pointer() -> None:
+    exporter = (ROOT / "scripts/export-cpu-rc-bundle.sh").read_text()
+
+    assert "LATEST_CPU_RC.txt" in exporter
+    assert 'printf \'%s\\n\' "$bundle_name"' in exporter
+
+
 def test_systemd_installer_exit_trap_expands_the_temp_path() -> None:
     script = (ROOT / "scripts/install-systemd-units.sh").read_text()
 
