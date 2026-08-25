@@ -195,6 +195,8 @@ class ApiServiceTests(unittest.TestCase):
                 "PILOT107_ALLOW_GPU_RECIPES": "false",
                 "PILOT107_AGENTD_URL": "http://pilot-agentd:8091",
                 "PILOT107_AGENTD_TOKEN": "internal-agentd-token",
+                "PILOT107_AGENTD_TIMEOUT_SECONDS": "300",
+                "PILOT107_AGENTD_MAX_OUTPUT_TOKENS": "12000",
                 "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
                 "PILOT107_LLM_API_KEY": "must-not-enter-python-config",
                 "PILOT107_TEMPLATE_REVIEWERS": "reviewer,reviewer2",
@@ -228,6 +230,8 @@ class ApiServiceTests(unittest.TestCase):
         self.assertEqual(config.agentd_url, "http://pilot-agentd:8091")
         self.assertEqual(config.agentd_token, "internal-agentd-token")
         self.assertEqual(config.agentd_model_profile, "campus-default")
+        self.assertEqual(config.agentd_timeout_seconds, 300.0)
+        self.assertEqual(config.agentd_max_output_tokens, 12000)
         self.assertNotIn("internal-agentd-token", repr(config))
         self.assertNotIn("must-not-enter-python-config", repr(config))
         self.assertFalse(hasattr(config, "llm_api_key"))

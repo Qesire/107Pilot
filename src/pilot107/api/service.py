@@ -199,6 +199,8 @@ class ApiServiceConfig:
     agentd_url: str | None = None
     agentd_token: str | None = field(default=None, repr=False)
     agentd_model_profile: str | None = None
+    agentd_timeout_seconds: float = 60.0
+    agentd_max_output_tokens: int = 1_200
     agent_a1_enabled: bool = False
     agent_capability_hmac_secret: bytes | None = field(default=None, repr=False)
     agent_capability_hmac_secret_file: Path | None = field(default=None, repr=False)
@@ -314,6 +316,10 @@ def config_from_env(
         agentd_url=values.get("PILOT107_AGENTD_URL") or None,
         agentd_token=values.get("PILOT107_AGENTD_TOKEN") or None,
         agentd_model_profile=values.get("PILOT107_AGENTD_MODEL_PROFILE") or None,
+        agentd_timeout_seconds=_float(values, "PILOT107_AGENTD_TIMEOUT_SECONDS", 60.0),
+        agentd_max_output_tokens=_int(
+            values, "PILOT107_AGENTD_MAX_OUTPUT_TOKENS", 1_200
+        ),
         agent_a1_enabled=(
             _bool(values, "PILOT107_AGENT_A1_ENABLED", False)
             or bool(values.get("PILOT107_AGENT_CAPABILITY_HMAC_SECRET"))
@@ -1408,6 +1414,8 @@ def _build_llm_provider(
                 base_url=config.agentd_url,
                 token=config.agentd_token,
                 model_profile_id=config.agentd_model_profile,
+                timeout_seconds=config.agentd_timeout_seconds,
+                max_output_tokens=config.agentd_max_output_tokens,
             )
         ),
         observer=observer,
