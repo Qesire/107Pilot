@@ -253,6 +253,26 @@ describe("structured output repair", () => {
 });
 
 describe("provider retry policy", () => {
+  it("retries a provider response with neither text nor tool calls", async () => {
+    const runtime = createFauxModelRuntime();
+    const sleeps: number[] = [];
+    runtime.faux.setResponses([
+      fauxAssistantMessage([], { stopReason: "stop", timestamp: 1 }),
+      fauxAssistantMessage([fauxText("recovered from empty response")], {
+        timestamp: 2,
+      }),
+    ]);
+
+    const events = await executeCollect(executor(runtime, sleeps), interactiveRequest());
+
+    expect(terminal(events)).toMatchObject({
+      type: "turn_completed",
+      payload: { result: "recovered from empty response", provider_calls: 2 },
+    });
+    expect(runtime.faux.state.callCount).toBe(2);
+    expect(sleeps).toEqual([100]);
+  });
+
   it("retries a leading 429 provider error even when Pi never reports an HTTP response", async () => {
     const runtime = createFauxModelRuntime();
     const sleeps: number[] = [];

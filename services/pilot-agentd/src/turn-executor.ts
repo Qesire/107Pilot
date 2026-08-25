@@ -424,13 +424,26 @@ async function runAttempt(options: {
       }
     }
 
+    const attemptMessages = agent.state.messages.slice(options.restored.length);
     const result = task.constrained
       ? task.getStructuredResult()
-      : collectAssistantText(agent.state.messages.slice(options.restored.length));
+      : collectAssistantText(attemptMessages);
     if (result === undefined) {
       return {
         kind: "failure",
         error: outputContractError(),
+        state: agent.state,
+      };
+    }
+    if (
+      !task.constrained &&
+      typeof result === "string" &&
+      result.trim().length === 0 &&
+      !hasToolCall(attemptMessages)
+    ) {
+      return {
+        kind: "failure",
+        error: emptyProviderResponseError(),
         state: agent.state,
       };
     }
@@ -480,6 +493,14 @@ function collectAssistantText(messages: readonly AgentMessage[]): string {
     .filter((content) => content.type === "text")
     .map((content) => content.text)
     .join("");
+}
+
+function hasToolCall(messages: readonly AgentMessage[]): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      message.content.some((content) => content.type === "toolCall"),
+  );
 }
 
 function lastAssistant(
@@ -682,6 +703,14 @@ function outputContractError(): AgentdTurnError {
     "output_contract_violation",
     false,
     "The model did not emit the required result.",
+  );
+}
+
+function emptyProviderResponseError(): AgentdTurnError {
+  return new AgentdTurnError(
+    "provider_invalid_response",
+    true,
+    "The model provider returned an empty response.",
   );
 }
 
