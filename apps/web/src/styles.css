@@ -1696,6 +1696,111 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 .files-multibase { display: flex; flex-direction: column; }
 .files-global-toolbar { margin-bottom: 14px; }
 
+.file-search-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(23 33 30 / 4%);
+}
+.file-search-main {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto minmax(160px, auto);
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-faint);
+}
+.file-search-main input,
+.file-search-main select,
+.file-search-filters input {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: 12px;
+}
+.file-search-root {
+  overflow: hidden;
+  color: var(--ink-faint);
+  font: 11px ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-search-filters summary {
+  width: max-content;
+  color: var(--teal);
+  font-size: 11px;
+  cursor: pointer;
+}
+.file-search-filters > div {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.file-search-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.file-search-state,
+.file-search-warnings {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+.file-search-state.error,
+.file-search-warnings { color: var(--red); }
+.file-search-results {
+  display: grid;
+  gap: 3px;
+  max-height: 210px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.file-search-results button {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) 54px 90px 150px;
+  align-items: center;
+  width: 100%;
+  gap: 8px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.file-search-results button:hover { background: var(--teal-soft); }
+.file-search-result-path {
+  overflow: hidden;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-search-continue { align-self: flex-start; }
+
+@media (max-width: 800px) {
+  .file-search-main { grid-template-columns: auto minmax(160px, 1fr) auto; }
+  .file-search-root { grid-column: 2 / -1; }
+  .file-search-filters > div { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+  .file-search-results button { grid-template-columns: auto minmax(160px, 1fr) 50px; }
+  .file-search-results button span:nth-last-child(-n + 2) { display: none; }
+}
+
 .pane-manager {
   /* flex:none (not flex:1) so the explicit height below is the used height.
      With flex-basis:0% the size came from flex layout in an auto-height

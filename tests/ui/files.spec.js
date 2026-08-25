@@ -17,6 +17,12 @@ function buildFs() {
     [`${HOME}/data`]: [
       { name: "sample.csv", type: "file", size: 4096, mtime: 1700000400 },
     ],
+    [`${HOME}/demo-search`]: [
+      { name: "nested", type: "dir", size: 0, mtime: 1700000500 },
+    ],
+    [`${HOME}/demo-search/nested`]: [
+      { name: "result-model.txt", type: "file", size: 8192, mtime: 1700000600 },
+    ],
   };
 }
 
@@ -45,6 +51,29 @@ async function installFilesMock(page) {
     if (url.pathname === "/api/v1/files" && request.method() === "GET") {
       const path = url.searchParams.get("path") || HOME;
       return json({ path, entries: fs[path] ?? [] });
+    }
+    if (url.pathname === "/api/v1/files/search" && request.method() === "GET") {
+      const root = url.searchParams.get("root") || HOME;
+      const query = (url.searchParams.get("q") || "").toLowerCase();
+      const kind = url.searchParams.get("kind") || "all";
+      const items = Object.entries(fs).flatMap(([dir, entries]) => {
+        if (dir !== root && !dir.startsWith(`${root}/`)) return [];
+        return entries.flatMap((item) => {
+          const path = `${dir}/${item.name}`;
+          const type = item.type === "dir" ? "directory" : "file";
+          const relativePath = path.slice(root.length).replace(/^\/+/, "");
+          if (!relativePath.toLowerCase().includes(query)) return [];
+          if (kind !== "all" && kind !== type) return [];
+          return [{
+            path,
+            relative_path: relativePath,
+            type,
+            size: item.size,
+            mtime: item.mtime,
+          }];
+        });
+      });
+      return json({ root, items, incomplete: false, next_cursor: null, warnings: [] });
     }
     if (url.pathname === "/api/v1/files/usage") {
       return json({
@@ -95,6 +124,23 @@ test("defaults to one column pane rooted at home", async ({ page }) => {
   await expect(page.locator(".file-pane")).toHaveCount(1);
   await expect(page.locator(".miller-column").last()).toContainText("readme.md");
   await expect(page.locator(".miller-column").last()).toContainText("docs");
+});
+
+test("manual path entry and search open a file in the active pane", async ({ page }) => {
+  await page.goto("/files?user=alice");
+  const pane = page.locator(".file-pane").first();
+  await pane.getByTitle("手动输入路径").click();
+  await pane.getByLabel("路径").fill(`${HOME}/demo-search`);
+  await pane.getByLabel("路径").press("Enter");
+  await expect(pane).toHaveAttribute("data-pane-cwd", `${HOME}/demo-search`);
+
+  const search = page.getByLabel("搜索文件名或路径");
+  await search.fill("model");
+  await expect(page.locator(".file-search-root")).toHaveText(`${HOME}/demo-search`);
+  await page.getByRole("button", { name: /nested\/result-model\.txt/ }).click();
+
+  await expect(pane).toHaveAttribute("data-pane-cwd", `${HOME}/demo-search/nested`);
+  await expect(pane.locator('[data-path$="/result-model.txt"]')).toHaveClass(/selected/);
 });
 
 test("panes navigate independently", async ({ page }) => {

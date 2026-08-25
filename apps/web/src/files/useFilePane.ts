@@ -81,6 +81,7 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
   const [selected, setSelected] = useState<string[]>([]);
   const [inlineForm, setInlineForm] = useState<InlineFormMode>(null);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const pendingOpenRef = useRef<{ cwd: string; selectedPath: string } | null>(null);
 
   const listing = useQuery({
     queryKey: ["files-list", manager.user, cwd],
@@ -102,6 +103,12 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
     });
     setSelected([]);
   }, [home]);
+
+  const openPath = useCallback((path: string, selectedPath?: string) => {
+    const target = clampToHome(path, home);
+    pendingOpenRef.current = selectedPath ? { cwd: target, selectedPath } : null;
+    navigateTo(target);
+  }, [home, navigateTo]);
 
   const goBack = useCallback(() => {
     setBackStack((stack) => {
@@ -159,6 +166,19 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
     () => entries.filter((entry) => selected.includes(entry.path)),
     [entries, selected],
   );
+
+  useEffect(() => {
+    manager.setPanePath(paneId, cwd);
+  }, [cwd, manager, paneId]);
+
+  useEffect(() => {
+    const pending = pendingOpenRef.current;
+    if (!pending || pending.cwd !== cwd || listing.isPending) return;
+    if (!listing.isError && entries.some((entry) => entry.path === pending.selectedPath)) {
+      setSelected([pending.selectedPath]);
+    }
+    pendingOpenRef.current = null;
+  }, [cwd, entries, listing.isError, listing.isPending]);
 
   const mkdirMutation = useMutation({
     mutationFn: (name: string) =>
@@ -256,6 +276,7 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
       getViewMode: () => stateRef.current.viewMode,
       setViewMode: (mode) => setViewModeState(mode),
       openMkdir: () => setInlineForm("mkdir"),
+      openPath,
     });
     return () => manager.unregisterPane(paneId);
     // Registration is stable per pane; invalidate identity changes are harmless.

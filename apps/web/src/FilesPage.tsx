@@ -19,6 +19,7 @@ import * as tus from "tus-js-client";
 import { api } from "./api";
 import { RefreshButton, SectionHeading } from "./components";
 import { FilesManagerProvider, useFilesManager } from "./files/FilesManagerContext";
+import { FileSearchPanel, fileSearchOpenTarget } from "./files/FileSearchPanel";
 import { PaneManager } from "./files/PaneManager";
 import { usePaneLayout } from "./files/usePaneLayout";
 import type { LocationState } from "./url";
@@ -315,6 +316,15 @@ function FilesShell({
           }}
         />
       </div>
+
+      <FileSearchPanel
+        user={user}
+        root={manager.activePath}
+        onOpen={(entry) => {
+          const target = fileSearchOpenTarget(entry);
+          manager.openPath(target.path, target.selectedPath);
+        }}
+      />
 
       {tasks.length > 0 && (
         <div className="files-upload-tasks" role="status" aria-live="polite">

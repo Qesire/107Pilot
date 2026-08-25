@@ -25,17 +25,21 @@ export interface PaneController {
   getViewMode: () => PaneViewMode;
   setViewMode: (mode: PaneViewMode) => void;
   openMkdir: () => void;
+  openPath: (path: string, selectedPath?: string) => void;
 }
 
 export interface FilesManager {
   user: string;
   homePath: string;
   activePaneId: string | null;
+  activePath: string;
   setActivePane: (paneId: string) => void;
   registerPane: (controller: PaneController) => void;
   unregisterPane: (paneId: string) => void;
   getController: (paneId: string) => PaneController | undefined;
   getActiveController: () => PaneController | undefined;
+  setPanePath: (paneId: string, path: string) => void;
+  openPath: (path: string, selectedPath?: string) => void;
   /** Move entries into destDir via rename; returns the number moved. */
   moveEntries: (entries: FileEntry[], destDir: string) => Promise<number>;
   /** Entries currently being dragged. Stored in a ref (not state) so the value
@@ -67,6 +71,7 @@ export function FilesManagerProvider({
   children: ReactNode;
 }) {
   const [activePaneId, setActivePaneId] = useState<string | null>(null);
+  const [panePaths, setPanePaths] = useState<Record<string, string>>({});
   const dragPayloadRef = useRef<DragPayload | null>(null);
   const controllers = useRef<Map<string, PaneController>>(new Map());
   const uploadTrigger = useRef<(() => void) | null>(null);
@@ -80,6 +85,11 @@ export function FilesManagerProvider({
 
   const unregisterPane = useCallback((paneId: string) => {
     controllers.current.delete(paneId);
+    setPanePaths((current) => {
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
     setActivePaneId((prev) => (prev === paneId ? null : prev));
   }, []);
 
@@ -92,6 +102,23 @@ export function FilesManagerProvider({
     () => (activePaneId ? controllers.current.get(activePaneId) : undefined),
     [activePaneId],
   );
+
+  const setPanePath = useCallback((paneId: string, path: string) => {
+    setPanePaths((current) => current[paneId] === path
+      ? current
+      : { ...current, [paneId]: path });
+  }, []);
+
+  const openPath = useCallback((path: string, selectedPath?: string) => {
+    const controller = activePaneId
+      ? controllers.current.get(activePaneId)
+      : controllers.current.values().next().value;
+    controller?.openPath(path, selectedPath);
+  }, [activePaneId]);
+
+  const activePath = activePaneId
+    ? panePaths[activePaneId] ?? controllers.current.get(activePaneId)?.getCwd() ?? homePath
+    : homePath;
 
   const moveEntries = useCallback(
     async (entries: FileEntry[], destDir: string): Promise<number> => {
@@ -123,11 +150,14 @@ export function FilesManagerProvider({
       user,
       homePath,
       activePaneId,
+      activePath,
       setActivePane,
       registerPane,
       unregisterPane,
       getController,
       getActiveController,
+      setPanePath,
+      openPath,
       moveEntries,
       getDragPayload,
       setDragPayload,
@@ -138,11 +168,14 @@ export function FilesManagerProvider({
       user,
       homePath,
       activePaneId,
+      activePath,
       setActivePane,
       registerPane,
       unregisterPane,
       getController,
       getActiveController,
+      setPanePath,
+      openPath,
       moveEntries,
       getDragPayload,
       setDragPayload,
