@@ -101,6 +101,7 @@ const CASES = [
       state: "pending",
       version: 0,
       request_key: "validate-1",
+      cancel_requested: false,
       resource_envelope: {
         partition: "debug",
         qos: "normal",
