@@ -90,6 +90,7 @@ def test_api_runtime_configures_the_required_outer_bwrap_boundary(
         "apparmor=bwrap",
         "systempaths=unconfined",
     }
+    assert api["tmpfs"] == ["/tmp:rw,nosuid,nodev,size=64m,mode=1777"]
 
 
 @pytest.mark.parametrize("compose_name", ["compose.yml", "compose.competition-app-node.yml"])

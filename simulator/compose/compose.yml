@@ -192,6 +192,8 @@ services:
     group_add:
       - "${PILOT107_SECRET_GID:-1000}"
     read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m,mode=1777
     cap_drop: ["ALL"]
     security_opt:
       - no-new-privileges:true
