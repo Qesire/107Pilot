@@ -42,7 +42,7 @@ _A2_TOOLS = frozenset(
     }
 )
 _A2_OPERATIONS = frozenset({"read", "write", "validate"})
-_MAX_LIFETIME_SECONDS = 120
+MAX_AGENT_CAPABILITY_LIFETIME_SECONDS = 300
 _CLOCK_SKEW_SECONDS = 5
 
 
@@ -263,7 +263,10 @@ def _validate_claims(
         raise ValueError("capability issue time is missing")
     if claims.expires_at <= claims.issued_at:
         raise ValueError("invalid capability lifetime")
-    if claims.expires_at - claims.issued_at > _MAX_LIFETIME_SECONDS:
+    if (
+        claims.expires_at - claims.issued_at
+        > MAX_AGENT_CAPABILITY_LIFETIME_SECONDS
+    ):
         raise ValueError("capability lifetime exceeds maximum")
     if claims.issued_at > now + _CLOCK_SKEW_SECONDS:
         raise ValueError("capability issue time is in the future")

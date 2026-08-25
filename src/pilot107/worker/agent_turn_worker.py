@@ -8,7 +8,11 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from pilot107.agent.capabilities import AgentCapabilityClaims, AgentCapabilitySigner
+from pilot107.agent.capabilities import (
+    MAX_AGENT_CAPABILITY_LIFETIME_SECONDS,
+    AgentCapabilityClaims,
+    AgentCapabilitySigner,
+)
 from pilot107.agent.project import is_project_agent_profile
 from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.protocol import AgentdClientError, AgentTurnEvent, DurableAgentTurnRequest
@@ -356,7 +360,8 @@ class AgentTurnWorker:
                 ),
                 max_invocations=32,
                 max_bytes=1024 * 1024,
-                expires_at=now + min(self.lease_seconds, 120),
+                expires_at=now
+                + min(self.lease_seconds, MAX_AGENT_CAPABILITY_LIFETIME_SECONDS),
                 project_id=project_id if isinstance(project_id, str) else None,
                 workspace_id=workspace_id if isinstance(workspace_id, str) else None,
                 operations=(

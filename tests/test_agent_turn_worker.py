@@ -169,6 +169,7 @@ def _worker(
     client: ScriptedAgentdClient,
     clock: MutableClock,
     *,
+    lease_seconds: int = 30,
     publish_event_hint=lambda _session_id, _sequence: None,
 ) -> AgentTurnWorker:
     return AgentTurnWorker(
@@ -177,7 +178,7 @@ def _worker(
         agentd_client=client,
         capability_signer=AgentCapabilitySigner(b"s" * 32, clock=clock.epoch),
         worker_id="agent-worker-1",
-        lease_seconds=30,
+        lease_seconds=lease_seconds,
         clock=clock.epoch,
         publish_event_hint=publish_event_hint,
     )
@@ -241,6 +242,29 @@ def test_dispatch_persists_each_event_before_hint_and_completes(tmp_path: Path) 
         limit=100,
     )
     assert client.requests[0].capability_token not in repr(persisted)
+
+
+def test_long_reasoner_turn_capability_matches_worker_lease(tmp_path: Path) -> None:
+    clock = MutableClock()
+    database = tmp_path / "agent.db"
+    store = SQLiteAgentSessionStore(database, clock=clock)
+    control = SQLiteControlRepository(database, clock=clock)
+    _, turn = _queued_turn(store, control, source={})
+    client = ScriptedAgentdClient(_completed_script(turn.turn_id))
+
+    result = _worker(
+        store,
+        control,
+        client,
+        clock,
+        lease_seconds=300,
+    ).dispatch_due(limit=1)
+
+    assert result.succeeded == 1
+    claims = AgentCapabilitySigner(b"s" * 32, clock=clock.epoch).verify(
+        client.requests[0].capability_token
+    )
+    assert claims.expires_at - claims.issued_at == 300
 
 
 def test_platform_only_turn_claims_no_unbound_resource_tools(tmp_path: Path) -> None:

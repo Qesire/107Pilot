@@ -140,8 +140,11 @@ def test_capability_rejects_expiry_clock_skew_and_excess_lifetime() -> None:
     assert expired.value.code == "AGENT.CAPABILITY.EXPIRED"
 
     current[0] = now
+    long_turn = replace(_claims(now), expires_at=now + 300)
+    assert signer.verify(signer.sign(long_turn)).expires_at == now + 300
+
     with pytest.raises(AgentCapabilityError):
-        signer.sign(replace(_claims(now), expires_at=now + 121))
+        signer.sign(replace(_claims(now), expires_at=now + 301))
 
 
 def test_capability_requires_a_32_byte_secret() -> None:
