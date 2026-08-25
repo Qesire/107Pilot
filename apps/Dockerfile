@@ -53,8 +53,13 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
 # credential is baked into this image.  git is required by the local
 # code-context transport (LocalWorkspaceReader) to inspect workspace revisions.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssh-client git \
+    && apt-get install -y --no-install-recommends bubblewrap openssh-client git \
     && rm -rf /var/lib/apt/lists/*
+
+# SandboxExecutor deliberately resolves allowed commands to a fixed absolute
+# path.  The upstream python image installs Python under /usr/local, so expose
+# that interpreter at the executor's /usr/bin/python3 contract.
+RUN ln -s /usr/local/bin/python3 /usr/bin/python3
 
 COPY src ./src
 COPY data/known_errors ./data/known_errors

@@ -76,6 +76,23 @@ def test_agentd_receives_only_private_tool_gateway_location(compose_name: str) -
 
 
 @pytest.mark.parametrize("compose_name", ["compose.yml", "compose.competition-app-node.yml"])
+def test_api_runtime_configures_the_required_outer_bwrap_boundary(
+    compose_name: str,
+) -> None:
+    api = _services(compose_name)["pilot107-api"]
+
+    assert api["user"] == "10700:10700"
+    assert api["read_only"] is True
+    assert api["cap_drop"] == ["ALL"]
+    assert set(api["security_opt"]) == {
+        "no-new-privileges:true",
+        "seccomp=unconfined",
+        "apparmor=bwrap",
+        "systempaths=unconfined",
+    }
+
+
+@pytest.mark.parametrize("compose_name", ["compose.yml", "compose.competition-app-node.yml"])
 @pytest.mark.parametrize("service_name", ["pilot107-api", "pilot107-worker"])
 def test_python_services_receive_agent_capability_secret_file(
     compose_name: str,

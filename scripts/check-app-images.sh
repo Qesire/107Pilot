@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 api_image="${PILOT107_API_IMAGE:-pilot107/api:local}"
 worker_image="${PILOT107_WORKER_IMAGE:-pilot107/worker:local}"
 web_image="${PILOT107_WEB_IMAGE:-pilot107/web:local}"
@@ -41,5 +42,7 @@ done
 docker run --rm "$agentd_image" node --version
 docker run --rm "$agentd_image" node -e \
   "import('@earendil-works/pi-agent-core').then(module => { if (typeof module.Agent !== 'function') process.exit(1); })"
+
+bash "$root/scripts/check-app-sandbox-image.sh" "$api_image"
 
 echo "pilot107 app images ok"
