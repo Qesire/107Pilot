@@ -122,11 +122,31 @@ class DockerSimulatorCommandBackendTests(unittest.TestCase):
         )
 
         self.assertEqual(receipt.job_id, "9001")
+        self.assertEqual(receipt.raw_response["backend_kind"], "docker-compose-command")
         self.assertTrue(executor.writes[0][0].startswith("/public/home/alice/pilot107-submit-"))
         self.assertTrue(executor.writes[0][0].endswith(".sbatch"))
         self.assertEqual(executor.writes[0][2], "alice")
         self.assertEqual(executor.calls[0][0][0], "sbatch")
         self.assertEqual(executor.calls[0][2], "alice")
+
+    def test_submit_projects_explicit_command_gateway_backend_kind(self) -> None:
+        executor = FakeDockerExecutor()
+        backend = DockerSimulatorCommandBackend(
+            executor=executor,  # type: ignore[arg-type]
+            allowed_roots=["/public/home/alice"],
+            backend_kind="command-gateway",
+        )
+
+        receipt = backend.submit(
+            SubmitIntent(
+                user="alice",
+                workdir=Path("/public/home/alice"),
+                script="#!/bin/bash\nhostname\n",
+                resource_plan=_plan(),
+            )
+        )
+
+        self.assertEqual(receipt.raw_response["backend_kind"], "command-gateway")
 
     def test_finished_job_falls_back_to_sacct_when_squeue_rejects_job_id(
         self,

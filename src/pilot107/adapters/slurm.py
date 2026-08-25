@@ -1978,10 +1978,14 @@ class DockerSimulatorCommandBackend:
         executor: SimulatorExecutor,
         allowed_roots: list[str],
         timeout_seconds: float = 10.0,
+        backend_kind: str = "docker-compose-command",
     ) -> None:
+        if not backend_kind:
+            raise ValueError("backend_kind must not be empty")
         self.executor = executor
         self.allowed_roots = allowed_roots
         self.timeout_seconds = timeout_seconds
+        self.backend_kind = backend_kind
 
     def submit(self, intent: SubmitIntent) -> SubmitReceipt:
         _validate_submit_intent(intent)
@@ -2027,7 +2031,12 @@ class DockerSimulatorCommandBackend:
             job_id=job_id,
             run_state=RunState.SUBMITTED,
             strategy=SubmissionStrategy.COMMAND,
-            raw_response={"stdout": result.stdout, "stderr": result.stderr, "argv": argv},
+            raw_response={
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "argv": argv,
+                "backend_kind": self.backend_kind,
+            },
         )
 
     def get_job(self, *, user: str, job_id: str) -> JobSnapshot:
@@ -2128,6 +2137,7 @@ class SshSlurmBackend(DockerSimulatorCommandBackend):
             executor=executor,
             allowed_roots=allowed_roots,
             timeout_seconds=timeout_seconds,
+            backend_kind="real107-ssh",
         )
         self.target_id = target_id
 
