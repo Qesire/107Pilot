@@ -77,6 +77,7 @@ class GatewayConfig:
         self._rate_lock = threading.Lock()
         self._rate_buckets: dict[str, tuple[float, int]] = {}
         self._audit_lock = threading.Lock()
+        self._publication_lock = threading.Lock()
         seed = token.encode("utf-8") if token else os.urandom(32)
         self._cursor_key = hashlib.sha256(b"pilot107-file-search\0" + seed).digest()
 
@@ -124,6 +125,15 @@ def make_handler(config: GatewayConfig) -> type[BaseHTTPRequestHandler]:
                     status = 200
                 elif self.path.rstrip("/") == "/sha256":
                     response = _file_sha256(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/path_sha256":
+                    response = _path_sha256(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/compare_and_swap":
+                    response = _compare_and_swap_file(payload, config)
+                    status = 200
+                elif self.path.rstrip("/") == "/compare_and_delete":
+                    response = _compare_and_delete_file(payload, config)
                     status = 200
                 elif self.path.rstrip("/") == "/list_dir":
                     response = _list_dir(payload, config)
@@ -371,6 +381,7 @@ def _audit_request_summary(*, path: str, payload: dict[str, Any]) -> dict[str, A
     if path in {
         "/read_bytes",
         "/sha256",
+        "/path_sha256",
         "/list_dir",
         "/stat",
         "/disk_usage",
@@ -381,6 +392,20 @@ def _audit_request_summary(*, path: str, payload: dict[str, Any]) -> dict[str, A
             "path": payload.get("path"),
             "dest_dir": payload.get("dest_dir"),
             "owner": payload.get("owner"),
+        }
+    if path == "/compare_and_swap":
+        return {
+            "staged_path": payload.get("staged_path"),
+            "target_path": payload.get("target_path"),
+            "owner": payload.get("owner"),
+            "expected_sha256": payload.get("expected_sha256"),
+            "desired_sha256": payload.get("desired_sha256"),
+        }
+    if path == "/compare_and_delete":
+        return {
+            "target_path": payload.get("target_path"),
+            "owner": payload.get("owner"),
+            "expected_sha256": payload.get("expected_sha256"),
         }
     if path == "/mkdir":
         return {"path": payload.get("path"), "owner": payload.get("owner")}
@@ -623,6 +648,84 @@ def _file_sha256(payload: dict[str, Any], config: GatewayConfig) -> dict[str, An
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return {"sha256": digest.hexdigest(), "size": target.stat().st_size}
+
+
+def _publication_path(
+    value: object, config: GatewayConfig, *, owner: str
+) -> Path:
+    raw = str(value)
+    _authorize_path(raw, config, user=owner)
+    return Path(posixpath.normpath(raw))
+
+
+def _publication_digest(value: object, *, optional: bool = False) -> str | None:
+    if optional and value is None:
+        return None
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise GatewayError("publication digest is invalid")
+    return value
+
+
+def _regular_file_sha256(path: Path) -> str | None:
+    if not os.path.lexists(path):
+        return None
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise GatewayError(f"publication path is not a regular file: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _path_sha256(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    path = _publication_path(payload.get("path", ""), config, owner=owner)
+    with config._publication_lock:
+        digest = _regular_file_sha256(path)
+    return {"sha256": digest}
+
+
+def _compare_and_swap_file(
+    payload: dict[str, Any], config: GatewayConfig
+) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    staged = _publication_path(payload.get("staged_path", ""), config, owner=owner)
+    target = _publication_path(payload.get("target_path", ""), config, owner=owner)
+    expected = _publication_digest(payload.get("expected_sha256"), optional=True)
+    desired = _publication_digest(payload.get("desired_sha256"))
+    assert isinstance(desired, str)
+    with config._publication_lock:
+        current = _regular_file_sha256(target)
+        if current == desired:
+            return {"outcome": "already_committed"}
+        if current != expected:
+            return {"outcome": "conflict"}
+        if _regular_file_sha256(staged) != desired:
+            return {"outcome": "staged_digest_mismatch"}
+        if not target.parent.is_dir():
+            raise GatewayError(f"parent directory does not exist: {target.parent}")
+        os.replace(staged, target)
+        _chown_to_owner(str(target), owner)
+    return {"outcome": "committed"}
+
+
+def _compare_and_delete_file(
+    payload: dict[str, Any], config: GatewayConfig
+) -> dict[str, Any]:
+    owner = _safe_user(str(payload.get("owner", "")))
+    target = _publication_path(payload.get("target_path", ""), config, owner=owner)
+    expected = _publication_digest(payload.get("expected_sha256"))
+    assert isinstance(expected, str)
+    with config._publication_lock:
+        current = _regular_file_sha256(target)
+        if current is None:
+            return {"outcome": "already_committed"}
+        if current != expected:
+            return {"outcome": "conflict"}
+        target.unlink()
+    return {"outcome": "committed"}
 
 
 def _list_dir(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:

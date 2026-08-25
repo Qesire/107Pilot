@@ -775,7 +775,10 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 relay=workspace_source,
                 owner_roots=workspace_owner_roots,
             )
-            if isinstance(workspace_source, SshRelayExecutor) and workspace_owner_roots
+            if isinstance(
+                workspace_source, (HttpCommandGatewayExecutor, SshRelayExecutor)
+            )
+            and workspace_owner_roots
             else None
         )
         agent_session_service = AgentSessionService(

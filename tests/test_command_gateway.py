@@ -34,6 +34,97 @@ def _mock_ownership() -> Iterator[None]:
 
 
 class CommandGatewayTests(unittest.TestCase):
+    def test_publication_compare_and_swap_and_delete_are_digest_guarded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staged = root / ".pilot107-stage"
+            target = root / "project" / "solver.c"
+            target.parent.mkdir()
+            desired = b"new solver\n"
+            staged.write_bytes(desired)
+            desired_sha256 = hashlib.sha256(desired).hexdigest()
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+
+            with _mock_ownership():
+                self.assertIsNone(
+                    gateway._path_sha256(
+                        {"path": str(target), "owner": "alice"}, config
+                    )["sha256"]
+                )
+                committed = gateway._compare_and_swap_file(
+                    {
+                        "staged_path": str(staged),
+                        "target_path": str(target),
+                        "expected_sha256": None,
+                        "desired_sha256": desired_sha256,
+                        "owner": "alice",
+                    },
+                    config,
+                )
+                stale = gateway._compare_and_swap_file(
+                    {
+                        "staged_path": str(root / "missing-stage"),
+                        "target_path": str(target),
+                        "expected_sha256": None,
+                        "desired_sha256": desired_sha256,
+                        "owner": "alice",
+                    },
+                    config,
+                )
+                deleted = gateway._compare_and_delete_file(
+                    {
+                        "target_path": str(target),
+                        "expected_sha256": desired_sha256,
+                        "owner": "alice",
+                    },
+                    config,
+                )
+                deleted_again = gateway._compare_and_delete_file(
+                    {
+                        "target_path": str(target),
+                        "expected_sha256": desired_sha256,
+                        "owner": "alice",
+                    },
+                    config,
+                )
+
+            self.assertEqual(committed["outcome"], "committed")
+            self.assertEqual(stale["outcome"], "already_committed")
+            self.assertEqual(deleted["outcome"], "committed")
+            self.assertEqual(deleted_again["outcome"], "already_committed")
+            self.assertFalse(target.exists())
+
+    def test_publication_compare_and_swap_rejects_stale_or_unsafe_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            staged = root / "staged"
+            target.write_bytes(b"current")
+            staged.write_bytes(b"desired")
+            desired_sha256 = hashlib.sha256(b"desired").hexdigest()
+            config = gateway.GatewayConfig(token=None, allowed_roots=[tmp])
+
+            with _mock_ownership():
+                conflict = gateway._compare_and_swap_file(
+                    {
+                        "staged_path": str(staged),
+                        "target_path": str(target),
+                        "expected_sha256": hashlib.sha256(b"stale").hexdigest(),
+                        "desired_sha256": desired_sha256,
+                        "owner": "alice",
+                    },
+                    config,
+                )
+                target.unlink()
+                target.symlink_to(root / "elsewhere")
+                with self.assertRaisesRegex(gateway.GatewayError, "regular file"):
+                    gateway._path_sha256(
+                        {"path": str(target), "owner": "alice"}, config
+                    )
+
+            self.assertEqual(conflict["outcome"], "conflict")
+            self.assertTrue(staged.exists())
+
     def test_search_files_matches_name_and_relative_path_without_following_symlinks(
         self,
     ) -> None:

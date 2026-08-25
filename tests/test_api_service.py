@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from pilot107.adapters.slurm import SimulatorPathChecker
+from pilot107.adapters.slurm import HttpCommandGatewayExecutor, SimulatorPathChecker
 from pilot107.api.service import build_api_service, config_from_env
 from pilot107.core.platform_snapshot import (
     CommandObservation,
@@ -452,6 +452,25 @@ class ApiServiceTests(unittest.TestCase):
         checker = factory("alice")
         self.assertIsInstance(checker, SimulatorPathChecker)
         self.assertEqual(checker.user, "alice")
+
+    def test_command_gateway_wires_atomic_workspace_publisher(self) -> None:
+        api = build_api_service(
+            config_from_env(
+                {
+                    "PILOT107_API_BACKEND": "command-gateway",
+                    "PILOT107_ALLOWED_ROOTS": "/public/home/{user}",
+                    "PILOT107_AGENT_CAPABILITY_HMAC_SECRET": "s" * 32,
+                    "PILOT107_COMMAND_GATEWAY_URL": "http://gateway.invalid:8090",
+                },
+                project_root=self.root,
+            )
+        )
+
+        assert api.project_agent_routes is not None
+        publisher = api.project_agent_routes.service.publisher
+        self.assertIsNotNone(publisher)
+        assert publisher is not None
+        self.assertIsInstance(publisher.relay, HttpCommandGatewayExecutor)
 
     def test_command_gateway_backend_auto_collects_login_node_snapshot(self) -> None:
         scontrol_nodes = (

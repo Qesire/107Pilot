@@ -664,6 +664,77 @@ class HttpCommandGatewayExecutor:
             raise SlurmTransportError("gateway sha256 response missing digest")
         return value
 
+    def path_sha256(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> str | None:
+        payload = self._request(
+            "/path_sha256",
+            {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
+            timeout_seconds=timeout_seconds,
+        )
+        value = payload.get("sha256")
+        if value is None:
+            return None
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise SlurmTransportError("gateway path_sha256 response has invalid digest")
+        return value
+
+    def compare_and_swap_file(
+        self,
+        *,
+        staged_path: str,
+        target_path: str,
+        expected_sha256: str | None,
+        desired_sha256: str,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> str:
+        payload = self._request(
+            "/compare_and_swap",
+            {
+                "staged_path": staged_path,
+                "target_path": target_path,
+                "expected_sha256": expected_sha256,
+                "desired_sha256": desired_sha256,
+                "owner": owner,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return self._publication_outcome(payload)
+
+    def compare_and_delete_file(
+        self,
+        *,
+        target_path: str,
+        expected_sha256: str,
+        owner: str,
+        timeout_seconds: float = 30.0,
+    ) -> str:
+        payload = self._request(
+            "/compare_and_delete",
+            {
+                "target_path": target_path,
+                "expected_sha256": expected_sha256,
+                "owner": owner,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        return self._publication_outcome(payload)
+
+    @staticmethod
+    def _publication_outcome(payload: dict[str, Any]) -> str:
+        outcome = payload.get("outcome")
+        if outcome not in {
+            "committed",
+            "already_committed",
+            "conflict",
+            "staged_digest_mismatch",
+        }:
+            raise SlurmTransportError("gateway publication response has invalid outcome")
+        return str(outcome)
+
     def list_dir(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
     ) -> list[FileEntry]:

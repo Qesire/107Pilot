@@ -29,6 +29,41 @@ def _b64(data: bytes) -> str:
 
 
 class LocalFileOpsExecutorTests(unittest.TestCase):
+    def test_http_publication_methods_use_atomic_gateway_operations(self) -> None:
+        executor = HttpCommandGatewayExecutor(base_url="http://gateway.invalid")
+        responses = [
+            {"sha256": None},
+            {"outcome": "committed"},
+            {"outcome": "already_committed"},
+        ]
+        with mock.patch.object(executor, "_request", side_effect=responses) as request:
+            self.assertIsNone(
+                executor.path_sha256(path="/work/target", owner="alice")
+            )
+            self.assertEqual(
+                executor.compare_and_swap_file(
+                    staged_path="/work/stage",
+                    target_path="/work/target",
+                    expected_sha256=None,
+                    desired_sha256="a" * 64,
+                    owner="alice",
+                ),
+                "committed",
+            )
+            self.assertEqual(
+                executor.compare_and_delete_file(
+                    target_path="/work/target",
+                    expected_sha256="a" * 64,
+                    owner="alice",
+                ),
+                "already_committed",
+            )
+
+        self.assertEqual(
+            [call.args[0] for call in request.call_args_list],
+            ["/path_sha256", "/compare_and_swap", "/compare_and_delete"],
+        )
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
