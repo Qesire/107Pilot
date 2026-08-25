@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildValidationEnvelope,
   buildFormalContract,
+  boundProjectSessionId,
   changeSetStateLabel,
   changeSetTone,
   isValidationEnvelopeInputValid,
@@ -32,6 +33,19 @@ function changeSet(state: WorkspaceChangeSet["state"]): WorkspaceChangeSet {
 }
 
 describe("Agent Project review presentation", () => {
+  it("mounts task lifecycle only for the session bound to the selected Project", () => {
+    expect(boundProjectSessionId(
+      new URLSearchParams("project=project-1&session=session-1"),
+      "project-1",
+    )).toBe("session-1");
+    expect(boundProjectSessionId(
+      new URLSearchParams("project=project-2&session=session-1"),
+      "project-1",
+    )).toBeNull();
+    expect(boundProjectSessionId(new URLSearchParams("project=project-1"), "project-1"))
+      .toBeNull();
+  });
+
   it("labels project origins and explicit risk levels", () => {
     expect(originLabel("blank")).toBe("空白");
     expect(originLabel("existing")).toBe("现有目录");

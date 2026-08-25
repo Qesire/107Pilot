@@ -7,6 +7,7 @@ import { useAgentChangeSetDiff, useAgentProject, useAgentProjects } from "./quer
 import type { AgentProjectOrigin, FormalRunApproval, JsonObject, WorkspaceChangeSet } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
+import { AgentTaskPanel } from "./AgentTaskPanel";
 
 interface AgentProjectPanelProps {
   user: string;
@@ -210,6 +211,7 @@ function ProjectReview({
       ? view.project.source.ref_id
       : null
   );
+  const taskSessionId = boundProjectSessionId(location.search, view.project.project_id);
   const startValidation = useMutation({
     mutationFn: async () => {
       const binding = projectAgentProfileBinding({
@@ -473,6 +475,7 @@ function ProjectReview({
         </button>
         {startValidation.error ? <ProjectMutationError error={startValidation.error} /> : null}
       </section>
+      {taskSessionId ? <AgentTaskPanel user={user} sessionId={taskSessionId} /> : null}
       <section>
         <h3>Blueprint</h3>
         {blueprint ? (
@@ -539,6 +542,15 @@ function ProjectMutationError({ error }: { error: Error }) {
 
 export function originLabel(origin: AgentProjectOrigin): string {
   return ({ blank: "空白", existing: "现有目录", template: "模板", failed_run: "失败 Run" })[origin];
+}
+
+export function boundProjectSessionId(
+  search: URLSearchParams,
+  selectedProjectId: string,
+): string | null {
+  const projectId = search.get("project");
+  const sessionId = search.get("session");
+  return projectId === selectedProjectId && sessionId ? sessionId : null;
 }
 
 export function projectAgentProfileBinding(input: {
