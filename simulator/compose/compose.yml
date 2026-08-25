@@ -344,6 +344,7 @@ services:
       GIT_CONFIG_KEY_0: "safe.directory"
       GIT_CONFIG_VALUE_0: "*"
       PILOT107_WORKER_ID: runtime-worker-primary
+      PILOT107_WORKER_TASK_LEASE_SECONDS: ${PILOT107_WORKER_TASK_LEASE_SECONDS:-300}
       PILOT107_WORKER_HEALTH_PATH: /var/lib/pilot107/worker-health.json
       PILOT107_WORKER_METRICS_ROOT: /var/lib/pilot107/worker-metrics
       PILOT107_CAPSULE_ROOT: /var/lib/pilot107/capsules

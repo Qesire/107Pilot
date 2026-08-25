@@ -42,7 +42,7 @@ _A2_TOOLS = frozenset(
     }
 )
 _A2_OPERATIONS = frozenset({"read", "write", "validate"})
-MAX_AGENT_CAPABILITY_LIFETIME_SECONDS = 300
+MAX_AGENT_CAPABILITY_LIFETIME_SECONDS = 660
 _CLOCK_SKEW_SECONDS = 5
 
 
@@ -207,9 +207,7 @@ def _parse_claims(payload: bytes) -> AgentCapabilityClaims:
     )
 
 
-def _validate_claims(
-    claims: AgentCapabilityClaims, *, now: int, signing: bool
-) -> None:
+def _validate_claims(claims: AgentCapabilityClaims, *, now: int, signing: bool) -> None:
     for value in (
         claims.owner,
         claims.session_id,
@@ -240,10 +238,10 @@ def _validate_claims(
             or not 0 <= claims.max_commands <= 64
         ):
             raise ValueError("invalid builder capability scope")
-        if (
-            {"project_blueprint_save", "workspace_patch"} & claims.tools
-            and "write" not in claims.operations
-        ):
+        if {
+            "project_blueprint_save",
+            "workspace_patch",
+        } & claims.tools and "write" not in claims.operations:
             raise ValueError("builder write tool lacks write operation")
         if "sandbox_exec" in claims.tools and (
             "validate" not in claims.operations or claims.max_commands < 1
@@ -263,19 +261,14 @@ def _validate_claims(
         raise ValueError("capability issue time is missing")
     if claims.expires_at <= claims.issued_at:
         raise ValueError("invalid capability lifetime")
-    if (
-        claims.expires_at - claims.issued_at
-        > MAX_AGENT_CAPABILITY_LIFETIME_SECONDS
-    ):
+    if claims.expires_at - claims.issued_at > MAX_AGENT_CAPABILITY_LIFETIME_SECONDS:
         raise ValueError("capability lifetime exceeds maximum")
     if claims.issued_at > now + _CLOCK_SKEW_SECONDS:
         raise ValueError("capability issue time is in the future")
     if claims.expires_at < now - _CLOCK_SKEW_SECONDS:
         if signing:
             raise ValueError("cannot sign an expired capability")
-        raise AgentCapabilityError(
-            "Agent capability has expired", code="AGENT.CAPABILITY.EXPIRED"
-        )
+        raise AgentCapabilityError("Agent capability has expired", code="AGENT.CAPABILITY.EXPIRED")
 
 
 def _encode(value: bytes) -> str:

@@ -81,7 +81,7 @@ const NullableCount = Type.Union([
 
 const LimitsSchema = Type.Object(
   {
-    timeout_ms: Type.Integer({ minimum: 100, maximum: 300_000 }),
+    timeout_ms: Type.Integer({ minimum: 100, maximum: 660_000 }),
     max_output_tokens: Type.Integer({ minimum: 1, maximum: 32_000 }),
   },
   { additionalProperties: false },

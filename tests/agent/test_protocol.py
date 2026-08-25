@@ -64,6 +64,17 @@ def test_durable_turn_request_accepts_only_the_a1_readonly_pairing() -> None:
     assert "opaque.test.token" not in repr(parsed)
 
 
+def test_durable_turn_request_accepts_the_reasoner_timeout_boundary() -> None:
+    request = _durable_request()
+    request["limits"]["timeout_ms"] = 660_000
+
+    assert agent_protocol.parse_durable_turn_request(request).turn_id == "turn-1"
+
+    request["limits"]["timeout_ms"] = 660_001
+    with pytest.raises(ValueError, match="durable Turn request"):
+        agent_protocol.parse_durable_turn_request(request)
+
+
 @pytest.mark.parametrize("profile_id", ["market_application", "template_publication"])
 def test_market_profiles_use_the_closed_project_pairing(profile_id: str) -> None:
     request = _durable_request()

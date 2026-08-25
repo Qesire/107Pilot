@@ -137,7 +137,7 @@ def test_config_loader_reads_only_agentd_names_and_redacts_the_token() -> None:
             "PILOT107_AGENTD_URL": "http://pilot-agentd:8091/",
             "PILOT107_AGENTD_TOKEN": "never-represent-this-secret",
             "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
-            "PILOT107_AGENTD_TIMEOUT_SECONDS": "300",
+            "PILOT107_AGENTD_TIMEOUT_SECONDS": "630",
             "PILOT107_AGENTD_MAX_OUTPUT_TOKENS": "12000",
             "PILOT107_LLM_API_KEY": "must-not-be-read",
         }
@@ -146,7 +146,7 @@ def test_config_loader_reads_only_agentd_names_and_redacts_the_token() -> None:
     config = config_from_env(env)
 
     assert config.base_url == "http://pilot-agentd:8091"
-    assert config.timeout_seconds == 300
+    assert config.timeout_seconds == 630
     assert config.max_output_tokens == 12_000
     assert set(env.reads) == {
         "PILOT107_AGENTD_URL",
@@ -169,7 +169,7 @@ def test_config_loader_reads_only_agentd_names_and_redacts_the_token() -> None:
         ({"token": "has whitespace"}, "PILOT107_AGENTD_TOKEN"),
         ({"model_profile_id": "bad/profile"}, "PILOT107_AGENTD_MODEL_PROFILE"),
         ({"timeout_seconds": 0.09}, "timeout_seconds"),
-        ({"timeout_seconds": 301}, "timeout_seconds"),
+        ({"timeout_seconds": 661}, "timeout_seconds"),
         ({"max_output_tokens": 0}, "max_output_tokens"),
         ({"max_output_tokens": 32_001}, "max_output_tokens"),
     ],
@@ -263,9 +263,7 @@ def test_stream_durable_turn_sends_the_exact_v2_authority_envelope() -> None:
         capability_token="opaque.capability.token",
     )
 
-    events = list(
-        AgentdClient(_config(), opener=opener).stream_durable_turn(request)
-    )
+    events = list(AgentdClient(_config(), opener=opener).stream_durable_turn(request))
 
     assert [event.type for event in events] == ["turn_started", "turn_completed"]
     assert captured["timeout"] == 30.0

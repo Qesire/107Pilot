@@ -47,6 +47,15 @@ describe("pilot-agentd configuration", () => {
     expect(publicJson).not.toContain("127.0.0.1");
   });
 
+  it("accepts the bounded ten-minute reasoner window", () => {
+    const config = configFromEnv({
+      ...campusEnv,
+      PILOT107_LLM_TIMEOUT_SECONDS: "600",
+    });
+
+    expect(config.modelProfile.timeoutMs).toBe(600_000);
+  });
+
   it.each([
     { PILOT107_LLM_BASE_URL: undefined },
     { PILOT107_LLM_MODEL: undefined },
@@ -106,7 +115,7 @@ describe("pilot-agentd configuration", () => {
   it.each([
     ["PILOT107_AGENTD_LISTEN_PORT", "0"],
     ["PILOT107_AGENTD_LISTEN_PORT", "8091.5"],
-    ["PILOT107_LLM_TIMEOUT_SECONDS", "301"],
+    ["PILOT107_LLM_TIMEOUT_SECONDS", "601"],
     ["PILOT107_LLM_MAX_TOKENS", "32001"],
     ["PILOT107_LLM_MAX_ATTEMPTS", "4"],
   ])("rejects an out-of-range %s without echoing its value", (name, value) => {

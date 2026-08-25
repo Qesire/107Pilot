@@ -345,7 +345,7 @@
             "timeout_ms": {
               "type": "integer",
               "minimum": 100,
-              "maximum": 300000
+              "maximum": 660000
             },
             "max_output_tokens": {
               "type": "integer",
@@ -1081,7 +1081,7 @@
             "timeout_ms": {
               "type": "integer",
               "minimum": 100,
-              "maximum": 300000
+              "maximum": 660000
             },
             "max_output_tokens": {
               "type": "integer",
@@ -1455,7 +1455,7 @@
             "timeout_ms": {
               "type": "integer",
               "minimum": 100,
-              "maximum": 300000
+              "maximum": 660000
             },
             "max_output_tokens": {
               "type": "integer",
@@ -1874,7 +1874,7 @@
             "timeout_ms": {
               "type": "integer",
               "minimum": 100,
-              "maximum": 300000
+              "maximum": 660000
             },
             "max_output_tokens": {
               "type": "integer",

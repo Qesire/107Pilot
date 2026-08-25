@@ -51,6 +51,17 @@ function durableRequest() {
   };
 }
 
+it("accepts the bounded reasoner timeout and rejects larger limits", () => {
+  expect(parseDurableTurnRequest({
+    ...durableRequest(),
+    limits: { timeout_ms: 660_000, max_output_tokens: 1_200 },
+  }).turn_id).toBe("turn-1");
+  expect(() => parseDurableTurnRequest({
+    ...durableRequest(),
+    limits: { timeout_ms: 660_001, max_output_tokens: 1_200 },
+  })).toThrow();
+});
+
 function toolInvocation() {
   return {
     schema_version: "pilot107.agent-tool-invocation/v1" as const,

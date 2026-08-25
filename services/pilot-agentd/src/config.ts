@@ -119,7 +119,7 @@ function campusProfile(env: NodeJS.ProcessEnv, id: string): ModelProfile {
     "PILOT107_LLM_TIMEOUT_SECONDS",
     DEFAULT_TIMEOUT_SECONDS,
     1,
-    300,
+    600,
   );
   const maxOutputTokens = integerFromEnv(
     env,

@@ -244,13 +244,11 @@ def parse_durable_turn_request(value: object) -> DurableAgentTurnRequest:
         limits = _closed_object(
             request["limits"], required={"timeout_ms", "max_output_tokens"}, label="limits"
         )
-        _validate_integer(limits["timeout_ms"], "timeout_ms", minimum=100, maximum=300_000)
+        _validate_integer(limits["timeout_ms"], "timeout_ms", minimum=100, maximum=660_000)
         _validate_integer(
             limits["max_output_tokens"], "max_output_tokens", minimum=1, maximum=32_000
         )
-        trace = _closed_object(
-            request["trace"], required={"correlation_id"}, label="trace"
-        )
+        trace = _closed_object(request["trace"], required={"correlation_id"}, label="trace")
         _validate_id(trace["correlation_id"], "correlation_id")
         return DurableAgentTurnRequest(
             session_id=session_id,
@@ -361,9 +359,7 @@ def parse_tool_result(value: object) -> ToolResult:
             _as_bool(error["retryable"], "tool error retryable")
         evidence_refs = tuple(
             _validate_text(item, "evidence_ref", minimum=1, maximum=4_096)
-            for item in _as_list(
-                tool_result["evidence_refs"], "evidence_refs", maximum=256
-            )
+            for item in _as_list(tool_result["evidence_refs"], "evidence_refs", maximum=256)
         )
         return ToolResult(
             schema_version=TOOL_RESULT_PROTOCOL_VERSION,

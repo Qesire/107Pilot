@@ -257,14 +257,14 @@ def test_long_reasoner_turn_capability_matches_worker_lease(tmp_path: Path) -> N
         control,
         client,
         clock,
-        lease_seconds=300,
+        lease_seconds=660,
     ).dispatch_due(limit=1)
 
     assert result.succeeded == 1
     claims = AgentCapabilitySigner(b"s" * 32, clock=clock.epoch).verify(
         client.requests[0].capability_token
     )
-    assert claims.expires_at - claims.issued_at == 300
+    assert claims.expires_at - claims.issued_at == 660
 
 
 def test_platform_only_turn_claims_no_unbound_resource_tools(tmp_path: Path) -> None:
@@ -334,9 +334,7 @@ def test_repair_turn_receives_one_project_scoped_capability(tmp_path: Path) -> N
 
     assert result.succeeded == 1
     [request] = client.requests
-    claims = AgentCapabilitySigner(
-        b"s" * 32, clock=clock.epoch
-    ).verify(request.capability_token)
+    claims = AgentCapabilitySigner(b"s" * 32, clock=clock.epoch).verify(request.capability_token)
     assert claims.profile_id == "run_diagnosis_repair"
     assert claims.project_id == "project-repair"
     assert claims.workspace_id == "workspace-repair"
@@ -652,11 +650,14 @@ def test_blocked_alice_messages_do_not_prevent_bob_dispatch(tmp_path: Path) -> N
     _, alice_active = _queued_turn(store, control, suffix="alice-active")
     _, alice_waiting = _queued_turn(store, control, suffix="alice-waiting")
     _, bob = _queued_turn(store, control, owner="bob", suffix="bob")
-    assert store.claim_turn(
-        alice_active.turn_id,
-        worker_id="other-worker",
-        lease_seconds=30,
-    ) is not None
+    assert (
+        store.claim_turn(
+            alice_active.turn_id,
+            worker_id="other-worker",
+            lease_seconds=30,
+        )
+        is not None
+    )
     client = ScriptedAgentdClient(_completed_script(bob.turn_id))
 
     result = _worker(store, control, client, clock).dispatch_due(limit=3)
