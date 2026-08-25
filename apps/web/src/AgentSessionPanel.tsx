@@ -63,14 +63,14 @@ export function AgentSessionPanel({ user, location, navigate }: AgentSessionPane
         {createSession.error ? <AgentMutationError error={createSession.error} /> : null}
         <div className="agent-readonly-note">
           <ShieldCheck aria-hidden="true" size={17} />
-          <p><strong>只读边界</strong>可读取平台、Workspace、Run、日志与 Evidence；不能提交或取消 Slurm 作业，也不能改写文件。</p>
+          <p><strong>只读边界</strong>可读取平台事实；仅在会话明确绑定后读取 Run、日志与 Evidence。不能提交或取消 Slurm 作业，也不能改写文件。</p>
         </div>
         <QueryBoundary
           pending={sessions.isPending}
           error={sessions.error}
           empty={(sessions.data?.items.length ?? 0) === 0}
           emptyTitle="还没有持久化对话"
-          emptyDetail="创建后即可询问作业、日志、证据和只读 Workspace 信息。"
+          emptyDetail="创建后即可询问平台事实，以及会话明确绑定的 Run、日志和 Evidence。"
         >
           <div className="agent-session-list">
             {(sessions.data?.items ?? []).map((session) => (
@@ -182,6 +182,7 @@ function AgentConversation({ user, sessionId }: { user: string; sessionId: strin
     createTurn.mutate({ text, requestKey });
   };
   const mutationError = createTurn.error ?? cancelTurn.error;
+  const eventGroups = useMemo(() => groupAgentEvents(events), [events]);
 
   return (
     <QueryBoundary
@@ -203,8 +204,8 @@ function AgentConversation({ user, sessionId }: { user: string; sessionId: strin
           </header>
 
           <div className="agent-event-stream" aria-live="polite" aria-label="持久化 Agent 事件">
-            {events.length ? events.map((item) => (
-              <AgentEventRow key={item.event_id} event={item} />
+            {eventGroups.length ? eventGroups.map((group) => (
+              <AgentEventGroupRow key={group.key} group={group} />
             )) : (
               <div className="agent-event-empty">
                 <MessageSquarePlus aria-hidden="true" size={22} />
@@ -222,7 +223,7 @@ function AgentConversation({ user, sessionId }: { user: string; sessionId: strin
               value={message}
               rows={3}
               maxLength={64_000}
-              placeholder="询问 Run、日志、Evidence 或 Workspace…"
+              placeholder="询问平台，或会话已绑定的 Run、日志与 Evidence…"
               disabled={session.data.state !== "idle" || createTurn.isPending}
               onChange={(event) => {
                 setMessage(event.target.value);
@@ -261,27 +262,42 @@ function AgentConversation({ user, sessionId }: { user: string; sessionId: strin
   );
 }
 
-function AgentEventRow({ event }: { event: AgentTurnEvent }) {
-  const text = agentEventText(event);
-  const toolName = typeof event.payload.tool_name === "string" ? event.payload.tool_name : null;
+function AgentEventGroupRow({ group }: { group: AgentEventGroup }) {
+  const first = group.events[0];
+  const last = group.events.at(-1);
+  if (!first || !last) return null;
+  const toolName = group.events
+    .map((event) => event.payload.tool_name)
+    .find((value): value is string => typeof value === "string");
+  const label = group.kind === "assistant"
+    ? "Agent 回复"
+    : group.kind === "tool"
+      ? toolName ?? "工具调用"
+      : first.event_type === "turn_started"
+        ? agentTaskKindLabel(first.payload.task_kind)
+        : agentEventLabel(first.event_type);
+  const meta = group.kind === "tool"
+    ? `${group.events.length} 条事件`
+    : formatTimestamp(last.created_at);
   return (
-    <article className={`agent-event agent-event-${event.event_type}`}>
-      <div className="agent-event-sequence" aria-label={`事件 ${event.event_id}`}>
-        <strong>#{event.event_id}</strong>
-        <span>{event.sequence}</span>
+    <article className={`agent-event agent-event-${group.kind}`}>
+      <div
+        className="agent-event-sequence"
+        aria-label={`事件 ${first.event_id} 至 ${last.event_id}`}
+      >
+        <strong>#{first.event_id}{first.event_id === last.event_id ? "" : `–${last.event_id}`}</strong>
+        <span>{first.sequence === last.sequence ? first.sequence : `${first.sequence}–${last.sequence}`}</span>
       </div>
       <div>
         <header>
-          <strong>{agentEventLabel(event.event_type)}</strong>
-          <small>{toolName ?? formatTimestamp(event.created_at)}</small>
+          <strong>{label}</strong>
+          <small>{meta}</small>
         </header>
-        {text ? <p>{text}</p> : null}
-        {!text && Object.keys(event.payload).length ? (
-          <details>
-            <summary>查看事件数据</summary>
-            <pre><code>{JSON.stringify(event.payload, null, 2)}</code></pre>
-          </details>
-        ) : null}
+        {group.text ? <p>{group.text}</p> : null}
+        <details>
+          <summary>查看{group.events.length > 1 ? `${group.events.length} 条` : ""}原始事件</summary>
+          <pre><code>{JSON.stringify(group.events, null, 2)}</code></pre>
+        </details>
       </div>
     </article>
   );
@@ -309,6 +325,82 @@ export function mergeAgentEvents(
   return [...byId.values()].sort((left, right) => left.event_id - right.event_id);
 }
 
+export interface AgentEventGroup {
+  readonly key: string;
+  readonly kind: "assistant" | "tool" | "lifecycle" | "failure";
+  readonly events: readonly AgentTurnEvent[];
+  readonly text: string | null;
+}
+
+export function groupAgentEvents(events: AgentTurnEvent[]): AgentEventGroup[] {
+  const groups: AgentEventGroup[] = [];
+  const toolGroups = new Map<string, number>();
+
+  for (const event of events) {
+    if (event.event_type === "message_delta") {
+      const delta = typeof event.payload.delta === "string" ? event.payload.delta : "";
+      const lastIndex = groups.length - 1;
+      const previous = groups[lastIndex];
+      if (
+        previous?.kind === "assistant" &&
+        previous.events.at(-1)?.turn_id === event.turn_id
+      ) {
+        groups[lastIndex] = {
+          ...previous,
+          events: [...previous.events, event],
+          text: `${previous.text ?? ""}${delta}`,
+        };
+      } else {
+        groups.push({
+          key: `assistant:${event.turn_id}:${event.event_id}`,
+          kind: "assistant",
+          events: [event],
+          text: delta,
+        });
+      }
+      continue;
+    }
+
+    if (event.event_type.startsWith("tool_call_")) {
+      const toolCallId = typeof event.payload.tool_call_id === "string"
+        ? event.payload.tool_call_id
+        : `event-${event.event_id}`;
+      const key = `tool:${event.turn_id}:${toolCallId}`;
+      const existingIndex = toolGroups.get(key);
+      if (existingIndex === undefined) {
+        toolGroups.set(key, groups.length);
+        groups.push({
+          key,
+          kind: "tool",
+          events: [event],
+          text: toolGroupText([event]),
+        });
+      } else {
+        const previous = groups[existingIndex];
+        if (!previous) continue;
+        const groupedEvents = [...previous.events, event];
+        groups[existingIndex] = {
+          ...previous,
+          events: groupedEvents,
+          text: toolGroupText(groupedEvents),
+        };
+      }
+      continue;
+    }
+
+    groups.push({
+      key: `event:${event.event_id}`,
+      kind: event.event_type === "turn_failed" ? "failure" : "lifecycle",
+      events: [event],
+      text: agentEventText(event),
+    });
+  }
+
+  return groups.filter(
+    (group) => group.kind !== "assistant" || Boolean(group.text?.trim()),
+  );
+}
+
 export function agentEventText(event: AgentTurnEvent): string | null {
   const candidates = [
     event.payload.delta,
@@ -319,11 +411,44 @@ export function agentEventText(event: AgentTurnEvent): string | null {
   const text = candidates.find((value) => typeof value === "string");
   if (typeof text === "string" && text.trim()) return text;
   const error = event.payload.error;
-  if (error && typeof error === "object" && "message" in error) {
-    const message = error.message;
-    return typeof message === "string" ? message : null;
+  const directError = errorMessage(error);
+  if (directError) return directError;
+  const resultError = event.payload.result;
+  if (resultError && typeof resultError === "object" && "error" in resultError) {
+    const nestedError = errorMessage(resultError.error);
+    if (nestedError) return nestedError;
   }
   return null;
+}
+
+function toolGroupText(events: readonly AgentTurnEvent[]): string | null {
+  for (const event of [...events].reverse()) {
+    const text = agentEventText(event);
+    if (text) return text;
+  }
+  return null;
+}
+
+function errorMessage(value: unknown): string | null {
+  if (!value || typeof value !== "object" || !("message" in value)) return null;
+  return typeof value.message === "string" && value.message.trim()
+    ? value.message
+    : null;
+}
+
+export function agentTaskKindLabel(taskKind: unknown): string {
+  if (typeof taskKind !== "string") return "Turn 开始";
+  return {
+    interactive: "交互 Turn",
+    interactive_readonly: "平台只读 Turn",
+    experiment_builder: "实验构建 Turn",
+    run_diagnosis_repair: "诊断修复 Turn",
+    market_application: "市场应用 Turn",
+    template_publication: "模板发布 Turn",
+    explain: "解释 Turn",
+    contract_patch: "Contract 建议 Turn",
+    remediation_plan: "修复规划 Turn",
+  }[taskKind] ?? taskKind;
 }
 
 function agentEventLabel(eventType: string): string {

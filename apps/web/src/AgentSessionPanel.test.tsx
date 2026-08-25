@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { agentEventText, mergeAgentEvents } from "./AgentSessionPanel";
+import {
+  agentEventText,
+  agentTaskKindLabel,
+  groupAgentEvents,
+  mergeAgentEvents,
+} from "./AgentSessionPanel";
 import type { AgentTurnEvent } from "./types";
 
 function event(overrides: Partial<AgentTurnEvent>): AgentTurnEvent {
@@ -33,5 +38,81 @@ describe("durable Agent event replay", () => {
       .toBe("排队原因是资源不足");
     expect(agentEventText(event({ event_type: "tool_started", payload: { tool_name: "run_get" } })))
       .toBeNull();
+  });
+
+  it("coalesces adjacent assistant deltas without losing meaningful spaces", () => {
+    const groups = groupAgentEvents([
+      event({ event_id: 1, sequence: 1, payload: { delta: "集群" } }),
+      event({ event_id: 2, sequence: 2, payload: { delta: "共有" } }),
+      event({ event_id: 3, sequence: 3, payload: { delta: " 6 CPU" } }),
+    ]);
+
+    expect(groups.filter((group) => group.kind === "assistant")).toHaveLength(1);
+    expect(groups[0]?.text).toBe("集群共有 6 CPU");
+    expect(groups[0]?.events.map((item) => item.event_id)).toEqual([1, 2, 3]);
+  });
+
+  it("keeps whitespace-only deltas in raw events but omits their visual group", () => {
+    const raw = [event({ payload: { delta: "\n\n" } })];
+
+    expect(raw).toHaveLength(1);
+    expect(groupAgentEvents(raw)).toEqual([]);
+  });
+
+  it("groups one tool lifecycle by turn and tool call id", () => {
+    const groups = groupAgentEvents([
+      event({
+        event_id: 1,
+        sequence: 1,
+        event_type: "tool_call_requested",
+        payload: { tool_call_id: "call-1", tool_name: "platform_get_snapshot", arguments: {} },
+      }),
+      event({
+        event_id: 2,
+        sequence: 2,
+        event_type: "tool_call_started",
+        payload: { tool_call_id: "call-1", tool_name: "platform_get_snapshot" },
+      }),
+      event({
+        event_id: 3,
+        sequence: 3,
+        event_type: "tool_call_completed",
+        payload: {
+          tool_call_id: "call-1",
+          tool_name: "platform_get_snapshot",
+          result: { snapshot_id: "platform-1" },
+          is_error: false,
+        },
+      }),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ kind: "tool", key: "tool:turn-1:call-1" });
+    expect(groups[0]?.events).toHaveLength(3);
+  });
+
+  it("projects a structured tool error message and the real task label", () => {
+    const groups = groupAgentEvents([
+      event({
+        event_type: "tool_call_completed",
+        payload: {
+          tool_call_id: "call-1",
+          tool_name: "platform_get_snapshot",
+          result: {
+            error: {
+              code: "platform_facts_unavailable",
+              message: "Authoritative VM Slurm facts are unavailable.",
+              retryable: false,
+            },
+          },
+          is_error: true,
+        },
+      }),
+    ]);
+
+    expect(groups[0]?.text).toBe("Authoritative VM Slurm facts are unavailable.");
+    expect(agentTaskKindLabel("interactive_readonly")).toBe("平台只读 Turn");
+    expect(agentTaskKindLabel("experiment_builder")).toBe("实验构建 Turn");
+    expect(agentTaskKindLabel("run_diagnosis_repair")).toBe("诊断修复 Turn");
   });
 });

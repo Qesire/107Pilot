@@ -903,8 +903,13 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 .agent-event header strong { color: var(--ink); font-size: 12px; }
 .agent-event header small { overflow: hidden; color: var(--ink-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .agent-event p { margin: 8px 0 0; color: var(--ink-soft); font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
-.agent-event-message_delta { background: #fbfdfc; }
-.agent-event-message_delta .agent-event-sequence { background: var(--teal-soft); }
+.agent-event-assistant { background: #fbfdfc; }
+.agent-event-assistant .agent-event-sequence { background: var(--teal-soft); }
+.agent-event-tool .agent-event-sequence { background: var(--blue-soft); }
+.agent-event-tool .agent-event-sequence strong { color: var(--blue); }
+.agent-event-failure { background: var(--red-soft); }
+.agent-event-failure .agent-event-sequence { background: var(--red-soft); }
+.agent-event-failure .agent-event-sequence strong { color: var(--red); }
 .agent-event details { margin-top: 8px; color: var(--ink-faint); font-size: 11px; }
 .agent-event summary { cursor: pointer; }
 .agent-event pre { max-height: 180px; overflow: auto; margin: 7px 0 0; background: #14201d; color: #d8e6df; padding: 10px; font-family: ui-monospace, monospace; font-size: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
