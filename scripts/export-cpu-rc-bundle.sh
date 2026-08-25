@@ -17,12 +17,13 @@ fi
 
 # P2-4 (round 8): untracked files in the bundle source dirs can leak into the
 # exported bundle and escape review. Refuse to export if any untracked files
-# exist under src/, apps/, or config/ — the only dirs copied into the bundle.
+# exist under src/, apps/, config/, or services/ — the source dirs copied into
+# the bundle.
 # Untracked files elsewhere (artifacts/, docs/) do not ship in the bundle and
 # are tolerated.
-untracked_in_bundle="$(git -C "$root" status --porcelain --untracked-files -- src apps config | grep '^??' || true)"
+untracked_in_bundle="$(git -C "$root" status --porcelain --untracked-files -- src apps config services | grep '^??' || true)"
 if [[ -n "$untracked_in_bundle" ]]; then
-  echo "refusing to export a bundle with untracked files in src/ apps/ config/:" >&2
+  echo "refusing to export a bundle with untracked files in src/ apps/ config/ services/:" >&2
   printf '%s\n' "$untracked_in_bundle" >&2
   echo "commit or remove these files before exporting" >&2
   exit 1
@@ -42,6 +43,7 @@ images=(
   "pilot107/api:cpu-rc-$short_revision"
   "pilot107/worker:cpu-rc-$short_revision"
   "pilot107/web:cpu-rc-$short_revision"
+  "pilot107/agentd:cpu-rc-$short_revision"
 )
 for image in "${images[@]}"; do
   docker image inspect "$image" >/dev/null
@@ -50,6 +52,7 @@ done
 cp -a "$root/src" "$work_dir/src"
 cp -a "$root/apps" "$work_dir/apps"
 cp -a "$root/config" "$work_dir/config"
+cp -a "$root/services" "$work_dir/services"
 mkdir -p "$work_dir/data" "$work_dir/simulator"
 cp -a "$root/data/known_errors" "$work_dir/data/"
 cp -a "$root/data/submission_templates" "$work_dir/data/"
@@ -127,12 +130,14 @@ sed -i \
   -e "s|^PILOT107_WORKER_IMAGE=.*|PILOT107_WORKER_IMAGE=${images[2]}|" \
   -e "s|^PILOT107_WEB_IMAGE=.*|PILOT107_WEB_IMAGE=${images[3]}|" \
   -e "s|^PILOT107_REVERSE_PROXY_IMAGE=.*|PILOT107_REVERSE_PROXY_IMAGE=${images[3]}|" \
+  -e "s|^PILOT107_AGENTD_IMAGE=.*|PILOT107_AGENTD_IMAGE=${images[4]}|" \
   "$env_template"
 
 printf '%s\n' "${images[@]}" >"$work_dir/images/images.txt"
 docker save "${images[@]}" | gzip -1 >"$work_dir/images/pilot107-cpu-rc-images.tar.gz"
 docker run --rm "${images[1]}" python3 -m pip list --format=json >"$work_dir/sbom/python-packages.json"
 cp "$root/package-lock.json" "$work_dir/sbom/web-package-lock.json"
+cp "$root/services/pilot-agentd/package-lock.json" "$work_dir/sbom/agentd-package-lock.json"
 
 python3 - "$work_dir" "$revision" "${images[@]}" <<'PY'
 import datetime
@@ -223,6 +228,7 @@ assert_required_files_exist() {
     "SHA256SUMS"
     "images/pilot107-cpu-rc-images.tar.gz"
     "images/images.txt"
+    "sbom/agentd-package-lock.json"
     "simulator/compose/compose.cpu-rc.yml"
     "simulator/compose/compose.yml"
     "simulator/compose/compose.competition.yml"
@@ -231,6 +237,7 @@ assert_required_files_exist() {
     "simulator/compose/.env.cpu-rc.example"
     "src"
     "apps"
+    "services/pilot-agentd"
     "pyproject.toml"
   )
   for rel in "${required[@]}"; do

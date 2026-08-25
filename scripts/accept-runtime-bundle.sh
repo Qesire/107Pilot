@@ -260,7 +260,7 @@ PY
 # considered "up". Used by stack_is_healthy below.
 CPU_RC_SERVICES=(
   mariadb slurmdbd slurmctld worker-1 slurmrestd
-  pilot107-command-gateway pilot107-api pilot107-worker
+  pilot107-command-gateway pilot-agentd pilot107-api pilot107-worker
   pilot107-web pilot107-reverse-proxy
 )
 

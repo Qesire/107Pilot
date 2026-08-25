@@ -126,11 +126,15 @@ cmd_install() {
 
   local tmp
   tmp="$(mktemp)"
-  trap 'rm -f "$tmp"' EXIT
+  local cleanup_command
+  printf -v cleanup_command 'rm -f -- %q' "$tmp"
+  trap "$cleanup_command" EXIT
   # Substitute the repo-root placeholder into a temp copy; do not mutate the
   # in-repo template.
   sed "s|__PILOT107_REPO_ROOT__|${repo_path}|g" "$template" >"$tmp"
   install -m 0644 "$tmp" "/etc/systemd/system/${unit_name}.service"
+  rm -f -- "$tmp"
+  trap - EXIT
 
   systemctl daemon-reload
   systemctl enable "${unit_name}.service"

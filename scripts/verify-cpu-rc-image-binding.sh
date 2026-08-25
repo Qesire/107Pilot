@@ -21,7 +21,7 @@
 #   - `docker compose ps` returns non-zero        → FAIL
 #   - a line of compose ps output can't be parsed → FAIL (parse_errors)
 #   - zero running containers found               → FAIL (not "nothing to bind")
-#   - any of the 10 expected services missing     → FAIL (missing_services)
+#   - any of the 11 expected services missing     → FAIL (missing_services)
 #   - a service's container exists but isn't      → FAIL
 #     State.Running=true
 #   - running image_id not in manifest            → FAIL
@@ -62,7 +62,7 @@
 #   PILOT107_SKIP_IMAGE_BINDING_CHECK if "1", skip and exit 0 with skipped=true.
 set -euo pipefail
 
-# The 10 cpu-rc services (must match accept-runtime-bundle.sh's CPU_RC_SERVICES
+# The 11 cpu-rc services (must match accept-runtime-bundle.sh's CPU_RC_SERVICES
 # and the compose files). If any is not found running by `docker compose ps`,
 # that is a binding failure — see "missing service" path below.
 EXPECTED_SERVICES=(
@@ -72,6 +72,7 @@ EXPECTED_SERVICES=(
   worker-1
   slurmrestd
   pilot107-command-gateway
+  pilot-agentd
   pilot107-api
   pilot107-worker
   pilot107-web
@@ -126,6 +127,16 @@ PY
   exit 0
 fi
 
+release_revision_short="$(python3 - "$manifest" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as handle:
+    print((json.load(handle).get("release_revision") or "")[:12])
+PY
+)"
+expected_agentd_image="pilot107/agentd:cpu-rc-$release_revision_short"
+
 # ----- compose context -------------------------------------------------------
 compose_dir="$script_root/simulator/compose"
 env_file="${PILOT107_CPU_RC_ENV_FILE:-$compose_dir/.env.cpu-rc}"
@@ -135,7 +146,7 @@ project_name="${PILOT107_CPU_RC_PROJECT_NAME:-pilot107-cpu-rc}"
 # names contain no spaces so this is safe.
 expected_services_arg="${EXPECTED_SERVICES[*]}"
 
-python3 - "$manifest" "$project_name" "$env_file" "$compose_dir" "$expected_services_arg" <<'PY'
+python3 - "$manifest" "$project_name" "$env_file" "$compose_dir" "$expected_services_arg" "$expected_agentd_image" <<'PY'
 import json
 import subprocess
 import sys
@@ -146,6 +157,7 @@ project_name = sys.argv[2]
 env_file = sys.argv[3]
 compose_dir = Path(sys.argv[4])
 expected_services = sys.argv[5].split()
+expected_agentd_image = sys.argv[6]
 
 manifest = json.loads(manifest_path.read_text())
 release_revision_full = manifest.get("release_revision", "") or ""
@@ -301,7 +313,7 @@ if duplicate:
         )
     fail(report, report["error"])
 
-# P1-3 fix #2: assert all 10 expected services are running.
+# P1-3 fix #2: assert all 11 expected services are running.
 missing = [s for s in expected_services if s not in by_service]
 if missing:
     report["missing_services"] = missing
@@ -403,6 +415,23 @@ for service in expected_services:
         capture_output=True, text=True,
     ).stdout.strip()
 
+    if service == "pilot-agentd" and config_image != expected_agentd_image:
+        all_match = False
+        running_images.append({
+            "container": name or cid,
+            "service": service,
+            "config_image": config_image,
+            "image_id": image_id,
+            "manifest_content_digest": manifest_refs.get(expected_agentd_image, ""),
+            "matches_manifest": False,
+        })
+        print(
+            "FAIL: pilot-agentd uses %s, expected revision image %s (release_revision=%s)"
+            % (config_image, expected_agentd_image, release_revision_full),
+            file=sys.stderr,
+        )
+        continue
+
     # Primary match: container's config_image tag must equal a manifest
     # reference, and the running image_id must equal that record's
     # content_digest.
@@ -415,7 +444,7 @@ for service in expected_services:
     # tag was re-pointed but the same image is still running), still count
     # it as a match but surface the tag in the record so callers can see the
     # discrepancy.
-    if not matches:
+    if not matches and service != "pilot-agentd":
         for ref, dg in manifest_refs.items():
             if dg and norm_digest(dg) == norm_digest(image_id):
                 matches = True
