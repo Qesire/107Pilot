@@ -5,6 +5,8 @@ export type TurnErrorCode =
   | "provider_unavailable"
   | "provider_invalid_response"
   | "output_contract_violation"
+  | "empty_provider_response"
+  | "tool_step_budget_exhausted"
   | "aborted"
   | "internal_error";
 
@@ -65,6 +67,9 @@ const MESSAGE_BY_CODE: Record<TurnErrorCode, string> = {
   provider_unavailable: "The model provider is unavailable.",
   provider_invalid_response: "The model provider returned an invalid response.",
   output_contract_violation: "The model did not emit the required result.",
+  empty_provider_response: "The model provider returned an empty response.",
+  tool_step_budget_exhausted:
+    "The Turn reached its bounded tool-step limit before producing a final answer.",
   aborted: "The Turn was aborted.",
   internal_error: "The Turn failed because of an internal error.",
 };

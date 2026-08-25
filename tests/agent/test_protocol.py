@@ -377,6 +377,19 @@ def test_every_event_payload_requires_its_wire_fields(event_type: str, missing: 
 
 
 @pytest.mark.parametrize(
+    "code",
+    ["empty_provider_response", "tool_step_budget_exhausted"],
+)
+def test_turn_failed_accepts_bounded_pi_terminal_codes(code: str) -> None:
+    payload = _failed_payload()
+    payload["error"]["code"] = code
+
+    events = list(parse_event_lines("turn-1", [_line(_event(1, "turn_failed", payload))]))
+
+    assert events[0].payload["error"]["code"] == code
+
+
+@pytest.mark.parametrize(
     ("event_type", "mutate"),
     [
         ("turn_started", lambda payload: payload.__setitem__("task_kind", "unknown")),

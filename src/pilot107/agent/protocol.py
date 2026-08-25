@@ -46,6 +46,8 @@ _ERROR_CODES = {
     "provider_unavailable",
     "provider_invalid_response",
     "output_contract_violation",
+    "empty_provider_response",
+    "tool_step_budget_exhausted",
     "aborted",
     "internal_error",
 }

@@ -542,6 +542,8 @@ const ErrorCodeSchema = Type.Union([
   Type.Literal("provider_unavailable"),
   Type.Literal("provider_invalid_response"),
   Type.Literal("output_contract_violation"),
+  Type.Literal("empty_provider_response"),
+  Type.Literal("tool_step_budget_exhausted"),
   Type.Literal("aborted"),
   Type.Literal("internal_error"),
 ]);

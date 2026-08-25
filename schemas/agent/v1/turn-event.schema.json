@@ -1120,6 +1120,14 @@
                     },
                     {
                       "type": "string",
+                      "const": "empty_provider_response"
+                    },
+                    {
+                      "type": "string",
+                      "const": "tool_step_budget_exhausted"
+                    },
+                    {
+                      "type": "string",
                       "const": "aborted"
                     },
                     {

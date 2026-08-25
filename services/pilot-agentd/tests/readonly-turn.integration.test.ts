@@ -169,4 +169,165 @@ describe("durable readonly Turn", () => {
     expect(serialized).not.toContain("idempotency_key");
     expect(serialized).not.toContain(invocations[0]?.invocation_id ?? "missing");
   });
+
+  it("fails a read-only tool loop after exactly four Pi steps", async () => {
+    const runtime = createFauxModelRuntime();
+    runtime.faux.setResponses(
+      Array.from({ length: 6 }, (_, index) =>
+        fauxAssistantMessage(
+          [
+            fauxToolCall(
+              "platform_get_snapshot",
+              {},
+              { id: `call-platform-${index + 1}` },
+            ),
+          ],
+          { stopReason: "toolUse", timestamp: index + 1 },
+        ),
+      ),
+    );
+    const gateway = {
+      invoke: async () => ({
+        schema_version: "pilot107.agent-tool-result/v1" as const,
+        invocation_id: "inv-platform",
+        result: { authority_id: "vm-slurm", snapshot_id: "platform-1" },
+        error: null,
+        evidence_refs: ["platform-snapshot:platform-1"],
+        bytes_returned: 80,
+      }),
+    };
+    const target = new TurnExecutor(() => runtime, async () => undefined, gateway);
+    const request = durableRequest({
+      input: { message: "inspect the platform", context_refs: [] },
+    });
+    const events: AgentTurnEvent[] = [];
+
+    await target.execute(
+      request,
+      (event) => events.push(event),
+      new AbortController().signal,
+    );
+
+    expect(runtime.faux.state.callCount).toBe(4);
+    expect(runtime.faux.getPendingResponseCount()).toBe(2);
+    expect(events.filter((event) => event.type === "tool_call_completed")).toHaveLength(4);
+    expect(events.filter((event) => event.type === "checkpoint")).toHaveLength(1);
+    expect(terminal(events)).toMatchObject({
+      type: "turn_failed",
+      payload: {
+        error: {
+          code: "tool_step_budget_exhausted",
+          retryable: false,
+        },
+      },
+    });
+  });
+
+  it("rejects whitespace-only terminal text after a tool call", async () => {
+    const runtime = createFauxModelRuntime();
+    runtime.faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("platform_get_snapshot", {}, { id: "call-platform" })],
+        { stopReason: "toolUse", timestamp: 1 },
+      ),
+      fauxAssistantMessage([fauxText("\n\n")], { timestamp: 2 }),
+    ]);
+    const gateway = {
+      invoke: async () => ({
+        schema_version: "pilot107.agent-tool-result/v1" as const,
+        invocation_id: "inv-platform",
+        result: { authority_id: "vm-slurm", snapshot_id: "platform-1" },
+        error: null,
+        evidence_refs: ["platform-snapshot:platform-1"],
+        bytes_returned: 80,
+      }),
+    };
+    const target = new TurnExecutor(() => runtime, async () => undefined, gateway);
+    const events: AgentTurnEvent[] = [];
+
+    await target.execute(
+      durableRequest({
+        input: { message: "inspect the platform", context_refs: [] },
+      }),
+      (event) => events.push(event),
+      new AbortController().signal,
+    );
+
+    expect(terminal(events)).toMatchObject({
+      type: "turn_failed",
+      payload: {
+        error: { code: "empty_provider_response", retryable: false },
+      },
+    });
+  });
+
+  it("allows a Project Turn to terminate at validation within twelve Pi steps", async () => {
+    const runtime = createFauxModelRuntime();
+    const responses = Array.from({ length: 11 }, (_, index) =>
+      fauxAssistantMessage(
+        [
+          fauxToolCall(
+            "project_get",
+            { project_id: "project-1", workspace_id: "workspace-1" },
+            { id: `call-project-${index + 1}` },
+          ),
+        ],
+        { stopReason: "toolUse", timestamp: index + 1 },
+      ),
+    );
+    responses.push(
+      fauxAssistantMessage(
+        [
+          fauxToolCall(
+            "validation_schedule",
+            {
+              project_id: "project-1",
+              workspace_id: "workspace-1",
+              request_key: "validation-1",
+              cpus: 1,
+              memory_mib: 512,
+              gpus: 0,
+              walltime_seconds: 300,
+              tasks: 1,
+              submissions: 1,
+              script: "true\n",
+              job_name: "validation",
+            },
+            { id: "call-validation" },
+          ),
+        ],
+        { stopReason: "toolUse", timestamp: 12 },
+      ),
+    );
+    runtime.faux.setResponses(responses);
+    const gateway = {
+      invoke: async () => ({
+        schema_version: "pilot107.agent-tool-result/v1" as const,
+        invocation_id: "inv-project",
+        result: { ok: true, task_id: "task-1" },
+        error: null,
+        evidence_refs: [],
+        bytes_returned: 32,
+      }),
+    };
+    const target = new TurnExecutor(() => runtime, async () => undefined, gateway);
+    const events: AgentTurnEvent[] = [];
+
+    await target.execute(
+      durableRequest({
+        task_kind: "experiment_builder",
+        prompt_profile_id: "experiment_builder",
+        toolset_id: "a2-project",
+        input: {
+          message: "validate the bound Project",
+          context_refs: ["workspace:workspace-1"],
+        },
+      }),
+      (event) => events.push(event),
+      new AbortController().signal,
+    );
+
+    expect(runtime.faux.state.callCount).toBe(12);
+    expect(terminal(events)).toMatchObject({ type: "turn_completed" });
+  });
 });

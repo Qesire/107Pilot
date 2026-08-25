@@ -25,6 +25,13 @@ import { prepareTask, type PreparedTask } from "./tasks.js";
 
 const RETRY_DELAYS_MS = [100, 400] as const;
 const MAX_PROVIDER_CALLS = 3;
+const PI_STEP_LIMITS = {
+  interactive_readonly: 4,
+  experiment_builder: 12,
+  run_diagnosis_repair: 12,
+  market_application: 12,
+  template_publication: 12,
+} as const satisfies Partial<Record<ExecutableTaskKind, number>>;
 const REPAIR_PROMPT =
   "The previous response did not satisfy the required output contract. " +
   "Call emit_result exactly once with arguments that match its schema. " +
@@ -59,6 +66,8 @@ function isInteractiveTask(taskKind: ExecutableTaskKind): boolean {
 interface AttemptBudget {
   providerCalls: number;
   repairUsed: boolean;
+  piSteps: number;
+  stepLimitExceeded: boolean;
 }
 
 interface TurnUsageAccumulator {
@@ -191,7 +200,12 @@ export class TurnExecutor {
       runtime.profile.maxOutputTokens,
       runtime.model.maxTokens,
     );
-    const budget: AttemptBudget = { providerCalls: 0, repairUsed: false };
+    const budget: AttemptBudget = {
+      providerCalls: 0,
+      repairUsed: false,
+      piSteps: 0,
+      stepLimitExceeded: false,
+    };
     const usage = createUsageAccumulator(runtime);
     let lastState: CheckpointableAgentState = { messages: restored };
 
@@ -271,9 +285,16 @@ export class TurnExecutor {
           maxAttempts: runtime.profile.maxAttempts,
         });
       if (!retry) {
+        const checkpoint = safeCheckpoint(request, outcome.state, usage);
+        if (
+          outcome.error.code === "tool_step_budget_exhausted" &&
+          checkpoint !== undefined
+        ) {
+          await sink.emit("checkpoint", { checkpoint });
+        }
         await sink.fail(
           outcome.error,
-          safeCheckpoint(request, outcome.state, usage),
+          checkpoint,
         );
         return;
       }
@@ -354,19 +375,29 @@ async function runAttempt(options: {
       } satisfies SimpleStreamOptions),
     sessionId: options.request.trace.correlation_id,
     toolExecution: "sequential",
-    shouldStopAfterTurn: ({ toolResults }) =>
-      ![
-        "interactive_readonly",
-        "experiment_builder",
-        "run_diagnosis_repair",
-        "market_application",
-        "template_publication",
-      ]
-        .includes(options.request.task_kind) ||
-      toolResults.length === 0,
+    shouldStopAfterTurn: ({ toolResults }) => {
+      if (!isLoopingTask(options.request.task_kind)) return true;
+      if (toolResults.length === 0) return true;
+      if (
+        toolResults.some(
+          (result) =>
+            result.toolName === "validation_schedule" && result.isError === false,
+        )
+      ) {
+        return true;
+      }
+      if (options.budget.piSteps >= taskStepLimit(options.request.task_kind)) {
+        options.budget.stepLimitExceeded = true;
+        return true;
+      }
+      return false;
+    },
   });
   const unsubscribe = agent.subscribe(async (event: AgentEvent) => {
-    if (event.type === "turn_start") options.budget.providerCalls += 1;
+    if (event.type === "turn_start") {
+      options.budget.providerCalls += 1;
+      options.budget.piSteps += 1;
+    }
     try {
       await mapPiEvent(event, options.sink);
     } catch (error) {
@@ -402,6 +433,13 @@ async function runAttempt(options: {
     );
     if (promptError !== undefined) {
       return { kind: "failure", error: promptError, state: agent.state };
+    }
+    if (options.budget.stepLimitExceeded) {
+      return {
+        kind: "failure",
+        error: toolStepBudgetError(),
+        state: agent.state,
+      };
     }
 
     if (
@@ -439,11 +477,11 @@ async function runAttempt(options: {
       !task.constrained &&
       typeof result === "string" &&
       result.trim().length === 0 &&
-      !hasToolCall(attemptMessages)
+      !hasSuccessfulValidationHandoff(attemptMessages)
     ) {
       return {
         kind: "failure",
-        error: emptyProviderResponseError(),
+        error: emptyProviderResponseError(!hasToolInteraction(attemptMessages)),
         state: agent.state,
       };
     }
@@ -495,12 +533,30 @@ function collectAssistantText(messages: readonly AgentMessage[]): string {
     .join("");
 }
 
-function hasToolCall(messages: readonly AgentMessage[]): boolean {
+function hasSuccessfulValidationHandoff(messages: readonly AgentMessage[]): boolean {
   return messages.some(
     (message) =>
-      message.role === "assistant" &&
-      message.content.some((content) => content.type === "toolCall"),
+      message.role === "toolResult" &&
+      message.toolName === "validation_schedule" &&
+      message.isError === false,
   );
+}
+
+function hasToolInteraction(messages: readonly AgentMessage[]): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "toolResult" ||
+      (message.role === "assistant" &&
+        message.content.some((content) => content.type === "toolCall")),
+  );
+}
+
+function isLoopingTask(taskKind: ExecutableTaskKind): boolean {
+  return taskKind in PI_STEP_LIMITS;
+}
+
+function taskStepLimit(taskKind: ExecutableTaskKind): number {
+  return PI_STEP_LIMITS[taskKind as keyof typeof PI_STEP_LIMITS] ?? 1;
 }
 
 function lastAssistant(
@@ -706,11 +762,19 @@ function outputContractError(): AgentdTurnError {
   );
 }
 
-function emptyProviderResponseError(): AgentdTurnError {
+function emptyProviderResponseError(retryable: boolean): AgentdTurnError {
   return new AgentdTurnError(
-    "provider_invalid_response",
-    true,
+    "empty_provider_response",
+    retryable,
     "The model provider returned an empty response.",
+  );
+}
+
+function toolStepBudgetError(): AgentdTurnError {
+  return new AgentdTurnError(
+    "tool_step_budget_exhausted",
+    false,
+    "The Turn reached its bounded tool-step limit before producing a final answer.",
   );
 }
 
