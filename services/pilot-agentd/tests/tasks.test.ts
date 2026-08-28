@@ -75,6 +75,9 @@ describe("task profiles", () => {
     expect(task.systemPrompt).toMatch(/inspect the final unified diff/i);
     expect(task.systemPrompt).toMatch(/at most one approved Slurm validation/i);
     expect(task.systemPrompt).toMatch(/end after scheduling/i);
+    expect(task.systemPrompt).toMatch(/do not narrate, plan, explain, or emit code/i);
+    expect(task.systemPrompt).toMatch(/single workspace_patch call/i);
+    expect(task.systemPrompt).toMatch(/assistant text.*40 words/i);
   });
 
   it("registers the bounded read tools only for an authorized durable Turn", () => {
