@@ -27,7 +27,7 @@ const RETRY_DELAYS_MS = [100, 400] as const;
 const MAX_PROVIDER_CALLS = 3;
 const PI_STEP_LIMITS = {
   interactive_readonly: 4,
-  experiment_builder: 12,
+  experiment_builder: 20,
   run_diagnosis_repair: 12,
   market_application: 12,
   template_publication: 12,

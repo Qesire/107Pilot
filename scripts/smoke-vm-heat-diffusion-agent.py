@@ -42,7 +42,9 @@ _PROJECT_GOAL = (
     "Echo each exact srun command before executing it so stdout Evidence proves the steps. "
     "raw-results.csv, convergence.json, scaling.json, report.md, convergence.svg, "
     "and scaling.svg with accessible labels plus platform snapshot and Run provenance. "
-    "Use scripts/validate_project.py for network-free sandbox validation and "
+    "Use scripts/validate_project.py for network-free, Python-standard-library static "
+    "sandbox validation; it must not require a C compiler or run the full experiment. "
+    "Compile and execute the C/OpenMP solver only inside the Slurm validation. Use "
     "scripts/run_experiment.sh as the single Slurm entrypoint."
 )
 

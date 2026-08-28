@@ -17,6 +17,7 @@ def test_heat_smoke_is_high_level_model_driven_and_never_writes_solver_files() -
     assert '"model_profile_id": model_profile_id' in source
     assert '"cpus": 4' in source
     assert "review the bound Project and complete its approved validation workflow" in source
+    assert "must not require a C compiler" in source
     assert "2D heat equation" in source
     assert "grids 64, 128, and 256" in source
     assert "audit_heat_diffusion_outputs" in source

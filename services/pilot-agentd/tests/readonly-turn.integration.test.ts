@@ -261,14 +261,14 @@ describe("durable readonly Turn", () => {
     });
   });
 
-  it("allows a Project Turn to terminate at validation within twelve Pi steps", async () => {
+  it("allows a Project Turn to terminate at validation within twenty Pi steps", async () => {
     const runtime = createFauxModelRuntime();
-    const responses = Array.from({ length: 11 }, (_, index) =>
+    const responses = Array.from({ length: 19 }, (_, index) =>
       fauxAssistantMessage(
         [
           fauxToolCall(
             "project_get",
-            { project_id: "project-1", workspace_id: "workspace-1" },
+            {},
             { id: `call-project-${index + 1}` },
           ),
         ],
@@ -281,8 +281,6 @@ describe("durable readonly Turn", () => {
           fauxToolCall(
             "validation_schedule",
             {
-              project_id: "project-1",
-              workspace_id: "workspace-1",
               request_key: "validation-1",
               cpus: 1,
               memory_mib: 512,
@@ -296,7 +294,7 @@ describe("durable readonly Turn", () => {
             { id: "call-validation" },
           ),
         ],
-        { stopReason: "toolUse", timestamp: 12 },
+        { stopReason: "toolUse", timestamp: 20 },
       ),
     );
     runtime.faux.setResponses(responses);
@@ -320,14 +318,14 @@ describe("durable readonly Turn", () => {
         toolset_id: "a2-project",
         input: {
           message: "validate the bound Project",
-          context_refs: ["workspace:workspace-1"],
+          context_refs: ["project:project-1", "workspace:workspace-1"],
         },
       }),
       (event) => events.push(event),
       new AbortController().signal,
     );
 
-    expect(runtime.faux.state.callCount).toBe(12);
+    expect(runtime.faux.state.callCount).toBe(20);
     expect(events[0]).toMatchObject({
       type: "turn_started",
       payload: { task_kind: "experiment_builder" },
