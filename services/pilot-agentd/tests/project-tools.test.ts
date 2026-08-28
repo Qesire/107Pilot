@@ -16,6 +16,10 @@ function builderRequest() {
     task_kind: "experiment_builder",
     prompt_profile_id: "experiment_builder",
     toolset_id: "a2-project",
+    input: {
+      message: "build the experiment",
+      context_refs: ["project:project-1", "workspace:workspace-1"],
+    },
   });
 }
 
@@ -25,6 +29,10 @@ function repairRequest() {
     task_kind: "run_diagnosis_repair",
     prompt_profile_id: "run_diagnosis_repair",
     toolset_id: "a2-project",
+    input: {
+      message: "repair the experiment",
+      context_refs: ["project:project-1", "workspace:workspace-1"],
+    },
   });
 }
 
@@ -93,8 +101,6 @@ describe("A2 Project tools", () => {
     const patch = tools.find((tool) => tool.name === "workspace_patch");
     if (patch === undefined) throw new Error("missing workspace_patch");
     const valid = {
-      project_id: "project-1",
-      workspace_id: "workspace-1",
       patches: [{
         path: "main.py",
         expected_source_digest: null,
@@ -103,6 +109,8 @@ describe("A2 Project tools", () => {
       }],
     };
     expect(Value.Check(patch.parameters, valid)).toBe(true);
+    expect(Value.Check(patch.parameters, { ...valid, project_id: "project-2" })).toBe(false);
+    expect(Value.Check(patch.parameters, { ...valid, workspace_id: "workspace-2" })).toBe(false);
     expect(Value.Check(patch.parameters, { ...valid, shell: "rm -rf" })).toBe(false);
     expect(Value.Check(patch.parameters, {
       ...valid,
@@ -117,14 +125,12 @@ describe("A2 Project tools", () => {
     const save = tools.find((tool) => tool.name === "project_blueprint_save");
     if (save === undefined) throw new Error("missing project_blueprint_save");
     const valid = {
-      project_id: "project-1",
-      workspace_id: "workspace-1",
       expected_version: 1,
       blueprint: HEAT_BLUEPRINT,
     };
 
     expect(Value.Check(save.parameters, valid)).toBe(true);
-    expect(Value.Check(save.parameters, { ...valid, project_id: "project-2" })).toBe(true);
+    expect(Value.Check(save.parameters, { ...valid, project_id: "project-2" })).toBe(false);
     expect(Value.Check(save.parameters, { ...valid, extra: true })).toBe(false);
     expect(Value.Check(save.parameters, {
       ...valid,
@@ -183,8 +189,6 @@ describe("A2 Project tools", () => {
     if (validation === undefined) throw new Error("missing validation_schedule");
 
     const result = await validation.execute("call-validation-1", {
-      project_id: "project-1",
-      workspace_id: "workspace-1",
       request_key: "validation-1",
       cpus: 1,
       memory_mib: 1024,
@@ -197,6 +201,8 @@ describe("A2 Project tools", () => {
     });
 
     expect(forwarded).toMatchObject({
+      project_id: "project-1",
+      workspace_id: "workspace-1",
       session_id: request.session_id,
       turn_id: request.turn_id,
     });
@@ -223,10 +229,7 @@ describe("A2 Project tools", () => {
     const tool = tools.find((candidate) => candidate.name === "project_get");
     if (tool === undefined) throw new Error("missing project_get");
 
-    const result = await tool.execute("call-project", {
-      project_id: "project-1",
-      workspace_id: "workspace-1",
-    });
+    const result = await tool.execute("call-project", {});
 
     expect(result).toEqual({
       content: [{ type: "text", text: "No Workspace is bound." }],

@@ -55,7 +55,7 @@ def test_heat_smoke_requires_model_identity_approvals_and_scientific_outputs() -
 
     for token in (
         "campus-default",
-        "qwen3.8-reasoner",
+        "deepseek-v4-flash",
         "PILOT107_HEAT_SMOKE_AUTO_APPROVE",
         "turn_completed",
         "provider_timeout",

@@ -16,7 +16,6 @@ const RelativePath = Type.String({
   maxLength: 4_096,
   pattern: "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$",
 });
-const Scope = { project_id: Id, workspace_id: Id };
 const ResourceHints = Type.Object(
   {
     partition: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
@@ -119,31 +118,28 @@ const WorkspacePatch = Type.Object(
 );
 
 const ARGUMENT_SCHEMAS = {
-  project_get: Type.Object(Scope, { additionalProperties: false }),
+  project_get: Type.Object({}, { additionalProperties: false }),
   project_blueprint_save: Type.Object(
     {
-      ...Scope,
       expected_version: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
       blueprint: ProjectBlueprintSchema,
     },
     { additionalProperties: false },
   ),
-  workspace_list: Type.Object(Scope, { additionalProperties: false }),
-  workspace_read: Type.Object({ ...Scope, path: Path }, { additionalProperties: false }),
+  workspace_list: Type.Object({}, { additionalProperties: false }),
+  workspace_read: Type.Object({ path: Path }, { additionalProperties: false }),
   workspace_patch: Type.Object(
     {
-      ...Scope,
       patches: Type.Array(WorkspacePatch, { minItems: 1, maxItems: 256 }),
     },
     { additionalProperties: false },
   ),
   workspace_diff: Type.Object(
-    { ...Scope, change_set_id: Id },
+    { change_set_id: Id },
     { additionalProperties: false },
   ),
   sandbox_exec: Type.Object(
     {
-      ...Scope,
       change_set_id: Id,
       argv: Type.Array(Type.String({ minLength: 1, maxLength: 4_096 }), {
         minItems: 1,
@@ -155,7 +151,6 @@ const ARGUMENT_SCHEMAS = {
   ),
   validation_schedule: Type.Object(
     {
-      ...Scope,
       request_key: Id,
       cpus: Type.Integer({ minimum: 1, maximum: 1_048_576 }),
       memory_mib: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
@@ -193,13 +188,14 @@ export function createProjectTools(
     parameters: ARGUMENT_SCHEMAS[name],
     executionMode: "sequential",
     execute: async (toolCallId, params, signal) => {
-      const argumentsWithBinding = name === "validation_schedule"
-        ? {
-            ...(params as JsonObject),
-            session_id: request.session_id,
-            turn_id: request.turn_id,
-          }
-        : params as JsonObject;
+      const argumentsWithBinding: JsonObject = {
+        ...(params as JsonObject),
+        project_id: boundContextId(request, "project"),
+        workspace_id: boundContextId(request, "workspace"),
+        ...(name === "validation_schedule"
+          ? { session_id: request.session_id, turn_id: request.turn_id }
+          : {}),
+      };
       const result = await gateway.invoke(
         request,
         toolCallId,
@@ -224,4 +220,18 @@ export function createProjectTools(
       };
     },
   }));
+}
+
+function boundContextId(
+  request: DurableAgentTurnRequest,
+  kind: "project" | "workspace",
+): string {
+  const prefix = `${kind}:`;
+  const values = request.input.context_refs
+    .filter((reference) => reference.startsWith(prefix))
+    .map((reference) => reference.slice(prefix.length));
+  if (values.length !== 1 || values[0] === "") {
+    throw new Error(`The Agent Turn must bind exactly one ${kind} context reference.`);
+  }
+  return values[0] as string;
 }

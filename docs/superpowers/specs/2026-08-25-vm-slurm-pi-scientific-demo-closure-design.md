@@ -4,7 +4,7 @@
 - 状态：设计已由用户逐节确认，等待书面规格审核
 - 适用环境：107Pilot CPU-RC 单 VM 演示环境
 - 部署边界：VM-local Docker Slurm、`fixed_user=alice`、CPU-only
-- 模型：`qwen3.8-reasoner`，provider 失败最多尝试 3 次
+- 模型：`deepseek-v4-flash`（USTC-107），provider 失败最多尝试 3 次
 - 首个科学任务：C/OpenMP 二维热扩散有限差分实验
 
 ## 1. 目标

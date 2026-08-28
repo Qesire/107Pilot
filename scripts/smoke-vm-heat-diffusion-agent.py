@@ -670,7 +670,7 @@ def main() -> int:
                 "PILOT107_AGENT_TASK_MODEL_PROFILE", "campus-default"
             ),
             expected_model=os.environ.get(
-                "PILOT107_EXPECTED_AGENT_MODEL", "qwen3.8-reasoner"
+                "PILOT107_EXPECTED_AGENT_MODEL", "deepseek-v4-flash"
             ),
             partition=os.environ.get("PILOT107_SMOKE_PARTITION", "CPU-RC"),
             qos=os.environ.get("PILOT107_SMOKE_QOS", "qos_cpu_rc"),

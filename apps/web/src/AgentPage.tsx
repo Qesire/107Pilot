@@ -653,7 +653,7 @@ export function sessionProviderValue(value: string | undefined, fallback: LlmPro
 }
 
 export function providerLabel(provider: LlmProvider): string {
-  return provider === "local" ? "USTC LLM (qwen3.8-reasoner)" : "确定性规则（无 LLM）";
+  return provider === "local" ? "USTC LLM (DeepSeek V4 Flash)" : "确定性规则（无 LLM）";
 }
 
 export function proposalPatchRows(payload: Record<string, unknown>) {

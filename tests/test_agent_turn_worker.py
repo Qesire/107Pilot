@@ -338,6 +338,11 @@ def test_repair_turn_receives_one_project_scoped_capability(tmp_path: Path) -> N
     assert claims.profile_id == "run_diagnosis_repair"
     assert claims.project_id == "project-repair"
     assert claims.workspace_id == "workspace-repair"
+    assert request.context_refs == (
+        "project:project-repair",
+        "workspace:workspace-repair",
+        "run:run-failed",
+    )
     assert "workspace_patch" in claims.tools
     assert "project_blueprint_save" in claims.tools
 

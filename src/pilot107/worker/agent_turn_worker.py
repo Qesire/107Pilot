@@ -408,7 +408,7 @@ class AgentTurnWorker:
 
 def _context_refs(source: Mapping[str, Any]) -> tuple[str, ...]:
     refs: list[str] = []
-    for key in ("run_id", "workspace_id", "evidence_id"):
+    for key in ("project_id", "workspace_id", "run_id", "evidence_id"):
         value = source.get(key)
         if isinstance(value, str) and value:
             refs.append(f"{key.removesuffix('_id')}:{value}")

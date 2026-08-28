@@ -228,8 +228,8 @@ def run_smoke(
     )
     prompt = (
         "Call validation_schedule exactly once and then stop. Do not call any other tool. "
+        "The platform has already bound the Project and Workspace; do not provide their IDs. "
         "Use exactly these arguments: "
-        f"project_id={project_id}; workspace_id={workspace_id}; "
         f"request_key={validation_request_key}; cpus=1; memory_mib=512; gpus=0; "
         "walltime_seconds=300; tasks=1; submissions=1; "
         f"job_name={prefix}; script={json.dumps(validation_script)}."

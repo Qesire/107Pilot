@@ -115,7 +115,7 @@ describe("LLM provider selection", () => {
   });
 
   it("labels providers in Chinese", () => {
-    expect(providerLabel("local")).toBe("USTC LLM (qwen3.8-reasoner)");
+    expect(providerLabel("local")).toBe("USTC LLM (DeepSeek V4 Flash)");
     expect(providerLabel("none")).toBe("确定性规则（无 LLM）");
   });
 });

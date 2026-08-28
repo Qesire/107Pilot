@@ -77,7 +77,7 @@ class CpuReleaseCandidateProfileTests(unittest.TestCase):
 
         self.assertIn("REPLACE_WITH_RANDOM_GATEWAY_TOKEN", env)
         self.assertIn("PILOT107_API_IMAGE=pilot107/api:cpu-rc", env)
-        self.assertIn("PILOT107_LLM_MODEL=qwen3.8-reasoner", env)
+        self.assertIn("PILOT107_LLM_MODEL=deepseek-v4-flash", env)
         self.assertIn("PILOT107_LLM_TIMEOUT_SECONDS=600", env)
         self.assertIn("PILOT107_LLM_MAX_TOKENS=12000", env)
         self.assertIn("PILOT107_LLM_MAX_ATTEMPTS=3", env)
