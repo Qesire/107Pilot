@@ -91,6 +91,8 @@ _A2_PROJECT_TOOLS = {
     "workspace_diff",
     "sandbox_exec",
     "validation_schedule",
+    "builder_context_get",
+    "builder_build_submit",
 }
 
 

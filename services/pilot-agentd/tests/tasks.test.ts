@@ -60,6 +60,27 @@ function onlyTool(kind: "explain" | "contract_patch" | "remediation_plan") {
 }
 
 describe("task profiles", () => {
+  it("gives the enabled Builder only context and build submission tools", () => {
+    const request = {
+      ...durableRequest(),
+      task_kind: "experiment_builder" as const,
+      prompt_profile_id: "experiment_builder" as const,
+      toolset_id: "a2-project" as const,
+    };
+    const task = prepareTask(request, {
+      readToolGateway: { invoke: async () => { throw new Error("not executed"); } },
+      phaseAwareBuilder: true,
+    });
+
+    expect(task.tools.map((tool) => tool.name)).toEqual([
+      "builder_context_get",
+      "builder_build_submit",
+    ]);
+    expect(task.systemPrompt).toMatch(/builder_context_get exactly once/i);
+    expect(task.systemPrompt).toMatch(/repair_required/i);
+    expect(task.systemPrompt).toMatch(/do not construct scheduler fields/i);
+  });
+
   it("orders the experiment builder through Blueprint, diff, sandbox, and one validation", () => {
     const request = {
       ...durableRequest(),

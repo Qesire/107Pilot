@@ -124,6 +124,14 @@
         {
           "type": "string",
           "const": "validation_schedule"
+        },
+        {
+          "type": "string",
+          "const": "builder_context_get"
+        },
+        {
+          "type": "string",
+          "const": "builder_build_submit"
         }
       ]
     },

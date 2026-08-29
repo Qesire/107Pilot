@@ -33,6 +33,7 @@ export interface AgentdConfig {
   readonly toolGatewayUrl?: string;
   readonly modelProfile: ModelProfile;
   readonly configured: boolean;
+  readonly phaseAwareBuilder: boolean;
   publicSummary(): PublicAgentdConfig;
 }
 
@@ -58,6 +59,13 @@ function integerFromEnv(
     throw new RangeError(`${name} is outside the supported range`);
   }
   return parsed;
+}
+
+function booleanFlagFromEnv(env: NodeJS.ProcessEnv, name: string): boolean {
+  const raw = optionalNonEmpty(env[name]);
+  if (raw === undefined || raw === "0") return false;
+  if (raw === "1") return true;
+  throw new TypeError(`${name} must be 0 or 1`);
 }
 
 function parseBaseUrl(value: string | undefined): string | undefined {
@@ -202,6 +210,10 @@ export function configFromEnv(env: NodeJS.ProcessEnv): AgentdConfig {
   const toolGatewayUrl = parseToolGatewayUrl(
     env.PILOT107_AGENTD_TOOL_GATEWAY_URL,
   );
+  const phaseAwareBuilder = booleanFlagFromEnv(
+    env,
+    "PILOT107_PHASE_AWARE_BUILDER",
+  );
 
   const profileId = optionalNonEmpty(env.PILOT107_AGENTD_MODEL_PROFILE) ?? "campus-default";
   let modelProfile: ModelProfile;
@@ -229,6 +241,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv): AgentdConfig {
     ...(toolGatewayUrl === undefined ? {} : { toolGatewayUrl }),
     modelProfile,
     configured,
+    phaseAwareBuilder,
     publicSummary,
   });
 }

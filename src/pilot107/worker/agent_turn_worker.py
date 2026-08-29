@@ -42,6 +42,9 @@ _A2_PROJECT_TOOLS = frozenset(
         "validation_schedule",
     }
 )
+_BUILDER_WORKFLOW_TOOLS = frozenset(
+    {"builder_context_get", "builder_build_submit"}
+)
 _TERMINAL_STATES = frozenset(
     {AgentTurnState.COMPLETED, AgentTurnState.CANCELLED, AgentTurnState.FAILED}
 )
@@ -88,6 +91,7 @@ class AgentTurnWorker:
         max_attempts: int = 5,
         clock: Callable[[], int] | None = None,
         publish_event_hint: Callable[[str, int], None] | None = None,
+        phase_aware_builder: bool = False,
     ) -> None:
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
@@ -103,6 +107,7 @@ class AgentTurnWorker:
         self.max_attempts = max_attempts
         self._clock = clock or (lambda: int(time.time()))
         self._publish_event_hint = publish_event_hint or (lambda _session, _sequence: None)
+        self.phase_aware_builder = phase_aware_builder
 
     def dispatch_due(self, *, limit: int) -> AgentTurnDispatchResult:
         if limit <= 0:
@@ -345,6 +350,7 @@ class AgentTurnWorker:
             not isinstance(project_id, str) or not isinstance(workspace_id, str)
         ):
             raise ValueError("Project Session scope is invalid")
+        phase_aware = self.phase_aware_builder and profile_id == "experiment_builder"
         return self.capability_signer.sign(
             AgentCapabilityClaims(
                 owner=claim.owner,
@@ -354,7 +360,9 @@ class AgentTurnWorker:
                 fencing_token=claim.fencing_token,
                 profile_id=profile_id,
                 tools=(
-                    _A2_PROJECT_TOOLS
+                    _BUILDER_WORKFLOW_TOOLS
+                    if phase_aware
+                    else _A2_PROJECT_TOOLS
                     if project_profile
                     else _a1_tools_for_context_refs(context_refs)
                 ),
@@ -369,7 +377,7 @@ class AgentTurnWorker:
                     if project_profile
                     else frozenset()
                 ),
-                max_commands=8 if project_profile else 0,
+                max_commands=(4 if phase_aware else 8) if project_profile else 0,
             )
         )
 

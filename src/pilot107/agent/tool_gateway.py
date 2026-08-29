@@ -95,7 +95,9 @@ class AgentToolGateway:
                 "Agent tool invocation budget exceeded",
                 code="AGENT.TOOL.INVOCATION_BUDGET_EXCEEDED",
             )
-        if invocation.tool_name == "sandbox_exec" and usage.commands > claims.max_commands:
+        if invocation.tool_name in {"sandbox_exec", "builder_build_submit"} and (
+            usage.commands > claims.max_commands
+        ):
             self._persist_failure(
                 invocation,
                 claims,
@@ -204,28 +206,39 @@ class AgentToolGateway:
                 code="AGENT.TOOL.UNAUTHORIZED",
             )
         if is_project_agent_profile(claims.profile_id):
-            required_operation = {
-                "project_get": "read",
-                "project_blueprint_save": "write",
-                "workspace_list": "read",
-                "workspace_read": "read",
-                "workspace_diff": "read",
-                "workspace_patch": "write",
-                "sandbox_exec": "validate",
-                "validation_schedule": "validate",
+            required_operations = {
+                "project_get": frozenset({"read"}),
+                "project_blueprint_save": frozenset({"write"}),
+                "workspace_list": frozenset({"read"}),
+                "workspace_read": frozenset({"read"}),
+                "workspace_diff": frozenset({"read"}),
+                "workspace_patch": frozenset({"write"}),
+                "sandbox_exec": frozenset({"validate"}),
+                "validation_schedule": frozenset({"validate"}),
+                "builder_context_get": frozenset({"read"}),
+                "builder_build_submit": frozenset({"write", "validate"}),
             }.get(invocation.tool_name)
             project_id = invocation.arguments.get("project_id")
             workspace_id = invocation.arguments.get("workspace_id")
             if (
-                required_operation is None
-                or required_operation not in claims.operations
+                required_operations is None
+                or not required_operations.issubset(claims.operations)
                 or project_id != claims.project_id
                 or workspace_id != claims.workspace_id
                 or (
-                    invocation.tool_name == "validation_schedule"
+                    invocation.tool_name
+                    in {
+                        "validation_schedule",
+                        "builder_context_get",
+                        "builder_build_submit",
+                    }
                     and (
                         invocation.arguments.get("session_id") != invocation.session_id
-                        or invocation.arguments.get("turn_id") != invocation.turn_id
+                        or (
+                            invocation.tool_name
+                            in {"validation_schedule", "builder_build_submit"}
+                            and invocation.arguments.get("turn_id") != invocation.turn_id
+                        )
                     )
                 )
             ):

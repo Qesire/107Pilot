@@ -103,6 +103,7 @@ export class TurnExecutor {
     private readonly resolveRuntime: RuntimeResolver,
     private readonly sleep: Sleep = abortableSleep,
     private readonly readToolGateway?: ReadToolGateway,
+    private readonly phaseAwareBuilder = false,
   ) {}
 
   async execute(
@@ -233,6 +234,7 @@ export class TurnExecutor {
           ...(this.readToolGateway === undefined
             ? {}
             : { readToolGateway: this.readToolGateway }),
+          phaseAwareBuilder: this.phaseAwareBuilder,
         });
       } catch (error) {
         if (error instanceof EventWriterError) throw error;
@@ -333,12 +335,16 @@ async function runAttempt(options: {
   readonly restored: AgentMessage[];
   readonly budget: AttemptBudget;
   readonly readToolGateway?: ReadToolGateway;
+  readonly phaseAwareBuilder: boolean;
 }): Promise<AttemptOutcome> {
   const task = prepareTask(
     options.request,
-    options.readToolGateway === undefined
-      ? {}
-      : { readToolGateway: options.readToolGateway },
+    {
+      ...(options.readToolGateway === undefined
+        ? {}
+        : { readToolGateway: options.readToolGateway }),
+      phaseAwareBuilder: options.phaseAwareBuilder,
+    },
   );
   const model = { ...options.runtime.model, maxTokens: options.maxTokens };
   const streamSimple = options.runtime.models.streamSimple.bind(
@@ -530,9 +536,31 @@ function hasSuccessfulValidationHandoff(messages: readonly AgentMessage[]): bool
   return messages.some(
     (message) =>
       message.role === "toolResult" &&
-      message.toolName === "validation_schedule" &&
-      message.isError === false,
+      message.isError === false &&
+      (
+        message.toolName === "validation_schedule"
+        || (
+          message.toolName === "builder_build_submit"
+          && message.content.some(
+            (content) =>
+              content.type === "text"
+              && isScheduledBuilderReceipt(content.text),
+          )
+        )
+      ),
   );
+}
+
+function isScheduledBuilderReceipt(value: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "object"
+      && parsed !== null
+      && "status" in parsed
+      && parsed.status === "scheduled";
+  } catch {
+    return false;
+  }
 }
 
 function hasToolInteraction(messages: readonly AgentMessage[]): boolean {

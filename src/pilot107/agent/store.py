@@ -981,7 +981,9 @@ class SQLiteAgentSessionStore:
                 """
                 SELECT COUNT(*) AS invocations,
                        COALESCE(SUM(bytes_returned), 0) AS bytes_returned,
-                       COALESCE(SUM(CASE WHEN tool_name = 'sandbox_exec' THEN 1 ELSE 0 END), 0)
+                       COALESCE(SUM(CASE WHEN tool_name IN (
+                           'sandbox_exec', 'builder_build_submit'
+                       ) THEN 1 ELSE 0 END), 0)
                            AS commands
                 FROM agent_tool_invocations WHERE turn_id = ? AND owner = ?
                 """,

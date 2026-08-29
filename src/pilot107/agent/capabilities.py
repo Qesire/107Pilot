@@ -39,6 +39,8 @@ _A2_TOOLS = frozenset(
         "workspace_diff",
         "sandbox_exec",
         "validation_schedule",
+        "builder_context_get",
+        "builder_build_submit",
     }
 )
 _A2_OPERATIONS = frozenset({"read", "write", "validate"})
@@ -249,6 +251,13 @@ def _validate_claims(claims: AgentCapabilityClaims, *, now: int, signing: bool) 
             raise ValueError("builder sandbox tool lacks command budget")
         if "validation_schedule" in claims.tools and "validate" not in claims.operations:
             raise ValueError("builder validation tool lacks validate operation")
+        if "builder_context_get" in claims.tools and "read" not in claims.operations:
+            raise ValueError("builder context tool lacks read operation")
+        if "builder_build_submit" in claims.tools and (
+            not {"write", "validate"}.issubset(claims.operations)
+            or claims.max_commands < 1
+        ):
+            raise ValueError("builder submission tool lacks write or validate scope")
     else:
         raise ValueError("invalid capability profile")
     if claims.state_version <= 0 or claims.fencing_token <= 0:

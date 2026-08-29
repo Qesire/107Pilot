@@ -4,6 +4,7 @@ import { Value } from "typebox/value";
 import { createProjectTools } from "../src/project-tools.js";
 import {
   A2_PROJECT_TOOL_NAMES,
+  BUILDER_WORKFLOW_TOOL_NAMES,
   parseDurableTurnRequest,
   parseToolInvocation,
   type ToolResult,
@@ -72,6 +73,96 @@ const HEAT_BLUEPRINT = {
 };
 
 describe("A2 Project tools", () => {
+  it("exposes only the closed phase-aware Builder facade when enabled", async () => {
+    const request = builderRequest();
+    const forwarded: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+    const tools = createProjectTools(request, {
+      invoke: async (_request, _callId, name, arguments_) => {
+        forwarded.push({ name, arguments: arguments_ });
+        return successResult(
+          name === "builder_build_submit"
+            ? { status: "repair_required", phase: "sandbox_failed" }
+            : { phase: "drafting" },
+        );
+      },
+    }, { phaseAwareBuilder: true });
+
+    expect(tools.map((tool) => tool.name)).toEqual([
+      ...BUILDER_WORKFLOW_TOOL_NAMES,
+    ]);
+    const context = tools[0];
+    const submit = tools[1];
+    if (context === undefined || submit === undefined) {
+      throw new Error("missing Builder facade tools");
+    }
+    expect(Value.Check(context.parameters, {})).toBe(true);
+    expect(Value.Check(context.parameters, { project_id: "project-2" })).toBe(false);
+    const valid = {
+      request_key: "build-1",
+      expected_project_version: 1,
+      expected_workspace_snapshot_digest: "a".repeat(64),
+      base_change_set_id: null,
+      blueprint: HEAT_BLUEPRINT,
+      patches: [{
+        path: "src/heat2d.c",
+        expected_source_digest: null,
+        operation: "create",
+        content: "int main(void) { return 0; }\n",
+      }],
+    };
+    expect(Value.Check(submit.parameters, valid)).toBe(true);
+    expect(Value.Check(submit.parameters, { ...valid, cpus: 4 })).toBe(false);
+
+    await context.execute("call-context", {});
+    const repair = await submit.execute("call-submit", valid);
+    expect(forwarded[0]).toMatchObject({
+      name: "builder_context_get",
+      arguments: {
+        project_id: "project-1",
+        workspace_id: "workspace-1",
+        session_id: request.session_id,
+      },
+    });
+    expect(forwarded[1]).toMatchObject({
+      name: "builder_build_submit",
+      arguments: {
+        project_id: "project-1",
+        workspace_id: "workspace-1",
+        session_id: request.session_id,
+        turn_id: request.turn_id,
+      },
+    });
+    expect(repair.terminate).toBe(false);
+  });
+
+  it("terminates the facade only after validation is scheduled", async () => {
+    const [context, submit] = createProjectTools(builderRequest(), {
+      invoke: async (_request, _callId, name) => successResult(
+        name === "builder_build_submit"
+          ? { status: "scheduled", phase: "validation_scheduled" }
+          : { phase: "drafting" },
+      ),
+    }, { phaseAwareBuilder: true });
+    if (context === undefined || submit === undefined) {
+      throw new Error("missing Builder facade tools");
+    }
+
+    expect((await context.execute("call-context", {})).terminate).toBe(false);
+    expect((await submit.execute("call-submit", {
+      request_key: "build-1",
+      expected_project_version: 1,
+      expected_workspace_snapshot_digest: "a".repeat(64),
+      base_change_set_id: null,
+      blueprint: HEAT_BLUEPRINT,
+      patches: [{
+        path: "main.py",
+        expected_source_digest: null,
+        operation: "create",
+        content: "print(1)\n",
+      }],
+    })).terminate).toBe(true);
+  });
+
   it("accepts only the experiment_builder pairing and tool names", () => {
     const request = builderRequest();
     expect(request.task_kind).toBe("experiment_builder");
@@ -245,11 +336,11 @@ describe("A2 Project tools", () => {
   });
 });
 
-function successResult(): ToolResult {
+function successResult(result: Record<string, unknown> = { ok: true }): ToolResult {
   return {
     schema_version: "pilot107.agent-tool-result/v1",
     invocation_id: "inv-1",
-    result: { ok: true },
+    result,
     error: null,
     evidence_refs: [],
     bytes_returned: 11,

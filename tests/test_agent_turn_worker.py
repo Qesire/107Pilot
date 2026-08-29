@@ -170,6 +170,7 @@ def _worker(
     clock: MutableClock,
     *,
     lease_seconds: int = 30,
+    phase_aware_builder: bool = False,
     publish_event_hint=lambda _session_id, _sequence: None,
 ) -> AgentTurnWorker:
     return AgentTurnWorker(
@@ -179,6 +180,7 @@ def _worker(
         capability_signer=AgentCapabilitySigner(b"s" * 32, clock=clock.epoch),
         worker_id="agent-worker-1",
         lease_seconds=lease_seconds,
+        phase_aware_builder=phase_aware_builder,
         clock=clock.epoch,
         publish_event_hint=publish_event_hint,
     )
@@ -345,6 +347,62 @@ def test_repair_turn_receives_one_project_scoped_capability(tmp_path: Path) -> N
     )
     assert "workspace_patch" in claims.tools
     assert "project_blueprint_save" in claims.tools
+
+
+def test_enabled_builder_turn_receives_only_phase_aware_facade_capability(
+    tmp_path: Path,
+) -> None:
+    clock = MutableClock()
+    database = tmp_path / "agent.db"
+    store = SQLiteAgentSessionStore(database, clock=clock)
+    control = SQLiteControlRepository(database, clock=clock)
+    session, _ = AgentSessionService(
+        store=store,
+        control_repository=control,
+    ).create_session(
+        owner="alice",
+        request_key="builder-session",
+        profile_id="experiment_builder",
+        model_profile_id="faux-default",
+        source={
+            "project_id": "project-builder",
+            "workspace_id": "workspace-builder",
+        },
+    )
+    turn, _ = AgentSessionService(
+        store=store,
+        control_repository=control,
+    ).submit_message(
+        session_id=session.session_id,
+        owner="alice",
+        request_key="builder-turn",
+        message="build",
+        expected_state_version=session.state_version,
+    )
+    events = _completed_script(turn.turn_id)
+    for event in events:
+        checkpoint = event.payload.get("checkpoint")
+        if isinstance(checkpoint, dict):
+            checkpoint["prompt_profile_id"] = "experiment_builder"
+    client = ScriptedAgentdClient(events)
+
+    result = _worker(
+        store,
+        control,
+        client,
+        clock,
+        phase_aware_builder=True,
+    ).dispatch_due(limit=1)
+
+    assert result.succeeded == 1
+    claims = AgentCapabilitySigner(b"s" * 32, clock=clock.epoch).verify(
+        client.requests[0].capability_token
+    )
+    assert claims.tools == frozenset(
+        {"builder_context_get", "builder_build_submit"}
+    )
+    assert claims.max_invocations == 32
+    assert claims.max_commands == 4
 
 
 def test_transport_failure_interrupts_with_last_checkpoint_and_retries(

@@ -111,6 +111,38 @@ def test_blueprint_save_capability_requires_write_operation() -> None:
     assert signer.verify(signer.sign(writable)).tools == frozenset({"project_blueprint_save"})
 
 
+def test_phase_aware_builder_capability_requires_write_and_validate_operations() -> None:
+    AgentCapabilityClaims, AgentCapabilityError, AgentCapabilitySigner = _api()
+    now = 1_786_662_000
+    signer = AgentCapabilitySigner(b"s" * 32, clock=lambda: now)
+    claims = AgentCapabilityClaims(
+        owner="alice",
+        session_id="session-builder",
+        turn_id="turn-builder",
+        state_version=3,
+        fencing_token=7,
+        profile_id="experiment_builder",
+        tools=frozenset({"builder_context_get", "builder_build_submit"}),
+        max_invocations=32,
+        max_bytes=1_048_576,
+        expires_at=now + 60,
+        project_id="project-builder",
+        workspace_id="workspace-builder",
+        operations=frozenset({"read", "write"}),
+        max_commands=1,
+    )
+
+    with pytest.raises(AgentCapabilityError):
+        signer.sign(claims)
+    valid = replace(
+        claims,
+        operations=frozenset({"read", "write", "validate"}),
+    )
+    assert signer.verify(signer.sign(valid)).tools == frozenset(
+        {"builder_context_get", "builder_build_submit"}
+    )
+
+
 def test_capability_rejects_signature_tampering_and_malformed_tokens() -> None:
     _, AgentCapabilityError, AgentCapabilitySigner = _api()
     now = 1_786_662_000

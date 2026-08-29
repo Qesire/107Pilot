@@ -3,12 +3,15 @@ import { Type, type TSchema } from "typebox";
 
 import {
   A2_PROJECT_TOOL_NAMES,
+  BUILDER_WORKFLOW_TOOL_NAMES,
   type DurableAgentTurnRequest,
   type JsonObject,
 } from "./protocol.js";
 import { toolFailureResult, type ReadToolGateway } from "./read-tools.js";
 
-type ProjectToolName = (typeof A2_PROJECT_TOOL_NAMES)[number];
+type ProjectToolName =
+  | (typeof A2_PROJECT_TOOL_NAMES)[number]
+  | (typeof BUILDER_WORKFLOW_TOOL_NAMES)[number];
 const Id = Type.String({ minLength: 1, maxLength: 128 });
 const Path = Type.String({ minLength: 1, maxLength: 4_096 });
 const RelativePath = Type.String({
@@ -102,7 +105,7 @@ const ProjectBlueprintSchema = Type.Object(
 );
 const WorkspacePatch = Type.Object(
   {
-    path: Path,
+    path: RelativePath,
     expected_source_digest: Type.Union([
       Type.Null(),
       Type.String({ pattern: "^[a-f0-9]{64}$" }),
@@ -163,6 +166,23 @@ const ARGUMENT_SCHEMAS = {
     },
     { additionalProperties: false },
   ),
+  builder_context_get: Type.Object({}, { additionalProperties: false }),
+  builder_build_submit: Type.Object(
+    {
+      request_key: Id,
+      expected_project_version: Type.Integer({
+        minimum: 1,
+        maximum: Number.MAX_SAFE_INTEGER,
+      }),
+      expected_workspace_snapshot_digest: Type.String({
+        pattern: "^[a-f0-9]{64}$",
+      }),
+      base_change_set_id: Type.Union([Type.Null(), Id]),
+      blueprint: ProjectBlueprintSchema,
+      patches: Type.Array(WorkspacePatch, { minItems: 1, maxItems: 256 }),
+    },
+    { additionalProperties: false },
+  ),
 } satisfies Record<ProjectToolName, TSchema>;
 
 const DESCRIPTIONS = {
@@ -175,13 +195,26 @@ const DESCRIPTIONS = {
   sandbox_exec: "Run one allowlisted argv-only validation in the network-disabled sandbox.",
   validation_schedule:
     "Schedule one approved, bounded Slurm validation and end this Turn while it runs.",
+  builder_context_get:
+    "Read one compact bound Builder phase, live manifest, Blueprint, and approved resource envelope.",
+  builder_build_submit:
+    "Persist one Blueprint and atomic patch batch, run Sandbox validation, and schedule one server-derived Slurm validation after success.",
 } satisfies Record<ProjectToolName, string>;
+
+export interface ProjectToolOptions {
+  readonly phaseAwareBuilder?: boolean;
+}
 
 export function createProjectTools(
   request: DurableAgentTurnRequest,
   gateway: ReadToolGateway,
+  options: ProjectToolOptions = {},
 ): AgentTool[] {
-  return A2_PROJECT_TOOL_NAMES.map((name) => ({
+  const names = options.phaseAwareBuilder === true
+      && request.task_kind === "experiment_builder"
+    ? BUILDER_WORKFLOW_TOOL_NAMES
+    : A2_PROJECT_TOOL_NAMES;
+  return names.map((name) => ({
     name,
     label: name,
     description: DESCRIPTIONS[name],
@@ -192,8 +225,10 @@ export function createProjectTools(
         ...(params as JsonObject),
         project_id: boundContextId(request, "project"),
         workspace_id: boundContextId(request, "workspace"),
-        ...(name === "validation_schedule"
+        ...(name === "validation_schedule" || name === "builder_build_submit"
           ? { session_id: request.session_id, turn_id: request.turn_id }
+          : name === "builder_context_get"
+          ? { session_id: request.session_id }
           : {}),
       };
       const result = await gateway.invoke(
@@ -216,7 +251,12 @@ export function createProjectTools(
           evidence_refs: [...result.evidence_refs],
           bytes_returned: result.bytes_returned,
         },
-        terminate: name === "validation_schedule",
+        terminate:
+          name === "validation_schedule"
+          || (
+            name === "builder_build_submit"
+            && result.result.status === "scheduled"
+          ),
       };
     },
   }));

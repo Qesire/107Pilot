@@ -455,12 +455,22 @@ export const A2_PROJECT_TOOL_NAMES = [
   "validation_schedule",
 ] as const;
 
+export const BUILDER_WORKFLOW_TOOL_NAMES = [
+  "builder_context_get",
+  "builder_build_submit",
+] as const;
+
 export type ReadToolName =
   | (typeof A1_READ_TOOL_NAMES)[number]
-  | (typeof A2_PROJECT_TOOL_NAMES)[number];
+  | (typeof A2_PROJECT_TOOL_NAMES)[number]
+  | (typeof BUILDER_WORKFLOW_TOOL_NAMES)[number];
 
 const ReadToolNameSchema = Type.Union(
-  [...A1_READ_TOOL_NAMES, ...A2_PROJECT_TOOL_NAMES].map((name) => Type.Literal(name)),
+  [
+    ...A1_READ_TOOL_NAMES,
+    ...A2_PROJECT_TOOL_NAMES,
+    ...BUILDER_WORKFLOW_TOOL_NAMES,
+  ].map((name) => Type.Literal(name)),
 );
 
 export const ToolInvocationSchema = Type.Object(
@@ -755,7 +765,7 @@ export function parseToolInvocation(value: unknown): ToolInvocation {
     "template_publication",
   ]
     .includes(value.profile_id)
-    ? A2_PROJECT_TOOL_NAMES
+    ? [...A2_PROJECT_TOOL_NAMES, ...BUILDER_WORKFLOW_TOOL_NAMES]
     : A1_READ_TOOL_NAMES;
   if (!(allowed as readonly string[]).includes(value.tool_name)) {
     throw new TypeError("tool invocation profile/tool pairing is invalid");

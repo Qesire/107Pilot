@@ -15,6 +15,18 @@ const campusEnv: NodeJS.ProcessEnv = {
 };
 
 describe("pilot-agentd configuration", () => {
+  it("parses the phase-aware Builder flag closed and defaults it off", () => {
+    expect(configFromEnv(campusEnv).phaseAwareBuilder).toBe(false);
+    expect(configFromEnv({
+      ...campusEnv,
+      PILOT107_PHASE_AWARE_BUILDER: "1",
+    }).phaseAwareBuilder).toBe(true);
+    expect(() => configFromEnv({
+      ...campusEnv,
+      PILOT107_PHASE_AWARE_BUILDER: "true",
+    })).toThrow("PILOT107_PHASE_AWARE_BUILDER");
+  });
+
   it("builds a bounded campus profile and exposes only a redacted summary", () => {
     const config = configFromEnv(campusEnv);
 

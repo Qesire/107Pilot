@@ -168,6 +168,26 @@ def test_workspace_tools_are_invalid_for_a1_but_remain_valid_for_a2() -> None:
     assert agent_protocol.parse_tool_invocation(project).tool_name == "workspace_read"
 
 
+@pytest.mark.parametrize(
+    "tool_name", ["builder_context_get", "builder_build_submit"]
+)
+def test_phase_aware_builder_tools_are_valid_only_for_project_profiles(
+    tool_name: str,
+) -> None:
+    project = _tool_invocation()
+    project.update(
+        profile_id="experiment_builder",
+        tool_name=tool_name,
+        arguments={"project_id": "project-1", "workspace_id": "workspace-1"},
+    )
+    assert agent_protocol.parse_tool_invocation(project).tool_name == tool_name
+
+    readonly = dict(project)
+    readonly["profile_id"] = "hpc-readonly-v1"
+    with pytest.raises(ValueError, match="invalid tool invocation"):
+        agent_protocol.parse_tool_invocation(readonly)
+
+
 def _usage() -> dict[str, int | None]:
     return {
         "input_tokens": 12,

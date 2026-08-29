@@ -45,6 +45,7 @@ export function createAgentdExecutor(
       runtime?.profile.id === profileId ? runtime : undefined,
     undefined,
     toolGateway,
+    config.phaseAwareBuilder,
   );
 }
 

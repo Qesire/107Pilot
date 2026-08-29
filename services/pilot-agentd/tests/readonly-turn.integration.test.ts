@@ -332,4 +332,216 @@ describe("durable readonly Turn", () => {
     });
     expect(terminal(events)).toMatchObject({ type: "turn_completed" });
   });
+
+  it("completes the phase-aware Builder in two Pi steps", async () => {
+    const runtime = createFauxModelRuntime();
+    runtime.faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("builder_context_get", {}, { id: "call-context" })],
+        { stopReason: "toolUse", timestamp: 1 },
+      ),
+      fauxAssistantMessage(
+        [fauxToolCall("builder_build_submit", builderSubmission("build-1"), {
+          id: "call-submit",
+        })],
+        { stopReason: "toolUse", timestamp: 2 },
+      ),
+    ]);
+    const called: string[] = [];
+    const gateway = {
+      invoke: async (_request, _callId, name: string) => {
+        called.push(name);
+        return {
+          schema_version: "pilot107.agent-tool-result/v1" as const,
+          invocation_id: `inv-${called.length}`,
+          result: name === "builder_build_submit"
+            ? { status: "scheduled", phase: "validation_scheduled", task_id: "task-1" }
+            : { phase: "drafting", next_action: "builder_build_submit" },
+          error: null,
+          evidence_refs: [],
+          bytes_returned: 64,
+        };
+      },
+    };
+    const target = new TurnExecutor(
+      () => runtime,
+      async () => undefined,
+      gateway,
+      true,
+    );
+    const events: AgentTurnEvent[] = [];
+
+    await target.execute(
+      builderTurnRequest(),
+      (event) => events.push(event),
+      new AbortController().signal,
+    );
+
+    expect(called).toEqual(["builder_context_get", "builder_build_submit"]);
+    expect(runtime.faux.state.callCount).toBe(2);
+    expect(terminal(events)).toMatchObject({ type: "turn_completed" });
+  });
+
+  it("keeps one repair receipt nonterminal and completes in three Pi steps", async () => {
+    const runtime = createFauxModelRuntime();
+    runtime.faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("builder_context_get", {}, { id: "call-context" })],
+        { stopReason: "toolUse", timestamp: 1 },
+      ),
+      fauxAssistantMessage(
+        [fauxToolCall("builder_build_submit", builderSubmission("build-1"), {
+          id: "call-submit-1",
+        })],
+        { stopReason: "toolUse", timestamp: 2 },
+      ),
+      fauxAssistantMessage(
+        [fauxToolCall("builder_build_submit", {
+          ...builderSubmission("build-2"),
+          expected_project_version: 2,
+          base_change_set_id: "changeset-1",
+        }, { id: "call-submit-2" })],
+        { stopReason: "toolUse", timestamp: 3 },
+      ),
+    ]);
+    let submissions = 0;
+    const gateway = {
+      invoke: async (_request, _callId, name: string) => {
+        if (name === "builder_build_submit") submissions += 1;
+        return {
+          schema_version: "pilot107.agent-tool-result/v1" as const,
+          invocation_id: `inv-${name}-${submissions}`,
+          result: name === "builder_context_get"
+            ? { phase: "drafting" }
+            : submissions === 1
+            ? {
+                status: "repair_required",
+                phase: "sandbox_failed",
+                change_set_id: "changeset-1",
+              }
+            : {
+                status: "scheduled",
+                phase: "validation_scheduled",
+                task_id: "task-1",
+              },
+          error: null,
+          evidence_refs: [],
+          bytes_returned: 64,
+        };
+      },
+    };
+    const target = new TurnExecutor(
+      () => runtime,
+      async () => undefined,
+      gateway,
+      true,
+    );
+    const events: AgentTurnEvent[] = [];
+
+    await target.execute(
+      builderTurnRequest(),
+      (event) => events.push(event),
+      new AbortController().signal,
+    );
+
+    expect(submissions).toBe(2);
+    expect(runtime.faux.state.callCount).toBe(3);
+    expect(terminal(events)).toMatchObject({ type: "turn_completed" });
+  });
+
+  it("stops a pathological phase-aware Builder loop at twenty Pi steps", async () => {
+    const runtime = createFauxModelRuntime();
+    runtime.faux.setResponses(
+      Array.from({ length: 21 }, (_, index) =>
+        fauxAssistantMessage(
+          [fauxToolCall("builder_context_get", {}, {
+            id: `call-context-${index + 1}`,
+          })],
+          { stopReason: "toolUse", timestamp: index + 1 },
+        ),
+      ),
+    );
+    const gateway = {
+      invoke: async () => ({
+        schema_version: "pilot107.agent-tool-result/v1" as const,
+        invocation_id: "inv-context",
+        result: { phase: "drafting", next_action: "builder_build_submit" },
+        error: null,
+        evidence_refs: [],
+        bytes_returned: 64,
+      }),
+    };
+    const target = new TurnExecutor(
+      () => runtime,
+      async () => undefined,
+      gateway,
+      true,
+    );
+    const events: AgentTurnEvent[] = [];
+
+    await target.execute(
+      builderTurnRequest(),
+      (event) => events.push(event),
+      new AbortController().signal,
+    );
+
+    expect(runtime.faux.state.callCount).toBe(20);
+    expect(runtime.faux.getPendingResponseCount()).toBe(1);
+    expect(terminal(events)).toMatchObject({
+      type: "turn_failed",
+      payload: {
+        error: { code: "tool_step_budget_exhausted", retryable: false },
+      },
+    });
+  });
 });
+
+function builderTurnRequest() {
+  return durableRequest({
+    task_kind: "experiment_builder",
+    prompt_profile_id: "experiment_builder",
+    toolset_id: "a2-project",
+    input: {
+      message: "build the bound Project",
+      context_refs: ["project:project-1", "workspace:workspace-1"],
+    },
+  });
+}
+
+function builderSubmission(requestKey: string) {
+  return {
+    request_key: requestKey,
+    expected_project_version: 1,
+    expected_workspace_snapshot_digest: "a".repeat(64),
+    base_change_set_id: null,
+    blueprint: {
+      goal: "validate",
+      entrypoints: ["scripts/run.sh"],
+      files: [],
+      validations: [
+        {
+          validation_id: "sandbox",
+          execution: "sandbox",
+          argv: ["python", "validate.py"],
+          expected_outputs: [],
+        },
+        {
+          validation_id: "slurm",
+          execution: "slurm",
+          argv: ["bash", "scripts/run.sh"],
+          expected_outputs: [],
+        },
+      ],
+      contract_intent: { recipe_version_id: null, resource_hints: {} },
+      expected_outputs: [],
+      dependencies: [],
+      open_questions: [],
+    },
+    patches: [{
+      path: "main.py",
+      expected_source_digest: null,
+      operation: "create",
+      content: "print(1)\n",
+    }],
+  };
+}
