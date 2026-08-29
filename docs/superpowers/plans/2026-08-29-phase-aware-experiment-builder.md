@@ -280,11 +280,13 @@ Canonicalize Blueprint plus patches to `input_digest`. Replaying the same
 ChangeSet/Sandbox/Task reference, resume from the first missing durable reference
 instead of applying patches or scheduling again.
 
-- [ ] **Step 7: Implement semantic no-progress limits**
+- [ ] **Step 7: Implement semantic no-progress guards**
 
-Allow one context call, one initial submission, and at most three repairs per
-Turn. Reject stale base ChangeSets, identical content, or post-schedule calls with
-`AGENT.BUILDER.NO_PROGRESS` and `retryable=false`.
+Target one context call and one initial submission through the prompt, without
+enforcing a small semantic call budget. Reject stale base ChangeSets, identical
+content, or post-schedule calls with `AGENT.BUILDER.NO_PROGRESS` and
+`retryable=false`; rely on the existing 20-step and 32-invocation emergency
+ceilings for pathological loops.
 
 - [ ] **Step 8: Run focused service tests**
 

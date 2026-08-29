@@ -377,7 +377,7 @@ class AgentTurnWorker:
                     if project_profile
                     else frozenset()
                 ),
-                max_commands=(4 if phase_aware else 8) if project_profile else 0,
+                max_commands=(32 if phase_aware else 8) if project_profile else 0,
             )
         )
 

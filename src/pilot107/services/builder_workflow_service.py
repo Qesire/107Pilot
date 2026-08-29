@@ -220,26 +220,15 @@ class BuilderWorkflowService:
                     "Initial Builder submission cannot name a base ChangeSet",
                     "AGENT.BUILDER.NO_PROGRESS",
                 )
-            if latest is not None:
-                submissions = self.store.list_builder_submissions(
-                    owner=owner,
-                    session_id=request.session_id,
-                    project_id=request.project_id,
-                    workspace_id=request.workspace_id,
+            if latest is not None and (
+                latest.state is not BuilderSubmissionState.SANDBOX_FAILED
+                or latest.turn_id != request.turn_id
+                or request.base_change_set_id != latest.change_set_id
+            ):
+                raise _error(
+                    "Builder submission does not continue the latest phase",
+                    "AGENT.BUILDER.NO_PROGRESS",
                 )
-                repairs = sum(
-                    item.base_change_set_id is not None for item in submissions
-                )
-                if (
-                    latest.state is not BuilderSubmissionState.SANDBOX_FAILED
-                    or latest.turn_id != request.turn_id
-                    or request.base_change_set_id != latest.change_set_id
-                    or repairs >= 3
-                ):
-                    raise _error(
-                        "Builder submission does not continue the latest phase",
-                        "AGENT.BUILDER.NO_PROGRESS",
-                    )
             if view.project.version != request.expected_project_version:
                 raise _error(
                     "Builder Project version is stale",

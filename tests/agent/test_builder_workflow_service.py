@@ -520,11 +520,13 @@ def test_repair_rejects_stale_base_identical_content_and_post_schedule_calls(
     assert scheduled_error.value.code == "AGENT.BUILDER.NO_PROGRESS"
 
 
-def test_builder_allows_at_most_three_repairs_per_turn(tmp_path: Path) -> None:
+def test_builder_continues_after_four_repairs_when_each_patch_makes_progress(
+    tmp_path: Path,
+) -> None:
     harness = BuilderHarness(tmp_path)
     harness.sandbox.exit_code = 1
     failed = harness.workflow.submit("alice", _valid_build(harness))
-    for index in range(1, 4):
+    for index in range(1, 5):
         failed = harness.workflow.submit(
             "alice",
             _repair_build(
@@ -536,18 +538,7 @@ def test_builder_allows_at_most_three_repairs_per_turn(tmp_path: Path) -> None:
         )
         assert failed.result["status"] == "repair_required"
 
-    with pytest.raises(AgentToolGatewayError) as error:
-        harness.workflow.submit(
-            "alice",
-            _repair_build(
-                harness,
-                failed,
-                request_key="repair-4",
-                content="print('repair 4')\n",
-            ),
-        )
-    assert error.value.code == "AGENT.BUILDER.NO_PROGRESS"
-    assert harness.sandbox.calls == 4
+    assert harness.sandbox.calls == 5
 
 
 def test_replay_recovers_after_task_creation_without_duplicate_work(

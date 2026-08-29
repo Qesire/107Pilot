@@ -402,7 +402,7 @@ def test_enabled_builder_turn_receives_only_phase_aware_facade_capability(
         {"builder_context_get", "builder_build_submit"}
     )
     assert claims.max_invocations == 32
-    assert claims.max_commands == 4
+    assert claims.max_commands == 32
 
 
 def test_transport_failure_interrupts_with_last_checkpoint_and_retries(

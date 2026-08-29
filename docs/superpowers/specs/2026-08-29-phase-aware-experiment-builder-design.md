@@ -247,10 +247,11 @@ Rejected transitions include:
 - scheduling when a validation AgentTask already exists;
 - any operation after `validation_scheduled`.
 
-The gateway still enforces its invocation and byte budgets. In addition, the
-Builder facade permits one context read, one initial build, and at most three
-repair submissions per Turn. This is a semantic budget, separate from the
-20-step emergency ceiling.
+The prompt targets one context read followed by one initial build, but the
+facade does not impose a small semantic call budget. Progressive repairs remain
+valid while each patch changes content and continues from the latest failed
+ChangeSet. The existing 20-step Pi ceiling and 32-invocation gateway ceiling
+remain the emergency safeguards for pathological loops.
 
 ## 8. Consistency and idempotency
 
