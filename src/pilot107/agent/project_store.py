@@ -257,6 +257,15 @@ class ProjectStore(Protocol):
         self, owner: str, request_key: str
     ) -> BuilderSubmissionRecord | None: ...
 
+    def get_latest_builder_submission(
+        self,
+        *,
+        owner: str,
+        session_id: str,
+        project_id: str,
+        workspace_id: str,
+    ) -> BuilderSubmissionRecord | None: ...
+
     def replace_builder_submission(
         self, record: BuilderSubmissionRecord, *, expected_version: int
     ) -> BuilderSubmissionRecord: ...
@@ -847,6 +856,31 @@ class SQLiteProjectStore:
                 "SELECT * FROM agent_builder_submissions "
                 "WHERE owner = ? AND request_key = ?",
                 (owner, request_key),
+            ).fetchone()
+        return None if row is None else _row_to_builder_submission(row)
+
+    def get_latest_builder_submission(
+        self,
+        *,
+        owner: str,
+        session_id: str,
+        project_id: str,
+        workspace_id: str,
+    ) -> BuilderSubmissionRecord | None:
+        for value, label in (
+            (owner, "owner"),
+            (session_id, "session_id"),
+            (project_id, "project_id"),
+            (workspace_id, "workspace_id"),
+        ):
+            _key(value, label)
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM agent_builder_submissions "
+                "WHERE owner = ? AND session_id = ? AND project_id = ? "
+                "AND workspace_id = ? "
+                "ORDER BY updated_at DESC, submission_id DESC LIMIT 1",
+                (owner, session_id, project_id, workspace_id),
             ).fetchone()
         return None if row is None else _row_to_builder_submission(row)
 
