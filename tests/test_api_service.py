@@ -45,8 +45,17 @@ class ApiServiceTests(unittest.TestCase):
         self.assertEqual(config.allowed_roots, ())
         self.assertFalse(config.auth_required)
         self.assertFalse(config.agent_a1_enabled)
+        self.assertFalse(config.phase_aware_builder)
         self.assertIsNone(config.agent_capability_hmac_secret)
         self.assertIsNone(config.agent_capability_hmac_secret_file)
+
+    def test_phase_aware_builder_config_is_explicit(self) -> None:
+        config = config_from_env(
+            {"PILOT107_PHASE_AWARE_BUILDER": "true"},
+            project_root=self.root,
+        )
+
+        self.assertTrue(config.phase_aware_builder)
 
     def test_agent_a1_config_keeps_capability_secret_out_of_repr(self) -> None:
         secret_file = self.root / "agent-capability.key"
@@ -130,6 +139,61 @@ class ApiServiceTests(unittest.TestCase):
             api.project_agent_routes.service,
         )
         self.assertNotIn("f" * 32, repr(api))
+
+    def test_phase_aware_builder_flag_switches_only_builder_handlers(self) -> None:
+        enabled = build_api_service(
+            config_from_env(
+                {
+                    "PILOT107_AGENT_CAPABILITY_HMAC_SECRET": "s" * 32,
+                    "PILOT107_API_BACKEND": "in-memory",
+                    "PILOT107_PHASE_AWARE_BUILDER": "true",
+                },
+                project_root=self.root,
+            )
+        )
+        disabled = build_api_service(
+            config_from_env(
+                {
+                    "PILOT107_DB_PATH": str(self.root / "legacy.db"),
+                    "PILOT107_EVIDENCE_ROOT": str(self.root / "legacy-evidence"),
+                    "PILOT107_AGENT_CAPABILITY_HMAC_SECRET": "s" * 32,
+                    "PILOT107_API_BACKEND": "in-memory",
+                },
+                project_root=self.root,
+            )
+        )
+
+        assert enabled.agent_tool_routes is not None
+        assert disabled.agent_tool_routes is not None
+        enabled_handlers = enabled.agent_tool_routes.gateway.profile_handlers
+        disabled_handlers = disabled.agent_tool_routes.gateway.profile_handlers
+        self.assertEqual(
+            set(enabled_handlers["experiment_builder"]),
+            {"builder_context_get", "builder_build_submit"},
+        )
+        self.assertIn("project_get", enabled_handlers["run_diagnosis_repair"])
+        self.assertNotIn("builder_context_get", enabled_handlers["run_diagnosis_repair"])
+        self.assertIn("project_get", disabled_handlers["experiment_builder"])
+        self.assertNotIn("builder_context_get", disabled_handlers["experiment_builder"])
+
+        assert disabled.project_agent_routes is not None
+        legacy_project = disabled.project_agent_routes.service.create_project(
+            owner="alice",
+            origin="blank",
+            goal="keep the legacy builder readable",
+            request_key="legacy-project",
+        )
+        legacy_result = disabled_handlers["experiment_builder"]["project_get"](
+            "alice",
+            {
+                "project_id": legacy_project.project.project_id,
+                "workspace_id": legacy_project.workspace.workspace_id,
+            },
+        )
+        self.assertEqual(
+            legacy_result.result["project"]["project_id"],
+            legacy_project.project.project_id,
+        )
 
     def test_formal_watch_uses_the_configured_cluster_connection(self) -> None:
         api = build_api_service(

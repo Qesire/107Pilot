@@ -135,6 +135,7 @@ from pilot107.runtime_watch.service import RuntimeWatchRegistrar
 from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.services.agent_task_service import AgentTaskService
+from pilot107.services.builder_workflow_service import BuilderWorkflowService
 from pilot107.services.platform_snapshot_freshness import SnapshotCollectionMonitor
 from pilot107.services.platform_snapshot_service import PlatformSnapshotService
 from pilot107.services.project_agent_service import ProjectAgentService
@@ -201,6 +202,7 @@ class ApiServiceConfig:
     agentd_model_profile: str | None = None
     agentd_timeout_seconds: float = 60.0
     agentd_max_output_tokens: int = 1_200
+    phase_aware_builder: bool = False
     agent_a1_enabled: bool = False
     agent_capability_hmac_secret: bytes | None = field(default=None, repr=False)
     agent_capability_hmac_secret_file: Path | None = field(default=None, repr=False)
@@ -319,6 +321,9 @@ def config_from_env(
         agentd_timeout_seconds=_float(values, "PILOT107_AGENTD_TIMEOUT_SECONDS", 60.0),
         agentd_max_output_tokens=_int(
             values, "PILOT107_AGENTD_MAX_OUTPUT_TOKENS", 1_200
+        ),
+        phase_aware_builder=_bool(
+            values, "PILOT107_PHASE_AWARE_BUILDER", False
         ),
         agent_a1_enabled=(
             _bool(values, "PILOT107_AGENT_A1_ENABLED", False)
@@ -823,6 +828,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             agent_task_store=agent_task_store,
         )
         project_handlers = project_agent_service.build_tool_handlers()
+        builder_handlers: Mapping[str, Any] = project_handlers
         if run_service is not None:
             assert agent_task_store is not None
 
@@ -861,13 +867,22 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             project_handlers["validation_schedule"] = agent_task_service.build_tool_handler(
                 resolve_resource_envelope
             )
+            if config.phase_aware_builder:
+                builder_handlers = BuilderWorkflowService(
+                    project_service=project_agent_service,
+                    store=project_store,
+                    envelope_resolver=resolve_resource_envelope,
+                    agent_task_service=agent_task_service,
+                ).build_tool_handlers()
+        elif config.phase_aware_builder:
+            raise ValueError("phase-aware Builder requires a configured Run backend")
         agent_tool_routes = AgentToolRoutes(
             gateway=AgentToolGateway(
                 store=agent_session_store,
                 signer=AgentCapabilitySigner(agent_capability_secret),
                 handlers=build_a1_read_handlers(read_context),
                 profile_handlers={
-                    "experiment_builder": project_handlers,
+                    "experiment_builder": builder_handlers,
                     "run_diagnosis_repair": project_handlers,
                     "market_application": project_handlers,
                     "template_publication": project_handlers,

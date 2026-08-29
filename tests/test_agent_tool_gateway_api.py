@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pilot107.agent.capabilities import AgentCapabilityClaims, AgentCapabilitySigner
 from pilot107.agent.protocol import TOOL_INVOCATION_PROTOCOL_VERSION
 from pilot107.agent.store import SQLiteAgentSessionStore
+from pilot107.agent.tasks import AgentResourceEnvelope
 from pilot107.agent.tool_gateway import AgentReadResult, AgentToolGateway
 from pilot107.api.asgi_app import build_asgi_app
 from pilot107.api.http_app import build_api
+from pilot107.api.service import build_api_service, config_from_env
 
 
 def _configured_api(root: Path):
@@ -130,6 +133,120 @@ def test_private_route_caps_body_and_stays_out_of_openapi(tmp_path: Path) -> Non
     assert oversized.payload["error"]["code"] == "AGENT.TOOL.REQUEST_TOO_LARGE"
     assert "/internal/v1/agent-tools/invoke" not in app.openapi()["paths"]
     assert reads == []
+
+
+def test_phase_aware_builder_context_route_uses_bound_scope(tmp_path: Path) -> None:
+    secret = b"s" * 32
+    api = build_api_service(
+        config_from_env(
+            {
+                "PILOT107_AGENT_CAPABILITY_HMAC_SECRET": secret.decode(),
+                "PILOT107_API_BACKEND": "in-memory",
+                "PILOT107_PHASE_AWARE_BUILDER": "true",
+            },
+            project_root=tmp_path,
+        )
+    )
+    assert api.project_agent_routes is not None
+    assert api.agent_session_routes is not None
+    assert api.agent_tool_routes is not None
+    created = api.project_agent_routes.service.create_project(
+        owner="alice",
+        origin="blank",
+        goal="build a heat diffusion experiment",
+        request_key="builder-project",
+    )
+    expires_at = datetime.now(UTC) + timedelta(hours=1)
+    envelope = AgentResourceEnvelope(
+        partition="debug",
+        qos="normal",
+        cpus=1,
+        memory_mib=512,
+        gpu_type=None,
+        gpus=0,
+        walltime_seconds=300,
+        max_tasks=1,
+        max_submissions=1,
+        workspace_snapshot_digest=created.workspace.snapshot.digest,
+        expires_at=expires_at.isoformat().replace("+00:00", "Z"),
+        approved_by="alice",
+    )
+    session_service = api.agent_session_routes.service
+    session, _ = session_service.create_session(
+        owner="alice",
+        request_key="builder-session",
+        profile_id="experiment_builder",
+        model_profile_id="faux-default",
+        source={
+            "project_id": created.project.project_id,
+            "workspace_id": created.workspace.workspace_id,
+            "resource_envelope": asdict(envelope),
+        },
+    )
+    turn, _ = session_service.submit_message(
+        session_id=session.session_id,
+        owner="alice",
+        request_key="builder-turn",
+        message="build the experiment",
+        expected_state_version=session.state_version,
+    )
+    gateway = api.agent_tool_routes.gateway
+    claim = gateway.store.claim_turn(
+        turn.turn_id,
+        worker_id="builder-worker",
+        lease_seconds=60,
+    )
+    assert claim is not None
+    capability_expires_at = datetime.now(UTC) + timedelta(seconds=60)
+    token = gateway.signer.sign(
+        AgentCapabilityClaims(
+            owner="alice",
+            session_id=session.session_id,
+            turn_id=turn.turn_id,
+            state_version=claim.state_version,
+            fencing_token=claim.fencing_token,
+            profile_id="experiment_builder",
+            tools=frozenset({"builder_context_get", "builder_build_submit"}),
+            max_invocations=32,
+            max_bytes=1024 * 1024,
+            expires_at=int(capability_expires_at.timestamp()),
+            project_id=created.project.project_id,
+            workspace_id=created.workspace.workspace_id,
+            operations=frozenset({"read", "write", "validate"}),
+            max_commands=32,
+        )
+    )
+    deadline = datetime.now(UTC) + timedelta(seconds=30)
+    payload = {
+        "schema_version": TOOL_INVOCATION_PROTOCOL_VERSION,
+        "invocation_id": "invocation-builder-context",
+        "idempotency_key": "builder-context-1",
+        "owner": "alice",
+        "session_id": session.session_id,
+        "turn_id": turn.turn_id,
+        "state_version": claim.state_version,
+        "profile_id": "experiment_builder",
+        "tool_name": "builder_context_get",
+        "arguments": {
+            "project_id": created.project.project_id,
+            "workspace_id": created.workspace.workspace_id,
+            "session_id": session.session_id,
+        },
+        "deadline": deadline.isoformat().replace("+00:00", "Z"),
+    }
+
+    response = api.handle_post(
+        "/internal/v1/agent-tools/invoke",
+        body=json.dumps(payload).encode(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status == 200
+    assert response.payload["result"]["phase"] == "drafting"
+    assert response.payload["result"]["next_action"] == "builder_build_submit"
 
 
 def _asgi_request(

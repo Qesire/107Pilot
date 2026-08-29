@@ -38,6 +38,8 @@ services:
   pilot-agentd:
     cpus: 0.50
     mem_limit: 768m
+    environment:
+      PILOT107_PHASE_AWARE_BUILDER: ${PILOT107_PHASE_AWARE_BUILDER:-0}
 
   pilot107-api:
     cpus: 0.50
@@ -46,12 +48,14 @@ services:
       PILOT107_CONTRACT_PROFILE: cpu-only
       PILOT107_CAPABILITY_PROFILE_PATH: /opt/pilot107/config/platform_profiles/cpu-only-8c16g.json
       PILOT107_ALLOW_GPU_RECIPES: "false"
+      PILOT107_PHASE_AWARE_BUILDER: ${PILOT107_PHASE_AWARE_BUILDER:-0}
 
   pilot107-worker:
     cpus: 0.50
     mem_limit: 768m
     environment:
       PILOT107_CAPABILITY_PROFILE_PATH: /opt/pilot107/config/platform_profiles/cpu-only-8c16g.json
+      PILOT107_PHASE_AWARE_BUILDER: ${PILOT107_PHASE_AWARE_BUILDER:-0}
 
   pilot107-web:
     cpus: 0.25

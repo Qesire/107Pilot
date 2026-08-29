@@ -43,6 +43,7 @@ class WorkerServiceTests(unittest.TestCase):
             config.metrics_root,
             self.root / "data" / "phase0" / "worker-metrics",
         )
+        self.assertFalse(config.phase_aware_builder)
 
     def test_config_from_env_accepts_service_overrides(self) -> None:
         config = config_from_env(
@@ -69,6 +70,7 @@ class WorkerServiceTests(unittest.TestCase):
                 "PILOT107_AGENTD_MODEL_PROFILE": "campus-default",
                 "PILOT107_AGENTD_TIMEOUT_SECONDS": "300",
                 "PILOT107_AGENTD_MAX_OUTPUT_TOKENS": "12000",
+                "PILOT107_PHASE_AWARE_BUILDER": "true",
                 "PILOT107_OBSERVABILITY_ENABLED": "true",
                 "PILOT107_OBSERVABILITY_MAX_COMMANDS_PER_MINUTE": "17",
                 "PILOT107_OBSERVABILITY_BATCH_SIZE": "23",
@@ -102,6 +104,7 @@ class WorkerServiceTests(unittest.TestCase):
         self.assertEqual(config.agentd_model_profile, "campus-default")
         self.assertEqual(config.agentd_timeout_seconds, 300.0)
         self.assertEqual(config.agentd_max_output_tokens, 12000)
+        self.assertTrue(config.phase_aware_builder)
         self.assertFalse(config.agent_a1_enabled)
         self.assertTrue(config.observability_enabled)
         self.assertEqual(config.observability_max_commands_per_minute, 17)

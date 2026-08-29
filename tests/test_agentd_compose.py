@@ -75,6 +75,15 @@ def test_agentd_receives_only_private_tool_gateway_location(compose_name: str) -
         assert forbidden not in environment
 
 
+def test_cpu_rc_propagates_phase_aware_builder_to_all_agent_services() -> None:
+    services = _services("compose.cpu-rc.yml")
+
+    for service_name in ("pilot-agentd", "pilot107-api", "pilot107-worker"):
+        assert _environment(services[service_name])["PILOT107_PHASE_AWARE_BUILDER"] == (
+            "${PILOT107_PHASE_AWARE_BUILDER:-0}"
+        )
+
+
 @pytest.mark.parametrize("compose_name", ["compose.yml", "compose.competition-app-node.yml"])
 def test_api_runtime_configures_the_required_outer_bwrap_boundary(
     compose_name: str,

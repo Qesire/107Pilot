@@ -84,6 +84,7 @@ class CpuReleaseCandidateProfileTests(unittest.TestCase):
         self.assertIn("PILOT107_AGENTD_TIMEOUT_SECONDS=630", env)
         self.assertIn("PILOT107_WORKER_TASK_LEASE_SECONDS=660", env)
         self.assertIn("PILOT107_AGENTD_MAX_OUTPUT_TOKENS=12000", env)
+        self.assertIn("PILOT107_PHASE_AWARE_BUILDER=1", env)
         self.assertEqual(profile["schema"], "pilot107.capability_profile.v1")
 
     def test_slurm_runtime_image_can_compile_openmp_scientific_jobs(self) -> None:

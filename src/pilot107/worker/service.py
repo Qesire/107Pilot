@@ -172,6 +172,7 @@ class WorkerServiceConfig:
     agentd_model_profile: str | None = None
     agentd_timeout_seconds: float = 60.0
     agentd_max_output_tokens: int = 1_200
+    phase_aware_builder: bool = False
     agent_a1_enabled: bool = False
     agent_capability_hmac_secret: bytes | None = field(default=None, repr=False)
     agent_capability_hmac_secret_file: Path | None = field(default=None, repr=False)
@@ -527,6 +528,9 @@ def config_from_env(
         agentd_max_output_tokens=_int(
             values, "PILOT107_AGENTD_MAX_OUTPUT_TOKENS", 1_200
         ),
+        phase_aware_builder=_bool(
+            values, "PILOT107_PHASE_AWARE_BUILDER", False
+        ),
         agent_a1_enabled=(
             _bool(values, "PILOT107_AGENT_A1_ENABLED", False)
             or bool(values.get("PILOT107_AGENT_CAPABILITY_HMAC_SECRET"))
@@ -639,6 +643,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             project_store=project_store,
             worker_id=config.worker_id,
             lease_seconds=max(120, config.task_lease_seconds),
+            phase_aware_builder=config.phase_aware_builder,
         )
     evidence_store = EvidenceStore(config.evidence_root)
     backend, task_handler, reconcile_backend, baseline_executor = _build_backend_and_task_handler(
