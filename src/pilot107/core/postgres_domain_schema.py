@@ -892,6 +892,41 @@ _AGENT_WORKSPACE_PUBLICATION_SCHEMA = _statements(
     "ON agent_workspace_publications(owner, updated_at DESC, publication_id DESC)"
 )
 
+_AGENT_BUILDER_SUBMISSION_SCHEMA = _statements(
+    """
+    CREATE TABLE agent_builder_submissions (
+        submission_id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        project_id TEXT NOT NULL REFERENCES agent_experiment_projects(project_id),
+        workspace_id TEXT NOT NULL REFERENCES agent_workspaces(workspace_id),
+        request_key TEXT NOT NULL,
+        input_digest TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        state TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        base_change_set_id TEXT,
+        change_set_id TEXT,
+        sandbox_result_id TEXT,
+        task_id TEXT,
+        receipt_json JSONB,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        UNIQUE (owner, request_key),
+        CHECK (phase IN ('drafting', 'sandbox_failed', 'validation_scheduled')),
+        CHECK (state IN ('running', 'sandbox_failed', 'scheduled')),
+        CHECK ((state = 'running' AND phase = 'drafting') OR
+               (state = 'sandbox_failed' AND phase = 'sandbox_failed') OR
+               (state = 'scheduled' AND phase = 'validation_scheduled')),
+        CHECK (version > 0)
+    )
+    """
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_builder_submissions_owner_updated "
+    "ON agent_builder_submissions(owner, updated_at DESC, submission_id DESC)"
+)
+
 _AGENT_TASK_SCHEMA = _statements(
     """
     CREATE TABLE agent_tasks (
@@ -1321,6 +1356,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.020.market_sessions", _MARKET_SESSION_SCHEMA),
     ("004a.021.repair_tickets", _REPAIR_TICKET_SCHEMA),
     ("004a.022.ssh_connection_sessions", _SSH_CONNECTION_SCHEMA),
+    ("004a.023.agent_builder_submissions", _AGENT_BUILDER_SUBMISSION_SCHEMA),
 )
 
 
@@ -1405,6 +1441,7 @@ def domain_table_names() -> tuple[str, ...]:
         "agent_workspaces",
         "agent_workspace_changesets",
         "agent_workspace_publications",
+        "agent_builder_submissions",
         "agent_tasks",
         "runtime_watches",
         "runtime_log_cursors",

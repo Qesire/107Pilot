@@ -18,10 +18,13 @@ from pilot107.agent.project import (
     blueprint_payload,
 )
 from pilot107.agent.project_store import (
+    _assert_builder_submission_identity,
+    _assert_builder_submission_replay,
     _assert_create_replay,
     _create_values,
     _key,
     _limit,
+    _row_to_builder_submission,
     _row_to_project,
     _version,
 )
@@ -29,6 +32,7 @@ from pilot107.core.postgres_control_repository import PostgresDriverUnavailable
 from pilot107.core.postgres_domain_schema import initialize_postgres_domain_schema
 
 if TYPE_CHECKING:
+    from pilot107.agent.builder_workflow import BuilderSubmissionRecord
     from pilot107.agent.publisher import WorkspacePublication
     from pilot107.agent.workspace import (
         AgentWorkspaceRecord,
@@ -596,6 +600,139 @@ class PostgresProjectStore:
         if not isinstance(value, dict):
             raise TypeError("Publication payload must be an object")
         return publication_from_payload(value)
+
+    def create_builder_submission(
+        self, record: BuilderSubmissionRecord
+    ) -> BuilderSubmissionRecord:
+        from pilot107.agent.builder_workflow import BuilderSubmissionRecord
+
+        if not isinstance(record, BuilderSubmissionRecord):
+            raise TypeError("record must be a BuilderSubmissionRecord")
+        workspace = self.get_workspace(record.workspace_id, owner=record.owner)
+        if workspace.project_id != record.project_id:
+            raise ProjectConflict("Builder submission Project does not own the Workspace")
+        receipt = None if record.receipt is None else self._jsonb(dict(record.receipt))
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO agent_builder_submissions (
+                    submission_id, owner, session_id, turn_id, project_id,
+                    workspace_id, request_key, input_digest, phase, state,
+                    version, base_change_set_id, change_set_id,
+                    sandbox_result_id, task_id, receipt_json, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                          %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (owner, request_key) DO NOTHING
+                RETURNING *
+                """,
+                (
+                    record.submission_id,
+                    record.owner,
+                    record.session_id,
+                    record.turn_id,
+                    record.project_id,
+                    record.workspace_id,
+                    record.request_key,
+                    record.input_digest,
+                    record.phase.value,
+                    record.state.value,
+                    record.version,
+                    record.base_change_set_id,
+                    record.change_set_id,
+                    record.sandbox_result_id,
+                    record.task_id,
+                    receipt,
+                    record.created_at,
+                    record.updated_at,
+                ),
+            ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    "SELECT * FROM agent_builder_submissions "
+                    "WHERE owner = %s AND request_key = %s",
+                    (record.owner, record.request_key),
+                ).fetchone()
+        if row is None:
+            raise RuntimeError("Builder submission insert did not produce a row")
+        result = _row_to_builder_submission(row)
+        _assert_builder_submission_replay(result, record)
+        return result
+
+    def get_builder_submission(
+        self, submission_id: str, *, owner: str
+    ) -> BuilderSubmissionRecord:
+        _key(submission_id, "submission_id")
+        _key(owner, "owner")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM agent_builder_submissions "
+                "WHERE submission_id = %s AND owner = %s",
+                (submission_id, owner),
+            ).fetchone()
+        if row is None:
+            raise KeyError(submission_id)
+        return _row_to_builder_submission(row)
+
+    def get_builder_submission_by_request_key(
+        self, owner: str, request_key: str
+    ) -> BuilderSubmissionRecord | None:
+        _key(owner, "owner")
+        _key(request_key, "request_key")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM agent_builder_submissions "
+                "WHERE owner = %s AND request_key = %s",
+                (owner, request_key),
+            ).fetchone()
+        return None if row is None else _row_to_builder_submission(row)
+
+    def replace_builder_submission(
+        self, record: BuilderSubmissionRecord, *, expected_version: int
+    ) -> BuilderSubmissionRecord:
+        from pilot107.agent.builder_workflow import (
+            BuilderSubmissionConflict,
+            BuilderSubmissionRecord,
+        )
+
+        if not isinstance(record, BuilderSubmissionRecord):
+            raise TypeError("record must be a BuilderSubmissionRecord")
+        _version(expected_version)
+        if record.version != expected_version + 1:
+            raise ValueError("Builder submission version must advance by one")
+        current = self.get_builder_submission(record.submission_id, owner=record.owner)
+        _assert_builder_submission_identity(current, record)
+        receipt = None if record.receipt is None else self._jsonb(dict(record.receipt))
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                UPDATE agent_builder_submissions
+                SET phase = %s, state = %s, version = %s,
+                    base_change_set_id = %s, change_set_id = %s,
+                    sandbox_result_id = %s, task_id = %s,
+                    receipt_json = %s, updated_at = %s
+                WHERE submission_id = %s AND owner = %s AND version = %s
+                RETURNING *
+                """,
+                (
+                    record.phase.value,
+                    record.state.value,
+                    record.version,
+                    record.base_change_set_id,
+                    record.change_set_id,
+                    record.sandbox_result_id,
+                    record.task_id,
+                    receipt,
+                    record.updated_at,
+                    record.submission_id,
+                    record.owner,
+                    expected_version,
+                ),
+            ).fetchone()
+        if row is None:
+            raise BuilderSubmissionConflict(
+                "Builder submission version changed during update"
+            )
+        return _row_to_builder_submission(row)
 
     def _now(self) -> datetime:
         value = self._clock()

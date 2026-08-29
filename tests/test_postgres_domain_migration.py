@@ -78,6 +78,7 @@ class PostgresDomainMigrationSafetyTests(unittest.TestCase):
                 "agent_tool_invocations",
                 "agent_experiment_projects",
                 "agent_workspaces",
+                "agent_builder_submissions",
                 "agent_tasks",
                 "runtime_watches",
                 "runtime_log_cursors",
@@ -209,6 +210,23 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
         self.assertIn("CREATE TABLE agent_workspaces", schema)
         self.assertIn("REFERENCES agent_experiment_projects", schema)
         self.assertIn("payload_json JSONB", schema)
+
+    def test_builder_submission_migration_is_durable_and_idempotent(self) -> None:
+        from pilot107.core.postgres_domain_schema import _MIGRATIONS
+
+        migration_id, statements = next(
+            migration
+            for migration in _MIGRATIONS
+            if migration[0] == "004a.023.agent_builder_submissions"
+        )
+        schema = "\n".join(statements)
+
+        self.assertEqual(migration_id, "004a.023.agent_builder_submissions")
+        self.assertIn("CREATE TABLE agent_builder_submissions", schema)
+        self.assertIn("receipt_json JSONB", schema)
+        self.assertIn("UNIQUE (owner, request_key)", schema)
+        self.assertIn("REFERENCES agent_experiment_projects", schema)
+        self.assertIn("REFERENCES agent_workspaces", schema)
 
 
 class PostgresDomainCopyTests(unittest.TestCase):
