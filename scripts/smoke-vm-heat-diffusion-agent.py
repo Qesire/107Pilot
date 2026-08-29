@@ -23,6 +23,18 @@ from pilot107.scientific.heat_diffusion_validation import audit_heat_diffusion_o
 _TERMINAL_RUN_STATES = {"SUCCEEDED", "FAILED", "CANCELLED", "TIMEOUT", "OOM"}
 _TERMINAL_TASK_STATES = {"succeeded", "failed", "cancelled", "auth_required"}
 _TERMINAL_TURN_EVENTS = {"turn_completed", "turn_failed"}
+_LEGACY_BUILDER_TOOLS = frozenset(
+    {
+        "project_get",
+        "project_blueprint_save",
+        "workspace_list",
+        "workspace_read",
+        "workspace_patch",
+        "workspace_diff",
+        "sandbox_exec",
+        "validation_schedule",
+    }
+)
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _REQUIRED_OUTPUTS = (
@@ -42,6 +54,10 @@ _PROJECT_GOAL = (
     "Echo each exact srun command before executing it so stdout Evidence proves the steps. "
     "raw-results.csv, convergence.json, scaling.json, report.md, convergence.svg, "
     "and scaling.svg with accessible labels plus platform snapshot and Run provenance. "
+    "Use exactly src/heat2d.c for the solver and scripts/summarize.py for analysis. "
+    "The summarizer must only summarize raw measurements produced by the entrypoint; "
+    "it must never launch the solver itself. The entrypoint must record convergence "
+    "measurements and the output of each distinct srun scaling step into raw-results.csv. "
     "Use scripts/validate_project.py for network-free, Python-standard-library static "
     "sandbox validation; it must not require a C compiler or run the full experiment. "
     "Compile and execute the C/OpenMP solver only inside the Slurm validation. Use "
@@ -204,24 +220,84 @@ def _poll_turn(
     provider = payload.get("provider")
     if not isinstance(provider, str) or not provider:
         raise RuntimeError("turn_completed omitted the actual provider")
+    builder_audit = _audit_builder_events(payload, events)
     result = payload.get("result")
-    if isinstance(result, str) and not result.strip():
+    if (
+        isinstance(result, str)
+        and not result.strip()
+        and builder_audit["terminal_phase"] != "validation_scheduled"
+    ):
         raise RuntimeError("Agent returned a whitespace-only completion")
-    if isinstance(result, dict) and isinstance(result.get("text"), str):
-        validation_scheduled = any(
-            event.get("event_type") == "tool_call_completed"
-            and isinstance(event.get("payload"), dict)
-            and event["payload"].get("tool_name") == "validation_schedule"
-            and event["payload"].get("is_error") is False
-            for event in events
-        )
-        if not result["text"].strip() and not validation_scheduled:
-            raise RuntimeError("Agent returned a whitespace-only completion")
+    if (
+        isinstance(result, dict)
+        and isinstance(result.get("text"), str)
+        and not result["text"].strip()
+        and builder_audit["terminal_phase"] != "validation_scheduled"
+    ):
+        raise RuntimeError("Agent returned a whitespace-only completion")
     encoded_events = json.dumps(events, ensure_ascii=False)
     for code in ("provider_timeout", "tool_step_budget_exhausted"):
         if code in encoded_events:
             raise RuntimeError(f"Agent Turn contained terminal failure code {code}")
     return payload, events
+
+
+def _audit_builder_events(
+    terminal: dict[str, Any], events: list[dict[str, Any]]
+) -> dict[str, Any]:
+    requested = [
+        payload.get("tool_name")
+        for event in events
+        if event.get("event_type") == "tool_call_requested"
+        and isinstance((payload := event.get("payload")), dict)
+        and isinstance(payload.get("tool_name"), str)
+    ]
+    legacy = sorted(set(requested) & _LEGACY_BUILDER_TOOLS)
+    if legacy:
+        raise RuntimeError(f"Agent model called legacy Builder tools: {legacy}")
+    for required in ("builder_context_get", "builder_build_submit"):
+        if required not in requested:
+            raise RuntimeError(f"Agent model did not call required facade tool {required}")
+
+    receipts: list[dict[str, Any]] = []
+    for event in events:
+        payload = event.get("payload")
+        if (
+            event.get("event_type") != "tool_call_completed"
+            or not isinstance(payload, dict)
+            or payload.get("tool_name") != "builder_build_submit"
+        ):
+            continue
+        details = payload.get("result")
+        if not isinstance(details, dict):
+            continue
+        receipt = details.get("result")
+        if isinstance(receipt, dict):
+            receipts.append(receipt)
+    if not receipts or receipts[-1].get("status") != "scheduled":
+        raise RuntimeError("Builder facade did not return a scheduled receipt")
+
+    pi_steps = terminal.get("pi_steps")
+    tool_invocations = terminal.get("tool_invocations")
+    if isinstance(pi_steps, bool) or not isinstance(pi_steps, int):
+        raise RuntimeError("turn_completed omitted pi_steps")
+    if pi_steps > 8:
+        raise RuntimeError(f"Builder exceeded the eight-step acceptance target: {pi_steps}")
+    if isinstance(tool_invocations, bool) or not isinstance(tool_invocations, int):
+        raise RuntimeError("turn_completed omitted tool_invocations")
+    if terminal.get("terminal_phase") != "validation_scheduled":
+        raise RuntimeError("Builder terminal phase is not validation_scheduled")
+    return {
+        "pi_steps": pi_steps,
+        "provider_calls": terminal.get("provider_calls"),
+        "tool_invocations": tool_invocations,
+        "build_submissions": terminal.get("build_submissions"),
+        "repair_submissions": terminal.get("repair_submissions"),
+        "no_progress_rejections": terminal.get("no_progress_rejections"),
+        "terminal_phase": terminal.get("terminal_phase"),
+        "requested_tools": requested,
+        "builder_submission_receipts": receipts,
+    }
 
 
 def _task_for_session(client: ApiClient, session_id: str) -> dict[str, Any] | None:
@@ -449,6 +525,7 @@ def run_smoke(
         timeout_seconds=timeout_seconds,
         interval_seconds=poll_interval_seconds,
     )
+    builder_audit = _audit_builder_events(terminal, events)
 
     def load_ready_project() -> dict[str, Any]:
         return client.get(f"/agent-projects/{_encoded(project_id)}")
@@ -555,6 +632,8 @@ def run_smoke(
             "validation_task_id": task_id,
         },
     )
+    if _required_string(candidate, "validation_run_id") != validation_run_id:
+        raise RuntimeError("formal candidate references a different validation Run")
     formal_contract = _formal_contract(
         goal=_PROJECT_GOAL,
         workdir=_required_string(candidate, "published_workdir"),
@@ -645,6 +724,7 @@ def run_smoke(
         "platform_snapshot_id": platform_snapshot_id,
         "project_id": project_id,
         "change_set_digest": change_set_digest,
+        "agent_task_id": task_id,
         "validation_run_id": validation_run_id,
         "formal_run_id": formal_run_id,
         "formal_job_id": formal_job_id,
@@ -653,6 +733,7 @@ def run_smoke(
         "evidence_refs": task_result["evidence_refs"],
         "capsule_ref": capsule_ref,
         "turn_event_refs": event_refs,
+        **builder_audit,
         "blueprint_saved": isinstance(blueprint, dict),
     }
 

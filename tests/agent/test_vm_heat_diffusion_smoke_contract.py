@@ -18,9 +18,17 @@ def test_heat_smoke_is_high_level_model_driven_and_never_writes_solver_files() -
     assert '"cpus": 4' in source
     assert "review the bound Project and complete its approved validation workflow" in source
     assert "must not require a C compiler" in source
+    assert "Use exactly src/heat2d.c" in source
+    assert "must only summarize raw measurements" in source
     assert "2D heat equation" in source
     assert "grids 64, 128, and 256" in source
     assert "audit_heat_diffusion_outputs" in source
+    assert '"builder_context_get"' in source
+    assert '"builder_build_submit"' in source
+    assert "_LEGACY_BUILDER_TOOLS" in source
+    assert "pi_steps > 8" in source
+    assert '"builder_submission_receipts"' in source
+    assert '"agent_task_id"' in source
     assert "/agent-changesets/" in source
     assert "/agent-sessions/" in source
     assert "/agent-tasks/" in source

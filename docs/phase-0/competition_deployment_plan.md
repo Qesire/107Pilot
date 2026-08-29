@@ -129,3 +129,14 @@ PILOT107_SKIP_BUILD=1 bash scripts/start-competition-app-node.sh
 - 浏览器只访问应用节点 HTTPS；
 - 应用节点访问 Slurm 宿主机 `pilot107-command-gateway`；
 - Slurm 宿主机无需暴露 Docker daemon、MariaDB 或宿主机文件系统。
+
+## 7. Phase-aware Builder 演示配置
+
+CPU-RC 演示使用 `PILOT107_PHASE_AWARE_BUILDER=1`，并把该值同时传给
+`pilot-agentd`、`pilot107-api` 和 `pilot107-worker`。Builder 模型只调用
+`builder_context_get` 与 `builder_build_submit`；Sandbox、资源推导和
+`vm-slurm` validation 调度由服务端确定性执行。
+
+少轮数是观测目标，不是小预算硬限制。有效修复可继续进行；20 个 Pi step
+和 32 次 gateway invocation 仅作为异常循环保险。部署及回滚流程、健康检查
+和科学计算验收见 `docs/operations/phase-aware-builder.md`。
