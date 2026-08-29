@@ -158,6 +158,12 @@ class AgentdTurnResult:
     checkpoint_digest: str
     duration_ms: int
     checkpoint: dict[str, Any] | None
+    pi_steps: int | None = None
+    tool_invocations: int | None = None
+    build_submissions: int | None = None
+    repair_submissions: int | None = None
+    no_progress_rejections: int | None = None
+    terminal_phase: str | None = None
 
 
 class AgentdClientError(RuntimeError):
@@ -464,6 +470,18 @@ def result_from_terminal(event: AgentTurnEvent | None) -> AgentdTurnResult:
         ),
         duration_ms=_as_int(payload["duration_ms"], "turn_completed.duration_ms"),
         checkpoint=checkpoint if isinstance(checkpoint, dict) else None,
+        pi_steps=_optional_int(payload.get("pi_steps")),
+        tool_invocations=_optional_int(payload.get("tool_invocations")),
+        build_submissions=_optional_int(payload.get("build_submissions")),
+        repair_submissions=_optional_int(payload.get("repair_submissions")),
+        no_progress_rejections=_optional_int(
+            payload.get("no_progress_rejections")
+        ),
+        terminal_phase=(
+            None
+            if payload.get("terminal_phase") is None
+            else _as_string(payload["terminal_phase"], "turn_completed.terminal_phase")
+        ),
     )
 
 
@@ -627,7 +645,15 @@ def _validate_event_payload(event_type: str, raw_payload: dict[str, Any]) -> Non
                 "checkpoint_digest",
                 "duration_ms",
             },
-            optional={"checkpoint"},
+            optional={
+                "checkpoint",
+                "pi_steps",
+                "tool_invocations",
+                "build_submissions",
+                "repair_submissions",
+                "no_progress_rejections",
+                "terminal_phase",
+            },
             label="turn_completed.payload",
         )
         _validate_json_value(payload["result"])
@@ -636,6 +662,24 @@ def _validate_event_payload(event_type: str, raw_payload: dict[str, Any]) -> Non
         _validate_id(payload["model_profile_id"], "turn_completed.model_profile_id")
         _validate_usage(payload["usage"], "turn_completed.usage")
         _validate_integer(payload["provider_calls"], "provider_calls", minimum=1, maximum=100)
+        for name in (
+            "pi_steps",
+            "tool_invocations",
+            "build_submissions",
+            "repair_submissions",
+            "no_progress_rejections",
+        ):
+            if name in payload:
+                _validate_integer(
+                    payload[name], name, minimum=0, maximum=(2**53) - 1
+                )
+        if payload.get("terminal_phase") not in {
+            None,
+            "drafting",
+            "sandbox_failed",
+            "validation_scheduled",
+        }:
+            raise ValueError("invalid Builder terminal phase")
         digest = _as_string(payload["checkpoint_digest"], "checkpoint_digest")
         if _DIGEST_PATTERN.fullmatch(digest) is None:
             raise ValueError("invalid checkpoint digest")

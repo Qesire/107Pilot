@@ -887,7 +887,8 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                     "market_application": project_handlers,
                     "template_publication": project_handlers,
                 },
-            )
+            ),
+            metrics=metrics,
         )
     market_session_store = build_market_session_store(selection=selection)
     market_application_service = MarketApplicationService(

@@ -247,6 +247,11 @@ def test_phase_aware_builder_context_route_uses_bound_scope(tmp_path: Path) -> N
     assert response.status == 200
     assert response.payload["result"]["phase"] == "drafting"
     assert response.payload["result"]["next_action"] == "builder_build_submit"
+    metrics = api.metrics.render()
+    assert (
+        'pilot107_agent_tool_invocations_total{outcome="success",'
+        'profile="experiment_builder",tool="builder_context_get"} 1'
+    ) in metrics
 
 
 def _asgi_request(

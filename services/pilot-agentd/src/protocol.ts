@@ -576,6 +576,12 @@ const ToolBaseProperties = {
   tool_name: Id,
 };
 
+const BuilderPhaseSchema = Type.Union([
+  Type.Literal("drafting"),
+  Type.Literal("sandbox_failed"),
+  Type.Literal("validation_scheduled"),
+]);
+
 function eventVariant<const EventType extends TurnEventType, const Payload extends TSchema>(
   type: EventType,
   payload: Payload,
@@ -671,6 +677,27 @@ const EventVariants = [
         model_profile_id: Id,
         usage: UsageSchema,
         provider_calls: Type.Integer({ minimum: 1, maximum: 100 }),
+        pi_steps: Type.Optional(Type.Integer({
+          minimum: 0,
+          maximum: Number.MAX_SAFE_INTEGER,
+        })),
+        tool_invocations: Type.Optional(Type.Integer({
+          minimum: 0,
+          maximum: Number.MAX_SAFE_INTEGER,
+        })),
+        build_submissions: Type.Optional(Type.Integer({
+          minimum: 0,
+          maximum: Number.MAX_SAFE_INTEGER,
+        })),
+        repair_submissions: Type.Optional(Type.Integer({
+          minimum: 0,
+          maximum: Number.MAX_SAFE_INTEGER,
+        })),
+        no_progress_rejections: Type.Optional(Type.Integer({
+          minimum: 0,
+          maximum: Number.MAX_SAFE_INTEGER,
+        })),
+        terminal_phase: Type.Optional(BuilderPhaseSchema),
         checkpoint_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
         duration_ms: Type.Integer({ minimum: 0, maximum: 3_600_000 }),
         checkpoint: Type.Optional(AgentCheckpointBodySchema),

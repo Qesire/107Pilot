@@ -9,13 +9,19 @@ from dataclasses import asdict
 from pilot107.agent.protocol import parse_tool_invocation
 from pilot107.agent.tool_gateway import AgentToolGateway, AgentToolGatewayError
 from pilot107.api.http_types import ApiResponse
+from pilot107.api.metrics import ControlPlaneMetrics
 
 _MAX_BODY_BYTES = 1024 * 1024
 
 
 class AgentToolRoutes:
-    def __init__(self, gateway: AgentToolGateway) -> None:
+    def __init__(
+        self,
+        gateway: AgentToolGateway,
+        metrics: ControlPlaneMetrics | None = None,
+    ) -> None:
         self.gateway = gateway
+        self.metrics = metrics
 
     def handle_post(
         self,
@@ -55,12 +61,46 @@ class AgentToolRoutes:
         try:
             result = self.gateway.invoke(token, invocation)
         except AgentToolGatewayError as exc:
+            self._observe_error(invocation.profile_id, invocation.tool_name, exc.code)
             return _gateway_error(exc)
         except Exception:
+            self._observe_error(invocation.profile_id, invocation.tool_name, None)
             return _error(500, "AGENT.TOOL.INTERNAL", "Agent tool invocation failed")
+        self._observe_success(invocation.profile_id, invocation.tool_name, result.result)
         payload = asdict(result)
         payload["evidence_refs"] = list(result.evidence_refs)
         return ApiResponse(status=200, payload=payload)
+
+    def _observe_error(
+        self,
+        profile: str,
+        tool: str,
+        code: str | None,
+    ) -> None:
+        if self.metrics is None:
+            return
+        outcome = "no_progress" if code == "AGENT.BUILDER.NO_PROGRESS" else "error"
+        self.metrics.observe_agent_tool(profile=profile, tool=tool, outcome=outcome)
+        if tool == "builder_build_submit":
+            self.metrics.observe_builder_submission(outcome=outcome, phase=None)
+
+    def _observe_success(
+        self,
+        profile: str,
+        tool: str,
+        result: Mapping[str, object] | None,
+    ) -> None:
+        if self.metrics is None:
+            return
+        self.metrics.observe_agent_tool(profile=profile, tool=tool, outcome="success")
+        if tool != "builder_build_submit" or result is None:
+            return
+        outcome = result.get("status")
+        phase = result.get("phase")
+        self.metrics.observe_builder_submission(
+            outcome=outcome if isinstance(outcome, str) else "error",
+            phase=phase if isinstance(phase, str) else None,
+        )
 
 
 def _gateway_error(exc: AgentToolGatewayError) -> ApiResponse:

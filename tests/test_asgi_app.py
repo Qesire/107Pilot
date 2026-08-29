@@ -242,6 +242,20 @@ class AsgiAppTests(unittest.TestCase):
                 input_tokens=42,
                 output_tokens=8,
             )
+            api.metrics.observe_agent_tool(
+                profile="experiment_builder",
+                tool="builder_build_submit",
+                outcome="no_progress",
+            )
+            api.metrics.observe_builder_submission(
+                outcome="scheduled",
+                phase="validation_scheduled",
+            )
+            api.metrics.observe_builder_turn(
+                profile="experiment_builder",
+                pi_steps=3,
+                phase="validation_scheduled",
+            )
             WorkerTelemetryStore(
                 root=root / "worker-metrics",
                 worker_id="worker-metrics-test",
@@ -299,6 +313,26 @@ class AsgiAppTests(unittest.TestCase):
             'pilot107_llm_tokens_total{direction="input",model="test-model",provider="local"} 42',
             metrics,
         )
+        self.assertIn(
+            'pilot107_agent_tool_invocations_total{outcome="no_progress",'
+            'profile="experiment_builder",tool="builder_build_submit"} 1',
+            metrics,
+        )
+        self.assertIn(
+            'pilot107_builder_submissions_total{outcome="scheduled",'
+            'phase="validation_scheduled"} 1',
+            metrics,
+        )
+        self.assertIn(
+            'pilot107_builder_no_progress_total{profile="experiment_builder"} 1',
+            metrics,
+        )
+        self.assertIn(
+            'pilot107_builder_pi_steps_bucket{le="3",phase="validation_scheduled",'
+            'profile="experiment_builder"} 1',
+            metrics,
+        )
+        self.assertNotIn("project-sensitive", metrics)
         self.assertIn("pilot107_metrics_scrape_error 0", metrics)
 
     def test_metrics_report_corrupt_durable_source_without_leaking_content(self) -> None:

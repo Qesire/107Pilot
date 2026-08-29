@@ -235,6 +235,12 @@ def _completed_payload(*, result: Any = None) -> dict[str, Any]:
         "model_profile_id": "campus-default",
         "usage": _usage(),
         "provider_calls": 1,
+        "pi_steps": 2,
+        "tool_invocations": 2,
+        "build_submissions": 1,
+        "repair_submissions": 0,
+        "no_progress_rejections": 0,
+        "terminal_phase": "validation_scheduled",
         "checkpoint_digest": _DIGEST,
         "duration_ms": 42,
         "checkpoint": _checkpoint(),
@@ -330,6 +336,33 @@ def test_parse_event_stream_accepts_all_v1_event_payloads_and_arbitrary_json_res
 
     assert [event.type for event in events] == [*event_types, "turn_completed"]
     assert events[-1].payload["result"] == ["interactive text", None, 3]
+    result = agent_protocol.result_from_terminal(events[-1])
+    assert result.pi_steps == 2
+    assert result.tool_invocations == 2
+    assert result.build_submissions == 1
+    assert result.repair_submissions == 0
+    assert result.no_progress_rejections == 0
+    assert result.terminal_phase == "validation_scheduled"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("pi_steps", -1),
+        ("tool_invocations", True),
+        ("terminal_phase", "published"),
+    ],
+)
+def test_turn_completed_rejects_invalid_builder_metrics(
+    field: str, value: object
+) -> None:
+    payload = _completed_payload()
+    payload[field] = value
+
+    with pytest.raises(AgentdClientError) as caught:
+        list(parse_event_lines("turn-1", [_line(_event(1, "turn_completed", payload))]))
+
+    assert caught.value.code == "protocol_error"
 
 
 def test_parse_event_stream_accepts_a_closed_failed_terminal() -> None:

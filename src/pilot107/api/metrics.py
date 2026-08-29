@@ -115,6 +115,45 @@ _STATIC_SEGMENTS = frozenset(
         "withdraw",
     }
 )
+_BUILDER_STEP_BUCKETS = (1, 2, 3, 5, 8, 13, 20)
+_AGENT_PROFILES = frozenset(
+    {
+        "hpc-readonly-v1",
+        "platform_coach",
+        "experiment_builder",
+        "run_diagnosis_repair",
+        "market_application",
+        "template_publication",
+    }
+)
+_AGENT_TOOLS = frozenset(
+    {
+        "platform_get_snapshot",
+        "platform_observation_get",
+        "account_observation_get",
+        "run_get",
+        "run_log_read",
+        "evidence_read",
+        "run_resources_get",
+        "project_get",
+        "project_blueprint_save",
+        "workspace_list",
+        "workspace_read",
+        "workspace_patch",
+        "workspace_diff",
+        "sandbox_exec",
+        "validation_schedule",
+        "builder_context_get",
+        "builder_build_submit",
+    }
+)
+_AGENT_TOOL_OUTCOMES = frozenset({"success", "error", "no_progress"})
+_BUILDER_SUBMISSION_OUTCOMES = frozenset(
+    {"scheduled", "repair_required", "error", "no_progress"}
+)
+_BUILDER_PHASES = frozenset(
+    {"none", "drafting", "sandbox_failed", "validation_scheduled"}
+)
 
 
 class ControlPlaneMetrics:
@@ -142,6 +181,12 @@ class ControlPlaneMetrics:
         self._sse_events = 0
         self._upload_events: defaultdict[str, int] = defaultdict(int)
         self._upload_bytes_total = 0
+        self._agent_tools: defaultdict[tuple[str, str, str], int] = defaultdict(int)
+        self._builder_submissions: defaultdict[tuple[str, str], int] = defaultdict(int)
+        self._builder_no_progress: defaultdict[str, int] = defaultdict(int)
+        self._builder_step_buckets: defaultdict[tuple[str, str, str], int] = defaultdict(int)
+        self._builder_step_sum: defaultdict[tuple[str, str], int] = defaultdict(int)
+        self._builder_step_count: defaultdict[tuple[str, str], int] = defaultdict(int)
 
     def observe_request(
         self,
@@ -198,6 +243,58 @@ class ControlPlaneMetrics:
             self._upload_events[normalized] += 1
             self._upload_bytes_total += max(0, size_bytes)
 
+    def observe_agent_tool(
+        self,
+        *,
+        profile: str,
+        tool: str,
+        outcome: str,
+    ) -> None:
+        normalized_profile = profile if profile in _AGENT_PROFILES else "other"
+        normalized_tool = tool if tool in _AGENT_TOOLS else "other"
+        normalized_outcome = (
+            outcome if outcome in _AGENT_TOOL_OUTCOMES else "error"
+        )
+        with self._lock:
+            self._agent_tools[
+                (normalized_profile, normalized_tool, normalized_outcome)
+            ] += 1
+            if normalized_outcome == "no_progress":
+                self._builder_no_progress[normalized_profile] += 1
+
+    def observe_builder_submission(
+        self,
+        *,
+        outcome: str,
+        phase: str | None,
+    ) -> None:
+        normalized_outcome = (
+            outcome if outcome in _BUILDER_SUBMISSION_OUTCOMES else "error"
+        )
+        normalized_phase = phase if phase in _BUILDER_PHASES else "none"
+        with self._lock:
+            self._builder_submissions[(normalized_outcome, normalized_phase)] += 1
+
+    def observe_builder_turn(
+        self,
+        *,
+        profile: str,
+        pi_steps: int,
+        phase: str | None,
+    ) -> None:
+        normalized_profile = profile if profile in _AGENT_PROFILES else "other"
+        normalized_phase = phase if phase in _BUILDER_PHASES else "none"
+        steps = pi_steps if isinstance(pi_steps, int) and not isinstance(pi_steps, bool) else 0
+        steps = max(0, steps)
+        key = (normalized_profile, normalized_phase)
+        with self._lock:
+            for bound in _BUILDER_STEP_BUCKETS:
+                if steps <= bound:
+                    self._builder_step_buckets[(*key, str(bound))] += 1
+            self._builder_step_buckets[(*key, "+Inf")] += 1
+            self._builder_step_sum[key] += steps
+            self._builder_step_count[key] += 1
+
     def observe_sse_closed(
         self,
         *,
@@ -234,6 +331,12 @@ class ControlPlaneMetrics:
             sse_events = self._sse_events
             upload_events = dict(self._upload_events)
             upload_bytes_total = self._upload_bytes_total
+            agent_tools = dict(self._agent_tools)
+            builder_submissions = dict(self._builder_submissions)
+            builder_no_progress = dict(self._builder_no_progress)
+            builder_step_buckets = dict(self._builder_step_buckets)
+            builder_step_sum = dict(self._builder_step_sum)
+            builder_step_count = dict(self._builder_step_count)
         lines = [
             "# HELP pilot107_api_requests_total HTTP requests by normalized route and status.",
             "# TYPE pilot107_api_requests_total counter",
@@ -319,6 +422,45 @@ class ControlPlaneMetrics:
         )
         for outcome, value in sorted(upload_events.items()):
             lines.append(f"pilot107_upload_events_total{{{_labels(outcome=outcome)}}} {value}")
+
+        lines.extend(
+            (
+                "# HELP pilot107_agent_tool_invocations_total Agent tool outcomes.",
+                "# TYPE pilot107_agent_tool_invocations_total counter",
+                "# HELP pilot107_builder_submissions_total Builder facade submission outcomes.",
+                "# TYPE pilot107_builder_submissions_total counter",
+                "# HELP pilot107_builder_no_progress_total Builder no-progress rejections.",
+                "# TYPE pilot107_builder_no_progress_total counter",
+                "# HELP pilot107_builder_pi_steps Builder Pi steps per terminal Turn.",
+                "# TYPE pilot107_builder_pi_steps histogram",
+            )
+        )
+        for (profile, tool, outcome), value in sorted(agent_tools.items()):
+            lines.append(
+                "pilot107_agent_tool_invocations_total"
+                f"{{{_labels(profile=profile, tool=tool, outcome=outcome)}}} {value}"
+            )
+        for (outcome, phase), value in sorted(builder_submissions.items()):
+            lines.append(
+                "pilot107_builder_submissions_total"
+                f"{{{_labels(outcome=outcome, phase=phase)}}} {value}"
+            )
+        for profile, value in sorted(builder_no_progress.items()):
+            lines.append(
+                f"pilot107_builder_no_progress_total{{{_labels(profile=profile)}}} {value}"
+            )
+        for (profile, phase, bound), value in sorted(builder_step_buckets.items()):
+            lines.append(
+                "pilot107_builder_pi_steps_bucket"
+                f"{{{_labels(profile=profile, phase=phase, le=bound)}}} {value}"
+            )
+        for (profile, phase), count in sorted(builder_step_count.items()):
+            labels = _labels(profile=profile, phase=phase)
+            lines.append(
+                f"pilot107_builder_pi_steps_sum{{{labels}}} "
+                f"{builder_step_sum[(profile, phase)]}"
+            )
+            lines.append(f"pilot107_builder_pi_steps_count{{{labels}}} {count}")
 
         scrape_error = 0
         try:

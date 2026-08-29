@@ -256,6 +256,7 @@ export class TurnExecutor {
           normalizedUsage(usage),
         );
         await sink.emit("checkpoint", { checkpoint });
+        const workflow = workflowMetrics(checkpoint, budget);
         await sink.complete({
           result: outcome.result,
           provider: runtime.model.provider,
@@ -263,6 +264,14 @@ export class TurnExecutor {
           model_profile_id: runtime.profile.id,
           usage: checkpoint.usage,
           provider_calls: budget.providerCalls,
+          pi_steps: workflow.piSteps,
+          tool_invocations: workflow.toolInvocations,
+          build_submissions: workflow.buildSubmissions,
+          repair_submissions: workflow.repairSubmissions,
+          no_progress_rejections: workflow.noProgressRejections,
+          ...(workflow.terminalPhase === undefined
+            ? {}
+            : { terminal_phase: workflow.terminalPhase }),
           checkpoint_digest: checkpoint.digest,
           duration_ms: boundedDuration(startedAt),
           checkpoint,
@@ -561,6 +570,64 @@ function isScheduledBuilderReceipt(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+type BuilderTerminalPhase =
+  | "drafting"
+  | "sandbox_failed"
+  | "validation_scheduled";
+
+function workflowMetrics(
+  checkpoint: AgentCheckpoint,
+  budget: AttemptBudget,
+): {
+  readonly piSteps: number;
+  readonly toolInvocations: number;
+  readonly buildSubmissions: number;
+  readonly repairSubmissions: number;
+  readonly noProgressRejections: number;
+  readonly terminalPhase?: BuilderTerminalPhase;
+} {
+  let buildSubmissions = 0;
+  let repairSubmissions = 0;
+  let noProgressRejections = 0;
+  let terminalPhase: BuilderTerminalPhase | undefined;
+  for (const tool of checkpoint.completed_tools) {
+    if (tool.tool_name === "builder_build_submit") {
+      if (tool.arguments.base_change_set_id === null) {
+        buildSubmissions += 1;
+      } else {
+        repairSubmissions += 1;
+      }
+    }
+    const details = objectRecord(tool.result);
+    const error = objectRecord(details?.error);
+    if (error?.code === "AGENT.BUILDER.NO_PROGRESS") {
+      noProgressRejections += 1;
+    }
+    const result = objectRecord(details?.result);
+    if (isBuilderPhase(result?.phase)) terminalPhase = result.phase;
+  }
+  return {
+    piSteps: budget.piSteps,
+    toolInvocations: checkpoint.completed_tools.length,
+    buildSubmissions,
+    repairSubmissions,
+    noProgressRejections,
+    ...(terminalPhase === undefined ? {} : { terminalPhase }),
+  };
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function isBuilderPhase(value: unknown): value is BuilderTerminalPhase {
+  return value === "drafting"
+    || value === "sandbox_failed"
+    || value === "validation_scheduled";
 }
 
 function hasToolInteraction(messages: readonly AgentMessage[]): boolean {

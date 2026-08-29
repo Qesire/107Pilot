@@ -379,7 +379,18 @@ describe("durable readonly Turn", () => {
 
     expect(called).toEqual(["builder_context_get", "builder_build_submit"]);
     expect(runtime.faux.state.callCount).toBe(2);
-    expect(terminal(events)).toMatchObject({ type: "turn_completed" });
+    expect(terminal(events)).toMatchObject({
+      type: "turn_completed",
+      payload: {
+        provider_calls: 2,
+        pi_steps: 2,
+        tool_invocations: 2,
+        build_submissions: 1,
+        repair_submissions: 0,
+        no_progress_rejections: 0,
+        terminal_phase: "validation_scheduled",
+      },
+    });
   });
 
   it("keeps one repair receipt nonterminal and completes in three Pi steps", async () => {
@@ -446,7 +457,17 @@ describe("durable readonly Turn", () => {
 
     expect(submissions).toBe(2);
     expect(runtime.faux.state.callCount).toBe(3);
-    expect(terminal(events)).toMatchObject({ type: "turn_completed" });
+    expect(terminal(events)).toMatchObject({
+      type: "turn_completed",
+      payload: {
+        pi_steps: 3,
+        tool_invocations: 3,
+        build_submissions: 1,
+        repair_submissions: 1,
+        no_progress_rejections: 0,
+        terminal_phase: "validation_scheduled",
+      },
+    });
   });
 
   it("stops a pathological phase-aware Builder loop at twenty Pi steps", async () => {
