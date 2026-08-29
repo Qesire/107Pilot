@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 
 from pilot107.adapters.slurm import InMemorySlurmBackend
+from pilot107.agent.project import (
+    ProjectBlueprint,
+    ProjectContractIntent,
+    ProjectValidation,
+)
 from pilot107.agent.store import SQLiteAgentSessionStore
 from pilot107.agent.task_store import SQLiteAgentTaskStore
 from pilot107.agent.tasks import AgentResourceEnvelope, AgentTaskRequest, AgentTaskState
@@ -317,6 +322,68 @@ def test_validation_tool_returns_stable_resource_envelope_error(tmp_path: Path) 
         handler("alice", arguments)
 
     assert error.value.code == "AGENT.TOOL.RESOURCE_ENVELOPE_EXCEEDED"
+
+
+def test_blueprint_validation_derives_bounded_request_without_model_scheduler_fields(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path)
+    blueprint = ProjectBlueprint(
+        goal="validate",
+        entrypoints=("scripts/run.sh",),
+        files=(),
+        validations=(
+            ProjectValidation(
+                validation_id="sandbox",
+                execution="sandbox",
+                argv=("python", "validate.py"),
+                expected_outputs=(),
+            ),
+            ProjectValidation(
+                validation_id="slurm",
+                execution="slurm",
+                argv=("bash", "scripts/run.sh", "--mode", "accurate result"),
+                expected_outputs=("results/summary.json",),
+            ),
+        ),
+        contract_intent=ProjectContractIntent(
+            recipe_version_id=None,
+            resource_hints={
+                "partition": "debug",
+                "qos": "normal",
+                "cpus_per_task": 1,
+                "memory_mib": 512,
+                "gpus": 0,
+                "time_limit": "00:04:00",
+            },
+        ),
+        expected_outputs=(),
+        dependencies=(),
+        open_questions=(),
+    )
+
+    task, created = harness.service.schedule_blueprint_validation(
+        owner="alice",
+        session_id=harness.session.session_id,
+        turn_id=harness.turn_id,
+        project_id="project-1",
+        workspace_id="workspace-1",
+        request_key="blueprint-validation",
+        blueprint=blueprint,
+        envelope=_envelope(),
+    )
+
+    assert created is True
+    assert task.request.cpus == 1
+    assert task.request.memory_mib == 512
+    assert task.request.walltime_seconds == 240
+    assert task.request.tasks == 1
+    assert task.request.submissions == 1
+    assert task.request.payload == {
+        "script": "bash scripts/run.sh --mode 'accurate result'",
+        "job_name": "slurm",
+        "expected_outputs": ["results/summary.json"],
+    }
 
 
 def test_run_uses_authorized_cluster_workdir_not_local_snapshot(tmp_path: Path) -> None:

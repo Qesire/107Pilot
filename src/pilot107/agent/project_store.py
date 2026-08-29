@@ -266,6 +266,16 @@ class ProjectStore(Protocol):
         workspace_id: str,
     ) -> BuilderSubmissionRecord | None: ...
 
+    def list_builder_submissions(
+        self,
+        *,
+        owner: str,
+        session_id: str,
+        project_id: str,
+        workspace_id: str,
+        limit: int = 100,
+    ) -> list[BuilderSubmissionRecord]: ...
+
     def replace_builder_submission(
         self, record: BuilderSubmissionRecord, *, expected_version: int
     ) -> BuilderSubmissionRecord: ...
@@ -875,14 +885,43 @@ class SQLiteProjectStore:
         ):
             _key(value, label)
         with self.connect() as connection:
-            row = connection.execute(
+            rows = connection.execute(
                 "SELECT * FROM agent_builder_submissions "
                 "WHERE owner = ? AND session_id = ? AND project_id = ? "
                 "AND workspace_id = ? "
-                "ORDER BY updated_at DESC, submission_id DESC LIMIT 1",
+                "ORDER BY updated_at DESC, submission_id DESC LIMIT 100",
                 (owner, session_id, project_id, workspace_id),
-            ).fetchone()
-        return None if row is None else _row_to_builder_submission(row)
+            ).fetchall()
+        return _latest_builder_submission(
+            [_row_to_builder_submission(row) for row in rows]
+        )
+
+    def list_builder_submissions(
+        self,
+        *,
+        owner: str,
+        session_id: str,
+        project_id: str,
+        workspace_id: str,
+        limit: int = 100,
+    ) -> list[BuilderSubmissionRecord]:
+        for value, label in (
+            (owner, "owner"),
+            (session_id, "session_id"),
+            (project_id, "project_id"),
+            (workspace_id, "workspace_id"),
+        ):
+            _key(value, label)
+        _limit(limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM agent_builder_submissions "
+                "WHERE owner = ? AND session_id = ? AND project_id = ? "
+                "AND workspace_id = ? "
+                "ORDER BY created_at ASC, submission_id ASC LIMIT ?",
+                (owner, session_id, project_id, workspace_id, limit),
+            ).fetchall()
+        return [_row_to_builder_submission(row) for row in rows]
 
     def replace_builder_submission(
         self, record: BuilderSubmissionRecord, *, expected_version: int
@@ -1101,6 +1140,24 @@ def _assert_builder_submission_replay(
     stored: BuilderSubmissionRecord, candidate: BuilderSubmissionRecord
 ) -> None:
     _assert_builder_submission_identity(stored, candidate)
+
+
+def _latest_builder_submission(
+    records: list[BuilderSubmissionRecord],
+) -> BuilderSubmissionRecord | None:
+    if not records:
+        return None
+    referenced = {
+        record.base_change_set_id
+        for record in records
+        if record.base_change_set_id is not None
+    }
+    tips = [
+        record
+        for record in records
+        if record.change_set_id is None or record.change_set_id not in referenced
+    ]
+    return max(tips or records, key=lambda item: (item.updated_at, item.submission_id))
 
 
 def _canonical_json(value: object) -> str:

@@ -23,6 +23,7 @@ from pilot107.agent.project_store import (
     _assert_create_replay,
     _create_values,
     _key,
+    _latest_builder_submission,
     _limit,
     _row_to_builder_submission,
     _row_to_project,
@@ -702,14 +703,43 @@ class PostgresProjectStore:
         ):
             _key(value, label)
         with self.connect() as connection:
-            row = connection.execute(
+            rows = connection.execute(
                 "SELECT * FROM agent_builder_submissions "
                 "WHERE owner = %s AND session_id = %s AND project_id = %s "
                 "AND workspace_id = %s "
-                "ORDER BY updated_at DESC, submission_id DESC LIMIT 1",
+                "ORDER BY updated_at DESC, submission_id DESC LIMIT 100",
                 (owner, session_id, project_id, workspace_id),
-            ).fetchone()
-        return None if row is None else _row_to_builder_submission(row)
+            ).fetchall()
+        return _latest_builder_submission(
+            [_row_to_builder_submission(row) for row in rows]
+        )
+
+    def list_builder_submissions(
+        self,
+        *,
+        owner: str,
+        session_id: str,
+        project_id: str,
+        workspace_id: str,
+        limit: int = 100,
+    ) -> list[BuilderSubmissionRecord]:
+        for value, label in (
+            (owner, "owner"),
+            (session_id, "session_id"),
+            (project_id, "project_id"),
+            (workspace_id, "workspace_id"),
+        ):
+            _key(value, label)
+        _limit(limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM agent_builder_submissions "
+                "WHERE owner = %s AND session_id = %s AND project_id = %s "
+                "AND workspace_id = %s "
+                "ORDER BY created_at ASC, submission_id ASC LIMIT %s",
+                (owner, session_id, project_id, workspace_id, limit),
+            ).fetchall()
+        return [_row_to_builder_submission(row) for row in rows]
 
     def replace_builder_submission(
         self, record: BuilderSubmissionRecord, *, expected_version: int

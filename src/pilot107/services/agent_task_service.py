@@ -12,7 +12,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pilot107.agent.project import is_project_agent_profile
+from pilot107.agent.project import ProjectBlueprint, is_project_agent_profile
 from pilot107.agent.store import AgentSessionStore
 from pilot107.agent.task_store import AgentTaskStore
 from pilot107.agent.tasks import (
@@ -130,6 +130,65 @@ class AgentTaskService:
             payload={"task_id": task.task_id, "owner": task.owner},
         )
         return task, created
+
+    def schedule_blueprint_validation(
+        self,
+        *,
+        owner: str,
+        session_id: str,
+        turn_id: str,
+        project_id: str,
+        workspace_id: str,
+        request_key: str,
+        blueprint: ProjectBlueprint,
+        envelope: AgentResourceEnvelope,
+    ) -> tuple[AgentTaskRecord, bool]:
+        """Derive one closed Slurm request from a typed Blueprint and approval."""
+
+        if not isinstance(blueprint, ProjectBlueprint):
+            raise TypeError("blueprint must be a ProjectBlueprint")
+        validations = [
+            validation
+            for validation in blueprint.validations
+            if validation.execution == "slurm"
+        ]
+        if len(validations) != 1:
+            raise ValueError("Blueprint must declare exactly one Slurm validation")
+        validation = validations[0]
+        hints = blueprint.contract_intent.resource_hints
+        partition = _resource_text(hints, "partition", envelope.partition)
+        qos = _resource_text(hints, "qos", envelope.qos)
+        cpus = _resource_int(hints, "cpus_per_task", envelope.cpus)
+        memory_mib = _resource_int(hints, "memory_mib", envelope.memory_mib)
+        gpus = _resource_int(hints, "gpus", envelope.gpus, allow_zero=True)
+        walltime_seconds = _resource_walltime(hints, envelope.walltime_seconds)
+        request = AgentTaskRequest(
+            partition=partition,
+            qos=qos,
+            cpus=cpus,
+            memory_mib=memory_mib,
+            gpu_type=envelope.gpu_type if gpus else None,
+            gpus=gpus,
+            walltime_seconds=walltime_seconds,
+            tasks=1,
+            submissions=1,
+            workspace_snapshot_digest=envelope.workspace_snapshot_digest,
+            payload={
+                "script": shlex.join(validation.argv),
+                "job_name": validation.validation_id,
+                "expected_outputs": list(validation.expected_outputs),
+            },
+        )
+        return self.schedule_validation(
+            owner=owner,
+            session_id=session_id,
+            turn_id=turn_id,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            request_key=request_key,
+            request=request,
+            envelope=envelope,
+        )
 
     def request_cancel(
         self, task_id: str, *, owner: str, expected_version: int
@@ -593,6 +652,65 @@ def _without_shebang(script: str) -> str:
         return script
     _, separator, remainder = script.partition("\n")
     return remainder if separator else ""
+
+
+def _resource_text(
+    hints: Mapping[str, str | int], key: str, default: str
+) -> str:
+    value = hints.get(key, default)
+    if not isinstance(value, str):
+        raise TypeError(f"Blueprint resource hint {key} must be text")
+    return value
+
+
+def _resource_int(
+    hints: Mapping[str, str | int],
+    key: str,
+    default: int,
+    *,
+    allow_zero: bool = False,
+) -> int:
+    value = hints.get(key, default)
+    minimum = 0 if allow_zero else 1
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"Blueprint resource hint {key} is invalid")
+    return value
+
+
+def _resource_walltime(
+    hints: Mapping[str, str | int], default_seconds: int
+) -> int:
+    value = hints.get("time_limit")
+    if value is None:
+        return default_seconds
+    if not isinstance(value, str):
+        raise TypeError("Blueprint time_limit must be text")
+    day_text, separator, clock_text = value.partition("-")
+    if separator:
+        if not day_text.isdigit():
+            raise ValueError("Blueprint time_limit is invalid")
+        days = int(day_text)
+    else:
+        days = 0
+        clock_text = day_text
+    parts = clock_text.split(":")
+    if not all(part.isdigit() for part in parts):
+        raise ValueError("Blueprint time_limit is invalid")
+    numbers = [int(part) for part in parts]
+    if len(numbers) == 1:
+        seconds = numbers[0] * 60
+    elif len(numbers) == 2 and numbers[1] < 60:
+        seconds = numbers[0] * 60 + numbers[1]
+    elif len(numbers) == 3 and numbers[1] < 60 and numbers[2] < 60:
+        seconds = numbers[0] * 3600 + numbers[1] * 60 + numbers[2]
+    else:
+        raise ValueError("Blueprint time_limit is invalid")
+    if separator and numbers[0] >= 24:
+        raise ValueError("Blueprint time_limit is invalid")
+    total = days * 86_400 + seconds
+    if not 1 <= total <= 31_536_000:
+        raise ValueError("Blueprint time_limit is invalid")
+    return total
 
 
 def _tool_string(
