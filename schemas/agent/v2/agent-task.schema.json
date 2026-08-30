@@ -142,12 +142,28 @@
         "created_at": {"$ref": "#/$defs/timestamp"},
         "legacy_boundary": {"type": "boolean"}
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"workspace_revision": {"type": "null"}}},
+          "then": {
+            "required": ["legacy_boundary"],
+            "properties": {"legacy_boundary": {"const": true}}
+          }
+        },
+        {
+          "if": {"properties": {"workspace_revision": {"type": "integer"}}},
+          "then": {
+            "required": ["legacy_boundary"],
+            "properties": {"legacy_boundary": {"const": false}}
+          }
+        }
+      ]
     },
     "gateReceipt": {
       "type": "object",
       "required": [
-        "run_id", "evidence_refs", "evidence_digest", "integrity_verified_at",
+        "task_id", "run_id", "run_terminal_state", "evidence_refs", "evidence_digest", "integrity_verified_at",
         "workspace_revision", "workspace_digest", "legacy_boundary", "capsule_ref",
         "capsule_state"
       ],
@@ -155,7 +171,7 @@
         "task_id": {"$ref": "#/$defs/id"},
         "run_id": {"$ref": "#/$defs/id"},
         "run_terminal_state": {"type": "string", "minLength": 1, "maxLength": 128},
-        "evidence_state": {"type": "string", "minLength": 1, "maxLength": 128},
+        "evidence_state": {"const": "finalized"},
         "evidence_refs": {
           "type": "array",
           "maxItems": 4096,
@@ -163,7 +179,7 @@
         },
         "evidence_digest": {"$ref": "#/$defs/digest"},
         "integrity_verified_at": {"$ref": "#/$defs/timestamp"},
-        "integrity_state": {"type": "string", "minLength": 1, "maxLength": 128},
+        "integrity_state": {"const": "verified"},
         "platform_snapshot_ref": {"type": "string", "minLength": 1, "maxLength": 4096},
         "source_revision": {"type": "string", "minLength": 1, "maxLength": 4096},
         "workspace_revision": {
@@ -178,7 +194,31 @@
         "capsule_state": {"enum": ["READY", "not_required"]},
         "terminal_at": {"$ref": "#/$defs/timestamp"}
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"capsule_state": {"const": "READY"}}},
+          "then": {"properties": {"capsule_ref": {"type": "string", "minLength": 1, "maxLength": 4096}}}
+        },
+        {
+          "if": {"properties": {"capsule_state": {"const": "not_required"}}},
+          "then": {"properties": {"capsule_ref": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"workspace_revision": {"type": "null"}}},
+          "then": {
+            "required": ["legacy_boundary"],
+            "properties": {"legacy_boundary": {"const": true}}
+          }
+        },
+        {
+          "if": {"properties": {"workspace_revision": {"type": "integer"}}},
+          "then": {
+            "required": ["legacy_boundary"],
+            "properties": {"legacy_boundary": {"const": false}}
+          }
+        }
+      ]
     },
     "id": {
       "type": "string",

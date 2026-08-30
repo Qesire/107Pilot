@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -65,7 +66,9 @@ def test_capsule_policy_is_explicit_not_inferred_from_vm_mode() -> None:
 
 def test_gate_receipt_carries_legacy_workspace_boundary_without_inventing_revision() -> None:
     receipt = AgentTaskGateReceipt(
+        task_id="task-1",
         run_id="run-1",
+        run_terminal_state="completed",
         evidence_refs=("evidence-1",),
         evidence_digest="a" * 64,
         integrity_verified_at="2026-08-19T00:05:00Z",
@@ -89,6 +92,7 @@ def test_gate_state_preserves_legacy_terminal_wire_state() -> None:
 def test_gate_receipt_rejects_unfinalized_or_unverified_facts() -> None:
     with pytest.raises(ValueError, match="evidence_state"):
         AgentTaskGateReceipt(
+            task_id="task-1",
             run_id="run-1",
             evidence_refs=("evidence-1",),
             evidence_digest="a" * 64,
@@ -98,10 +102,12 @@ def test_gate_receipt_rejects_unfinalized_or_unverified_facts() -> None:
             legacy_boundary=True,
             capsule_ref=None,
             capsule_state="not_required",
+            run_terminal_state="completed",
             evidence_state="collected",
         )
     with pytest.raises(ValueError, match="integrity_state"):
         AgentTaskGateReceipt(
+            task_id="task-1",
             run_id="run-1",
             evidence_refs=("evidence-1",),
             evidence_digest="a" * 64,
@@ -111,6 +117,7 @@ def test_gate_receipt_rejects_unfinalized_or_unverified_facts() -> None:
             legacy_boundary=True,
             capsule_ref=None,
             capsule_state="not_required",
+            run_terminal_state="completed",
             integrity_state="pending",
         )
 
@@ -124,6 +131,7 @@ def test_gate_receipt_requires_capsule_state_and_ref_to_agree(
 ) -> None:
     with pytest.raises(ValueError, match="capsule"):
         AgentTaskGateReceipt(
+            task_id="task-1",
             run_id="run-1",
             evidence_refs=("evidence-1",),
             evidence_digest="a" * 64,
@@ -133,7 +141,100 @@ def test_gate_receipt_requires_capsule_state_and_ref_to_agree(
             legacy_boundary=True,
             capsule_ref=capsule_ref,
             capsule_state=capsule_state,
+            run_terminal_state="completed",
         )
+
+
+def test_gate_receipt_requires_task_and_terminal_state() -> None:
+    with pytest.raises(TypeError):
+        AgentTaskGateReceipt(
+            run_id="run-1",
+            evidence_refs=("evidence-1",),
+            evidence_digest="a" * 64,
+            integrity_verified_at="2026-08-19T00:05:00Z",
+            workspace_revision=None,
+            workspace_digest="b" * 64,
+            legacy_boundary=True,
+            capsule_ref=None,
+            capsule_state="not_required",
+        )
+
+
+@pytest.mark.parametrize("receipt_type", [AgentTaskScheduleReceipt, AgentTaskGateReceipt])
+def test_legacy_boundary_is_required_when_revision_is_missing(receipt_type: type) -> None:
+    values: dict[str, object] = {
+        "task_id": "task-1",
+        "run_id": "run-1",
+        "workspace_revision": None,
+        "workspace_digest": "a" * 64,
+        "legacy_boundary": False,
+    }
+    if receipt_type is AgentTaskScheduleReceipt:
+        values.update(
+            {
+                "completion_policy": AgentTaskCompletionPolicy.EVIDENCE_REQUIRED,
+                "submit_state": "admitted",
+            }
+        )
+    else:
+        values.update(
+            {
+                "evidence_refs": ("evidence-1",),
+                "evidence_digest": "b" * 64,
+                "integrity_verified_at": "2026-08-19T00:05:00Z",
+                "capsule_ref": None,
+                "capsule_state": "not_required",
+                "run_terminal_state": "completed",
+            }
+        )
+    with pytest.raises(ValueError, match="legacy workspace boundary"):
+        receipt_type(**values)
+
+
+@pytest.mark.parametrize("receipt_type", [AgentTaskScheduleReceipt, AgentTaskGateReceipt])
+def test_live_boundary_is_required_when_revision_is_present(receipt_type: type) -> None:
+    values: dict[str, object] = {
+        "task_id": "task-1",
+        "run_id": "run-1",
+        "workspace_revision": 1,
+        "workspace_digest": "a" * 64,
+        "legacy_boundary": True,
+    }
+    if receipt_type is AgentTaskScheduleReceipt:
+        values.update(
+            {
+                "completion_policy": AgentTaskCompletionPolicy.EVIDENCE_REQUIRED,
+                "submit_state": "admitted",
+            }
+        )
+    else:
+        values.update(
+            {
+                "evidence_refs": ("evidence-1",),
+                "evidence_digest": "b" * 64,
+                "integrity_verified_at": "2026-08-19T00:05:00Z",
+                "capsule_ref": None,
+                "capsule_state": "not_required",
+                "run_terminal_state": "completed",
+            }
+        )
+    with pytest.raises(ValueError, match="legacy workspace boundary"):
+        receipt_type(**values)
+
+
+def test_task_policy_must_match_schedule_receipt_policy(tmp_path: Path) -> None:
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
+    receipt = AgentTaskScheduleReceipt(
+        task_id=task.task_id,
+        run_id="run-1",
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED,
+        submit_state="admitted",
+    )
+
+    with pytest.raises(ValueError, match="completion_policy"):
+        replace(task, schedule_receipt=receipt)
 
 
 def test_receipt_serializers_emit_schema_valid_full_receipts(tmp_path: Path) -> None:
@@ -268,6 +369,7 @@ def exercise_agent_task_store_contract(
     assert created is True
     assert task.state is AgentTaskState.PENDING
     assert task.version == 0
+    assert task.legacy_gate_unverified is True
 
     replay, replay_created = _create(store)
     assert replay_created is False

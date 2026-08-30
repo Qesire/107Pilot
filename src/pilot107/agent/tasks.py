@@ -295,8 +295,10 @@ class AgentTaskScheduleReceipt:
             )
         elif not isinstance(self.legacy_boundary, bool):
             raise TypeError("legacy_boundary must be boolean")
-        if self.legacy_boundary and self.workspace_revision is not None:
-            raise ValueError("legacy workspace boundary cannot invent a live revision")
+        if self.workspace_revision is None and self.legacy_boundary is not True:
+            raise ValueError("legacy workspace boundary is required without a revision")
+        if self.workspace_revision is not None and self.legacy_boundary is not False:
+            raise ValueError("legacy workspace boundary cannot mark a live revision")
         if self.created_at is not None:
             object.__setattr__(
                 self, "created_at", timestamp(parse_timestamp(self.created_at, "created_at"))
@@ -311,7 +313,9 @@ class AgentTaskScheduleReceipt:
 class AgentTaskGateReceipt:
     """Immutable facts proving a terminal Evidence gate was verified."""
 
+    task_id: str
     run_id: str
+    run_terminal_state: str
     evidence_refs: tuple[str, ...]
     evidence_digest: str
     integrity_verified_at: str
@@ -320,8 +324,6 @@ class AgentTaskGateReceipt:
     legacy_boundary: bool
     capsule_ref: str | None
     capsule_state: str
-    task_id: str | None = None
-    run_terminal_state: str | None = None
     evidence_state: str = "finalized"
     integrity_state: str = "verified"
     platform_snapshot_ref: str | None = None
@@ -329,7 +331,9 @@ class AgentTaskGateReceipt:
     terminal_at: str | None = None
 
     def __post_init__(self) -> None:
+        _identifier(self.task_id, "task_id")
         _identifier(self.run_id, "run_id")
+        _bounded_text(self.run_terminal_state, "run_terminal_state")
         refs = tuple(self.evidence_refs)
         if len(refs) > 4096:
             raise ValueError("evidence_refs has too many entries")
@@ -347,17 +351,15 @@ class AgentTaskGateReceipt:
             _non_negative_int(self.workspace_revision, "workspace_revision")
         if not isinstance(self.legacy_boundary, bool):
             raise TypeError("legacy_boundary must be boolean")
-        if self.legacy_boundary and self.workspace_revision is not None:
-            raise ValueError("legacy workspace boundary cannot invent a live revision")
+        if self.workspace_revision is None and self.legacy_boundary is not True:
+            raise ValueError("legacy workspace boundary is required without a revision")
+        if self.workspace_revision is not None and self.legacy_boundary is not False:
+            raise ValueError("legacy workspace boundary cannot mark a live revision")
         if self.capsule_ref is not None:
             _bounded_text(self.capsule_ref, "capsule_ref", maximum=4096)
         _bounded_text(self.capsule_state, "capsule_state")
         if self.capsule_state not in _CAPSULE_STATES:
             raise ValueError("capsule_state is invalid")
-        if self.task_id is not None:
-            _identifier(self.task_id, "task_id")
-        if self.run_terminal_state is not None:
-            _bounded_text(self.run_terminal_state, "run_terminal_state")
         _bounded_text(self.evidence_state, "evidence_state")
         _bounded_text(self.integrity_state, "integrity_state")
         if self.evidence_state != "finalized":
@@ -489,6 +491,11 @@ class AgentTaskRecord:
             self.schedule_receipt, AgentTaskScheduleReceipt
         ):
             raise TypeError("AgentTask schedule receipt is invalid")
+        if (
+            self.schedule_receipt is not None
+            and self.schedule_receipt.completion_policy is not self.completion_policy
+        ):
+            raise ValueError("AgentTask completion_policy does not match schedule receipt")
         if self.gate_receipt is not None and not isinstance(
             self.gate_receipt, AgentTaskGateReceipt
         ):

@@ -688,11 +688,17 @@ def _task_from_row(row: Mapping[str, Any] | Any) -> AgentTaskRecord:
     raw_result = row["result_json"]
     result_value = _loaded(raw_result) if raw_result is not None else None
     state = AgentTaskState(str(row["state"]))
+    gate_columns = (
+        "completion_policy",
+        "gate_state",
+        "schedule_receipt",
+        "gate_receipt",
+        "legacy_gate_unverified",
+    )
     legacy_gate_unverified = (
-        bool(row["legacy_gate_unverified"])
-        if _row_has(row, "legacy_gate_unverified")
-        and row["legacy_gate_unverified"] is not None
-        else state is AgentTaskState.SUCCEEDED
+        True
+        if any(not _row_has(row, column) for column in gate_columns)
+        else bool(row["legacy_gate_unverified"])
     )
     return AgentTaskRecord(
         task_id=str(row["task_id"]),

@@ -333,3 +333,77 @@ def test_new_agent_task_payload_requires_all_gate_fields() -> None:
 
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
+
+
+def test_agent_task_schema_restricts_terminal_gate_states() -> None:
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import ValidationError
+
+    schema = json.loads(
+        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
+    )
+    for field, invalid in (("evidence_state", "collected"), ("integrity_state", "pending")):
+        payload = copy.deepcopy(GOLDENS["agent/v2/agent-task.schema.json"])
+        payload.update(
+            {
+                "completion_policy": "evidence_required",
+                "gate_state": "completed",
+                "schedule_receipt": None,
+                "gate_receipt": {
+                    "run_id": "run-1",
+                    "evidence_refs": ["evidence-1"],
+                    "evidence_digest": "a" * 64,
+                    "integrity_verified_at": "2026-08-19T00:05:00Z",
+                    "workspace_revision": None,
+                    "workspace_digest": "b" * 64,
+                    "legacy_boundary": True,
+                    "capsule_ref": None,
+                    "capsule_state": "not_required",
+                    "task_id": "task-1",
+                    "run_terminal_state": "completed",
+                    field: invalid,
+                },
+                "legacy_gate_unverified": False,
+            }
+        )
+        with pytest.raises(ValidationError):
+            Draft202012Validator(schema).validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("capsule_ref", "capsule_state"), [(None, "READY"), ("capsule-1", "not_required")]
+)
+def test_agent_task_schema_restricts_capsule_state_and_ref(
+    capsule_ref: str | None, capsule_state: str
+) -> None:
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import ValidationError
+
+    payload = copy.deepcopy(GOLDENS["agent/v2/agent-task.schema.json"])
+    payload.update(
+        {
+            "completion_policy": "evidence_required",
+            "gate_state": "completed",
+            "schedule_receipt": None,
+            "gate_receipt": {
+                "run_id": "run-1",
+                "evidence_refs": ["evidence-1"],
+                "evidence_digest": "a" * 64,
+                "integrity_verified_at": "2026-08-19T00:05:00Z",
+                "workspace_revision": None,
+                "workspace_digest": "b" * 64,
+                "legacy_boundary": True,
+                "capsule_ref": capsule_ref,
+                "capsule_state": capsule_state,
+                "task_id": "task-1",
+                "run_terminal_state": "completed",
+            },
+            "legacy_gate_unverified": False,
+        }
+    )
+    schema = json.loads(
+        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
+    )
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
