@@ -319,3 +319,17 @@ def test_agent_task_schema_rejects_terminal_gate_receipt_without_integrity_times
 
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
+
+
+def test_new_agent_task_payload_requires_all_gate_fields() -> None:
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import ValidationError
+
+    payload = copy.deepcopy(GOLDENS["agent/v2/agent-task.schema.json"])
+    payload["completion_policy"] = "evidence_required"
+    schema = json.loads(
+        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
+    )
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)

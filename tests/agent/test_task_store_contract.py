@@ -23,7 +23,9 @@ from pilot107.agent.tasks import (
     AgentTaskScheduleReceipt,
     AgentTaskState,
     ResourceEnvelopeExceeded,
+    agent_task_gate_receipt_payload,
     agent_task_payload,
+    agent_task_schedule_receipt_payload,
 )
 
 
@@ -82,6 +84,117 @@ def test_gate_receipt_carries_legacy_workspace_boundary_without_inventing_revisi
 def test_gate_state_preserves_legacy_terminal_wire_state() -> None:
     assert AgentTaskGateState.COMPLETED.value == "completed"
     assert AgentTaskState.SUCCEEDED.value == "succeeded"
+
+
+def test_gate_receipt_rejects_unfinalized_or_unverified_facts() -> None:
+    with pytest.raises(ValueError, match="evidence_state"):
+        AgentTaskGateReceipt(
+            run_id="run-1",
+            evidence_refs=("evidence-1",),
+            evidence_digest="a" * 64,
+            integrity_verified_at="2026-08-19T00:05:00Z",
+            workspace_revision=None,
+            workspace_digest="b" * 64,
+            legacy_boundary=True,
+            capsule_ref=None,
+            capsule_state="not_required",
+            evidence_state="collected",
+        )
+    with pytest.raises(ValueError, match="integrity_state"):
+        AgentTaskGateReceipt(
+            run_id="run-1",
+            evidence_refs=("evidence-1",),
+            evidence_digest="a" * 64,
+            integrity_verified_at="2026-08-19T00:05:00Z",
+            workspace_revision=None,
+            workspace_digest="b" * 64,
+            legacy_boundary=True,
+            capsule_ref=None,
+            capsule_state="not_required",
+            integrity_state="pending",
+        )
+
+
+@pytest.mark.parametrize(
+    ("capsule_ref", "capsule_state"),
+    [(None, "READY"), ("capsule-1", "not_required")],
+)
+def test_gate_receipt_requires_capsule_state_and_ref_to_agree(
+    capsule_ref: str | None, capsule_state: str
+) -> None:
+    with pytest.raises(ValueError, match="capsule"):
+        AgentTaskGateReceipt(
+            run_id="run-1",
+            evidence_refs=("evidence-1",),
+            evidence_digest="a" * 64,
+            integrity_verified_at="2026-08-19T00:05:00Z",
+            workspace_revision=None,
+            workspace_digest="b" * 64,
+            legacy_boundary=True,
+            capsule_ref=capsule_ref,
+            capsule_state=capsule_state,
+        )
+
+
+def test_receipt_serializers_emit_schema_valid_full_receipts(tmp_path: Path) -> None:
+    schedule = AgentTaskScheduleReceipt(
+        task_id="task-1",
+        run_id="run-1",
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED,
+        submit_state="submitted",
+        receipt_id="receipt-1",
+        owner="alice",
+        session_id="session-1",
+        originating_turn_id="turn-1",
+        request_digest="a" * 64,
+        idempotency_key="validate-1",
+        slurm_job_id="123",
+        resource_envelope_id="envelope-1",
+        workspace_revision=1,
+        workspace_digest="b" * 64,
+        created_at="2026-08-19T00:00:00Z",
+        legacy_boundary=False,
+    )
+    gate = AgentTaskGateReceipt(
+        task_id="task-1",
+        run_id="run-1",
+        run_terminal_state="completed",
+        evidence_refs=("evidence-1",),
+        evidence_digest="c" * 64,
+        integrity_verified_at="2026-08-19T00:05:00Z",
+        workspace_revision=1,
+        workspace_digest="b" * 64,
+        legacy_boundary=False,
+        capsule_ref="capsule-1",
+        capsule_state="READY",
+        terminal_at="2026-08-19T00:05:00Z",
+    )
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
+    payload = agent_task_payload(task)
+    payload.update(
+        {
+            "completion_policy": schedule.completion_policy.value,
+            "gate_state": "completed",
+            "schedule_receipt": agent_task_schedule_receipt_payload(schedule),
+            "gate_receipt": agent_task_gate_receipt_payload(gate),
+            "legacy_gate_unverified": False,
+        }
+    )
+    payload = json.loads(json.dumps(payload))
+    from jsonschema import Draft202012Validator
+
+    schema_path = (
+        Path(__file__).resolve().parents[2]
+        / "schemas"
+        / "agent"
+        / "v2"
+        / "agent-task.schema.json"
+    )
+    Draft202012Validator(json.loads(schema_path.read_text())).validate(payload)
+    assert payload["schedule_receipt"]["workspace_revision"] == 1
+    assert payload["gate_receipt"]["capsule_ref"] == "capsule-1"
 
 
 class MutableClock:
@@ -213,6 +326,7 @@ def exercise_agent_task_store_contract(
         result=AgentTaskResult.succeeded(("evidence-1",)),
     )
     assert completed.state is AgentTaskState.SUCCEEDED
+    assert completed.legacy_gate_unverified is True
     assert completed.result is not None
     assert completed.result.evidence_refs == ("evidence-1",)
     assert store.complete_task(

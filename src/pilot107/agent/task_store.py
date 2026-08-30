@@ -687,6 +687,13 @@ def _assert_create_arguments(
 def _task_from_row(row: Mapping[str, Any] | Any) -> AgentTaskRecord:
     raw_result = row["result_json"]
     result_value = _loaded(raw_result) if raw_result is not None else None
+    state = AgentTaskState(str(row["state"]))
+    legacy_gate_unverified = (
+        bool(row["legacy_gate_unverified"])
+        if _row_has(row, "legacy_gate_unverified")
+        and row["legacy_gate_unverified"] is not None
+        else state is AgentTaskState.SUCCEEDED
+    )
     return AgentTaskRecord(
         task_id=str(row["task_id"]),
         owner=str(row["owner"]),
@@ -695,7 +702,7 @@ def _task_from_row(row: Mapping[str, Any] | Any) -> AgentTaskRecord:
         project_id=str(row["project_id"]),
         workspace_id=str(row["workspace_id"]),
         task_kind=cast(AgentTaskKind, str(row["task_kind"])),
-        state=AgentTaskState(str(row["state"])),
+        state=state,
         version=int(row["version"]),
         request_key=str(row["request_key"]),
         request=_request_from_payload(_loaded(row["request_json"])),
@@ -716,7 +723,13 @@ def _task_from_row(row: Mapping[str, Any] | Any) -> AgentTaskRecord:
         fencing_token=int(row["fencing_token"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        legacy_gate_unverified=legacy_gate_unverified,
     )
+
+
+def _row_has(row: Mapping[str, Any] | Any, key: str) -> bool:
+    keys = getattr(row, "keys", None)
+    return key in keys() if callable(keys) else False
 
 
 def _request_payload(value: AgentTaskRequest) -> dict[str, Any]:

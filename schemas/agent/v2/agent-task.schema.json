@@ -226,5 +226,16 @@
       "additionalProperties": false
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {"required": ["completion_policy"]},
+      "then": {
+        "required": [
+          "completion_policy", "gate_state", "schedule_receipt",
+          "gate_receipt", "legacy_gate_unverified"
+        ]
+      }
+    }
+  ]
 }

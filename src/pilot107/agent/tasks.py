@@ -360,6 +360,14 @@ class AgentTaskGateReceipt:
             _bounded_text(self.run_terminal_state, "run_terminal_state")
         _bounded_text(self.evidence_state, "evidence_state")
         _bounded_text(self.integrity_state, "integrity_state")
+        if self.evidence_state != "finalized":
+            raise ValueError("evidence_state must be finalized")
+        if self.integrity_state != "verified":
+            raise ValueError("integrity_state must be verified")
+        if self.capsule_state == "READY" and self.capsule_ref is None:
+            raise ValueError("capsule_ref is required when capsule is READY")
+        if self.capsule_state == "not_required" and self.capsule_ref is not None:
+            raise ValueError("capsule_ref must be absent when capsule is not required")
         if self.platform_snapshot_ref is not None:
             _bounded_text(self.platform_snapshot_ref, "platform_snapshot_ref", maximum=4096)
         if self.source_revision is not None:
@@ -578,6 +586,19 @@ def agent_task_schedule_receipt_payload(
 
     if not isinstance(value, AgentTaskScheduleReceipt):
         raise TypeError("value must be AgentTaskScheduleReceipt")
+    required = (
+        value.receipt_id,
+        value.owner,
+        value.session_id,
+        value.originating_turn_id,
+        value.request_digest,
+        value.idempotency_key,
+        value.resource_envelope_id,
+        value.workspace_digest,
+        value.created_at,
+    )
+    if any(item is None for item in required):
+        raise ValueError("schedule receipt is incomplete for wire serialization")
     return {
         "receipt_id": value.receipt_id,
         "task_id": value.task_id,
@@ -603,7 +624,7 @@ def agent_task_gate_receipt_payload(value: AgentTaskGateReceipt) -> dict[str, An
 
     if not isinstance(value, AgentTaskGateReceipt):
         raise TypeError("value must be AgentTaskGateReceipt")
-    return {
+    payload = {
         "task_id": value.task_id,
         "run_id": value.run_id,
         "run_terminal_state": value.run_terminal_state,
@@ -612,15 +633,19 @@ def agent_task_gate_receipt_payload(value: AgentTaskGateReceipt) -> dict[str, An
         "evidence_digest": value.evidence_digest,
         "integrity_verified_at": value.integrity_verified_at,
         "integrity_state": value.integrity_state,
-        "platform_snapshot_ref": value.platform_snapshot_ref,
-        "source_revision": value.source_revision,
         "workspace_revision": value.workspace_revision,
         "workspace_digest": value.workspace_digest,
         "legacy_boundary": value.legacy_boundary,
         "capsule_ref": value.capsule_ref,
         "capsule_state": value.capsule_state,
-        "terminal_at": value.terminal_at,
     }
+    if value.platform_snapshot_ref is not None:
+        payload["platform_snapshot_ref"] = value.platform_snapshot_ref
+    if value.source_revision is not None:
+        payload["source_revision"] = value.source_revision
+    if value.terminal_at is not None:
+        payload["terminal_at"] = value.terminal_at
+    return payload
 
 
 def parse_timestamp(value: str, label: str) -> datetime:
