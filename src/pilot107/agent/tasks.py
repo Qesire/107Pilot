@@ -37,6 +37,44 @@ TERMINAL_TASK_STATES = frozenset(
 )
 
 
+class AgentTaskCompletionPolicy(StrEnum):
+    """Explicit evidence gate policy for an AgentTask."""
+
+    EVIDENCE_REQUIRED = "evidence_required"
+    EVIDENCE_AND_CAPSULE_REQUIRED = "evidence_and_capsule_required"
+
+    @property
+    def requires_capsule(self) -> bool:
+        return self is self.EVIDENCE_AND_CAPSULE_REQUIRED
+
+
+class AgentTaskGateState(StrEnum):
+    """Durable gate projection; legacy task state remains wire-compatible."""
+
+    CREATED = "created"
+    ADMITTED = "admitted"
+    SUBMITTING = "submitting"
+    PENDING = "pending"
+    RUNNING = "running"
+    AWAITING_RUN_TERMINAL = "awaiting_run_terminal"
+    AWAITING_EVIDENCE = "awaiting_evidence"
+    AWAITING_INTEGRITY = "awaiting_integrity"
+    AWAITING_CAPSULE = "awaiting_capsule"
+    COMPLETED = "completed"
+    INPUT_REQUIRED = "input_required"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+    ORPHANED = "orphaned"
+
+
+_SCHEDULE_SUBMIT_STATES = frozenset(
+    {"admitted", "submitting", "pending", "submitted", "submission_uncertain"}
+)
+_CAPSULE_STATES = frozenset({"READY", "not_required"})
+
+
 @dataclass(frozen=True)
 class AgentResourceEnvelope:
     partition: str
@@ -197,6 +235,142 @@ class AgentTaskResult:
 
 
 @dataclass(frozen=True)
+class AgentTaskScheduleReceipt:
+    """Non-terminal acknowledgement that a validation request was admitted."""
+
+    task_id: str
+    run_id: str
+    completion_policy: AgentTaskCompletionPolicy
+    submit_state: str
+    receipt_id: str | None = None
+    owner: str | None = None
+    session_id: str | None = None
+    originating_turn_id: str | None = None
+    request_digest: str | None = None
+    idempotency_key: str | None = None
+    slurm_job_id: str | None = None
+    resource_envelope_id: str | None = None
+    workspace_revision: int | None = None
+    workspace_digest: str | None = None
+    created_at: str | None = None
+    legacy_boundary: bool | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.task_id, "task_id")
+        _identifier(self.run_id, "run_id")
+        if not isinstance(self.completion_policy, AgentTaskCompletionPolicy):
+            try:
+                object.__setattr__(
+                    self,
+                    "completion_policy",
+                    AgentTaskCompletionPolicy(self.completion_policy),
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError("completion_policy is invalid") from exc
+        _bounded_text(self.submit_state, "submit_state")
+        if self.submit_state not in _SCHEDULE_SUBMIT_STATES:
+            raise ValueError("submit_state is invalid")
+        for value, label in (
+            (self.receipt_id, "receipt_id"),
+            (self.owner, "owner"),
+            (self.session_id, "session_id"),
+            (self.originating_turn_id, "originating_turn_id"),
+            (self.idempotency_key, "idempotency_key"),
+            (self.slurm_job_id, "slurm_job_id"),
+            (self.resource_envelope_id, "resource_envelope_id"),
+        ):
+            if value is not None:
+                _identifier(value, label)
+        for value, label in (
+            (self.request_digest, "request_digest"),
+            (self.workspace_digest, "workspace_digest"),
+        ):
+            if value is not None:
+                _digest(value, label)
+        if self.workspace_revision is not None:
+            _non_negative_int(self.workspace_revision, "workspace_revision")
+        if self.legacy_boundary is None:
+            object.__setattr__(
+                self, "legacy_boundary", self.workspace_revision is None
+            )
+        elif not isinstance(self.legacy_boundary, bool):
+            raise TypeError("legacy_boundary must be boolean")
+        if self.legacy_boundary and self.workspace_revision is not None:
+            raise ValueError("legacy workspace boundary cannot invent a live revision")
+        if self.created_at is not None:
+            object.__setattr__(
+                self, "created_at", timestamp(parse_timestamp(self.created_at, "created_at"))
+            )
+
+    @property
+    def is_terminal(self) -> bool:
+        return False
+
+
+@dataclass(frozen=True)
+class AgentTaskGateReceipt:
+    """Immutable facts proving a terminal Evidence gate was verified."""
+
+    run_id: str
+    evidence_refs: tuple[str, ...]
+    evidence_digest: str
+    integrity_verified_at: str
+    workspace_revision: int | None
+    workspace_digest: str
+    legacy_boundary: bool
+    capsule_ref: str | None
+    capsule_state: str
+    task_id: str | None = None
+    run_terminal_state: str | None = None
+    evidence_state: str = "finalized"
+    integrity_state: str = "verified"
+    platform_snapshot_ref: str | None = None
+    source_revision: str | None = None
+    terminal_at: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.run_id, "run_id")
+        refs = tuple(self.evidence_refs)
+        if len(refs) > 4096:
+            raise ValueError("evidence_refs has too many entries")
+        for value in refs:
+            _bounded_text(value, "evidence_ref", maximum=4096)
+        object.__setattr__(self, "evidence_refs", refs)
+        _digest(self.evidence_digest, "evidence_digest")
+        object.__setattr__(
+            self,
+            "integrity_verified_at",
+            timestamp(parse_timestamp(self.integrity_verified_at, "integrity_verified_at")),
+        )
+        _digest(self.workspace_digest, "workspace_digest")
+        if self.workspace_revision is not None:
+            _non_negative_int(self.workspace_revision, "workspace_revision")
+        if not isinstance(self.legacy_boundary, bool):
+            raise TypeError("legacy_boundary must be boolean")
+        if self.legacy_boundary and self.workspace_revision is not None:
+            raise ValueError("legacy workspace boundary cannot invent a live revision")
+        if self.capsule_ref is not None:
+            _bounded_text(self.capsule_ref, "capsule_ref", maximum=4096)
+        _bounded_text(self.capsule_state, "capsule_state")
+        if self.capsule_state not in _CAPSULE_STATES:
+            raise ValueError("capsule_state is invalid")
+        if self.task_id is not None:
+            _identifier(self.task_id, "task_id")
+        if self.run_terminal_state is not None:
+            _bounded_text(self.run_terminal_state, "run_terminal_state")
+        _bounded_text(self.evidence_state, "evidence_state")
+        _bounded_text(self.integrity_state, "integrity_state")
+        if self.platform_snapshot_ref is not None:
+            _bounded_text(self.platform_snapshot_ref, "platform_snapshot_ref", maximum=4096)
+        if self.source_revision is not None:
+            _bounded_text(self.source_revision, "source_revision", maximum=4096)
+        if self.terminal_at is not None:
+            object.__setattr__(
+                self, "terminal_at", timestamp(parse_timestamp(self.terminal_at, "terminal_at"))
+            )
+
+
+@dataclass(frozen=True)
 class AgentTaskLease:
     task_id: str
     owner: str
@@ -241,6 +415,11 @@ class AgentTaskRecord:
     created_at: str
     updated_at: str
     schema_version: str = "pilot107.agent-task/v1"
+    completion_policy: AgentTaskCompletionPolicy = AgentTaskCompletionPolicy.EVIDENCE_REQUIRED
+    gate_state: AgentTaskGateState = AgentTaskGateState.CREATED
+    schedule_receipt: AgentTaskScheduleReceipt | None = None
+    gate_receipt: AgentTaskGateReceipt | None = None
+    legacy_gate_unverified: bool = False
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -284,6 +463,30 @@ class AgentTaskRecord:
             raise ValueError("terminal AgentTask requires a result")
         if self.result is not None and self.result.status != self.state.value:
             raise ValueError("AgentTask result does not match task state")
+        if not isinstance(self.completion_policy, AgentTaskCompletionPolicy):
+            try:
+                object.__setattr__(
+                    self,
+                    "completion_policy",
+                    AgentTaskCompletionPolicy(self.completion_policy),
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError("completion_policy is invalid") from exc
+        if not isinstance(self.gate_state, AgentTaskGateState):
+            try:
+                object.__setattr__(self, "gate_state", AgentTaskGateState(self.gate_state))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("gate_state is invalid") from exc
+        if self.schedule_receipt is not None and not isinstance(
+            self.schedule_receipt, AgentTaskScheduleReceipt
+        ):
+            raise TypeError("AgentTask schedule receipt is invalid")
+        if self.gate_receipt is not None and not isinstance(
+            self.gate_receipt, AgentTaskGateReceipt
+        ):
+            raise TypeError("AgentTask gate receipt is invalid")
+        if not isinstance(self.legacy_gate_unverified, bool):
+            raise TypeError("legacy_gate_unverified must be boolean")
         object.__setattr__(
             self,
             "created_at",
@@ -310,7 +513,7 @@ def agent_task_payload(value: AgentTaskRecord) -> dict[str, Any]:
             "expires_at": value.lease_expires_at,
             "fencing_token": value.fencing_token,
         }
-    return {
+    payload = {
         "schema_version": value.schema_version,
         "task_id": value.task_id,
         "owner": value.owner,
@@ -322,6 +525,19 @@ def agent_task_payload(value: AgentTaskRecord) -> dict[str, Any]:
         "state": value.state.value,
         "version": value.version,
         "request_key": value.request_key,
+        "completion_policy": value.completion_policy.value,
+        "gate_state": value.gate_state.value,
+        "schedule_receipt": (
+            agent_task_schedule_receipt_payload(value.schedule_receipt)
+            if value.schedule_receipt is not None
+            else None
+        ),
+        "gate_receipt": (
+            agent_task_gate_receipt_payload(value.gate_receipt)
+            if value.gate_receipt is not None
+            else None
+        ),
+        "legacy_gate_unverified": value.legacy_gate_unverified,
         "cancel_requested": value.cancel_requested,
         "resource_envelope": {
             "partition": envelope.partition,
@@ -351,6 +567,59 @@ def agent_task_payload(value: AgentTaskRecord) -> dict[str, Any]:
         "lease": lease,
         "created_at": value.created_at,
         "updated_at": value.updated_at,
+    }
+    return payload
+
+
+def agent_task_schedule_receipt_payload(
+    value: AgentTaskScheduleReceipt,
+) -> dict[str, Any]:
+    """Serialize a schedule receipt without presenting it as a terminal result."""
+
+    if not isinstance(value, AgentTaskScheduleReceipt):
+        raise TypeError("value must be AgentTaskScheduleReceipt")
+    return {
+        "receipt_id": value.receipt_id,
+        "task_id": value.task_id,
+        "owner": value.owner,
+        "session_id": value.session_id,
+        "originating_turn_id": value.originating_turn_id,
+        "request_digest": value.request_digest,
+        "idempotency_key": value.idempotency_key,
+        "run_id": value.run_id,
+        "submit_state": value.submit_state,
+        "slurm_job_id": value.slurm_job_id,
+        "resource_envelope_id": value.resource_envelope_id,
+        "workspace_revision": value.workspace_revision,
+        "workspace_digest": value.workspace_digest,
+        "completion_policy": value.completion_policy.value,
+        "created_at": value.created_at,
+        "legacy_boundary": value.legacy_boundary,
+    }
+
+
+def agent_task_gate_receipt_payload(value: AgentTaskGateReceipt) -> dict[str, Any]:
+    """Serialize immutable terminal gate facts for the AgentTask wire contract."""
+
+    if not isinstance(value, AgentTaskGateReceipt):
+        raise TypeError("value must be AgentTaskGateReceipt")
+    return {
+        "task_id": value.task_id,
+        "run_id": value.run_id,
+        "run_terminal_state": value.run_terminal_state,
+        "evidence_state": value.evidence_state,
+        "evidence_refs": list(value.evidence_refs),
+        "evidence_digest": value.evidence_digest,
+        "integrity_verified_at": value.integrity_verified_at,
+        "integrity_state": value.integrity_state,
+        "platform_snapshot_ref": value.platform_snapshot_ref,
+        "source_revision": value.source_revision,
+        "workspace_revision": value.workspace_revision,
+        "workspace_digest": value.workspace_digest,
+        "legacy_boundary": value.legacy_boundary,
+        "capsule_ref": value.capsule_ref,
+        "capsule_state": value.capsule_state,
+        "terminal_at": value.terminal_at,
     }
 
 

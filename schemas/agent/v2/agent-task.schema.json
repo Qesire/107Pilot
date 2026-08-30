@@ -34,6 +34,21 @@
     "state": {"enum": ["pending", "running", "succeeded", "failed", "cancelled", "auth_required"]},
     "version": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
     "request_key": {"$ref": "#/$defs/id"},
+    "completion_policy": {"$ref": "#/$defs/completionPolicy"},
+    "gate_state": {"$ref": "#/$defs/gateState"},
+    "schedule_receipt": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/scheduleReceipt"}
+      ]
+    },
+    "gate_receipt": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/gateReceipt"}
+      ]
+    },
+    "legacy_gate_unverified": {"type": "boolean"},
     "cancel_requested": {"type": "boolean"},
     "resource_envelope": {"$ref": "#/$defs/resourceEnvelope"},
     "linked_run_id": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]},
@@ -83,6 +98,88 @@
     "updated_at": {"$ref": "#/$defs/timestamp"}
   },
   "$defs": {
+    "completionPolicy": {
+      "enum": ["evidence_required", "evidence_and_capsule_required"]
+    },
+    "gateState": {
+      "enum": [
+        "created", "admitted", "submitting", "pending", "running",
+        "awaiting_run_terminal", "awaiting_evidence", "awaiting_integrity",
+        "awaiting_capsule", "completed", "input_required", "cancelling",
+        "cancelled", "failed", "blocked", "orphaned"
+      ]
+    },
+    "scheduleReceipt": {
+      "type": "object",
+      "required": [
+        "receipt_id", "task_id", "owner", "session_id", "originating_turn_id",
+        "request_digest", "idempotency_key", "run_id", "submit_state",
+        "slurm_job_id", "resource_envelope_id", "workspace_revision",
+        "workspace_digest", "completion_policy", "created_at"
+      ],
+      "properties": {
+        "receipt_id": {"$ref": "#/$defs/id"},
+        "task_id": {"$ref": "#/$defs/id"},
+        "owner": {"$ref": "#/$defs/id"},
+        "session_id": {"$ref": "#/$defs/id"},
+        "originating_turn_id": {"$ref": "#/$defs/id"},
+        "request_digest": {"$ref": "#/$defs/digest"},
+        "idempotency_key": {"$ref": "#/$defs/id"},
+        "run_id": {"$ref": "#/$defs/id"},
+        "submit_state": {
+          "enum": ["admitted", "submitting", "pending", "submitted", "submission_uncertain"]
+        },
+        "slurm_job_id": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]},
+        "resource_envelope_id": {"$ref": "#/$defs/id"},
+        "workspace_revision": {
+          "anyOf": [
+            {"type": "null"},
+            {"type": "integer", "minimum": 0, "maximum": 9007199254740991}
+          ]
+        },
+        "workspace_digest": {"$ref": "#/$defs/digest"},
+        "completion_policy": {"$ref": "#/$defs/completionPolicy"},
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "legacy_boundary": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "gateReceipt": {
+      "type": "object",
+      "required": [
+        "run_id", "evidence_refs", "evidence_digest", "integrity_verified_at",
+        "workspace_revision", "workspace_digest", "legacy_boundary", "capsule_ref",
+        "capsule_state"
+      ],
+      "properties": {
+        "task_id": {"$ref": "#/$defs/id"},
+        "run_id": {"$ref": "#/$defs/id"},
+        "run_terminal_state": {"type": "string", "minLength": 1, "maxLength": 128},
+        "evidence_state": {"type": "string", "minLength": 1, "maxLength": 128},
+        "evidence_refs": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+        },
+        "evidence_digest": {"$ref": "#/$defs/digest"},
+        "integrity_verified_at": {"$ref": "#/$defs/timestamp"},
+        "integrity_state": {"type": "string", "minLength": 1, "maxLength": 128},
+        "platform_snapshot_ref": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "source_revision": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "workspace_revision": {
+          "anyOf": [
+            {"type": "null"},
+            {"type": "integer", "minimum": 0, "maximum": 9007199254740991}
+          ]
+        },
+        "workspace_digest": {"$ref": "#/$defs/digest"},
+        "legacy_boundary": {"type": "boolean"},
+        "capsule_ref": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1, "maxLength": 4096}]},
+        "capsule_state": {"enum": ["READY", "not_required"]},
+        "terminal_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "additionalProperties": false
+    },
     "id": {
       "type": "string",
       "minLength": 1,

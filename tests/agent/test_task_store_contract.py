@@ -14,13 +14,74 @@ from pilot107.agent.store_factory import build_agent_task_store
 from pilot107.agent.task_store import AgentTaskStore, SQLiteAgentTaskStore
 from pilot107.agent.tasks import (
     AgentResourceEnvelope,
+    AgentTaskCompletionPolicy,
     AgentTaskConflict,
+    AgentTaskGateReceipt,
+    AgentTaskGateState,
     AgentTaskRequest,
     AgentTaskResult,
+    AgentTaskScheduleReceipt,
     AgentTaskState,
     ResourceEnvelopeExceeded,
     agent_task_payload,
 )
+
+
+def test_schedule_receipt_is_non_terminal_and_declares_completion_policy() -> None:
+    receipt = AgentTaskScheduleReceipt(
+        task_id="task-1",
+        run_id="run-1",
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_REQUIRED,
+        submit_state="admitted",
+    )
+
+    assert receipt.is_terminal is False
+    assert receipt.completion_policy is AgentTaskCompletionPolicy.EVIDENCE_REQUIRED
+
+
+def test_live_schedule_receipt_boundary_is_not_legacy() -> None:
+    receipt = AgentTaskScheduleReceipt(
+        task_id="task-1",
+        run_id="run-1",
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_REQUIRED,
+        submit_state="submitted",
+        workspace_revision=1,
+        workspace_digest="a" * 64,
+    )
+
+    assert receipt.workspace_revision == 1
+    assert receipt.legacy_boundary is False
+
+
+def test_capsule_policy_is_explicit_not_inferred_from_vm_mode() -> None:
+    assert AgentTaskCompletionPolicy("evidence_required").requires_capsule is False
+    assert (
+        AgentTaskCompletionPolicy("evidence_and_capsule_required").requires_capsule
+        is True
+    )
+
+
+def test_gate_receipt_carries_legacy_workspace_boundary_without_inventing_revision() -> None:
+    receipt = AgentTaskGateReceipt(
+        run_id="run-1",
+        evidence_refs=("evidence-1",),
+        evidence_digest="a" * 64,
+        integrity_verified_at="2026-08-19T00:05:00Z",
+        workspace_revision=None,
+        workspace_digest="b" * 64,
+        legacy_boundary=True,
+        capsule_ref=None,
+        capsule_state="not_required",
+    )
+
+    assert receipt.workspace_revision is None
+    assert receipt.legacy_boundary is True
+    assert receipt.capsule_state == "not_required"
+
+
+def test_gate_state_preserves_legacy_terminal_wire_state() -> None:
+    assert AgentTaskGateState.COMPLETED.value == "completed"
+    assert AgentTaskState.SUCCEEDED.value == "succeeded"
 
 
 class MutableClock:

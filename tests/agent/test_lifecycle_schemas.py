@@ -250,3 +250,72 @@ def test_lifecycle_schemas_reject_unknown_discriminants(
 
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
+
+
+def test_agent_task_schema_accepts_schedule_and_terminal_gate_receipts() -> None:
+    from jsonschema import Draft202012Validator
+
+    payload = copy.deepcopy(GOLDENS["agent/v2/agent-task.schema.json"])
+    payload.update(
+        {
+            "completion_policy": "evidence_required",
+            "gate_state": "awaiting_evidence",
+            "schedule_receipt": {
+                "receipt_id": "receipt-1",
+                "task_id": "task-1",
+                "owner": "alice",
+                "session_id": "session-1",
+                "originating_turn_id": "turn-1",
+                "request_digest": "a" * 64,
+                "idempotency_key": "validate-1",
+                "run_id": "run-1",
+                "submit_state": "admitted",
+                "slurm_job_id": None,
+                "resource_envelope_id": "envelope-1",
+                "workspace_revision": None,
+                "workspace_digest": "b" * 64,
+                "completion_policy": "evidence_required",
+                "created_at": "2026-08-19T00:00:00Z",
+                "legacy_boundary": True,
+            },
+            "gate_receipt": None,
+            "legacy_gate_unverified": True,
+        }
+    )
+    schema = json.loads(
+        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
+    )
+
+    Draft202012Validator(schema).validate(payload)
+
+
+def test_agent_task_schema_rejects_terminal_gate_receipt_without_integrity_timestamp() -> None:
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import ValidationError
+
+    payload = copy.deepcopy(GOLDENS["agent/v2/agent-task.schema.json"])
+    payload.update(
+        {
+            "completion_policy": "evidence_required",
+            "gate_state": "completed",
+            "schedule_receipt": None,
+            "gate_receipt": {
+                "run_id": "run-1",
+                "evidence_refs": ["evidence-1"],
+                "evidence_digest": "a" * 64,
+                "integrity_verified_at": None,
+                "workspace_revision": None,
+                "workspace_digest": "b" * 64,
+                "legacy_boundary": True,
+                "capsule_ref": None,
+                "capsule_state": "not_required",
+            },
+            "legacy_gate_unverified": False,
+        }
+    )
+    schema = json.loads(
+        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
+    )
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
