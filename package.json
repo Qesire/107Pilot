@@ -10,6 +10,7 @@
     "check:js": "npm run typecheck",
     "test": "vitest run --config apps/web/vite.config.mts",
     "test:ui": "npm run build && playwright test",
+    "test:ui:live": "playwright test --config=playwright.live.config.cjs",
     "screenshots": "npm run build && playwright test tests/ui/visual.spec.js"
   },
   "devDependencies": {
