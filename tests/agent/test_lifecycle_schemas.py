@@ -479,3 +479,73 @@ def test_agent_task_schema_rejects_non_terminal_run_state(run_terminal_state: st
     )
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
+
+
+def test_agent_task_schema_requires_ready_capsule_for_capsule_policy() -> None:
+    from jsonschema import Draft202012Validator
+    from jsonschema.exceptions import ValidationError
+
+    payload = copy.deepcopy(GOLDENS["agent/v2/agent-task.schema.json"])
+    payload.update(
+        {
+            "completion_policy": "evidence_and_capsule_required",
+            "gate_state": "completed",
+            "schedule_receipt": None,
+            "gate_receipt": {
+                "task_id": "task-1",
+                "run_id": "run-1",
+                "run_terminal_state": "completed",
+                "evidence_state": "finalized",
+                "evidence_refs": ["evidence-1"],
+                "evidence_digest": "a" * 64,
+                "integrity_verified_at": "2026-08-19T00:05:00Z",
+                "integrity_state": "verified",
+                "workspace_revision": None,
+                "workspace_digest": "b" * 64,
+                "legacy_boundary": True,
+                "capsule_ref": None,
+                "capsule_state": "not_required",
+            },
+            "legacy_gate_unverified": False,
+        }
+    )
+    schema = json.loads(
+        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
+    )
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(payload)
+
+
+def test_agent_task_schema_allows_evidence_policy_with_optional_capsule() -> None:
+    from jsonschema import Draft202012Validator
+
+    payload = copy.deepcopy(GOLDENS["agent/v2/agent-task.schema.json"])
+    payload.update(
+        {
+            "completion_policy": "evidence_required",
+            "gate_state": "completed",
+            "schedule_receipt": None,
+            "gate_receipt": {
+                "task_id": "task-1",
+                "run_id": "run-1",
+                "run_terminal_state": "completed",
+                "evidence_state": "finalized",
+                "evidence_refs": ["evidence-1"],
+                "evidence_digest": "a" * 64,
+                "integrity_verified_at": "2026-08-19T00:05:00Z",
+                "integrity_state": "verified",
+                "workspace_revision": None,
+                "workspace_digest": "b" * 64,
+                "legacy_boundary": True,
+                "capsule_ref": "capsule-1",
+                "capsule_state": "READY",
+            },
+            "legacy_gate_unverified": False,
+        }
+    )
+    schema = json.loads(
+        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
+    )
+
+    Draft202012Validator(schema).validate(payload)

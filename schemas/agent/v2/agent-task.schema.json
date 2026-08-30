@@ -276,6 +276,25 @@
           "gate_receipt", "legacy_gate_unverified"
         ]
       }
+    },
+    {
+      "if": {
+        "required": ["completion_policy", "gate_receipt"],
+        "properties": {
+          "completion_policy": {"const": "evidence_and_capsule_required"},
+          "gate_receipt": {"type": "object"}
+        }
+      },
+      "then": {
+        "properties": {
+          "gate_receipt": {
+            "properties": {
+              "capsule_state": {"const": "READY"},
+              "capsule_ref": {"type": "string", "minLength": 1, "maxLength": 4096}
+            }
+          }
+        }
+      }
     }
   ]
 }

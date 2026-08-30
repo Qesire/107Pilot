@@ -244,6 +244,65 @@ def test_task_gate_receipt_requires_task_and_linked_run(tmp_path: Path) -> None:
         replace(task, linked_run_id="run-2", gate_receipt=gate)
 
 
+def test_capsule_required_policy_requires_ready_capsule_on_gate_receipt(
+    tmp_path: Path,
+) -> None:
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
+    not_required = AgentTaskGateReceipt(
+        task_id=task.task_id,
+        run_id="run-1",
+        run_terminal_state="completed",
+        evidence_refs=("evidence-1",),
+        evidence_digest="a" * 64,
+        integrity_verified_at="2026-08-19T00:05:00Z",
+        workspace_revision=None,
+        workspace_digest="b" * 64,
+        legacy_boundary=True,
+        capsule_ref=None,
+        capsule_state="not_required",
+    )
+    with pytest.raises(ValueError, match="Capsule"):
+        replace(
+            task,
+            linked_run_id="run-1",
+            completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED,
+            gate_receipt=not_required,
+        )
+
+    ready = replace(not_required, capsule_ref="capsule-1", capsule_state="READY")
+    completed = replace(
+        task,
+        linked_run_id="run-1",
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED,
+        gate_receipt=ready,
+    )
+    assert completed.gate_receipt == ready
+
+
+def test_evidence_policy_allows_ready_capsule_as_an_extra_product(tmp_path: Path) -> None:
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
+    ready = AgentTaskGateReceipt(
+        task_id=task.task_id,
+        run_id="run-1",
+        run_terminal_state="completed",
+        evidence_refs=("evidence-1",),
+        evidence_digest="a" * 64,
+        integrity_verified_at="2026-08-19T00:05:00Z",
+        workspace_revision=None,
+        workspace_digest="b" * 64,
+        legacy_boundary=True,
+        capsule_ref="capsule-1",
+        capsule_state="READY",
+    )
+
+    completed = replace(task, linked_run_id="run-1", gate_receipt=ready)
+    assert completed.gate_receipt == ready
+
+
 def test_new_gate_columns_with_null_value_remain_legacy_unverified(
     tmp_path: Path,
 ) -> None:

@@ -520,6 +520,13 @@ class AgentTaskRecord:
                 raise ValueError("gate receipt requires a linked Run")
             if self.gate_receipt.run_id != self.linked_run_id:
                 raise ValueError("gate receipt Run does not match linked Run")
+            if self.completion_policy.requires_capsule and (
+                self.gate_receipt.capsule_state != "READY"
+                or self.gate_receipt.capsule_ref is None
+            ):
+                raise ValueError(
+                    "Capsule-required AgentTask needs a READY Capsule reference"
+                )
         if not isinstance(self.legacy_gate_unverified, bool):
             raise TypeError("legacy_gate_unverified must be boolean")
         object.__setattr__(
