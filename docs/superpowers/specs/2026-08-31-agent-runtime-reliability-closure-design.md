@@ -1,7 +1,7 @@
 # Agent Runtime Reliability Closure Design
 
 - 日期：2026-08-31
-- 状态：proposed for implementation review
+- 状态：principal-agent revised；等待用户确认后进入实施计划
 - 范围：AgentSession、AgentTurn、pilot-agentd、AgentTask、Run、Evidence、Workspace 及其 Worker/Outbox 生命周期
 - 目标环境：CPU-RC VM、vm-local Slurm；同一协议适用于真实 Slurm
 
@@ -17,6 +17,11 @@
 Workspace 只比较一次初始快照，则以本文为准。本文不改变 owner、capability、
 审批、Slurm token、Evidence provenance 或“Pi 不获得通用宿主 shell”的安全边界。
 
+2026-08-31 主 Agent 复审进一步冻结以下实现边界：跨进程/跨存储链路通过
+durable receipt、write-ahead journal 和 reconciliation 收敛，不宣称不存在的分布式
+单事务；provider `tool_call_id` 只标识一次模型调用，不能作为领域副作用的幂等身份；
+AgentTask 的完成门禁由显式 completion policy 决定，不能仅凭运行环境推断。
+
 ## 1. 目标
 
 本设计要使 Agent runtime 在进程、容器、Worker、网络和模型 provider 发生故障时，
@@ -28,7 +33,8 @@ Workspace 只比较一次初始快照，则以本文为准。本文不改变 own
 2. 为 Turn、Outbox、ToolInvocation 和 AgentTask 增加可验证的 lease、heartbeat、fencing 和 stale reconciliation 语义。
 3. 每一个完整且已持久化的 tool result 都形成可恢复 checkpoint；崩溃恢复不得重做已确认完成的有副作用操作。
 4. 明确区分 schedule receipt、Run terminal、Evidence finalized 和最终 AgentTask result。
-5. 让 AgentTask 只有在 Run 终态、Evidence 完成且完整性检查通过后才可进入 `completed`；VM closure 路径还必须等 Capsule READY。
+5. 让 AgentTask 只有在 Run 终态、Evidence 完成且完整性检查通过后才可进入
+   `completed`；只有 completion policy 明确要求的 closure 路径还必须等 Capsule READY。
 6. 把 Workspace 的 immutable base snapshot、live revision/digest 和单写者 CAS 绑定到每次 patch、ChangeSet、Run 和 Evidence。
 7. 通过 context compaction 控制 prompt 大小，但不删除 durable event、Evidence 或审计事实。
 8. 把 64-step 从“硬失败点”改成“高位熔断、checkpoint、续接 Turn”；异常循环仍有明确的绝对终止条件。
@@ -133,6 +139,7 @@ ScheduleReceipt:
   resource_envelope_id: string
   workspace_revision: integer
   workspace_digest: sha256
+  completion_policy: evidence_required | evidence_and_capsule_required
   created_at: timestamp
 ```
 
@@ -147,7 +154,7 @@ TerminalEvidenceResult:
   run_id: string
   run_terminal_state: completed | failed | cancelled | orphaned
   evidence_state: finalized
-  integrity_state: checked
+  integrity_state: verified
   evidence_refs: [EvidenceRef]
   evidence_digest: sha256
   platform_snapshot_ref: SnapshotRef
@@ -155,7 +162,7 @@ TerminalEvidenceResult:
   workspace_revision: integer
   workspace_digest: sha256
   capsule_ref: CapsuleRef | null
-  capsule_state: READY | null
+  capsule_state: READY | not_required
   terminal_at: timestamp
 ```
 
@@ -172,7 +179,7 @@ created
 → awaiting_run_terminal
 → awaiting_evidence
 → awaiting_integrity
-→ awaiting_capsule       (仅 VM closure)
+→ awaiting_capsule       (仅 completion policy 要求 Capsule 时)
 → completed
 ```
 
@@ -184,18 +191,26 @@ input_required | cancelling | cancelled | failed | blocked | orphaned
 
 成功任务进入 `completed` 的必要条件：
 
-1. `Run.state` 是明确 terminal state；
+1. `Run.state=completed`，主作业 ExitCode 明确且为成功；其他 terminal Run 只能导向
+   Task `failed`、`cancelled` 或 `orphaned`；
 2. Run 的 Job ID、Step accounting、ExitCode、stdout/stderr 引用已经记录；
 3. Evidence 对象已 `collected`、`finalized`，并且 `integrity_checked=true`；
 4. Evidence digest 与 Run、source revision、platform snapshot 和 workspace digest 绑定；
-5. VM closure 任务额外要求关联 Capsule `READY`、manifest 完整且 digest 校验通过；
-6. 这些条件在同一个最终化 transaction 中写入 Task outcome，或由带版本/CAS 的连续事务安全地完成。
+5. `completion_policy=evidence_and_capsule_required` 的任务额外要求关联 Capsule
+   `READY`、manifest 完整且 digest 校验通过；普通 VM-local Slurm 验证仍可使用
+   `evidence_required`，不能仅因运行在 VM 上就推断必须构建 Capsule；
+6. Task finalizer 必须在带版本/CAS 的本地 transaction 中重新读取并锁定这些权威
+   receipt/ref，再写入 Task outcome；Run、Evidence、Capsule 位于不同 store 或进程时，
+   通过不可变 digest 引用和 reconciliation 收敛，不宣称跨服务原子 transaction。
 
 只有 receipt 的 Task 必须保持 `pending`、`running` 或 `awaiting_*`，不得进入
 `completed`。Run 成功但 Evidence 收集失败必须是 `awaiting_evidence` 或 `failed`，
-不得伪造成功结果。Run 已终止但结果为失败、取消或 orphaned 时，必须在 Evidence
-完成和完整性检查后进入对应的 Task `failed`、`cancelled` 或 `orphaned`；这些终态
-不是成功的 `completed`。Evidence 成功但 integrity check 失败必须是 `failed` 或 `blocked`。
+不得伪造成功结果。Run 已终止但结果为失败、取消或 orphaned 时，应尽力完成失败证据
+采集和完整性检查，再进入对应的 Task `failed`、`cancelled` 或 `orphaned`；这些终态
+不是成功的 `completed`。若证据采集经过有界重试仍失败，Task 必须以明确的
+`evidence_unavailable` / `collection_failed` outcome 终止并保留收集错误引用，不能永久
+停在 `awaiting_evidence`，也不能伪造 Evidence。Evidence 完成但 integrity check 失败
+必须是 `failed` 或 `blocked`。
 
 ### 5.3 事件与通知
 
@@ -251,7 +266,8 @@ reserved → running → completed
 规则：
 
 - handler 开始前先持久化 `reserved/running` 和唯一 `durable_operation_key`；
-- handler 执行期间每不超过 lease 三分之一时间发送 heartbeat，默认间隔 5 秒，最小 lease 30 秒；
+- heartbeat 由 Tool Gateway 的执行包装器维护，不要求每个业务 handler 自己实现；包装器
+  在 handler 执行期间每不超过 lease 三分之一时间续租，默认间隔 5 秒，最小 lease 30 秒；
 - stale 判定需要 `now > lease_expires_at + clock_skew_guard`，默认 guard 10 秒；
 - stale reconciler 先按 durable operation key 查询领域 receipt、Slurm submit marker、ChangeSet journal 或传输记录；
 - 找到已完成 receipt 就补写 `completed`，不能再次调用 handler；
@@ -260,19 +276,31 @@ reserved → running → completed
 
 ### 6.3 Handler durable operation key
 
-每个有副作用的 typed handler 必须接收并持久化如下稳定 key：
+一次 provider tool call 使用 `invocation_id` 标识；领域副作用使用与 provider
+`tool_call_id` 无关的 `durable_operation_key` 标识。每个有副作用的 typed handler
+必须接收并持久化如下稳定 key：
 
 ```text
 durable_operation_key =
-  sha256(owner || session_id || turn_id || tool_name || tool_call_id ||
-         canonical_arguments_digest || target_revision)
+  sha256(owner || session_id || tool_name || canonical_intent_digest ||
+         target_resource_id || target_revision || user_request_key)
 ```
 
 同一 key 只能对应一个 canonical arguments digest、一个 owner/session scope 和一个
 领域操作。重复请求返回原有 receipt/result；相同 key 搭配不同内容返回稳定 conflict。
-该 key 必须贯穿：ToolInvocation、ChangeSet publish journal、Run submit intent、
-Slurm marker、Evidence finalization 和 Capsule build。外部系统不支持事务时，先写
-intent/marker，再执行，之后通过 receipt reconciliation 收敛。
+恢复时 provider 即使产生不同 `tool_call_id`，只要 canonical intent、目标资源、目标
+revision 和显式 request key 相同，就能查回原有领域 receipt；缺少稳定 request key 的
+mutating tool 必须 fail closed，不能退化到按自然语言相似度猜测。
+
+一个用户动作跨越 ChangeSet、Run、Evidence 和 Capsule 时，保存同一个
+`causation_root_key`，但每个阶段使用独立的 stage operation key：
+
+```text
+stage_operation_key = sha256(causation_root_key || stage_name || stage_input_digest)
+```
+
+这样既能建立完整 lineage，也不会把不同聚合根错误地塞进同一个幂等命名空间。外部
+系统不支持事务时，先写 intent/marker，再执行，之后通过 receipt reconciliation 收敛。
 
 ### 6.4 Turn heartbeat
 
@@ -286,8 +314,12 @@ heartbeat，默认每 10 秒一次，或者在 `lease_remaining <= lease_duratio
 4. 让 Outbox 进入带退避的 pending/retry；
 5. 由新 Worker 使用新 fencing token 恢复。
 
-Turn lease 默认 120 秒，最大单次 agentd 请求 timeout 必须小于 Turn lease 的二分之一；
-若配置更长 provider/tool timeout，必须同步提高 lease 并保留 heartbeat，不得只改 HTTP timeout。
+Turn lease 默认 120 秒。没有 heartbeat 的兼容路径中，最大单次 agentd 请求 timeout
+必须小于 Turn lease 的二分之一；启用 heartbeat 后允许请求跨越初始 lease，但每次
+续租后的剩余 lease 必须覆盖“下一 heartbeat 间隔 + abort/持久化余量”。若配置更长
+provider/tool timeout，必须保留 heartbeat 并同步检查 capability 的有效期，不能只改
+HTTP timeout。单个 Turn 不得通过无限续租跨越 capability 绝对有效期；应 checkpoint
+并创建带新 capability 的 continuation Turn。
 
 ### 6.5 Outbox heartbeat
 
@@ -315,14 +347,23 @@ accounting 和受限 metadata 对账；不得用“数据库没有 job_id”推�
 ### 7.1 持久化边界
 
 只有 handler 已返回、Tool Gateway 已完成权限和 invocation 校验、ToolResult 已通过
-schema/大小/secret-redaction 检查，才称为“完整 tool result”。此时在一个 durable
-transaction 中完成：
+schema/大小/secret-redaction 检查，才称为“完整 tool result”。Tool Gateway、agentd
+和 Python Worker 跨进程通信，不能宣称它们共享一个数据库事务；这里采用两个 durable
+commit point 和可恢复收敛协议：
 
-1. 写入 `tool_call_completed` 事件；
-2. 写入或确认 ToolInvocation terminal receipt；
-3. 将该 invocation 的 result digest、result 摘要和副作用 receipt 加入 checkpoint；
-4. 更新 Turn `final_checkpoint`、checkpoint digest、event sequence 和 state version；
-5. 发布浏览器 hint。
+1. Tool Gateway 先原子提交 ToolInvocation terminal receipt、result digest 与领域
+   side-effect receipt；这是“副作用是否已经完成”的权威事实；
+2. agentd 返回只引用该 terminal receipt 的完整 ToolResult，并生成 checkpoint candidate；
+3. Python Worker 在 TurnStore 的一个事务中追加 `tool_call_completed` 事件、更新
+   `final_checkpoint`、checkpoint digest、event sequence 与 state version；
+4. 若第 1 步成功而第 3 步前崩溃，恢复逻辑按 durable operation key 从 invocation ledger
+   补建 checkpoint，不重新执行 handler；
+5. 若第 1 步未形成 terminal receipt，则只能进入 stale reconciliation，不能把 agentd
+   内存中的返回值当成完成事实；
+6. TurnStore commit 后才发布浏览器 hint。
+
+若部署模式确认 ToolInvocation 与 TurnStore 位于同一数据库，可以在实现中优化为本地
+原子 transaction，但协议正确性不得依赖该部署偶然性。
 
 部分 delta、started、progress、handler timeout 或未知外部状态不得进入 completed
 invocation checkpoint。它们可以保留为事件，但恢复时必须视为未完成或未知。
@@ -401,23 +442,39 @@ WorkspaceMutation:
   resulting_live_digest: sha256
   base_snapshot_id: string
   changeset_id: string
+  state: prepared | files_applied | committed | rolling_back | conflicted
+  journal_digest: sha256
 ```
 
 ### 8.3 单写者与 CAS
 
 一个 workspace 同时只能有一个有效 writer lease。patch、revert、publish、repair 和
 ChangeSet finalization 必须携带 writer fencing token 以及
-`expected_live_revision + expected_live_digest`。数据库 transaction 中执行：
+`expected_live_revision + expected_live_digest`。POSIX 文件系统和数据库不能组成一个
+真实原子 transaction，因此 mutation 必须使用 write-ahead journal：
 
 ```text
-if workspace.state != active: conflict
-if writer token/lease invalid: conflict
-if live revision or digest != expected: workspace_conflict
-apply mutation atomically
-increment live_revision
-recompute live_digest
-append mutation journal
+DB transaction:
+  validate workspace state, writer lease/fence and expected revision/digest
+  write PREPARED mutation journal with before/after digests and temp paths
+
+filesystem phase:
+  write bounded temp files
+  fsync where supported
+  atomic rename each target
+  mark FILES_APPLIED
+
+DB transaction:
+  re-read live files and verify resulting digest
+  increment live_revision
+  store live_digest and ChangeSet binding
+  mark mutation COMMITTED
 ```
+
+崩溃恢复按 journal 和磁盘 digest 判断继续 commit 还是按 before image 回滚；无法证明
+任一方向安全时将 workspace 标记为 `conflicted`。任何阶段都必须重新校验 writer fencing
+token，旧 writer 不能完成新 writer 接管后的 journal。所谓 mutation“原子”指外部只能
+观察到旧 revision 或已提交新 revision，不能把文件系统和数据库误表述为同一 ACID 事务。
 
 用户或另一 Session 在执行期间修改 workspace 时，旧 Agent 不得覆盖修改；它必须收到
 结构化 `workspace_conflict`，包含新的 revision/digest 和可重新生成 patch 所需的
@@ -469,12 +526,17 @@ Run/Task status、用户决定、失败 code、待处理 conflict 和下一步�
 ```text
 pi_steps < 48       normal
 48 <= pi_steps < 64 high-water warning + compact context
-pi_steps == 64      checkpoint + continuation_required + release Pi
+pi_steps >= 64      checkpoint + continuation_required + release Pi
 ```
 
 当前 Turn 以 `turn_yielded` 事件结束。该事件不是 `turn_failed`，也不是 AgentTask
 terminal result。续接 Turn 使用同一 Session、同一 Task/Project/Workspace lineage，
 从最后 checkpoint 开始，不重复已完成 invocation。
+
+`yield_turn_and_enqueue_continuation` 必须是控制面原子操作：校验旧 Turn fencing，写入
+最终 checkpoint 和 `yielded`，创建唯一 `parent_turn_id` 绑定的 continuation Turn，更新
+Session active turn，并写入同一 outbox。重复执行返回同一个 continuation Turn；不能先把
+Session 置 idle 再通过普通用户 `submit_message` 拼接，否则会产生丢失唤醒或双续接窗口。
 
 ### 10.2 绝对安全边界
 
@@ -538,9 +600,9 @@ AgentTurn:
 
 ### 11.3 AgentTask
 
-除第 5 节的状态外，Task 必须保存 `schedule_receipt_ref`、`run_id`、`evidence_refs`、
+除第 5 节的状态外，Task 必须保存 `completion_policy`、`schedule_receipt_ref`、`run_id`、`evidence_refs`、
 `evidence_digest`、`integrity_checked_at`、`capsule_ref`、`capsule_state`、
-`durable_operation_key`、lease 和 `reconciliation_attempt`。Task outcome 不得只由
+`causation_root_key`、本阶段 `durable_operation_key`、lease 和 `reconciliation_attempt`。Task outcome 不得只由
 agentd 的 HTTP response 设置。
 
 ### 11.4 Run/Evidence/Capsule
@@ -555,7 +617,7 @@ agentd 的 HTTP response 设置。
 |---|---|---|---|
 | 浏览器断线 | Turn/Task 继续 running/pending | 重连读取 durable events/receipt | 取消后台 Turn |
 | agentd 调用前退出 | Turn lease 可过期，checkpoint 不变 | 新 Worker 从 checkpoint 重试 | 伪造 tool result |
-| tool 完成后 agentd 退出 | completed invocation + checkpoint | 通过 operation key 重放 result，不重做副作用 | 仅按新 toolCall ID 再执行 |
+| invocation receipt 完成后、checkpoint 前 agentd/Worker 退出 | terminal invocation receipt，checkpoint 可滞后 | 通过 operation key 重放 result 并补建 checkpoint，不重做副作用 | 仅按新 toolCall ID 再执行 |
 | Worker 在 stream 中退出 | Turn/Outbox lease 过期 | stale reconcile 后新 fencing claim | 旧 Worker ack/finish |
 | heartbeat 续租失败 | interrupted 或 stale | abort、checkpoint、retry | 继续写旧 lease |
 | handler 返回未知错误 | invocation unknown/reconciling | 查 receipt/marker，再决定 | 假设没有副作用 |
@@ -574,10 +636,17 @@ agentd 的 HTTP response 设置。
 迁移采用 additive-first 方式，禁止删除或重写历史事实：
 
 1. 新增 lease heartbeat、fencing/state version、operation key、checkpoint digest、workspace live revision/digest、Task evidence gate 和 Capsule state 字段；
-2. 旧 `AgentTurn` 中已有 `lease_expires_at`、`fencing_token`、`state_version` 和 `final_checkpoint` 直接保留，`heartbeat_at` 初始取 `updated_at`，operation key 由旧 turn/request/tool identity 的 canonical digest 派生；
-3. 旧 Task 只包含 schedule receipt 时迁移为 `awaiting_run_terminal`，不得迁移为 completed；
+2. 旧 `AgentTurn` 中已有 `lease_expires_at`、`fencing_token`、`state_version` 和
+   `final_checkpoint` 直接保留，`heartbeat_at` 初始取 `updated_at`。旧 invocation 不具备
+   稳定领域 request key 时使用 `legacy:<invocation_id>`，只允许重放已存 terminal result，
+   不得伪造一个可跨新 provider tool call 去重的 operation key；
+3. 旧 Task 根据关联 Run、Evidence 和 Capsule 的实际事实执行 reconciliation：只有
+   schedule receipt 的记录迁移为 `awaiting_run_terminal`；旧 `completed` 记录在兼容读路径
+   保留原始状态，但标注 `legacy_gate_unverified`，新 follow-up 前必须完成门禁校验；
 4. 已有 Run terminal 且已有 Evidence 引用的记录进入一次性 integrity reconciliation；校验通过才补写 `evidence_integrity_checked`；
-5. 缺少 workspace live revision 的旧 workspace 从 immutable base manifest 建立 revision 1 和 digest；无法可靠计算 digest 时进入 `conflicted`，不自动发布；
+5. 缺少 workspace live revision 的旧 workspace 从当前受限 live manifest 建立 revision 1
+   和 digest，并保留原 immutable base digest；当前文件无法可靠读取或与已有进行中
+   ChangeSet 无法对账时进入 `conflicted`，不自动发布；
 6. 旧 20/64 step 失败记录保持原始 outcome；新执行使用本文的 64 high-water/256 absolute cap；
 7. 读路径同时接受旧字段和新字段，写路径只产生新 schema；所有 event payload 带 `schema_version`；
 8. migration 完成前，旧 worker 只可处理兼容的 queued/pending 对象；新 worker 发现缺少关键 gate 字段时先执行 backfill/reconciliation；
@@ -587,18 +656,23 @@ agentd 的 HTTP response 设置。
 
 ### 14.1 数据库和状态机测试
 
-- 同一 owner/session/turn/tool content 的 operation key 重放返回同一 receipt；内容变化返回 conflict；
+- 同一 owner/session/typed intent/target revision/request key 即使 provider tool call ID 不同，
+  operation key 重放仍返回同一 receipt；内容变化返回 conflict；
 - 旧 fencing token、旧 state version、过期 lease 的 append/finish/ack 全部被拒绝；
 - Turn、Outbox、Invocation heartbeat 可在 lease 到期前续租；到期后新 worker 可 reclaim；
 - stale reconciler 找到外部 receipt 时只补写状态，不重复 handler/Slurm submit；
-- `schedule_receipt_issued` 永远不能直接产生 Task completed；
+- `schedule_receipt_issued` 永远不能直接产生 Task completed；普通验证的
+  `evidence_required` 与需要 Capsule 的 `evidence_and_capsule_required` 分别通过门禁；
 - Run terminal 但 Evidence 未 finalized 时 Task 仍不可完成；integrity failure 和 Capsule 非 READY 的状态符合门禁；
+- 失败 Run 的 Evidence 经过有界重试仍不可得时，以 `evidence_unavailable` 失败终止，
+  不伪造 Evidence、也不永久等待；
 - event sequence 连续、重放幂等，浏览器 hint 丢失不影响 durable history。
 
 ### 14.2 Turn/agentd 测试
 
 - agentd 重启前后从最后完整 checkpoint 恢复；每个完整 tool result 都可从 checkpoint 读取；
-- 在 tool completed event 后、terminal event 前模拟 agentd crash，恢复不重复有副作用 handler；
+- 在 Tool Gateway terminal receipt 提交后、Turn checkpoint 提交前模拟 agentd/Worker crash，
+  恢复从 invocation ledger 补建 checkpoint，不重复有副作用 handler；
 - 模拟 provider 返回不同 tool call ID 时，operation key 能安全匹配；无法匹配时进入 unknown 而不是重执行；
 - stream 持续超过初始 lease 时 heartbeat 仍保持同一 claim；heartbeat 失败后旧 worker 不能写回；
 - 64 steps 产生 `turn_yielded`、checkpoint 和一个 continuation Turn；累计 256 steps 产生 `agent_runtime_budget_exhausted`；
@@ -609,6 +683,8 @@ agentd 的 HTTP response 设置。
 
 - immutable base snapshot 被引用后不可修改；每次成功 mutation 只生成新的 live revision/digest；
 - 两个 writer 同时 CAS 同一 revision 时恰有一个成功，另一个得到 `workspace_conflict`；
+- 分别在 mutation PREPARED 后、FILES_APPLIED 后模拟崩溃，reconciler 只能安全 commit、
+  回滚或标记 conflicted，旧 fencing writer 不能完成 journal；
 - 用户 live 修改后旧 ChangeSet、repair 和 publish 全部拒绝覆盖；
 - Run/Evidence/Capsule 均保存同一提交边界的 base snapshot 和 live digest；
 - patch、publish journal 和 handler retry 使用同一 durable operation key 不重复写文件。
@@ -622,7 +698,9 @@ agentd 的 HTTP response 设置。
 3. Worker/Runtime Watch 从 receipt 对账到唯一数字 Slurm Job ID；
 4. `squeue` 运行期和 `sacct` 终态引用同一 Run/Job；
 5. Run terminal 后 Evidence 被收集、finalized、integrity checked；
-6. VM closure 路径构建 Capsule，只有 Capsule READY 后 AgentTask 才 completed；
+6. 对 `completion_policy=evidence_and_capsule_required` 的 VM closure 路径构建 Capsule，
+   只有 Capsule READY 后 AgentTask 才 completed；普通 `evidence_required` 验证不被无关
+   Capsule 门禁阻塞；
 7. 在 agentd、Worker、API 容器分别重启并重新执行 tick，结果不重复提交、不丢事件、不丢 Evidence；
 8. 浏览器断线、HTTP 重试、重复 schedule request 和 stale Worker 均产生相同最终事实；
 9. 导出的 Evidence/Capsule 绑定同一 source revision、workspace digest、platform snapshot 和 Slurm Job ID；
@@ -643,7 +721,8 @@ workspace conflict 和 context compaction 统计。日志和 metrics 不得包�
 - 任意完整 tool result 都有可验证 checkpoint 和 operation key；
 - 长 Slurm 任务只占用 AgentTask/Run/Reconciler，不占用 Pi Turn；
 - schedule receipt 从不伪装 terminal evidence result；
-- Task completed 必须满足 Run terminal、Evidence finalized、integrity checked，VM closure 还满足 Capsule READY；
+- Task completed 必须满足 Run terminal、Evidence finalized、integrity verified；只有
+  completion policy 明确要求时才额外满足 Capsule READY；
 - 64-step 触发 checkpoint 续接，异常累计预算仍能安全失败；
 - Workspace 永远以 immutable base + live revision/digest + 单写者 CAS 保护；
 - 旧数据可迁移、可回滚读取，且不删除用户历史或外部事实。
