@@ -974,6 +974,40 @@ _AGENT_TASK_SCHEMA = _statements(
     "ON agent_tasks(linked_run_id) WHERE linked_run_id IS NOT NULL"
 )
 
+_AGENT_TASK_EVIDENCE_GATE_SCHEMA = _statements(
+    "ALTER TABLE agent_tasks ADD COLUMN completion_policy TEXT NOT NULL DEFAULT 'evidence_required'"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN gate_state TEXT NOT NULL DEFAULT 'created'"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN schedule_receipt_ref TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN schedule_receipt TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN evidence_refs_json TEXT NOT NULL DEFAULT '[]'"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN evidence_digest TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN integrity_checked_at TIMESTAMPTZ"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN capsule_ref TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN capsule_state TEXT NOT NULL DEFAULT 'not_required'"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN gate_receipt TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN causation_root_key TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN durable_operation_key TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN reconciliation_attempt INTEGER NOT NULL DEFAULT 0"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN heartbeat_at TIMESTAMPTZ"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN legacy_gate_unverified SMALLINT NOT NULL DEFAULT 1"
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_tasks_gate_reconciliation ON agent_tasks(gate_state, reconciliation_attempt, updated_at)"
+)
+
 _WORKFLOW_MANIFEST_SCHEMA = _statements(
     """
     CREATE TABLE workflow_manifests (
@@ -1357,6 +1391,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.021.repair_tickets", _REPAIR_TICKET_SCHEMA),
     ("004a.022.ssh_connection_sessions", _SSH_CONNECTION_SCHEMA),
     ("004a.023.agent_builder_submissions", _AGENT_BUILDER_SUBMISSION_SCHEMA),
+    ("004a.024.agent_task_evidence_gates", _AGENT_TASK_EVIDENCE_GATE_SCHEMA),
 )
 
 

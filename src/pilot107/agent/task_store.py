@@ -11,16 +11,23 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from pilot107.agent.migrations import AGENT_TASK_EVIDENCE_GATE_MIGRATION
 from pilot107.agent.tasks import (
     TERMINAL_TASK_STATES,
     AgentResourceEnvelope,
+    AgentTaskCompletionPolicy,
     AgentTaskConflict,
+    AgentTaskGateReceipt,
+    AgentTaskGateState,
     AgentTaskKind,
     AgentTaskLease,
     AgentTaskRecord,
     AgentTaskRequest,
     AgentTaskResult,
+    AgentTaskScheduleReceipt,
     AgentTaskState,
+    agent_task_gate_receipt_payload,
+    agent_task_schedule_receipt_payload,
     timestamp,
 )
 from pilot107.core.schema_migrations import SchemaMigration, apply_schema_migrations
@@ -78,6 +85,7 @@ AGENT_TASK_MIGRATIONS = (
             """,
         ),
     ),
+    AGENT_TASK_EVIDENCE_GATE_MIGRATION,
 )
 
 
@@ -125,6 +133,25 @@ class AgentTaskStore(Protocol):
 
     def complete_task(
         self, task_id: str, *, lease: AgentTaskLease, result: AgentTaskResult
+    ) -> AgentTaskRecord: ...
+
+    def advance_gate(
+        self,
+        task_id: str,
+        *,
+        lease: AgentTaskLease,
+        gate_state: AgentTaskGateState,
+        receipt: AgentTaskGateReceipt | AgentTaskScheduleReceipt | None = None,
+        completion_policy: AgentTaskCompletionPolicy | None = None,
+    ) -> AgentTaskRecord: ...
+
+    def finalize_task(
+        self,
+        task_id: str,
+        *,
+        lease: AgentTaskLease,
+        gate_receipt: AgentTaskGateReceipt | None,
+        result: AgentTaskResult,
     ) -> AgentTaskRecord: ...
 
     def request_cancel(
@@ -214,9 +241,11 @@ class SQLiteAgentTaskStore:
                     resource_envelope_json, envelope_expires_at,
                     linked_run_id, result_json,
                     cancel_requested, lease_owner, lease_expires_at, fencing_token,
-                    created_at, updated_at
+                    created_at, updated_at, completion_policy, gate_state,
+                    evidence_refs_json, capsule_state, legacy_gate_unverified
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, NULL, NULL,
-                          0, NULL, NULL, 0, ?, ?)
+                          0, NULL, NULL, 0, ?, ?, ?, 'created', '[]',
+                          'not_required', 1)
                 ON CONFLICT (owner, request_key) DO NOTHING
                 """,
                 _insert_values(candidate),
@@ -464,6 +493,204 @@ class SQLiteAgentTaskStore:
             raise AgentTaskConflict("AgentTask completion was fenced")
         return _task_from_row(updated)
 
+    def advance_gate(
+        self,
+        task_id: str,
+        *,
+        lease: AgentTaskLease,
+        gate_state: AgentTaskGateState,
+        receipt: AgentTaskGateReceipt | AgentTaskScheduleReceipt | None = None,
+        completion_policy: AgentTaskCompletionPolicy | None = None,
+    ) -> AgentTaskRecord:
+        """Advance the durable gate projection under the current task lease."""
+
+        _key(task_id, "task_id")
+        if task_id != lease.task_id:
+            raise AgentTaskConflict("AgentTask lease binding is invalid")
+        if not isinstance(gate_state, AgentTaskGateState):
+            try:
+                gate_state = AgentTaskGateState(gate_state)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("gate_state is invalid") from exc
+        if receipt is not None and not isinstance(
+            receipt, (AgentTaskGateReceipt, AgentTaskScheduleReceipt)
+        ):
+            raise TypeError("receipt must be an AgentTask gate receipt")
+        if completion_policy is not None and not isinstance(
+            completion_policy, AgentTaskCompletionPolicy
+        ):
+            try:
+                completion_policy = AgentTaskCompletionPolicy(completion_policy)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("completion_policy is invalid") from exc
+        receipt_payload = None
+        schedule_ref = None
+        evidence_refs = None
+        evidence_digest = None
+        integrity_checked_at = None
+        capsule_ref = None
+        capsule_state = "not_required"
+        if isinstance(receipt, AgentTaskScheduleReceipt):
+            receipt_payload = _json(agent_task_schedule_receipt_payload(receipt))
+            schedule_ref = receipt.receipt_id
+        elif isinstance(receipt, AgentTaskGateReceipt):
+            receipt_payload = _json(agent_task_gate_receipt_payload(receipt))
+            evidence_refs = _json_array(receipt.evidence_refs)
+            evidence_digest = receipt.evidence_digest
+            integrity_checked_at = receipt.integrity_verified_at
+            capsule_ref = receipt.capsule_ref
+            capsule_state = receipt.capsule_state
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current_row = self._assert_lease(connection, lease)
+            current = _task_from_row(current_row)
+            target_policy = completion_policy or current.completion_policy
+            if receipt is not None:
+                if receipt.task_id != current.task_id:
+                    raise AgentTaskConflict("AgentTask receipt task binding is invalid")
+                if current.linked_run_id is not None and receipt.run_id != current.linked_run_id:
+                    raise AgentTaskConflict("AgentTask receipt Run does not match linked Run")
+                if isinstance(receipt, AgentTaskScheduleReceipt) and (
+                    receipt.completion_policy is not target_policy
+                ):
+                    raise AgentTaskConflict("AgentTask schedule policy conflicts")
+            updated = connection.execute(
+                "UPDATE agent_tasks SET completion_policy = ?, gate_state = ?, "
+                "schedule_receipt_ref = COALESCE(?, schedule_receipt_ref), "
+                "schedule_receipt = COALESCE(?, schedule_receipt), "
+                "evidence_refs_json = COALESCE(?, evidence_refs_json), "
+                "evidence_digest = COALESCE(?, evidence_digest), "
+                "integrity_checked_at = COALESCE(?, integrity_checked_at), "
+                "capsule_ref = COALESCE(?, capsule_ref), "
+                "capsule_state = COALESCE(?, capsule_state), "
+                "gate_receipt = CASE WHEN ? IS NOT NULL THEN ? ELSE gate_receipt END, "
+                "legacy_gate_unverified = CASE WHEN ? IS NOT NULL THEN 0 "
+                "ELSE legacy_gate_unverified END, "
+                "heartbeat_at = ?, version = version + 1, updated_at = ? "
+                "WHERE task_id = ? AND owner = ? AND state = 'running' "
+                "AND version = ? AND fencing_token = ? RETURNING *",
+                (
+                    target_policy.value,
+                    gate_state.value,
+                    schedule_ref,
+                    receipt_payload if isinstance(receipt, AgentTaskScheduleReceipt) else None,
+                    evidence_refs,
+                    evidence_digest,
+                    integrity_checked_at,
+                    capsule_ref,
+                    capsule_state,
+                    receipt_payload if isinstance(receipt, AgentTaskGateReceipt) else None,
+                    receipt_payload if isinstance(receipt, AgentTaskGateReceipt) else None,
+                    receipt_payload if isinstance(receipt, AgentTaskGateReceipt) else None,
+                    self._now(),
+                    self._now(),
+                    task_id,
+                    lease.owner,
+                    lease.version,
+                    lease.fencing_token,
+                ),
+            ).fetchone()
+        if updated is None:
+            raise AgentTaskConflict("AgentTask gate transition was fenced")
+        return _task_from_row(updated)
+
+    def finalize_task(
+        self,
+        task_id: str,
+        *,
+        lease: AgentTaskLease,
+        gate_receipt: AgentTaskGateReceipt | None,
+        result: AgentTaskResult,
+    ) -> AgentTaskRecord:
+        """Finalize a task only after an authoritative, policy-compatible gate."""
+
+        _key(task_id, "task_id")
+        if task_id != lease.task_id:
+            raise AgentTaskConflict("AgentTask lease binding is invalid")
+        if not isinstance(result, AgentTaskResult):
+            raise TypeError("result must be AgentTaskResult")
+        if result.status == "succeeded" and not isinstance(gate_receipt, AgentTaskGateReceipt):
+            raise AgentTaskConflict("successful AgentTask finalization requires a gate receipt")
+        if gate_receipt is not None and not isinstance(gate_receipt, AgentTaskGateReceipt):
+            raise TypeError("gate_receipt must be AgentTaskGateReceipt")
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM agent_tasks WHERE task_id = ? AND owner = ?",
+                (task_id, lease.owner),
+            ).fetchone()
+            if existing is None:
+                raise KeyError(task_id)
+            current = _task_from_row(existing)
+            if current.state in TERMINAL_TASK_STATES:
+                if current.result == result and (
+                    gate_receipt is None or current.gate_receipt == gate_receipt
+                ):
+                    return current
+                raise AgentTaskConflict("AgentTask terminal result replay conflicts")
+            self._assert_lease(connection, lease)
+            receipt_payload = None
+            evidence_refs = _json_array(result.evidence_refs)
+            evidence_digest = None
+            integrity_checked_at = None
+            capsule_ref = None
+            capsule_state = "not_required"
+            if gate_receipt is not None:
+                if gate_receipt.task_id != current.task_id:
+                    raise AgentTaskConflict("AgentTask gate receipt task binding is invalid")
+                if current.linked_run_id is None or gate_receipt.run_id != current.linked_run_id:
+                    raise AgentTaskConflict("AgentTask gate receipt Run does not match linked Run")
+                if result.status == "succeeded" and gate_receipt.run_terminal_state != "completed":
+                    raise AgentTaskConflict("successful AgentTask requires a completed Run")
+                if current.completion_policy.requires_capsule and (
+                    gate_receipt.capsule_state != "READY" or gate_receipt.capsule_ref is None
+                ):
+                    raise AgentTaskConflict("Capsule-required AgentTask needs a READY Capsule")
+                receipt_payload = _json(agent_task_gate_receipt_payload(gate_receipt))
+                evidence_refs = _json_array(gate_receipt.evidence_refs)
+                evidence_digest = gate_receipt.evidence_digest
+                integrity_checked_at = gate_receipt.integrity_verified_at
+                capsule_ref = gate_receipt.capsule_ref
+                capsule_state = gate_receipt.capsule_state
+            target = AgentTaskState(result.status)
+            updated = connection.execute(
+                "UPDATE agent_tasks SET state = ?, result_json = ?, gate_state = ?, "
+                "gate_receipt = COALESCE(?, gate_receipt), evidence_refs_json = ?, "
+                "evidence_digest = COALESCE(?, evidence_digest), "
+                "integrity_checked_at = COALESCE(?, integrity_checked_at), "
+                "capsule_ref = COALESCE(?, capsule_ref), capsule_state = ?, "
+                "legacy_gate_unverified = CASE WHEN ? IS NOT NULL THEN 0 "
+                "ELSE legacy_gate_unverified END, "
+                "version = version + 1, lease_owner = NULL, lease_expires_at = NULL, "
+                "heartbeat_at = ?, updated_at = ? WHERE task_id = ? AND owner = ? "
+                "AND state = 'running' AND version = ? AND fencing_token = ? RETURNING *",
+                (
+                    target.value,
+                    _json(_result_payload(result)),
+                    (
+                        AgentTaskGateState.COMPLETED.value
+                        if result.status == "succeeded"
+                        else gate_state_for_result(target).value
+                    ),
+                    receipt_payload,
+                    evidence_refs,
+                    evidence_digest,
+                    integrity_checked_at,
+                    capsule_ref,
+                    capsule_state,
+                    receipt_payload,
+                    self._now(),
+                    self._now(),
+                    task_id,
+                    lease.owner,
+                    lease.version,
+                    lease.fencing_token,
+                ),
+            ).fetchone()
+        if updated is None:
+            raise AgentTaskConflict("AgentTask finalization was fenced")
+        return _task_from_row(updated)
+
     def request_cancel(
         self, task_id: str, *, owner: str, expected_version: int
     ) -> AgentTaskRecord:
@@ -641,6 +868,7 @@ def _insert_values(value: AgentTaskRecord) -> tuple[object, ...]:
         value.resource_envelope.expires_at,
         value.created_at,
         value.updated_at,
+        value.completion_policy.value,
     )
 
 
@@ -697,12 +925,14 @@ def _task_from_row(row: Mapping[str, Any] | Any) -> AgentTaskRecord:
     )
     legacy_gate_unverified = (
         True
-        if any(
-            not _row_has(row, column) or row[column] is None
-            for column in gate_columns
-        )
+        if any(not _row_has(row, column) for column in gate_columns)
+        or row["legacy_gate_unverified"] is None
         else bool(row["legacy_gate_unverified"])
     )
+    raw_policy = row["completion_policy"] if _row_has(row, "completion_policy") else None
+    raw_gate_state = row["gate_state"] if _row_has(row, "gate_state") else None
+    raw_schedule = row["schedule_receipt"] if _row_has(row, "schedule_receipt") else None
+    raw_gate = row["gate_receipt"] if _row_has(row, "gate_receipt") else None
     return AgentTaskRecord(
         task_id=str(row["task_id"]),
         owner=str(row["owner"]),
@@ -732,6 +962,26 @@ def _task_from_row(row: Mapping[str, Any] | Any) -> AgentTaskRecord:
         fencing_token=int(row["fencing_token"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        completion_policy=(
+            AgentTaskCompletionPolicy(str(raw_policy))
+            if raw_policy is not None
+            else AgentTaskCompletionPolicy.EVIDENCE_REQUIRED
+        ),
+        gate_state=(
+            AgentTaskGateState(str(raw_gate_state))
+            if raw_gate_state is not None
+            else AgentTaskGateState.CREATED
+        ),
+        schedule_receipt=(
+            AgentTaskScheduleReceipt(**_loaded(raw_schedule))
+            if raw_schedule is not None
+            else None
+        ),
+        gate_receipt=(
+            AgentTaskGateReceipt(**_loaded(raw_gate))
+            if raw_gate is not None
+            else None
+        ),
         legacy_gate_unverified=legacy_gate_unverified,
     )
 
@@ -800,6 +1050,16 @@ def _result_from_payload(value: dict[str, Any]) -> AgentTaskResult:
     )
 
 
+def gate_state_for_result(result: AgentTaskState) -> AgentTaskGateState:
+    if result is AgentTaskState.CANCELLED:
+        return AgentTaskGateState.CANCELLED
+    if result is AgentTaskState.AUTH_REQUIRED:
+        return AgentTaskGateState.INPUT_REQUIRED
+    if result is AgentTaskState.FAILED:
+        return AgentTaskGateState.FAILED
+    return AgentTaskGateState.BLOCKED
+
+
 def _loaded(value: object) -> dict[str, Any]:
     loaded = json.loads(value) if isinstance(value, str) else value
     if not isinstance(loaded, dict):
@@ -811,6 +1071,15 @@ def _json(value: dict[str, Any]) -> str:
     return json.dumps(
         value,
         sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+
+def _json_array(values: tuple[str, ...]) -> str:
+    return json.dumps(
+        list(values),
         separators=(",", ":"),
         ensure_ascii=False,
         allow_nan=False,

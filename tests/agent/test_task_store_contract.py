@@ -19,6 +19,7 @@ from pilot107.agent.tasks import (
     AgentTaskConflict,
     AgentTaskGateReceipt,
     AgentTaskGateState,
+    AgentTaskRecord,
     AgentTaskRequest,
     AgentTaskResult,
     AgentTaskScheduleReceipt,
@@ -244,6 +245,140 @@ def test_task_gate_receipt_requires_task_and_linked_run(tmp_path: Path) -> None:
         replace(task, linked_run_id="run-2", gate_receipt=gate)
 
 
+def _terminal_gate(task: AgentTaskRecord, *, capsule: bool = False) -> AgentTaskGateReceipt:
+    task_id = task.task_id
+    return AgentTaskGateReceipt(
+        task_id=task_id,
+        run_id="run-1",
+        run_terminal_state="completed",
+        evidence_refs=("evidence-1",),
+        evidence_digest="a" * 64,
+        integrity_verified_at="2026-08-19T00:05:00Z",
+        workspace_revision=None,
+        workspace_digest="b" * 64,
+        legacy_boundary=True,
+        capsule_ref="capsule-1" if capsule else None,
+        capsule_state="READY" if capsule else "not_required",
+    )
+
+
+def test_store_rejects_success_without_terminal_gate(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    lease = replace(lease, version=linked.version)
+
+    with pytest.raises(AgentTaskConflict, match="gate"):
+        store.finalize_task(
+            task.task_id,
+            lease=lease,
+            gate_receipt=None,
+            result=AgentTaskResult.succeeded(("evidence-1",)),
+        )
+
+
+def test_stale_fence_cannot_finalize_gate(tmp_path: Path) -> None:
+    clock = MutableClock()
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=clock)
+    task, _ = _create(store)
+    first = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=1)
+    assert first is not None
+    clock.advance(timedelta(seconds=2))
+    second = store.claim_task(task.task_id, owner="alice", worker_id="worker-b", lease_seconds=30)
+    assert second is not None
+
+    with pytest.raises(AgentTaskConflict):
+        store.finalize_task(
+            task.task_id,
+            lease=first,
+            gate_receipt=_terminal_gate(task),
+            result=AgentTaskResult.succeeded(("evidence-1",)),
+        )
+
+
+def test_advance_gate_persists_receipt_and_uses_task_cas(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+
+    advanced = store.advance_gate(
+        task.task_id,
+        lease=lease,
+        gate_state=AgentTaskGateState.AWAITING_EVIDENCE,
+        receipt=None,
+    )
+
+    assert advanced.gate_state is AgentTaskGateState.AWAITING_EVIDENCE
+    assert advanced.version == lease.version + 1
+    assert (
+        store.get_task(task.task_id, owner="alice").gate_state
+        is AgentTaskGateState.AWAITING_EVIDENCE
+    )
+    with pytest.raises(AgentTaskConflict):
+        store.advance_gate(
+            task.task_id,
+            lease=lease,
+            gate_state=AgentTaskGateState.AWAITING_INTEGRITY,
+            receipt=None,
+        )
+
+
+def test_finalize_requires_policy_compatible_ready_capsule(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    lease = replace(lease, version=linked.version)
+    capsule_task = replace(
+        task,
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED,
+    )
+    # The policy is persisted as part of the gate transition, not by mutating a record.
+    store.advance_gate(
+        task.task_id,
+        lease=lease,
+        gate_state=AgentTaskGateState.AWAITING_CAPSULE,
+        receipt=None,
+        completion_policy=capsule_task.completion_policy,
+    )
+    refreshed = store.get_task(task.task_id, owner="alice")
+    renewed = store.renew_task(
+        replace(lease, version=refreshed.version), lease_seconds=30
+    )
+    with pytest.raises(AgentTaskConflict, match="Capsule"):
+        store.finalize_task(
+            task.task_id,
+            lease=renewed,
+            gate_receipt=_terminal_gate(task),
+            result=AgentTaskResult.succeeded(("evidence-1",)),
+        )
+
+
+def test_finalize_persists_verified_gate_and_releases_lease(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    lease = replace(lease, version=linked.version)
+    completed = store.finalize_task(
+        task.task_id,
+        lease=lease,
+        gate_receipt=_terminal_gate(task),
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+    )
+
+    assert completed.state is AgentTaskState.SUCCEEDED
+    assert completed.gate_state is AgentTaskGateState.COMPLETED
+    assert completed.gate_receipt is not None
+    assert completed.legacy_gate_unverified is False
+    assert completed.lease_owner is None
+
+
 def test_capsule_required_policy_requires_ready_capsule_on_gate_receipt(
     tmp_path: Path,
 ) -> None:
@@ -308,17 +443,6 @@ def test_new_gate_columns_with_null_value_remain_legacy_unverified(
 ) -> None:
     store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
     task, _ = _create(store)
-    with store.connect() as connection:
-        connection.execute("ALTER TABLE agent_tasks ADD COLUMN completion_policy TEXT")
-        connection.execute("ALTER TABLE agent_tasks ADD COLUMN gate_state TEXT")
-        connection.execute("ALTER TABLE agent_tasks ADD COLUMN schedule_receipt TEXT")
-        connection.execute("ALTER TABLE agent_tasks ADD COLUMN gate_receipt TEXT")
-        connection.execute("ALTER TABLE agent_tasks ADD COLUMN legacy_gate_unverified INTEGER")
-        connection.execute(
-            "UPDATE agent_tasks SET completion_policy = ?, gate_state = ?, "
-            "schedule_receipt = ?, gate_receipt = ?, legacy_gate_unverified = ?",
-            ("evidence_required", "created", "schedule", "gate", 0),
-        )
     with store.connect() as connection:
         connection.execute("UPDATE agent_tasks SET gate_receipt = NULL")
     assert store.get_task(task.task_id, owner="alice").legacy_gate_unverified is True

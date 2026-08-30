@@ -117,3 +117,30 @@ AGENT_SESSION_MIGRATIONS = (
         ),
     ),
 )
+
+# Task persistence uses its own migration history because agent_tasks is an
+# independent lifecycle table.  This migration is additive so old task rows
+# remain readable and are explicitly marked for gate reconciliation.
+AGENT_TASK_EVIDENCE_GATE_MIGRATION = SchemaMigration(
+    migration_id="006c.002.agent_task_evidence_gates",
+    statements=(
+        "ALTER TABLE agent_tasks ADD COLUMN completion_policy TEXT NOT NULL "
+        "DEFAULT 'evidence_required'",
+        "ALTER TABLE agent_tasks ADD COLUMN gate_state TEXT NOT NULL DEFAULT 'created'",
+        "ALTER TABLE agent_tasks ADD COLUMN schedule_receipt_ref TEXT",
+        "ALTER TABLE agent_tasks ADD COLUMN schedule_receipt TEXT",
+        "ALTER TABLE agent_tasks ADD COLUMN evidence_refs_json TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE agent_tasks ADD COLUMN evidence_digest TEXT",
+        "ALTER TABLE agent_tasks ADD COLUMN integrity_checked_at TEXT",
+        "ALTER TABLE agent_tasks ADD COLUMN capsule_ref TEXT",
+        "ALTER TABLE agent_tasks ADD COLUMN capsule_state TEXT NOT NULL DEFAULT 'not_required'",
+        "ALTER TABLE agent_tasks ADD COLUMN gate_receipt TEXT",
+        "ALTER TABLE agent_tasks ADD COLUMN causation_root_key TEXT",
+        "ALTER TABLE agent_tasks ADD COLUMN durable_operation_key TEXT",
+        "ALTER TABLE agent_tasks ADD COLUMN reconciliation_attempt INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE agent_tasks ADD COLUMN heartbeat_at TEXT",
+        "ALTER TABLE agent_tasks ADD COLUMN legacy_gate_unverified INTEGER NOT NULL DEFAULT 1",
+        "CREATE INDEX idx_agent_tasks_gate_reconciliation ON agent_tasks("
+        "gate_state, reconciliation_attempt, updated_at)",
+    ),
+)
