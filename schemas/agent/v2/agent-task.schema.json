@@ -170,7 +170,7 @@
       "properties": {
         "task_id": {"$ref": "#/$defs/id"},
         "run_id": {"$ref": "#/$defs/id"},
-        "run_terminal_state": {"type": "string", "minLength": 1, "maxLength": 128},
+        "run_terminal_state": {"enum": ["completed", "failed", "cancelled", "orphaned"]},
         "evidence_state": {"const": "finalized"},
         "evidence_refs": {
           "type": "array",

@@ -160,6 +160,111 @@ def test_gate_receipt_requires_task_and_terminal_state() -> None:
         )
 
 
+@pytest.mark.parametrize("run_terminal_state", ["completed", "failed", "cancelled", "orphaned"])
+def test_gate_receipt_accepts_only_wire_run_terminal_states(
+    run_terminal_state: str,
+) -> None:
+    receipt = AgentTaskGateReceipt(
+        task_id="task-1",
+        run_id="run-1",
+        run_terminal_state=run_terminal_state,
+        evidence_refs=("evidence-1",),
+        evidence_digest="a" * 64,
+        integrity_verified_at="2026-08-19T00:05:00Z",
+        workspace_revision=None,
+        workspace_digest="b" * 64,
+        legacy_boundary=True,
+        capsule_ref=None,
+        capsule_state="not_required",
+    )
+    assert receipt.run_terminal_state == run_terminal_state
+
+
+@pytest.mark.parametrize("run_terminal_state", ["running", "bogus"])
+def test_gate_receipt_rejects_non_terminal_run_states(run_terminal_state: str) -> None:
+    with pytest.raises(ValueError, match="run_terminal_state"):
+        AgentTaskGateReceipt(
+            task_id="task-1",
+            run_id="run-1",
+            run_terminal_state=run_terminal_state,
+            evidence_refs=("evidence-1",),
+            evidence_digest="a" * 64,
+            integrity_verified_at="2026-08-19T00:05:00Z",
+            workspace_revision=None,
+            workspace_digest="b" * 64,
+            legacy_boundary=True,
+            capsule_ref=None,
+            capsule_state="not_required",
+        )
+
+
+def test_task_receipt_bindings_follow_linked_run_and_admitted_boundary(
+    tmp_path: Path,
+) -> None:
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
+    admitted = AgentTaskScheduleReceipt(
+        task_id=task.task_id,
+        run_id="run-1",
+        completion_policy=task.completion_policy,
+        submit_state="admitted",
+    )
+    assert replace(task, schedule_receipt=admitted).schedule_receipt == admitted
+    with pytest.raises(ValueError, match="schedule receipt task_id"):
+        replace(task, schedule_receipt=replace(admitted, task_id="task-other"))
+    with pytest.raises(ValueError, match="linked Run"):
+        replace(task, linked_run_id="run-2", schedule_receipt=admitted)
+    with pytest.raises(ValueError, match="admitted"):
+        replace(task, schedule_receipt=replace(admitted, submit_state="submitted"))
+
+
+def test_task_gate_receipt_requires_task_and_linked_run(tmp_path: Path) -> None:
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
+    gate = AgentTaskGateReceipt(
+        task_id=task.task_id,
+        run_id="run-1",
+        run_terminal_state="completed",
+        evidence_refs=("evidence-1",),
+        evidence_digest="a" * 64,
+        integrity_verified_at="2026-08-19T00:05:00Z",
+        workspace_revision=None,
+        workspace_digest="b" * 64,
+        legacy_boundary=True,
+        capsule_ref=None,
+        capsule_state="not_required",
+    )
+    with pytest.raises(ValueError, match="linked Run"):
+        replace(task, gate_receipt=gate)
+    with pytest.raises(ValueError, match="gate receipt task_id"):
+        replace(task, linked_run_id="run-1", gate_receipt=replace(gate, task_id="task-other"))
+    with pytest.raises(ValueError, match="gate receipt Run"):
+        replace(task, linked_run_id="run-2", gate_receipt=gate)
+
+
+def test_new_gate_columns_with_null_value_remain_legacy_unverified(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    with store.connect() as connection:
+        connection.execute("ALTER TABLE agent_tasks ADD COLUMN completion_policy TEXT")
+        connection.execute("ALTER TABLE agent_tasks ADD COLUMN gate_state TEXT")
+        connection.execute("ALTER TABLE agent_tasks ADD COLUMN schedule_receipt TEXT")
+        connection.execute("ALTER TABLE agent_tasks ADD COLUMN gate_receipt TEXT")
+        connection.execute("ALTER TABLE agent_tasks ADD COLUMN legacy_gate_unverified INTEGER")
+        connection.execute(
+            "UPDATE agent_tasks SET completion_policy = ?, gate_state = ?, "
+            "schedule_receipt = ?, gate_receipt = ?, legacy_gate_unverified = ?",
+            ("evidence_required", "created", "schedule", "gate", 0),
+        )
+    with store.connect() as connection:
+        connection.execute("UPDATE agent_tasks SET gate_receipt = NULL")
+    assert store.get_task(task.task_id, owner="alice").legacy_gate_unverified is True
+
+
 @pytest.mark.parametrize("receipt_type", [AgentTaskScheduleReceipt, AgentTaskGateReceipt])
 def test_legacy_boundary_is_required_when_revision_is_missing(receipt_type: type) -> None:
     values: dict[str, object] = {

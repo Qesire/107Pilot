@@ -73,6 +73,7 @@ _SCHEDULE_SUBMIT_STATES = frozenset(
     {"admitted", "submitting", "pending", "submitted", "submission_uncertain"}
 )
 _CAPSULE_STATES = frozenset({"READY", "not_required"})
+_RUN_TERMINAL_STATES = frozenset({"completed", "failed", "cancelled", "orphaned"})
 
 
 @dataclass(frozen=True)
@@ -334,6 +335,8 @@ class AgentTaskGateReceipt:
         _identifier(self.task_id, "task_id")
         _identifier(self.run_id, "run_id")
         _bounded_text(self.run_terminal_state, "run_terminal_state")
+        if self.run_terminal_state not in _RUN_TERMINAL_STATES:
+            raise ValueError("run_terminal_state must be terminal")
         refs = tuple(self.evidence_refs)
         if len(refs) > 4096:
             raise ValueError("evidence_refs has too many entries")
@@ -491,6 +494,16 @@ class AgentTaskRecord:
             self.schedule_receipt, AgentTaskScheduleReceipt
         ):
             raise TypeError("AgentTask schedule receipt is invalid")
+        if self.schedule_receipt is not None:
+            if self.schedule_receipt.task_id != self.task_id:
+                raise ValueError("schedule receipt task_id does not match AgentTask")
+            if self.linked_run_id is None:
+                if self.schedule_receipt.submit_state != "admitted":
+                    raise ValueError(
+                        "schedule receipt must remain admitted before linked Run"
+                    )
+            elif self.schedule_receipt.run_id != self.linked_run_id:
+                raise ValueError("schedule receipt Run does not match linked Run")
         if (
             self.schedule_receipt is not None
             and self.schedule_receipt.completion_policy is not self.completion_policy
@@ -500,6 +513,13 @@ class AgentTaskRecord:
             self.gate_receipt, AgentTaskGateReceipt
         ):
             raise TypeError("AgentTask gate receipt is invalid")
+        if self.gate_receipt is not None:
+            if self.gate_receipt.task_id != self.task_id:
+                raise ValueError("gate receipt task_id does not match AgentTask")
+            if self.linked_run_id is None:
+                raise ValueError("gate receipt requires a linked Run")
+            if self.gate_receipt.run_id != self.linked_run_id:
+                raise ValueError("gate receipt Run does not match linked Run")
         if not isinstance(self.legacy_gate_unverified, bool):
             raise TypeError("legacy_gate_unverified must be boolean")
         object.__setattr__(

@@ -697,7 +697,10 @@ def _task_from_row(row: Mapping[str, Any] | Any) -> AgentTaskRecord:
     )
     legacy_gate_unverified = (
         True
-        if any(not _row_has(row, column) for column in gate_columns)
+        if any(
+            not _row_has(row, column) or row[column] is None
+            for column in gate_columns
+        )
         else bool(row["legacy_gate_unverified"])
     )
     return AgentTaskRecord(
