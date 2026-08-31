@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,6 +21,7 @@ from pilot107.agent.tasks import (
     AgentTaskGateState,
     AgentTaskRequest,
     AgentTaskState,
+    agent_task_schedule_receipt_payload,
 )
 from pilot107.agent.tool_gateway import AgentToolGatewayError
 from pilot107.core.control_repository import SQLiteControlRepository
@@ -258,6 +260,23 @@ class Harness:
             outcome={"status": "completed"},
         )
         self.turn_id = turn.turn_id
+
+    def restart_task_service(self) -> None:
+        previous = self.service
+        self.service = AgentTaskService(
+            store=self.task_store,
+            session_store=self.session_store,
+            session_service=self.session_service,
+            run_service=self.run_service,
+            control_repository=self.control,
+            workspace_resolver=previous.workspace_resolver,
+            provenance_authority_resolver=previous.provenance_authority_resolver,
+            evidence_binder=previous.evidence_binder,
+            capsule_authority_resolver=previous.capsule_authority_resolver,
+            run_workdir_resolver=previous.run_workdir_resolver,
+            worker_id="task-worker-restarted",
+            lease_seconds=30,
+        )
 
     def schedule(
         self,
@@ -775,6 +794,89 @@ def test_integrity_failure_blocks_task(tmp_path: Path) -> None:
     assert blocked.result.error_code == "EVIDENCE.INTEGRITY_FAILED"
 
 
+def test_terminal_revalidation_rejects_evidence_tampered_after_first_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    evidence_path = harness.evidence_store.run_root(running.linked_run_id) / "logs/stdout.txt"
+    assert harness.service.evidence_binder is not None
+    original_verify = harness.service.evidence_binder.verify_terminal_gate
+    calls = 0
+
+    def verify_then_tamper(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        receipt = original_verify(*args, **kwargs)
+        if calls == 1:
+            evidence_path.write_text("tampered after first gate\n", encoding="utf-8")
+        return receipt
+
+    monkeypatch.setattr(
+        harness.service.evidence_binder,
+        "verify_terminal_gate",
+        verify_then_tamper,
+    )
+
+    harness.service.reconcile_active(limit=10)
+    blocked = harness.task_store.get_task(task.task_id, owner="alice")
+
+    assert calls == 2
+    assert blocked.state is AgentTaskState.FAILED
+    assert blocked.gate_state is AgentTaskGateState.BLOCKED
+    assert blocked.result is not None
+    assert blocked.result.error_code == "EVIDENCE.INTEGRITY_FAILED"
+
+
+def test_terminal_revalidation_rejects_run_provenance_changed_after_first_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    assert harness.service.evidence_binder is not None
+    original_verify = harness.service.evidence_binder.verify_terminal_gate
+    calls = 0
+
+    def verify_then_mutate_run(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        receipt = original_verify(*args, **kwargs)
+        if calls == 1:
+            with harness.run_store.connect() as connection:
+                connection.execute(
+                    "UPDATE runs SET source_revision = ? WHERE run_id = ?",
+                    ("workspace-source-tampered", running.linked_run_id),
+                )
+        return receipt
+
+    monkeypatch.setattr(
+        harness.service.evidence_binder,
+        "verify_terminal_gate",
+        verify_then_mutate_run,
+    )
+
+    harness.service.reconcile_active(limit=10)
+    blocked = harness.task_store.get_task(task.task_id, owner="alice")
+
+    assert calls == 2
+    assert blocked.state is AgentTaskState.FAILED
+    assert blocked.gate_state is AgentTaskGateState.BLOCKED
+    assert blocked.result is not None
+    assert blocked.result.error_code == "EVIDENCE.INTEGRITY_FAILED"
+
+
 def test_missing_evidence_authority_blocks_task(tmp_path: Path) -> None:
     harness = Harness(tmp_path)
     task, _ = harness.schedule()
@@ -927,6 +1029,48 @@ def test_ready_followup_is_idempotent_after_finalizer_crash(
     assert len(followups) == 1
 
 
+def test_ready_enqueue_failure_is_recovered_after_terminal_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    original_enqueue = harness.control.enqueue
+    failed_once = False
+
+    def fail_first_ready_enqueue(*args, **kwargs):
+        nonlocal failed_once
+        if kwargs.get("topic") == "agent.task.ready.v1" and not failed_once:
+            failed_once = True
+            raise RuntimeError("ready outbox unavailable")
+        return original_enqueue(*args, **kwargs)
+
+    monkeypatch.setattr(harness.control, "enqueue", fail_first_ready_enqueue)
+    first = harness.service.reconcile_active(limit=10)
+    terminal = harness.task_store.get_task(task.task_id, owner="alice")
+    assert terminal.state is AgentTaskState.SUCCEEDED
+    assert len(first.errors) == 1
+
+    monkeypatch.setattr(harness.control, "enqueue", original_enqueue)
+    harness.restart_task_service()
+    harness.service.reconcile_active(limit=10)
+    harness.service.dispatch_due(limit=10)
+    harness.service.reconcile_active(limit=10)
+    harness.service.dispatch_due(limit=10)
+    followups = [
+        turn
+        for turn in harness.session_store.list_recoverable_turns(limit=10)
+        if turn.request_key == f"agent-task:{task.task_id}:ready"
+    ]
+
+    assert len(followups) == 1
+
+
 def test_ready_intent_is_not_visible_before_terminal_finalizer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -997,6 +1141,57 @@ def test_crash_after_run_creation_reuses_the_same_run(
     assert second.succeeded == 1
     assert len(runs) == 1
     assert persisted.linked_run_id == runs[0].run_id
+
+
+def test_execute_ack_crash_replays_identical_schedule_receipt_without_resubmit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    original_acknowledge = harness.service._acknowledge
+    crashed = False
+
+    def crash_before_ack(message):
+        nonlocal crashed
+        if message.topic == "agent.task.execute.v1" and not crashed:
+            crashed = True
+            raise RuntimeError("crash before execute ack")
+        return original_acknowledge(message)
+
+    monkeypatch.setattr(harness.service, "_acknowledge", crash_before_ack)
+    first = harness.service.dispatch_due(limit=1)
+    scheduled = harness.task_store.get_task(task.task_id, owner="alice")
+    assert scheduled.schedule_receipt is not None
+    first_receipt = scheduled.schedule_receipt
+    first_receipt_bytes = json.dumps(
+        agent_task_schedule_receipt_payload(first_receipt),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    assert len(first.errors) == 1
+
+    monkeypatch.setattr(harness.service, "_acknowledge", original_acknowledge)
+    harness.clock.advance(1)
+    replay = harness.service.dispatch_due(limit=1)
+    persisted = harness.task_store.get_task(task.task_id, owner="alice")
+    runs, _ = harness.run_store.list_runs_page(owner="alice")
+
+    assert replay.succeeded == 1
+    assert replay.errors == []
+    assert persisted.schedule_receipt == first_receipt
+    assert persisted.schedule_receipt is not None
+    assert (
+        json.dumps(
+            agent_task_schedule_receipt_payload(persisted.schedule_receipt),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        == first_receipt_bytes
+    )
+    assert len(runs) == 1
+    assert len(harness.run_service.dispatch_due_submissions(limit=10).succeeded) == 1
+    assert harness.backend._next_job_id == 1001
 
 
 def test_validation_tool_uses_server_approved_envelope_and_terminates_turn(

@@ -152,3 +152,12 @@ AGENT_TASK_STAGE_IDENTITY_MIGRATION = SchemaMigration(
         "ALTER TABLE agent_tasks ADD COLUMN gate_operation_key TEXT",
     ),
 )
+
+AGENT_TASK_READY_RECOVERY_MIGRATION = SchemaMigration(
+    migration_id="006c.004.agent_task_ready_recovery",
+    statements=(
+        "ALTER TABLE agent_tasks ADD COLUMN ready_outbox_pending INTEGER NOT NULL DEFAULT 0",
+        "CREATE INDEX idx_agent_tasks_ready_recovery ON agent_tasks("
+        "ready_outbox_pending, updated_at, task_id)",
+    ),
+)

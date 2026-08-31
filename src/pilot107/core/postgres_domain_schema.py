@@ -1014,6 +1014,13 @@ _AGENT_TASK_STAGE_IDENTITY_SCHEMA = _statements(
     "ALTER TABLE agent_tasks ADD COLUMN gate_operation_key TEXT"
 )
 
+_AGENT_TASK_READY_RECOVERY_SCHEMA = _statements(
+    "ALTER TABLE agent_tasks ADD COLUMN ready_outbox_pending SMALLINT NOT NULL DEFAULT 0"
+    "\n-- statement\n"
+    "CREATE INDEX idx_agent_tasks_ready_recovery "
+    "ON agent_tasks(ready_outbox_pending, updated_at, task_id)"
+)
+
 _EVIDENCE_OBJECT_GATE_SCHEMA = _statements(
     "ALTER TABLE evidence_objects ADD COLUMN IF NOT EXISTS workspace_revision INTEGER"
     "\n-- statement\n"
@@ -1500,6 +1507,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.026.evidence_object_integrity_gates", _EVIDENCE_OBJECT_GATE_SCHEMA),
     ("004a.027.run_provenance", _RUN_PROVENANCE_SCHEMA),
     ("004a.028.evidence_object_immutable_guard", _EVIDENCE_OBJECT_IMMUTABLE_GUARD_SCHEMA),
+    ("004a.029.agent_task_ready_recovery", _AGENT_TASK_READY_RECOVERY_SCHEMA),
 )
 
 

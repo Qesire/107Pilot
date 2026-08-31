@@ -597,6 +597,39 @@ def test_finalize_persists_verified_gate_and_releases_lease(tmp_path: Path) -> N
     assert completed.lease_owner is None
 
 
+def test_terminal_transition_persists_ready_outbox_recovery_until_materialized(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    completed = store.finalize_task(
+        task.task_id,
+        lease=replace(lease, version=linked.version),
+        gate_receipt=_terminal_gate(task),
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+    )
+
+    assert store.list_ready_outbox_pending(limit=10) == [completed]
+    materialized = store.mark_ready_outbox_materialized(
+        completed.task_id,
+        owner=completed.owner,
+        expected_version=completed.version,
+    )
+    assert materialized == completed
+    assert store.list_ready_outbox_pending(limit=10) == []
+    assert (
+        store.mark_ready_outbox_materialized(
+            completed.task_id,
+            owner=completed.owner,
+            expected_version=completed.version,
+        )
+        == completed
+    )
+
+
 def test_terminal_finalize_replay_allows_exact_immutable_identity_without_lease(
     tmp_path: Path,
 ) -> None:

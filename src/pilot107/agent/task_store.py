@@ -13,6 +13,7 @@ from typing import Any, Protocol, cast
 
 from pilot107.agent.migrations import (
     AGENT_TASK_EVIDENCE_GATE_MIGRATION,
+    AGENT_TASK_READY_RECOVERY_MIGRATION,
     AGENT_TASK_STAGE_IDENTITY_MIGRATION,
 )
 from pilot107.agent.tasks import (
@@ -108,6 +109,7 @@ AGENT_TASK_MIGRATIONS = (
     ),
     AGENT_TASK_EVIDENCE_GATE_MIGRATION,
     AGENT_TASK_STAGE_IDENTITY_MIGRATION,
+    AGENT_TASK_READY_RECOVERY_MIGRATION,
 )
 
 
@@ -136,6 +138,16 @@ class AgentTaskStore(Protocol):
     ) -> list[AgentTaskRecord]: ...
 
     def list_recoverable_tasks(self, *, limit: int = 100) -> list[AgentTaskRecord]: ...
+
+    def list_ready_outbox_pending(self, *, limit: int = 100) -> list[AgentTaskRecord]: ...
+
+    def mark_ready_outbox_materialized(
+        self,
+        task_id: str,
+        *,
+        owner: str,
+        expected_version: int,
+    ) -> AgentTaskRecord: ...
 
     def claim_task(
         self,
@@ -328,6 +340,51 @@ class SQLiteAgentTaskStore:
             ).fetchall()
         return [_task_from_row(row) for row in rows]
 
+    def list_ready_outbox_pending(self, *, limit: int = 100) -> list[AgentTaskRecord]:
+        _limit(limit)
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM agent_tasks WHERE ready_outbox_pending = 1 "
+                "AND state IN ('succeeded', 'failed', 'cancelled', 'auth_required') "
+                "ORDER BY updated_at, task_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [_task_from_row(row) for row in rows]
+
+    def mark_ready_outbox_materialized(
+        self,
+        task_id: str,
+        *,
+        owner: str,
+        expected_version: int,
+    ) -> AgentTaskRecord:
+        _key(task_id, "task_id")
+        _key(owner, "owner")
+        _version(expected_version)
+        with self.connect() as connection:
+            updated = connection.execute(
+                "UPDATE agent_tasks SET ready_outbox_pending = 0 "
+                "WHERE task_id = ? AND owner = ? AND version = ? "
+                "AND ready_outbox_pending = 1 "
+                "AND state IN ('succeeded', 'failed', 'cancelled', 'auth_required') "
+                "RETURNING *",
+                (task_id, owner, expected_version),
+            ).fetchone()
+            if updated is None:
+                current = connection.execute(
+                    "SELECT * FROM agent_tasks WHERE task_id = ? AND owner = ?",
+                    (task_id, owner),
+                ).fetchone()
+                if current is None:
+                    raise KeyError(task_id)
+                if (
+                    int(current["version"]) == expected_version
+                    and int(current["ready_outbox_pending"]) == 0
+                ):
+                    return _task_from_row(current)
+                raise AgentTaskConflict("AgentTask ready outbox materialization was fenced")
+        return _task_from_row(updated)
+
     def claim_task(
         self,
         task_id: str,
@@ -509,7 +566,8 @@ class SQLiteAgentTaskStore:
             self._assert_lease(connection, lease)
             updated = connection.execute(
                 "UPDATE agent_tasks SET state = ?, result_json = ?, version = version + 1, "
-                "lease_owner = NULL, lease_expires_at = NULL, updated_at = ? "
+                "ready_outbox_pending = 1, lease_owner = NULL, lease_expires_at = NULL, "
+                "updated_at = ? "
                 "WHERE task_id = ? AND owner = ? AND state = 'running' "
                 "AND version = ? AND fencing_token = ? RETURNING *",
                 (
@@ -791,7 +849,8 @@ class SQLiteAgentTaskStore:
                 "capsule_ref = COALESCE(?, capsule_ref), capsule_state = ?, "
                 "legacy_gate_unverified = CASE WHEN ? IS NOT NULL THEN 0 "
                 "ELSE legacy_gate_unverified END, "
-                "version = version + 1, lease_owner = NULL, lease_expires_at = NULL, "
+                "version = version + 1, ready_outbox_pending = 1, "
+                "lease_owner = NULL, lease_expires_at = NULL, "
                 "heartbeat_at = ?, updated_at = ? WHERE task_id = ? AND owner = ? "
                 "AND state = 'running' AND version = ? AND fencing_token = ? RETURNING *",
                 (
@@ -853,7 +912,8 @@ class SQLiteAgentTaskStore:
                 result = AgentTaskResult.cancelled("cancelled before execution")
                 updated = connection.execute(
                     "UPDATE agent_tasks SET state = 'cancelled', cancel_requested = 1, "
-                    "result_json = ?, version = version + 1, lease_owner = NULL, "
+                    "result_json = ?, version = version + 1, ready_outbox_pending = 1, "
+                    "lease_owner = NULL, "
                     "lease_expires_at = NULL, updated_at = ? WHERE task_id = ? "
                     "AND owner = ? AND version = ? RETURNING *",
                     (
@@ -885,7 +945,8 @@ class SQLiteAgentTaskStore:
             connection.execute("BEGIN IMMEDIATE")
             updated = connection.execute(
                 "UPDATE agent_tasks SET state = 'pending', result_json = NULL, "
-                "version = version + 1, updated_at = ? WHERE task_id = ? AND owner = ? "
+                "ready_outbox_pending = 0, version = version + 1, updated_at = ? "
+                "WHERE task_id = ? AND owner = ? "
                 "AND state = 'auth_required' AND cancel_requested = 0 "
                 "AND version = ? RETURNING *",
                 (self._now(), task_id, owner, expected_version),

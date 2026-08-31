@@ -21,6 +21,7 @@ from pilot107.agent.tasks import (
     TERMINAL_TASK_STATES,
     AgentResourceEnvelope,
     AgentTaskCompletionPolicy,
+    AgentTaskGateReceipt,
     AgentTaskGateState,
     AgentTaskLease,
     AgentTaskRecord,
@@ -65,6 +66,10 @@ class AgentTaskProvenanceError(ValueError):
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+class _CapsuleGateError(RuntimeError):
+    """Raised when Capsule authority changes during Task finalization."""
 
 
 class PlatformSnapshotAuthorityStore(Protocol):
@@ -419,6 +424,16 @@ class AgentTaskService:
         checked = 0
         succeeded = 0
         errors: list[AgentTaskDispatchError] = []
+        for pending in self.store.list_ready_outbox_pending(limit=limit):
+            try:
+                self._enqueue_ready(pending)
+            except Exception:
+                errors.append(
+                    AgentTaskDispatchError(
+                        task_id=pending.task_id,
+                        message="AgentTask ready 通知恢复失败。",
+                    )
+                )
         for candidate in self.store.list_recoverable_tasks(limit=limit):
             if candidate.state is not AgentTaskState.RUNNING:
                 continue
@@ -483,7 +498,7 @@ class AgentTaskService:
                 task_id,
                 lease=lease,
                 gate_state=AgentTaskGateState.PENDING,
-                receipt=_schedule_receipt(task, run_id),
+                receipt=task.schedule_receipt or _schedule_receipt(task, run_id),
                 completion_policy=task.completion_policy,
             )
             self.store.release_task(replace(lease, version=scheduled.version))
@@ -753,17 +768,109 @@ class AgentTaskService:
             receipt=receipt,
         )
         final_lease = replace(lease, version=gated.version)
+        try:
+            final_receipt = self._revalidate_terminal_receipt(
+                task=task,
+                expected_receipt=receipt,
+            )
+        except EvidenceBindingError:
+            return self._finalize_without_gate(
+                task=task,
+                lease=final_lease,
+                result=AgentTaskResult(
+                    status="failed",
+                    evidence_refs=receipt.evidence_refs,
+                    error_code="EVIDENCE.INTEGRITY_FAILED",
+                    message="Evidence 在任务提交终态前发生变化，已阻止完成。",
+                ),
+                gate_state=AgentTaskGateState.BLOCKED,
+            )
+        except _CapsuleGateError:
+            return self._finalize_without_gate(
+                task=task,
+                lease=final_lease,
+                result=AgentTaskResult(
+                    status="failed",
+                    evidence_refs=receipt.evidence_refs,
+                    error_code="CAPSULE.INTEGRITY_FAILED",
+                    message="Capsule 在任务提交终态前发生变化，已阻止完成。",
+                ),
+                gate_state=AgentTaskGateState.BLOCKED,
+            )
+        except Exception:
+            return self._finalize_without_gate(
+                task=task,
+                lease=final_lease,
+                result=AgentTaskResult(
+                    status="failed",
+                    evidence_refs=receipt.evidence_refs,
+                    error_code="EVIDENCE.AUTHORITY_UNAVAILABLE",
+                    message="Evidence 终态复核服务不可用，任务已安全终止。",
+                ),
+                gate_state=AgentTaskGateState.BLOCKED,
+            )
         completed = self._persist_terminal_and_enqueue(
             task_id=task.task_id,
             owner=task.owner,
             persist=lambda: self.store.finalize_task(
                 task_id,
                 lease=final_lease,
-                gate_receipt=receipt,
-                result=AgentTaskResult.succeeded(receipt.evidence_refs),
+                gate_receipt=final_receipt,
+                result=AgentTaskResult.succeeded(final_receipt.evidence_refs),
             ),
         )
         return completed.state is AgentTaskState.SUCCEEDED
+
+    def _revalidate_terminal_receipt(
+        self,
+        *,
+        task: AgentTaskRecord,
+        expected_receipt: AgentTaskGateReceipt,
+    ) -> AgentTaskGateReceipt:
+        """Re-read cross-store authorities immediately before the Task CAS.
+
+        This is an auditable convergence protocol, not a claim that the Task DB,
+        Run DB, Capsule store, and filesystem share one atomic transaction.  The
+        second immutable receipt closes normal orchestration races; an
+        administrator who can mutate authorities after this read remains outside
+        the application trust boundary.
+        """
+        if self.evidence_binder is None or task.linked_run_id is None:
+            raise RuntimeError("Evidence authority is unavailable")
+        run = self.run_service.store.get_run(task.linked_run_id)
+        refs = self._terminal_evidence_refs(run.run_id)
+        receipt = self.evidence_binder.verify_terminal_gate(
+            run.run_id,
+            refs,
+            {
+                "workspace_revision": run.workspace_revision,
+                "workspace_digest": run.workspace_digest,
+                "legacy_boundary": run.workspace_revision is None,
+                "source_revision": run.source_revision,
+                "platform_snapshot_ref": run.platform_snapshot_ref,
+            },
+            task_id=task.task_id,
+        )
+        if task.completion_policy.requires_capsule:
+            if run.capsule_state is not CapsuleState.READY:
+                raise _CapsuleGateError("Capsule is no longer READY")
+            if self.capsule_authority_resolver is None:
+                raise _CapsuleGateError("Capsule authority is unavailable")
+            try:
+                capsule_ref = _required_provenance_text(
+                    self.capsule_authority_resolver(run.run_id),
+                    "capsule_ref",
+                )
+                receipt = replace(
+                    receipt,
+                    capsule_ref=capsule_ref,
+                    capsule_state="READY",
+                )
+            except Exception as exc:
+                raise _CapsuleGateError("Capsule authority verification failed") from exc
+        if receipt != expected_receipt:
+            raise EvidenceBindingError("terminal_gate_receipt_changed")
+        return receipt
 
     def _terminal_evidence_refs(self, run_id: str) -> tuple[str, ...]:
         return tuple(
@@ -918,6 +1025,11 @@ class AgentTaskService:
             owner=task.owner,
             version=task.version,
         )
+        self.store.mark_ready_outbox_materialized(
+            task.task_id,
+            owner=task.owner,
+            expected_version=task.version,
+        )
 
     def _enqueue_ready_intent(self, *, task_id: str, owner: str, version: int) -> None:
         self.control_repository.enqueue(
@@ -1059,7 +1171,7 @@ def _schedule_receipt(task: AgentTaskRecord, run_id: str) -> AgentTaskScheduleRe
         workspace_revision=None,
         workspace_digest=task.request.workspace_snapshot_digest,
         completion_policy=task.completion_policy,
-        created_at=task.updated_at,
+        created_at=task.created_at,
         legacy_boundary=True,
     )
 
