@@ -1050,6 +1050,7 @@ _EVIDENCE_OBJECT_IMMUTABLE_GUARD_SCHEMA = _statements(
         protected_changed BOOLEAN;
         state_changed BOOLEAN;
         explicit_invalidation BOOLEAN;
+        freeze_completion BOOLEAN;
     BEGIN
         IF OLD.integrity_checked_at IS NULL
            AND OLD.integrity_invalidated_at IS NULL THEN
@@ -1084,7 +1085,17 @@ _EVIDENCE_OBJECT_IMMUTABLE_GUARD_SCHEMA = _statements(
             NEW.integrity_object_set_digest IS NULL AND
             NEW.integrity_invalidated_at IS NOT NULL AND
             NOT protected_changed;
-        IF (protected_changed OR state_changed) AND NOT explicit_invalidation THEN
+        freeze_completion :=
+            OLD.integrity_checked_at IS NOT NULL AND
+            OLD.integrity_object_set_digest IS NULL AND
+            OLD.integrity_invalidated_at IS NULL AND
+            NEW.integrity_checked_at IS NOT DISTINCT FROM OLD.integrity_checked_at AND
+            NEW.integrity_object_set_digest IS NOT NULL AND
+            NEW.integrity_invalidated_at IS NULL AND
+            NOT protected_changed;
+        IF (protected_changed OR state_changed)
+           AND NOT explicit_invalidation
+           AND NOT freeze_completion THEN
             RAISE EXCEPTION 'integrity-frozen evidence object is immutable';
         END IF;
         RETURN NEW;
