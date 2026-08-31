@@ -625,6 +625,13 @@ class RunStore:
                 column="integrity_object_set_digest",
                 definition="TEXT",
             )
+            self._ensure_column(
+                conn,
+                table="evidence_objects",
+                column="integrity_invalidated_at",
+                definition="TEXT",
+            )
+            self._ensure_evidence_integrity_guard(conn)
 
     def create_run(
         self,
@@ -1060,11 +1067,7 @@ class RunStore:
                 conn,
                 run_id=run_id,
                 event_type=event_type,
-                payload={
-                    "state": state.value,
-                    **({"failure_reason": _bounded_event_reason(failure_reason)}
-                       if failure_reason else {}),
-                },
+                payload={"state": state.value},
             )
         return self.get_run(run_id)
 
