@@ -831,6 +831,87 @@ def test_terminal_finalize_replay_requires_matching_gate_stage_key(tmp_path: Pat
         )
 
 
+def test_schedule_then_finalize_first_writes_gate_stage_key_and_receipt(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    schedule = store.advance_gate(
+        task.task_id,
+        lease=replace(lease, version=linked.version),
+        gate_state=AgentTaskGateState.ADMITTED,
+        receipt=_schedule_receipt(task),
+        causation_root_key="cause-direct",
+        stage_operation_key="schedule-direct",
+    )
+    gate = _terminal_gate(task)
+    completed = store.finalize_task(
+        task.task_id,
+        lease=replace(lease, version=schedule.version),
+        gate_receipt=gate,
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+        causation_root_key="cause-direct",
+        stage_operation_key="gate-direct",
+    )
+
+    assert completed.state is AgentTaskState.SUCCEEDED
+    with store.connect() as connection:
+        row = connection.execute(
+            "SELECT schedule_operation_key, gate_operation_key, durable_operation_key "
+            "FROM agent_tasks WHERE task_id = ?",
+            (task.task_id,),
+        ).fetchone()
+    assert row["schedule_operation_key"] == "schedule-direct"
+    assert row["gate_operation_key"] == "gate-direct"
+    assert row["durable_operation_key"] == "gate-direct"
+
+
+def test_direct_schedule_finalize_replay_and_gate_key_conflict(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    schedule = store.advance_gate(
+        task.task_id,
+        lease=replace(lease, version=linked.version),
+        gate_state=AgentTaskGateState.ADMITTED,
+        receipt=_schedule_receipt(task),
+        causation_root_key="cause-direct",
+        stage_operation_key="schedule-direct",
+    )
+    gate = _terminal_gate(task)
+    finalize_lease = replace(lease, version=schedule.version)
+    first = store.finalize_task(
+        task.task_id,
+        lease=finalize_lease,
+        gate_receipt=gate,
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+        causation_root_key="cause-direct",
+        stage_operation_key="gate-direct",
+    )
+    assert store.finalize_task(
+        task.task_id,
+        lease=finalize_lease,
+        gate_receipt=gate,
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+        causation_root_key="cause-direct",
+        stage_operation_key="gate-direct",
+    ) == first
+    with pytest.raises(AgentTaskConflict, match="identity"):
+        store.finalize_task(
+            task.task_id,
+            lease=finalize_lease,
+            gate_receipt=gate,
+            result=AgentTaskResult.succeeded(("evidence-1",)),
+            causation_root_key="cause-direct",
+            stage_operation_key="gate-other",
+        )
+
+
 def test_advance_gate_rejects_policy_incompatible_receipt_before_update(tmp_path: Path) -> None:
     store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
     task, _ = _create(store)

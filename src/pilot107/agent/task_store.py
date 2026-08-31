@@ -570,7 +570,6 @@ class SQLiteAgentTaskStore:
             except (TypeError, ValueError) as exc:
                 raise ValueError("completion_policy is invalid") from exc
         receipt_payload = None
-        receipt_identity = None
         schedule_ref = None
         evidence_refs = None
         evidence_digest = None
@@ -579,11 +578,9 @@ class SQLiteAgentTaskStore:
         capsule_state = "not_required"
         if isinstance(receipt, AgentTaskScheduleReceipt):
             receipt_payload = _json(agent_task_schedule_receipt_payload(receipt))
-            receipt_identity = _receipt_identity(receipt_payload)
             schedule_ref = receipt.receipt_id
         elif isinstance(receipt, AgentTaskGateReceipt):
             receipt_payload = _json(agent_task_gate_receipt_payload(receipt))
-            receipt_identity = _receipt_identity(receipt_payload)
             evidence_refs = _json_array(receipt.evidence_refs)
             evidence_digest = receipt.evidence_digest
             integrity_checked_at = receipt.integrity_verified_at
@@ -680,7 +677,7 @@ class SQLiteAgentTaskStore:
                     gate_state.value,
                     schedule_ref,
                     receipt_payload if isinstance(receipt, AgentTaskScheduleReceipt) else None,
-                    receipt_identity,
+                    stage_operation_key if receipt is not None else None,
                     causation_root_key,
                     stage_operation_key if isinstance(receipt, AgentTaskScheduleReceipt) else None,
                     stage_operation_key if isinstance(receipt, AgentTaskScheduleReceipt) else None,
@@ -730,9 +727,6 @@ class SQLiteAgentTaskStore:
             if gate_receipt is not None
             else None
         )
-        receipt_identity = (
-            _receipt_identity(gate_payload) if gate_payload is not None else None
-        )
         stage_operation_key = _stage_key(stage_operation_key, gate_payload)
         causation_root_key = _root_key(causation_root_key, task_id)
         with self.connect() as connection:
@@ -745,16 +739,10 @@ class SQLiteAgentTaskStore:
                 raise KeyError(task_id)
             current = _task_from_row(existing)
             if current.state in TERMINAL_TASK_STATES:
-                stored_identity = (
-                    existing["durable_operation_key"]
-                    if _row_has(existing, "durable_operation_key")
-                    else None
-                )
                 if (
                     gate_receipt is not None
                     and current.result == result
                     and current.gate_receipt == gate_receipt
-                    and stored_identity == receipt_identity
                     and (
                         not _row_has(existing, "causation_root_key")
                         or existing["causation_root_key"] == causation_root_key
@@ -828,7 +816,7 @@ class SQLiteAgentTaskStore:
                     ),
                     receipt_payload,
                     evidence_refs,
-                    receipt_identity if gate_receipt is not None else None,
+                    stage_operation_key if gate_receipt is not None else None,
                     causation_root_key,
                     stage_operation_key if gate_receipt is not None else None,
                     evidence_digest,
@@ -1233,8 +1221,8 @@ def _stage_key(value: str | None, payload: str | None) -> str | None:
 
 def _stored_stage_key(row: Mapping[str, Any] | Any, stage: str) -> str | None:
     column = f"{stage}_operation_key"
-    if _row_has(row, column) and row[column] is not None:
-        return str(row[column])
+    if _row_has(row, column):
+        return str(row[column]) if row[column] is not None else None
     if _row_has(row, "durable_operation_key") and row["durable_operation_key"] is not None:
         return str(row["durable_operation_key"])
     return None
