@@ -107,7 +107,124 @@ class EvidenceBinderTests(unittest.TestCase):
         self.assertIn("evidence_ref_rejected:ev_bind_stderr:mutable_not_finalized", bundle.warnings)
         self.assertIn(f"evidence_ref_not_registered:{cross_run_ref}", bundle.warnings)
 
-    def _register(self, *, content: str, mutable: bool = False) -> str:
+    def test_terminal_gate_rejects_unfinalized_evidence_and_incomplete_collection(self) -> None:
+        ref = self._register(content="still changing\n", mutable=True)
+        self._mark_run_ready(collection_state="pending")
+
+        with self.assertRaisesRegex(Exception, "not_collected|finalized|collection"):
+            self.binder.verify_terminal_gate(
+                self.run.run_id,
+                (ref,),
+                self._workspace_boundary(),
+            )
+
+    def test_terminal_gate_rejects_integrity_or_scope_mismatch(self) -> None:
+        ref = self._register(content="verified\n")
+        self._mark_run_ready()
+        with self.store.connect() as conn:
+            conn.execute(
+                "UPDATE evidence_objects SET size_bytes = size_bytes + 1 WHERE run_id = ?",
+                (self.run.run_id,),
+            )
+
+        with self.assertRaisesRegex(Exception, "size_mismatch|integrity"):
+            self.binder.verify_terminal_gate(
+                self.run.run_id,
+                (ref,),
+                self._workspace_boundary(),
+            )
+
+    def test_terminal_gate_binds_run_workspace_source_platform_and_manifest_digest(self) -> None:
+        self._mark_run_ready()
+        boundary = self._workspace_boundary()
+        ref = self._register(content="verified\n", metadata=boundary)
+        manifest_payload = {
+            "schema": "pilot107.evidence_manifest.v1",
+            "run_id": self.run.run_id,
+            "owner": self.run.owner,
+            "job_id": "1001",
+            "workspace_digest": boundary["workspace_digest"],
+            "workspace_revision": None,
+            "legacy_boundary": True,
+            "source_revision": boundary["source_revision"],
+            "platform_snapshot_ref": boundary["platform_snapshot_ref"],
+            "artifacts": [{
+                "logical_path": "logs/stderr.tail.txt",
+                "size_bytes": len(b"verified\n"),
+                "sha256": self._sha(ref),
+                "content_type": "text/plain",
+                "evidence_ref": ref,
+            }],
+            "warnings": [],
+        }
+        manifest = self.evidence_store.write_json(
+            run_id=self.run.run_id,
+            logical_path="manifest/manifest.json",
+            payload=manifest_payload,
+        )
+        manifest_ref = f"evidence://runs/{self.run.run_id}/{manifest.logical_path}"
+        self.store.upsert_evidence_objects(
+            self.run.run_id,
+            [
+                {
+                    "object_id": "ev_manifest",
+                    "category": "manifest",
+                    "logical_path": manifest.logical_path,
+                    "store_path": str(manifest.path),
+                    "source_uri": manifest_ref,
+                    "sha256": manifest.sha256,
+                    "size_bytes": manifest.size_bytes,
+                    "mime_type": manifest.content_type,
+                    "collection_status": "collected",
+                    "finalized_at": "2026-08-31T00:00:00+00:00",
+                    **boundary,
+                }
+            ],
+        )
+
+        receipt = self.binder.verify_terminal_gate(
+            self.run.run_id,
+            (ref, manifest_ref),
+            {
+                "workspace_digest": boundary["workspace_digest"],
+                "workspace_revision": None,
+                "legacy_boundary": True,
+            },
+        )
+
+        self.assertEqual(receipt.run_id, self.run.run_id)
+        self.assertIsNone(receipt.workspace_revision)
+        self.assertTrue(receipt.legacy_boundary)
+        self.assertEqual(receipt.workspace_digest, boundary["workspace_digest"])
+        self.assertEqual(receipt.source_revision, "source-revision-1")
+        self.assertEqual(receipt.platform_snapshot_ref, "snapshot:platform-1")
+        self.assertEqual(receipt.evidence_refs, (ref, manifest_ref))
+        self.assertEqual(receipt.evidence_digest, manifest.sha256)
+        self.assertTrue(
+            all(
+                item.integrity_checked_at is not None
+                for item in self.store.list_evidence_objects(self.run.run_id)
+            )
+        )
+
+    def test_terminal_gate_rejects_bounded_collection_exhaustion(self) -> None:
+        self._mark_run_ready(collection_state="failed")
+        ref = self._register(content="error\n")
+
+        with self.assertRaisesRegex(Exception, "evidence_unavailable|collection_failed"):
+            self.binder.verify_terminal_gate(
+                self.run.run_id,
+                (ref,),
+                self._workspace_boundary(),
+            )
+
+    def _register(
+        self,
+        *,
+        content: str,
+        mutable: bool = False,
+        metadata: dict[str, object] | None = None,
+    ) -> str:
         artifact = self.evidence_store.write_text(
             run_id=self.run.run_id,
             logical_path="logs/stderr.tail.txt",
@@ -129,11 +246,43 @@ class EvidenceBinderTests(unittest.TestCase):
                     "mime_type": artifact.content_type,
                     "collection_status": "collected",
                     "mutable_during_run": mutable,
-                    "finalized_at": None,
+                    "finalized_at": (
+                        "2026-08-31T00:00:00+00:00"
+                        if metadata is not None and not mutable
+                        else None
+                    ),
+                    **(metadata or {}),
                 }
             ],
         )
         return ref
+
+    def _workspace_boundary(self) -> dict[str, object]:
+        return {
+            "workspace_digest": "a" * 64,
+            "workspace_revision": None,
+            "legacy_boundary": True,
+            "source_revision": "source-revision-1",
+            "platform_snapshot_ref": "snapshot:platform-1",
+        }
+
+    def _mark_run_ready(self, *, collection_state: str = "succeeded") -> None:
+        with self.store.connect() as conn:
+            conn.execute(
+                "UPDATE runs SET state = 'SUCCEEDED', job_id = '1001', exit_code = '0:0', "
+                "terminal_state = 'COMPLETED', result_status = 'COMPLETE', "
+                "collection_state = ? WHERE run_id = ?",
+                (collection_state, self.run.run_id),
+            )
+
+    def _sha(self, ref: str) -> str:
+        logical_path = ref.rsplit("/", 1)[-1]
+        obj = next(
+            item for item in self.store.list_evidence_objects(self.run.run_id)
+            if item.logical_path.endswith(logical_path)
+        )
+        assert obj.sha256 is not None
+        return obj.sha256
 
 
 if __name__ == "__main__":

@@ -776,6 +776,7 @@ class DemoEvidenceCollector:
                     )
                 )
         collected_at = utc_now_iso()
+        provenance = _run_provenance_payload(run)
         self.run_store.upsert_evidence_objects(
             run.run_id,
             [
@@ -784,6 +785,7 @@ class DemoEvidenceCollector:
                     run_root=run_root,
                     artifact=artifact,
                     finalized_at=collected_at,
+                    **provenance,
                 )
                 for artifact in artifacts
             ],
@@ -810,6 +812,7 @@ class DemoEvidenceCollector:
                     for artifact in sorted(artifacts, key=lambda item: item.logical_path)
                 ],
                 "warnings": warnings,
+                **provenance,
             },
         )
         self.run_store.upsert_evidence_objects(
@@ -820,6 +823,7 @@ class DemoEvidenceCollector:
                     run_root=run_root,
                     artifact=manifest,
                     finalized_at=collected_at,
+                    **provenance,
                 )
             ],
         )
@@ -1576,6 +1580,7 @@ class DockerSlurmEvidenceCollector:
         run_root = self.store.run_root(run.run_id)
         artifacts = self._existing_artifacts(run_root)
         collected_at = utc_now_iso()
+        provenance = _run_provenance_payload(run)
         payload = {
             "schema": "pilot107.evidence_manifest.v1",
             "run_id": run.run_id,
@@ -1595,6 +1600,7 @@ class DockerSlurmEvidenceCollector:
                 for artifact in sorted(artifacts, key=lambda item: item.logical_path)
             ],
             "warnings": warnings,
+            **provenance,
         }
         if self.run_store is not None:
             self.run_store.upsert_evidence_objects(
@@ -1605,6 +1611,7 @@ class DockerSlurmEvidenceCollector:
                         run_root=run_root,
                         artifact=artifact,
                         finalized_at=collected_at,
+                        **provenance,
                     )
                     for artifact in artifacts
                 ],
@@ -1623,6 +1630,7 @@ class DockerSlurmEvidenceCollector:
                         run_root=run_root,
                         artifact=manifest,
                         finalized_at=collected_at,
+                        **provenance,
                     )
                 ],
             )
@@ -2219,6 +2227,10 @@ def _evidence_object_payload(
     run_root: Path,
     artifact: EvidenceArtifact,
     finalized_at: str,
+    workspace_revision: int | None = None,
+    workspace_digest: str | None = None,
+    source_revision: str | None = None,
+    platform_snapshot_ref: str | None = None,
 ) -> dict[str, Any]:
     return {
         "object_id": _evidence_object_id(run_id, artifact.logical_path),
@@ -2233,7 +2245,34 @@ def _evidence_object_payload(
         "collection_note": None,
         "mutable_during_run": _is_mutable_during_run(artifact.logical_path),
         "finalized_at": finalized_at,
+        "workspace_revision": workspace_revision,
+        "workspace_digest": workspace_digest,
+        "source_revision": source_revision,
+        "platform_snapshot_ref": platform_snapshot_ref,
     }
+
+
+def _run_provenance_payload(run: RunRecord) -> dict[str, Any]:
+    """Expose persisted provenance when a submit path has supplied it.
+
+    Older Run records do not carry these values; returning an empty mapping keeps
+    their evidence readable while preventing the collector from inventing a live
+    workspace revision or digest.
+    """
+    plan = run.resource_plan
+    digest = plan.get("workspace_digest", plan.get("workspace_snapshot_digest"))
+    revision = plan.get("workspace_revision")
+    source = plan.get("source_revision")
+    platform = plan.get("platform_snapshot_ref", plan.get("platform_snapshot_id"))
+    payload: dict[str, Any] = {}
+    if digest is not None:
+        payload["workspace_digest"] = str(digest)
+        payload["workspace_revision"] = None if revision is None else int(revision)
+    if source is not None:
+        payload["source_revision"] = str(source)
+    if platform is not None:
+        payload["platform_snapshot_ref"] = str(platform)
+    return payload
 
 
 def _evidence_object_id(run_id: str, logical_path: str) -> str:

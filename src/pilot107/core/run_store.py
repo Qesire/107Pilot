@@ -117,6 +117,13 @@ class EvidenceObjectRecord:
     finalized_at: str | None
     created_at: str
     updated_at: str
+    # Provenance fields are additive so legacy rows remain readable.  A null
+    # value means the collector predates the terminal evidence gate.
+    workspace_revision: int | None = None
+    workspace_digest: str | None = None
+    source_revision: str | None = None
+    platform_snapshot_ref: str | None = None
+    integrity_checked_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -290,6 +297,11 @@ class RunStore:
                     collection_note TEXT,
                     mutable_during_run INTEGER NOT NULL DEFAULT 0,
                     finalized_at TEXT,
+                    workspace_revision INTEGER,
+                    workspace_digest TEXT,
+                    source_revision TEXT,
+                    platform_snapshot_ref TEXT,
+                    integrity_checked_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE(run_id, logical_path)
@@ -517,6 +529,36 @@ class RunStore:
                 table="diagnoses",
                 column="fix_guide_json",
                 definition="TEXT NOT NULL DEFAULT '{}'",
+            )
+            self._ensure_column(
+                conn,
+                table="evidence_objects",
+                column="workspace_revision",
+                definition="INTEGER",
+            )
+            self._ensure_column(
+                conn,
+                table="evidence_objects",
+                column="workspace_digest",
+                definition="TEXT",
+            )
+            self._ensure_column(
+                conn,
+                table="evidence_objects",
+                column="source_revision",
+                definition="TEXT",
+            )
+            self._ensure_column(
+                conn,
+                table="evidence_objects",
+                column="platform_snapshot_ref",
+                definition="TEXT",
+            )
+            self._ensure_column(
+                conn,
+                table="evidence_objects",
+                column="integrity_checked_at",
+                definition="TEXT",
             )
 
     def create_run(
@@ -1846,9 +1888,11 @@ class RunStore:
                     INSERT INTO evidence_objects (
                         object_id, run_id, category, logical_path, store_path, source_uri,
                         sha256, size_bytes, mime_type, collection_status, collection_note,
-                        mutable_during_run, finalized_at, created_at, updated_at
+                        mutable_during_run, finalized_at, workspace_revision, workspace_digest,
+                        source_revision, platform_snapshot_ref, integrity_checked_at,
+                        created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(run_id, logical_path) DO UPDATE SET
                         category = excluded.category,
                         store_path = excluded.store_path,
@@ -1860,6 +1904,14 @@ class RunStore:
                         collection_note = excluded.collection_note,
                         mutable_during_run = excluded.mutable_during_run,
                         finalized_at = excluded.finalized_at,
+                        workspace_revision = excluded.workspace_revision,
+                        workspace_digest = excluded.workspace_digest,
+                        source_revision = excluded.source_revision,
+                        platform_snapshot_ref = excluded.platform_snapshot_ref,
+                        integrity_checked_at = COALESCE(
+                            evidence_objects.integrity_checked_at,
+                            excluded.integrity_checked_at
+                        ),
                         updated_at = excluded.updated_at
                     """,
                     (
@@ -1876,11 +1928,58 @@ class RunStore:
                         None if obj.get("collection_note") is None else str(obj["collection_note"]),
                         1 if bool(obj.get("mutable_during_run", False)) else 0,
                         None if obj.get("finalized_at") is None else str(obj["finalized_at"]),
+                        (
+                            None
+                            if obj.get("workspace_revision") is None
+                            else int(obj["workspace_revision"])
+                        ),
+                        (
+                            None
+                            if obj.get("workspace_digest") is None
+                            else str(obj["workspace_digest"])
+                        ),
+                        (
+                            None
+                            if obj.get("source_revision") is None
+                            else str(obj["source_revision"])
+                        ),
+                        (
+                            None
+                            if obj.get("platform_snapshot_ref") is None
+                            else str(obj["platform_snapshot_ref"])
+                        ),
+                        (
+                            None
+                            if obj.get("integrity_checked_at") is None
+                            else str(obj["integrity_checked_at"])
+                        ),
                         now,
                         now,
                     ),
                 )
         return self.list_evidence_objects(run_id)
+
+    def mark_evidence_integrity_checked(
+        self,
+        run_id: str,
+        logical_paths: tuple[str, ...] | list[str],
+        *,
+        checked_at: str | None = None,
+    ) -> None:
+        """Persist the timestamp of a successful terminal integrity verification."""
+        paths = tuple(dict.fromkeys(str(path) for path in logical_paths if str(path)))
+        if not paths:
+            return
+        now = checked_at or utc_now_iso()
+        placeholders = ",".join("?" for _ in paths)
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE evidence_objects SET integrity_checked_at = COALESCE("
+                "integrity_checked_at, ?) WHERE run_id = ? AND logical_path IN ("
+                + placeholders
+                + ")",
+                (now, run_id, *paths),
+            )
 
     def list_evidence_objects(
         self,
@@ -2638,6 +2737,25 @@ def _row_to_evidence_object(row: sqlite3.Row) -> EvidenceObjectRecord:
         finalized_at=None if row["finalized_at"] is None else str(row["finalized_at"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        workspace_revision=(
+            None if row["workspace_revision"] is None else int(row["workspace_revision"])
+        ),
+        workspace_digest=(
+            None if row["workspace_digest"] is None else str(row["workspace_digest"])
+        ),
+        source_revision=(
+            None if row["source_revision"] is None else str(row["source_revision"])
+        ),
+        platform_snapshot_ref=(
+            None
+            if row["platform_snapshot_ref"] is None
+            else str(row["platform_snapshot_ref"])
+        ),
+        integrity_checked_at=(
+            None
+            if row["integrity_checked_at"] is None
+            else str(row["integrity_checked_at"])
+        ),
     )
 
 
