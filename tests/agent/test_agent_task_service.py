@@ -640,6 +640,25 @@ def test_evidence_required_task_completes_without_capsule(tmp_path: Path) -> Non
     assert completed.result.evidence_refs == refs
 
 
+def test_failed_run_with_finalized_evidence_finishes_failed(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id, exit_code="1:0")
+    refs = harness.finalize_evidence(running.linked_run_id)
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    failed = harness.task_store.get_task(task.task_id, owner="alice")
+
+    assert failed.state is AgentTaskState.FAILED
+    assert failed.gate_state is AgentTaskGateState.FAILED
+    assert failed.result is not None
+    assert failed.result.error_code == "VALIDATION.RUN_FAILED"
+    assert failed.result.evidence_refs == refs
+
+
 def test_evidence_and_capsule_task_waits_for_capsule_ready(tmp_path: Path) -> None:
     harness = Harness(tmp_path)
     task, _ = harness.schedule(
@@ -666,6 +685,50 @@ def test_evidence_and_capsule_task_waits_for_capsule_ready(tmp_path: Path) -> No
     assert completed.gate_receipt is not None
     assert completed.gate_receipt.capsule_state == "READY"
     assert completed.gate_receipt.capsule_ref == f"capsule:{running.linked_run_id}"
+
+
+def test_capsule_authority_unavailable_blocks_required_task(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    harness.service.capsule_authority_resolver = None
+    task, _ = harness.schedule(
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
+    )
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    blocked = harness.task_store.get_task(task.task_id, owner="alice")
+    assert blocked.state is AgentTaskState.FAILED
+    assert blocked.gate_state is AgentTaskGateState.BLOCKED
+    assert blocked.result is not None
+    assert blocked.result.error_code == "CAPSULE.AUTHORITY_UNAVAILABLE"
+
+
+def test_failed_capsule_build_finishes_required_task_as_unavailable(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule(
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
+    )
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    harness.run_store.update_capsule_state(
+        running.linked_run_id,
+        CapsuleState.FAILED,
+        event_type="test.capsule_failed",
+    )
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    failed = harness.task_store.get_task(task.task_id, owner="alice")
+    assert failed.state is AgentTaskState.FAILED
+    assert failed.gate_state is AgentTaskGateState.FAILED
+    assert failed.result is not None
+    assert failed.result.error_code == "CAPSULE.UNAVAILABLE"
 
 
 def test_capsule_authority_malformed_reference_blocks_completion(tmp_path: Path) -> None:
@@ -710,6 +773,24 @@ def test_integrity_failure_blocks_task(tmp_path: Path) -> None:
     assert blocked.gate_state is AgentTaskGateState.BLOCKED
     assert blocked.result is not None
     assert blocked.result.error_code == "EVIDENCE.INTEGRITY_FAILED"
+
+
+def test_missing_evidence_authority_blocks_task(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    harness.service.evidence_binder = None
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    blocked = harness.task_store.get_task(task.task_id, owner="alice")
+    assert blocked.state is AgentTaskState.FAILED
+    assert blocked.gate_state is AgentTaskGateState.BLOCKED
+    assert blocked.result is not None
+    assert blocked.result.error_code == "EVIDENCE.AUTHORITY_UNAVAILABLE"
 
 
 def test_evidence_authority_runtime_failure_terminates_fail_closed(
