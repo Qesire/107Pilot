@@ -654,6 +654,31 @@ def test_run_terminal_without_finalized_evidence_stays_awaiting_evidence(
     assert ready_count == 0
 
 
+def test_active_evidence_seal_claim_keeps_task_retryably_awaiting(tmp_path: Path) -> None:
+    """Treating claim contention as integrity failure terminally blocks valid work."""
+
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    harness.run_store.begin_evidence_seal(
+        running.linked_run_id,
+        claim_owner="other-live-sealer",
+        lease_seconds=300,
+    )
+
+    batch = harness.service.reconcile_active(limit=10)
+    waiting = harness.task_store.get_task(task.task_id, owner="alice")
+
+    assert batch.succeeded == 0
+    assert batch.errors == []
+    assert waiting.state is AgentTaskState.RUNNING
+    assert waiting.gate_state is AgentTaskGateState.AWAITING_EVIDENCE
+
+
 def test_evidence_required_task_completes_without_capsule(tmp_path: Path) -> None:
     harness = Harness(tmp_path)
     task, _ = harness.schedule()

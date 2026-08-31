@@ -26,7 +26,7 @@ from pilot107.core.postgres_domain_stores import (
 )
 from pilot107.core.remediation import RemediationBudget, RemediationState
 from pilot107.core.remediation_store import RemediationStore
-from pilot107.core.run_store import RunStore
+from pilot107.core.run_store import EvidenceSealClaimConflict, RunStore
 from pilot107.core.template_market import TemplateMarketStore, TemplateVisibility
 
 
@@ -183,6 +183,44 @@ class PostgresDomainMigrationTests(unittest.TestCase):
         self.assertEqual(checks["database"]["status"], "ok")
         self.assertEqual(checks["platform_snapshot_store"]["status"], "ok")
         self.assertEqual(checks["user_entitlement_store"]["status"], "ok")
+
+    def test_evidence_seal_claim_is_exclusive_and_expiry_takeover_is_fenced(self) -> None:
+        store = PostgresRunStore(self.dsn, compatibility_path=self.runtime_path)
+        run = store.create_run(
+            run_id="run_pg_evidence_seal_claim",
+            owner="alice",
+            workdir="/public/home/alice/project",
+            script="echo sealed",
+        )
+        with store.connect() as conn:
+            conn.execute(
+                "UPDATE runs SET state = ?, collection_state = ? WHERE run_id = ?",
+                ("succeeded", "succeeded", run.run_id),
+            )
+        first = store.begin_evidence_seal(
+            run.run_id,
+            claim_owner="pg-sealer-a",
+            lease_seconds=300,
+        )
+
+        with self.assertRaises(EvidenceSealClaimConflict):
+            store.begin_evidence_seal(
+                run.run_id,
+                claim_owner="pg-sealer-b",
+                lease_seconds=300,
+            )
+        with store.connect() as conn:
+            conn.execute(
+                "UPDATE runs SET evidence_seal_lease_expires_at = ? WHERE run_id = ?",
+                ("2000-01-01T00:00:00+00:00", run.run_id),
+            )
+        takeover = store.begin_evidence_seal(
+            run.run_id,
+            claim_owner="pg-sealer-b",
+            lease_seconds=300,
+        )
+
+        self.assertGreater(takeover.fencing_token, first.fencing_token)
 
     def test_migration_cli_imports_and_verifies_a_quiesced_source(self) -> None:
         source_path = Path(self._temporary.name) / "cli-source.db"

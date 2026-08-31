@@ -1058,6 +1058,15 @@ _EVIDENCE_SEAL_SCHEMA = _statements(
     "ALTER TABLE runs ADD COLUMN IF NOT EXISTS evidence_seal_invalid_reason TEXT"
 )
 
+_EVIDENCE_SEAL_CLAIM_SCHEMA = _statements(
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS evidence_seal_claim_owner TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS evidence_seal_lease_expires_at TIMESTAMPTZ"
+    "\n-- statement\n"
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS evidence_seal_fencing_token "
+    "BIGINT NOT NULL DEFAULT 0"
+)
+
 _RUN_PROVENANCE_IMMUTABLE_GUARD_SCHEMA = _statements(
     """
     CREATE OR REPLACE FUNCTION pilot107_run_provenance_immutable_guard()
@@ -1554,6 +1563,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "004a.031.run_provenance_immutable_guard",
         _RUN_PROVENANCE_IMMUTABLE_GUARD_SCHEMA,
     ),
+    ("004a.032.evidence_seal_claim", _EVIDENCE_SEAL_CLAIM_SCHEMA),
 )
 
 

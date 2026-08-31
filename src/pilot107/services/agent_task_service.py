@@ -694,7 +694,15 @@ class AgentTaskService:
                 },
                 task_id=task.task_id,
             )
-        except EvidenceBindingError:
+        except EvidenceBindingError as exc:
+            if exc.code == "evidence_seal_awaiting":
+                waiting = self.store.advance_gate(
+                    task_id,
+                    lease=lease,
+                    gate_state=AgentTaskGateState.AWAITING_EVIDENCE,
+                )
+                self.store.release_task(replace(lease, version=waiting.version))
+                return False
             return self._finalize_without_gate(
                 task=task,
                 lease=lease,

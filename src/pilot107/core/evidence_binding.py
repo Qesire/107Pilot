@@ -7,16 +7,23 @@ import json
 import os
 import re
 import stat
-import tempfile
-from collections.abc import Mapping
-from contextlib import suppress
+import uuid
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 from pilot107.agent.tasks import AgentTaskGateReceipt
-from pilot107.core.run_store import EvidenceObjectRecord, EvidenceSealRecord, RunStore, utc_now_iso
+from pilot107.core.run_store import (
+    EvidenceObjectRecord,
+    EvidenceSealClaimConflict,
+    EvidenceSealFenceConflict,
+    EvidenceSealRecord,
+    RunStore,
+    utc_now_iso,
+)
 from pilot107.core.states import CollectionState, EvidenceSealState, RunState
 
 _SENSITIVE_ASSIGNMENT = re.compile(
@@ -87,15 +94,19 @@ class EvidenceBinder:
         evidence_root: Path,
         max_snippet_bytes: int = 8192,
         max_total_bytes: int = 32768,
+        seal_lease_seconds: int = 300,
     ) -> None:
         if max_snippet_bytes <= 0:
             raise ValueError("max_snippet_bytes must be positive")
         if max_total_bytes <= 0:
             raise ValueError("max_total_bytes must be positive")
+        if seal_lease_seconds <= 0:
+            raise ValueError("seal_lease_seconds must be positive")
         self.store = store
         self.evidence_root = evidence_root.expanduser().resolve()
         self.max_snippet_bytes = max_snippet_bytes
         self.max_total_bytes = max_total_bytes
+        self.seal_lease_seconds = seal_lease_seconds
 
     def bind(self, run_id: str, evidence_refs: tuple[str, ...] | list[str]) -> EvidenceBundle:
         run = self.store.get_run(run_id)
@@ -186,14 +197,10 @@ class EvidenceBinder:
             objects=self.store.list_evidence_objects(run_id),
             object_set_digest=receipt.evidence_digest,
         )
-        marker_path = _seal_marker_path(self.evidence_root, run_id)
         expected_ref = _seal_marker_ref(run_id)
         if seal.marker_ref != expected_ref:
             raise EvidenceBindingError("evidence_seal_marker_binding_mismatch")
-        try:
-            persisted = marker_path.read_bytes()
-        except OSError as exc:
-            raise EvidenceBindingError("evidence_seal_marker_unreadable") from exc
+        persisted = _read_seal_marker(self.evidence_root, run_id)
         if persisted != marker_bytes:
             raise EvidenceBindingError("evidence_seal_marker_mismatch")
         digest = hashlib.sha256(persisted).hexdigest()
@@ -222,16 +229,40 @@ class EvidenceBinder:
             raise EvidenceBindingError("evidence_unavailable")
         if run.collection_state is not CollectionState.SUCCEEDED:
             raise EvidenceBindingError("collection_incomplete")
+        claim_owner = f"evidence-binder:{uuid.uuid4().hex}"
         try:
-            current = self.store.begin_evidence_seal(run_id)
-            if current.state is EvidenceSealState.SEALED:
-                return current
+            current = self.store.begin_evidence_seal(
+                run_id,
+                claim_owner=claim_owner,
+                lease_seconds=self.seal_lease_seconds,
+            )
+        except EvidenceSealClaimConflict as exc:
+            raise EvidenceBindingError("evidence_seal_awaiting") from exc
+        except ValueError as exc:
+            raise EvidenceBindingError("evidence_seal_invalid") from exc
+        if current.state is EvidenceSealState.SEALED:
+            return current
+        fencing_token = current.fencing_token
+
+        def renew_claim() -> None:
+            try:
+                self.store.renew_evidence_seal_claim(
+                    run_id,
+                    claim_owner=claim_owner,
+                    fencing_token=fencing_token,
+                    lease_seconds=self.seal_lease_seconds,
+                )
+            except EvidenceSealFenceConflict as exc:
+                raise EvidenceBindingError("evidence_seal_awaiting") from exc
+
+        try:
             receipt = self._verify_terminal_gate_facts(
                 run_id,
                 evidence_refs,
                 workspace_boundary,
                 task_id=task_id,
             )
+            renew_claim()
             run = self.store.get_run(run_id)
             objects = self.store.list_evidence_objects(run_id)
             paths = _validate_registered_tree(
@@ -239,34 +270,58 @@ class EvidenceBinder:
                 run_id=run_id,
                 objects=objects,
             )
+            renew_claim()
             marker_bytes = _seal_marker_bytes(
                 run=run,
                 objects=objects,
                 object_set_digest=receipt.evidence_digest,
             )
-            marker_path = _seal_marker_path(self.evidence_root, run_id)
-            _write_seal_marker(marker_path, marker_bytes)
+            _write_seal_marker(self.evidence_root, run_id, marker_bytes)
+            renew_claim()
             before = {path: _stable_file_fingerprint(str(path)) for path in paths}
             _make_evidence_tree_read_only(
                 run_root=(self.evidence_root / "runs" / run_id),
                 files=paths,
             )
-            _make_marker_read_only(marker_path)
+            _make_marker_read_only(self.evidence_root, run_id)
             for path, fingerprint in before.items():
                 if _stable_file_fingerprint(str(path)) != fingerprint:
                     raise EvidenceBindingError("evidence_file_changed_during_seal")
+            renew_claim()
             digest = hashlib.sha256(marker_bytes).hexdigest()
             return self.store.complete_evidence_seal(
                 run_id,
+                claim_owner=claim_owner,
+                fencing_token=fencing_token,
                 digest=digest,
                 marker_ref=_seal_marker_ref(run_id),
             )
         except EvidenceBindingError as exc:
-            self.store.invalidate_evidence_seal(run_id, reason=exc.code)
+            if exc.code == "evidence_seal_awaiting":
+                raise
+            try:
+                self.store.invalidate_evidence_seal(
+                    run_id,
+                    claim_owner=claim_owner,
+                    fencing_token=fencing_token,
+                    reason=exc.code,
+                )
+            except EvidenceSealFenceConflict as fence_exc:
+                raise EvidenceBindingError("evidence_seal_awaiting") from fence_exc
             raise
         except ValueError as exc:
-            self.store.invalidate_evidence_seal(run_id, reason=str(exc))
+            try:
+                self.store.invalidate_evidence_seal(
+                    run_id,
+                    claim_owner=claim_owner,
+                    fencing_token=fencing_token,
+                    reason=str(exc),
+                )
+            except EvidenceSealFenceConflict as fence_exc:
+                raise EvidenceBindingError("evidence_seal_awaiting") from fence_exc
             raise EvidenceBindingError("evidence_seal_invalid") from exc
+        except EvidenceSealFenceConflict as exc:
+            raise EvidenceBindingError("evidence_seal_awaiting") from exc
 
     def _verify_terminal_gate_facts(
         self,
@@ -757,12 +812,6 @@ def _seal_marker_ref(run_id: str) -> str:
     return f"evidence-seal://runs/{run_id}/seal.json"
 
 
-def _seal_marker_path(evidence_root: Path, run_id: str) -> Path:
-    if re.fullmatch(r"[A-Za-z0-9_.:-]+", run_id) is None:
-        raise EvidenceBindingError("evidence_seal_run_id_invalid")
-    return evidence_root / "seals" / run_id / "seal.json"
-
-
 def _seal_marker_bytes(
     *,
     run: Any,
@@ -849,38 +898,145 @@ def _validate_registered_tree(
     return tuple(sorted(expected, key=lambda item: item.as_posix()))
 
 
-def _write_seal_marker(marker_path: Path, content: bytes) -> None:
-    marker_dir = marker_path.parent
-    marker_dir.mkdir(parents=True, exist_ok=True)
-    if marker_path.is_symlink():
-        raise EvidenceBindingError("evidence_seal_marker_symlink")
-    if marker_path.exists():
-        try:
-            if marker_path.read_bytes() != content:
-                raise EvidenceBindingError("evidence_seal_marker_mismatch")
-        except OSError as exc:
-            raise EvidenceBindingError("evidence_seal_marker_unreadable") from exc
-        return
-    temporary_name: str | None = None
+@contextmanager
+def _open_seal_directory(
+    evidence_root: Path,
+    run_id: str,
+    *,
+    create: bool,
+) -> Iterator[tuple[int, int]]:
+    """Open the managed marker directory without following any child symlink.
+
+    The deployment target is Linux; ``O_NOFOLLOW`` and directory-relative APIs
+    are deliberately required rather than silently weakening this boundary.
+    """
+
+    if re.fullmatch(r"[A-Za-z0-9_.:-]+", run_id) is None:
+        raise EvidenceBindingError("evidence_seal_run_id_invalid")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    descriptors: list[int] = []
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=marker_dir,
-            prefix=".seal-",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temporary_name = handle.name
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, marker_path)
-        temporary_name = None
-        _fsync_directory(marker_dir)
+        root_fd = os.open(evidence_root, flags)
+        descriptors.append(root_fd)
+        seals_fd = _open_directory_component(root_fd, "seals", flags=flags, create=create)
+        descriptors.append(seals_fd)
+        run_fd = _open_directory_component(seals_fd, run_id, flags=flags, create=create)
+        descriptors.append(run_fd)
+        yield run_fd, seals_fd
+    except EvidenceBindingError:
+        raise
+    except OSError as exc:
+        raise EvidenceBindingError("evidence_seal_marker_directory_invalid") from exc
     finally:
-        if temporary_name is not None:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _open_directory_component(
+    parent_fd: int,
+    name: str,
+    *,
+    flags: int,
+    create: bool,
+) -> int:
+    created = False
+    if create:
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+            created = True
+        except FileExistsError:
+            created = False
+    descriptor = os.open(name, flags, dir_fd=parent_fd)
+    if created:
+        os.fsync(parent_fd)
+    return descriptor
+
+
+def _read_file_at(directory_fd: int, name: str) -> bytes:
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory_fd,
+        )
+    except OSError as exc:
+        raise EvidenceBindingError("evidence_seal_marker_unreadable") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise EvidenceBindingError("evidence_seal_marker_not_regular")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 64 * 1024):
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _read_seal_marker(evidence_root: Path, run_id: str) -> bytes:
+    with _open_seal_directory(evidence_root, run_id, create=False) as (run_fd, _):
+        return _read_file_at(run_fd, "seal.json")
+
+
+def _write_seal_marker(evidence_root: Path, run_id: str, content: bytes) -> None:
+    with _open_seal_directory(evidence_root, run_id, create=True) as (run_fd, _):
+        try:
+            existing = _read_file_at(run_fd, "seal.json")
+        except EvidenceBindingError as exc:
+            if exc.code != "evidence_seal_marker_unreadable" or not _missing_marker_at(run_fd):
+                raise
+        else:
+            if existing != content:
+                raise EvidenceBindingError("evidence_seal_marker_mismatch")
+            return
+
+        temporary_name = f".seal-{uuid.uuid4().hex}.tmp"
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_NOFOLLOW
+                | os.O_CLOEXEC,
+                0o600,
+                dir_fd=run_fd,
+            )
+            view = memoryview(content)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("short Evidence seal marker write")
+                view = view[written:]
+            os.fsync(descriptor)
+            os.close(descriptor)
+            descriptor = None
+            os.replace(
+                temporary_name,
+                "seal.json",
+                src_dir_fd=run_fd,
+                dst_dir_fd=run_fd,
+            )
+            if _read_file_at(run_fd, "seal.json") != content:
+                raise EvidenceBindingError("evidence_seal_marker_mismatch")
+            os.fsync(run_fd)
+        except EvidenceBindingError:
+            raise
+        except OSError as exc:
+            raise EvidenceBindingError("evidence_seal_marker_write_failed") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
             with suppress(FileNotFoundError):
-                Path(temporary_name).unlink()
+                os.unlink(temporary_name, dir_fd=run_fd)
+
+
+def _missing_marker_at(directory_fd: int) -> bool:
+    try:
+        os.stat("seal.json", dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    return False
 
 
 def _make_evidence_tree_read_only(*, run_root: Path, files: tuple[Path, ...]) -> None:
@@ -892,15 +1048,23 @@ def _make_evidence_tree_read_only(*, run_root: Path, files: tuple[Path, ...]) ->
         directory.chmod(0o555)
 
 
-def _make_marker_read_only(marker_path: Path) -> None:
-    marker_path.chmod(0o444)
-    marker_path.parent.chmod(0o555)
-    _fsync_directory(marker_path.parent.parent)
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+def _make_marker_read_only(evidence_root: Path, run_id: str) -> None:
+    with _open_seal_directory(evidence_root, run_id, create=False) as (run_fd, seals_fd):
+        try:
+            marker_fd = os.open(
+                "seal.json",
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=run_fd,
+            )
+        except OSError as exc:
+            raise EvidenceBindingError("evidence_seal_marker_unreadable") from exc
+        try:
+            if not stat.S_ISREG(os.fstat(marker_fd).st_mode):
+                raise EvidenceBindingError("evidence_seal_marker_not_regular")
+            os.fchmod(marker_fd, 0o444)
+            os.fsync(marker_fd)
+        finally:
+            os.close(marker_fd)
+        os.fchmod(run_fd, 0o555)
+        os.fsync(run_fd)
+        os.fsync(seals_fd)

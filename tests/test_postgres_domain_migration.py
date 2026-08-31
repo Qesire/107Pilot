@@ -264,6 +264,27 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
             self.assertIn(f"NEW.{column} IS DISTINCT FROM OLD.{column}", schema)
         self.assertIn("CREATE TRIGGER runs_provenance_immutable_guard", schema)
 
+    def test_evidence_seal_claim_migration_adds_lease_and_fence_columns(self) -> None:
+        """Dropping an additive claim column would re-enable shared PREPARING work."""
+
+        from pilot107.core.postgres_domain_schema import _MIGRATIONS
+
+        migration_id, statements = next(
+            migration
+            for migration in _MIGRATIONS
+            if migration[0] == "004a.032.evidence_seal_claim"
+        )
+        schema = "\n".join(statements)
+
+        self.assertEqual(migration_id, "004a.032.evidence_seal_claim")
+        for column in (
+            "evidence_seal_claim_owner",
+            "evidence_seal_lease_expires_at",
+            "evidence_seal_fencing_token",
+        ):
+            self.assertIn(f"ADD COLUMN IF NOT EXISTS {column}", schema)
+        self.assertIn("DEFAULT 0", schema)
+
     def test_agent_migration_uses_native_postgres_types_and_fencing_index(self) -> None:
         from pilot107.core.postgres_domain_schema import _MIGRATIONS
 

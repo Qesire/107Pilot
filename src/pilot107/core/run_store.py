@@ -42,6 +42,14 @@ class WorkflowManifestFenceConflict(RuntimeError):
     """Raised when a stale workflow writer attempts to replace manifest truth."""
 
 
+class EvidenceSealClaimConflict(RuntimeError):
+    """Raised while another live owner holds the Evidence seal claim."""
+
+
+class EvidenceSealFenceConflict(RuntimeError):
+    """Raised when a stale Evidence sealer attempts to mutate seal state."""
+
+
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -182,6 +190,9 @@ class EvidenceSealRecord:
     marker_ref: str | None
     sealed_at: str | None
     invalid_reason: str | None
+    claim_owner: str | None
+    lease_expires_at: str | None
+    fencing_token: int
 
 
 @dataclass(frozen=True)
@@ -301,6 +312,9 @@ class RunStore:
                     evidence_seal_marker_ref TEXT,
                     evidence_sealed_at TEXT,
                     evidence_seal_invalid_reason TEXT,
+                    evidence_seal_claim_owner TEXT,
+                    evidence_seal_lease_expires_at TEXT,
+                    evidence_seal_fencing_token INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -580,6 +594,9 @@ class RunStore:
                 ("evidence_seal_marker_ref", "TEXT"),
                 ("evidence_sealed_at", "TEXT"),
                 ("evidence_seal_invalid_reason", "TEXT"),
+                ("evidence_seal_claim_owner", "TEXT"),
+                ("evidence_seal_lease_expires_at", "TEXT"),
+                ("evidence_seal_fencing_token", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 self._ensure_column(conn, table="runs", column=column, definition=definition)
             self._ensure_run_provenance_guard(conn)
@@ -1984,7 +2001,9 @@ class RunStore:
             row = conn.execute(
                 "SELECT run_id, evidence_seal_state, evidence_seal_digest, "
                 "evidence_seal_marker_ref, evidence_sealed_at, "
-                "evidence_seal_invalid_reason FROM runs WHERE run_id = ?",
+                "evidence_seal_invalid_reason, evidence_seal_claim_owner, "
+                "evidence_seal_lease_expires_at, evidence_seal_fencing_token "
+                "FROM runs WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
         if row is None:
@@ -2008,17 +2027,42 @@ class RunStore:
                 if row["evidence_seal_invalid_reason"] is None
                 else str(row["evidence_seal_invalid_reason"])
             ),
+            claim_owner=(
+                None
+                if row["evidence_seal_claim_owner"] is None
+                else str(row["evidence_seal_claim_owner"])
+            ),
+            lease_expires_at=(
+                None
+                if row["evidence_seal_lease_expires_at"] is None
+                else str(row["evidence_seal_lease_expires_at"])
+            ),
+            fencing_token=int(row["evidence_seal_fencing_token"]),
         )
 
-    def begin_evidence_seal(self, run_id: str) -> EvidenceSealRecord:
+    def begin_evidence_seal(
+        self,
+        run_id: str,
+        *,
+        claim_owner: str,
+        lease_seconds: int = 300,
+    ) -> EvidenceSealRecord:
         """CAS a terminal, fully collected Run into recoverable seal preparation."""
 
+        if not claim_owner.strip():
+            raise ValueError("Evidence seal claim owner is required")
+        if lease_seconds <= 0:
+            raise ValueError("Evidence seal lease_seconds must be positive")
         terminal_values = sorted(state.value for state in TERMINAL_RUN_STATES)
         placeholders = ",".join("?" for _ in terminal_values)
         now = utc_now_iso()
+        lease_expires_at = (datetime.now(UTC) + timedelta(seconds=lease_seconds)).isoformat()
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT state, collection_state, evidence_seal_state FROM runs WHERE run_id = ?",
+                "SELECT state, collection_state, evidence_seal_state, "
+                "evidence_seal_claim_owner, evidence_seal_lease_expires_at "
+                "FROM runs WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
             if row is None:
@@ -2032,28 +2076,84 @@ class RunStore:
                 raise ValueError("Evidence can only be sealed for a terminal Run")
             if str(row["collection_state"]) != CollectionState.SUCCEEDED.value:
                 raise ValueError("Evidence can only be sealed after complete collection")
-            conn.execute(
-                f"UPDATE runs SET evidence_seal_state = ?, updated_at = ? "
+            if (
+                seal_state is EvidenceSealState.PREPARING
+                and row["evidence_seal_lease_expires_at"] is not None
+                and str(row["evidence_seal_lease_expires_at"]) > now
+            ):
+                raise EvidenceSealClaimConflict("Evidence seal claim is active")
+            result = conn.execute(
+                f"UPDATE runs SET evidence_seal_state = ?, evidence_seal_claim_owner = ?, "
+                "evidence_seal_lease_expires_at = ?, "
+                "evidence_seal_fencing_token = evidence_seal_fencing_token + 1, "
+                "updated_at = ? "
                 f"WHERE run_id = ? AND state IN ({placeholders}) "
-                "AND collection_state = ? AND evidence_seal_state = ?",
+                "AND collection_state = ? AND (evidence_seal_state = ? OR "
+                "(evidence_seal_state = ? AND (evidence_seal_lease_expires_at IS NULL "
+                "OR evidence_seal_lease_expires_at <= ?)))",
                 (
                     EvidenceSealState.PREPARING.value,
+                    claim_owner,
+                    lease_expires_at,
                     now,
                     run_id,
                     *terminal_values,
                     CollectionState.SUCCEEDED.value,
                     EvidenceSealState.OPEN.value,
+                    EvidenceSealState.PREPARING.value,
+                    now,
                 ),
             )
+            if result.rowcount != 1:
+                raise EvidenceSealClaimConflict("Evidence seal claim was not acquired")
+        return self.get_evidence_seal(run_id)
+
+    def renew_evidence_seal_claim(
+        self,
+        run_id: str,
+        *,
+        claim_owner: str,
+        fencing_token: int,
+        lease_seconds: int = 300,
+    ) -> EvidenceSealRecord:
+        if fencing_token <= 0:
+            raise ValueError("Evidence seal fencing_token must be positive")
+        if lease_seconds <= 0:
+            raise ValueError("Evidence seal lease_seconds must be positive")
+        now = utc_now_iso()
+        lease_expires_at = (datetime.now(UTC) + timedelta(seconds=lease_seconds)).isoformat()
+        with self.connect() as conn:
+            result = conn.execute(
+                "UPDATE runs SET evidence_seal_lease_expires_at = ?, updated_at = ? "
+                "WHERE run_id = ? AND evidence_seal_state = ? "
+                "AND evidence_seal_claim_owner = ? AND evidence_seal_fencing_token = ? "
+                "AND evidence_seal_lease_expires_at IS NOT NULL "
+                "AND evidence_seal_lease_expires_at > ?",
+                (
+                    lease_expires_at,
+                    now,
+                    run_id,
+                    EvidenceSealState.PREPARING.value,
+                    claim_owner,
+                    fencing_token,
+                    now,
+                ),
+            )
+            if result.rowcount != 1:
+                raise EvidenceSealFenceConflict("Evidence seal claim is stale")
         return self.get_evidence_seal(run_id)
 
     def complete_evidence_seal(
         self,
         run_id: str,
         *,
+        claim_owner: str,
+        fencing_token: int,
         digest: str,
         marker_ref: str,
     ) -> EvidenceSealRecord:
+        if fencing_token <= 0:
+            raise ValueError("Evidence seal fencing_token must be positive")
         if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
             raise ValueError("Evidence seal digest is invalid")
         if not marker_ref:
@@ -2078,8 +2178,12 @@ class RunStore:
             result = conn.execute(
                 "UPDATE runs SET evidence_seal_state = ?, evidence_seal_digest = ?, "
                 "evidence_seal_marker_ref = ?, evidence_sealed_at = ?, "
-                "evidence_seal_invalid_reason = NULL, updated_at = ? "
-                "WHERE run_id = ? AND evidence_seal_state = ?",
+                "evidence_seal_invalid_reason = NULL, evidence_seal_claim_owner = NULL, "
+                "evidence_seal_lease_expires_at = NULL, updated_at = ? "
+                "WHERE run_id = ? AND evidence_seal_state = ? "
+                "AND evidence_seal_claim_owner = ? AND evidence_seal_fencing_token = ? "
+                "AND evidence_seal_lease_expires_at IS NOT NULL "
+                "AND evidence_seal_lease_expires_at > ?",
                 (
                     EvidenceSealState.SEALED.value,
                     digest,
@@ -2088,31 +2192,53 @@ class RunStore:
                     now,
                     run_id,
                     EvidenceSealState.PREPARING.value,
+                    claim_owner,
+                    fencing_token,
+                    now,
                 ),
             )
             if result.rowcount != 1:
-                raise ValueError("Evidence seal is not preparing")
+                raise EvidenceSealFenceConflict("Evidence seal claim is stale")
         return self.get_evidence_seal(run_id)
 
-    def invalidate_evidence_seal(self, run_id: str, *, reason: str) -> EvidenceSealRecord:
+    def invalidate_evidence_seal(
+        self,
+        run_id: str,
+        *,
+        claim_owner: str,
+        fencing_token: int,
+        reason: str,
+    ) -> EvidenceSealRecord:
+        if fencing_token <= 0:
+            raise ValueError("Evidence seal fencing_token must be positive")
         bounded_reason = " ".join(reason.split())[:512] or "evidence_seal_invalid"
         now = utc_now_iso()
         with self.connect() as conn:
             result = conn.execute(
                 "UPDATE runs SET evidence_seal_state = ?, evidence_seal_invalid_reason = ?, "
-                "updated_at = ? WHERE run_id = ? AND evidence_seal_state != ?",
+                "evidence_seal_claim_owner = NULL, evidence_seal_lease_expires_at = NULL, "
+                "updated_at = ? WHERE run_id = ? AND evidence_seal_state = ? "
+                "AND evidence_seal_claim_owner = ? AND evidence_seal_fencing_token = ? "
+                "AND evidence_seal_lease_expires_at IS NOT NULL "
+                "AND evidence_seal_lease_expires_at > ?",
                 (
                     EvidenceSealState.INVALID.value,
                     bounded_reason,
                     now,
                     run_id,
-                    EvidenceSealState.INVALID.value,
+                    EvidenceSealState.PREPARING.value,
+                    claim_owner,
+                    fencing_token,
+                    now,
                 ),
             )
             if result.rowcount == 0:
-                exists = conn.execute("SELECT 1 FROM runs WHERE run_id = ?", (run_id,)).fetchone()
-                if exists is None:
+                current = conn.execute(
+                    "SELECT evidence_seal_state FROM runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
+                if current is None:
                     raise KeyError(run_id)
+                raise EvidenceSealFenceConflict("Evidence seal claim is stale")
         return self.get_evidence_seal(run_id)
 
     def upsert_evidence_objects(

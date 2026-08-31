@@ -2,12 +2,14 @@ import os
 import sqlite3
 import stat
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
 from unittest.mock import patch
 
-from pilot107.core.evidence_binding import EvidenceBinder
+from pilot107.core.evidence_binding import EvidenceBinder, EvidenceBindingError
 from pilot107.core.run_store import RunStore
 from pilot107.worker.evidence import EvidenceStore
 
@@ -312,6 +314,11 @@ class EvidenceBinderTests(unittest.TestCase):
         self.assertEqual(preparing.state.value, "PREPARING_SEAL")
         marker_path = self.root / "evidence" / "seals" / self.run.run_id / "seal.json"
         self.assertTrue(marker_path.is_file())
+        with self.store.connect() as conn:
+            conn.execute(
+                "UPDATE runs SET evidence_seal_lease_expires_at = ? WHERE run_id = ?",
+                ("2000-01-01T00:00:00+00:00", self.run.run_id),
+            )
 
         sealed = self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
         receipt = self.binder.verify_terminal_gate(self.run.run_id, refs, boundary)
@@ -321,12 +328,214 @@ class EvidenceBinderTests(unittest.TestCase):
 
     def test_seal_replay_resumes_preparing_without_marker(self) -> None:
         boundary, refs = self._prepare_sealable_evidence()
-        preparing = self.store.begin_evidence_seal(self.run.run_id)
+        preparing = self.store.begin_evidence_seal(
+            self.run.run_id,
+            claim_owner="crashed-before-marker",
+        )
+        with self.store.connect() as conn:
+            conn.execute(
+                "UPDATE runs SET evidence_seal_lease_expires_at = ? WHERE run_id = ?",
+                ("2000-01-01T00:00:00+00:00", self.run.run_id),
+            )
         self.assertEqual(preparing.state.value, "PREPARING_SEAL")
 
         sealed = self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
 
         self.assertEqual(sealed.state.value, "SEALED")
+
+    def test_concurrent_sealers_do_not_share_preparing_claim(self) -> None:
+        """Removing owner/fence exclusion lets both sealers enter filesystem work."""
+
+        boundary, refs = self._prepare_sealable_evidence()
+        other_binder = EvidenceBinder(
+            store=self.store,
+            evidence_root=self.evidence_store.root,
+            max_snippet_bytes=4096,
+        )
+        entered = threading.Event()
+        release = threading.Event()
+        original_validate = __import__(
+            "pilot107.core.evidence_binding", fromlist=["_validate_registered_tree"]
+        )._validate_registered_tree
+
+        def block_first_worker(**kwargs: object) -> tuple[Path, ...]:
+            entered.set()
+            release.wait(timeout=5)
+            return original_validate(**kwargs)
+
+        def seal(binder: EvidenceBinder) -> str:
+            try:
+                result = binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
+            except EvidenceBindingError as exc:
+                return exc.code
+            return result.state.value
+
+        with (
+            patch(
+                "pilot107.core.evidence_binding._validate_registered_tree",
+                side_effect=block_first_worker,
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            first = executor.submit(seal, self.binder)
+            self.assertTrue(entered.wait(timeout=5))
+            second = executor.submit(seal, other_binder)
+            second_outcome = second.result(timeout=5)
+            release.set()
+            outcomes = sorted((first.result(timeout=5), second_outcome))
+
+        self.assertEqual(outcomes, ["SEALED", "evidence_seal_awaiting"])
+        sealed = self.store.get_evidence_seal(self.run.run_id)
+        self.assertEqual(sealed.state.value, "SEALED")
+        self.binder.verify_terminal_gate(self.run.run_id, refs, boundary)
+        other_binder.verify_terminal_gate(self.run.run_id, refs, boundary)
+
+    def test_seal_rejects_marker_root_ancestor_symlink_without_external_write(self) -> None:
+        """Replacing dir-fd traversal with Path.mkdir writes the marker outside root."""
+
+        boundary, refs = self._prepare_sealable_evidence()
+        outside = self.root / "outside-seals"
+        outside.mkdir()
+        seals = self.evidence_store.root / "seals"
+        seals.symlink_to(outside, target_is_directory=True)
+
+        with self.assertRaisesRegex(Exception, "symlink|marker|directory"):
+            self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
+
+        self.assertEqual(list(outside.rglob("*")), [])
+
+    def test_evidence_seal_claim_excludes_active_owner_and_fences_stale_writer(self) -> None:
+        """Removing the owner/fence predicates permits a stale worker to publish."""
+
+        self._prepare_sealable_evidence()
+        first = self.store.begin_evidence_seal(
+            self.run.run_id,
+            claim_owner="sealer-a",
+            lease_seconds=300,
+        )
+        self.assertEqual(first.claim_owner, "sealer-a")
+        self.assertEqual(first.fencing_token, 1)
+
+        with self.assertRaisesRegex(Exception, "claim|lease|preparing"):
+            self.store.begin_evidence_seal(
+                self.run.run_id,
+                claim_owner="sealer-b",
+                lease_seconds=300,
+            )
+        with self.assertRaisesRegex(Exception, "fenc|claim|lease"):
+            self.store.complete_evidence_seal(
+                self.run.run_id,
+                claim_owner="sealer-b",
+                fencing_token=first.fencing_token + 1,
+                digest="1" * 64,
+                marker_ref="evidence-seal://runs/run_bind/seal.json",
+            )
+        with self.assertRaisesRegex(Exception, "fenc|claim|lease"):
+            self.store.invalidate_evidence_seal(
+                self.run.run_id,
+                claim_owner="sealer-b",
+                fencing_token=first.fencing_token + 1,
+                reason="stale",
+            )
+        self.assertEqual(
+            self.store.get_evidence_seal(self.run.run_id).state.value,
+            "PREPARING_SEAL",
+        )
+
+    def test_expired_evidence_seal_claim_is_taken_over_with_higher_fence(self) -> None:
+        """Removing expiry takeover leaves PREPARING evidence permanently orphaned."""
+
+        self._prepare_sealable_evidence()
+        first = self.store.begin_evidence_seal(
+            self.run.run_id,
+            claim_owner="crashed-sealer",
+            lease_seconds=300,
+        )
+        with self.store.connect() as conn:
+            conn.execute(
+                "UPDATE runs SET evidence_seal_lease_expires_at = ? WHERE run_id = ?",
+                ("2000-01-01T00:00:00+00:00", self.run.run_id),
+            )
+
+        takeover = self.store.begin_evidence_seal(
+            self.run.run_id,
+            claim_owner="replacement-sealer",
+            lease_seconds=300,
+        )
+
+        self.assertEqual(takeover.claim_owner, "replacement-sealer")
+        self.assertGreater(takeover.fencing_token, first.fencing_token)
+        with self.assertRaisesRegex(Exception, "fenc|claim|lease"):
+            self.store.complete_evidence_seal(
+                self.run.run_id,
+                claim_owner="crashed-sealer",
+                fencing_token=first.fencing_token,
+                digest="1" * 64,
+                marker_ref="evidence-seal://runs/run_bind/seal.json",
+            )
+        with self.assertRaisesRegex(Exception, "fenc|claim|lease"):
+            self.store.invalidate_evidence_seal(
+                self.run.run_id,
+                claim_owner="crashed-sealer",
+                fencing_token=first.fencing_token,
+                reason="late failure",
+            )
+        self.assertEqual(
+            self.store.get_evidence_seal(self.run.run_id).state.value,
+            "PREPARING_SEAL",
+        )
+
+    def test_sealed_evidence_never_downgrades_and_matching_complete_is_idempotent(self) -> None:
+        """Allowing invalidate on SEALED destroys a successfully published seal."""
+
+        self._prepare_sealable_evidence()
+        claim = self.store.begin_evidence_seal(
+            self.run.run_id,
+            claim_owner="winning-sealer",
+            lease_seconds=300,
+        )
+        marker_ref = "evidence-seal://runs/run_bind/seal.json"
+        sealed = self.store.complete_evidence_seal(
+            self.run.run_id,
+            claim_owner="winning-sealer",
+            fencing_token=claim.fencing_token,
+            digest="1" * 64,
+            marker_ref=marker_ref,
+        )
+
+        replay = self.store.complete_evidence_seal(
+            self.run.run_id,
+            claim_owner="stale-sealer",
+            fencing_token=claim.fencing_token + 1,
+            digest="1" * 64,
+            marker_ref=marker_ref,
+        )
+        with self.assertRaisesRegex(Exception, "fenc|claim|lease"):
+            self.store.invalidate_evidence_seal(
+                self.run.run_id,
+                claim_owner="winning-sealer",
+                fencing_token=claim.fencing_token,
+                reason="late failure",
+            )
+
+        self.assertEqual(sealed.state.value, "SEALED")
+        self.assertEqual(replay.digest, sealed.digest)
+        self.assertEqual(self.store.get_evidence_seal(self.run.run_id).state.value, "SEALED")
+
+    def test_seal_rejects_existing_marker_symlink_without_touching_target(self) -> None:
+        """Removing O_NOFOLLOW permits reads through a forged final marker symlink."""
+
+        boundary, refs = self._prepare_sealable_evidence()
+        outside = self.root / "outside-marker.json"
+        outside.write_text("do-not-touch\n", encoding="utf-8")
+        marker_dir = self.evidence_store.root / "seals" / self.run.run_id
+        marker_dir.mkdir(parents=True)
+        (marker_dir / "seal.json").symlink_to(outside)
+
+        with self.assertRaisesRegex(Exception, "symlink|marker"):
+            self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
+
+        self.assertEqual(outside.read_text(encoding="utf-8"), "do-not-touch\n")
 
     def test_sealed_marker_tamper_is_rejected(self) -> None:
         boundary, refs = self._prepare_sealable_evidence()
@@ -351,6 +560,9 @@ class EvidenceBinderTests(unittest.TestCase):
             self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
 
         self.assertEqual(self.store.get_evidence_seal(self.run.run_id).state.value, "INVALID")
+        with self.assertRaises(EvidenceBindingError) as replay_error:
+            self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
+        self.assertEqual(replay_error.exception.code, "evidence_seal_invalid")
 
     def test_seal_rejects_registered_path_escape(self) -> None:
         boundary, refs = self._prepare_sealable_evidence()
