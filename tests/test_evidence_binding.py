@@ -199,13 +199,25 @@ class EvidenceBinderTests(unittest.TestCase):
         self.assertEqual(receipt.source_revision, "source-revision-1")
         self.assertEqual(receipt.platform_snapshot_ref, "snapshot:platform-1")
         self.assertEqual(receipt.evidence_refs, (ref, manifest_ref))
-        self.assertEqual(receipt.evidence_digest, manifest.sha256)
+        self.assertEqual(len(receipt.evidence_digest), 64)
+        self.assertNotEqual(receipt.evidence_digest, manifest.sha256)
         self.assertTrue(
             all(
                 item.integrity_checked_at is not None
                 for item in self.store.list_evidence_objects(self.run.run_id)
             )
         )
+        repeated = self.binder.verify_terminal_gate(
+            self.run.run_id,
+            (ref, manifest_ref),
+            {
+                "workspace_digest": boundary["workspace_digest"],
+                "workspace_revision": None,
+                "legacy_boundary": True,
+            },
+        )
+        self.assertEqual(repeated.integrity_verified_at, receipt.integrity_verified_at)
+        self.assertEqual(repeated.evidence_digest, receipt.evidence_digest)
 
     def test_terminal_gate_rejects_bounded_collection_exhaustion(self) -> None:
         self._mark_run_ready(collection_state="failed")
@@ -216,6 +228,127 @@ class EvidenceBinderTests(unittest.TestCase):
                 self.run.run_id,
                 (ref,),
                 self._workspace_boundary(),
+            )
+
+    def test_terminal_gate_does_not_accept_caller_supplied_workspace_boundary(self) -> None:
+        self._mark_run_ready()
+        boundary = self._workspace_boundary()
+        ref = self._register(content="verified\n", metadata=boundary)
+        manifest, manifest_ref = self._register_manifest(ref, boundary)
+        spoofed = {
+            **boundary,
+            "workspace_digest": "b" * 64,
+        }
+
+        with self.assertRaisesRegex(Exception, "workspace|provenance|boundary"):
+            self.binder.verify_terminal_gate(
+                self.run.run_id,
+                (ref, manifest_ref),
+                spoofed,
+            )
+
+    def test_terminal_gate_requires_explicit_legacy_boundary_marker(self) -> None:
+        self._mark_run_ready()
+        boundary = self._workspace_boundary()
+        ref = self._register(content="verified\n", metadata=boundary)
+        _, manifest_ref = self._register_manifest(ref, boundary)
+        missing_marker = {key: value for key, value in boundary.items() if key != "legacy_boundary"}
+
+        with self.assertRaisesRegex(Exception, "legacy|boundary"):
+            self.binder.verify_terminal_gate(
+                self.run.run_id,
+                (ref, manifest_ref),
+                missing_marker,
+            )
+
+    def test_terminal_gate_rejects_registered_collected_object_missing_from_manifest(self) -> None:
+        self._mark_run_ready()
+        boundary = self._workspace_boundary()
+        ref = self._register(content="verified\n", metadata=boundary)
+        _, manifest_ref = self._register_manifest(ref, boundary)
+        extra = self.evidence_store.write_text(
+            run_id=self.run.run_id,
+            logical_path="logs/extra.txt",
+            content="extra\n",
+            content_type="text/plain",
+        )
+        self.store.upsert_evidence_objects(
+            self.run.run_id,
+            [{
+                "object_id": "ev_extra",
+                "category": "logs",
+                "logical_path": extra.logical_path,
+                "store_path": str(extra.path),
+                "source_uri": f"evidence://runs/{self.run.run_id}/{extra.logical_path}",
+                "sha256": extra.sha256,
+                "size_bytes": extra.size_bytes,
+                "mime_type": extra.content_type,
+                "collection_status": "collected",
+                "finalized_at": "2026-08-31T00:00:00+00:00",
+                **boundary,
+            }],
+        )
+
+        with self.assertRaisesRegex(Exception, "manifest|registered|object"):
+            self.binder.verify_terminal_gate(
+                self.run.run_id,
+                (ref, manifest_ref),
+                boundary,
+            )
+
+    def test_terminal_gate_requires_strict_success_exit_code(self) -> None:
+        self._mark_run_ready()
+        with self.store.connect() as conn:
+            conn.execute(
+                "UPDATE runs SET exit_code = '0:0:0' WHERE run_id = ?",
+                (self.run.run_id,),
+            )
+        ref = self._register(content="verified\n")
+
+        with self.assertRaisesRegex(Exception, "exit_code"):
+            self.binder.verify_terminal_gate(
+                self.run.run_id,
+                (ref,),
+                self._workspace_boundary(),
+            )
+
+    def test_manifest_size_type_is_reported_as_binding_error(self) -> None:
+        from pilot107.core.evidence_binding import _verify_manifest_artifacts
+
+        ref = self._register(content="verified\n", metadata={})
+        evidence_object = self.store.list_evidence_objects(self.run.run_id)[0]
+        with self.assertRaisesRegex(Exception, "manifest_size_mismatch"):
+            _verify_manifest_artifacts(
+                run_id=self.run.run_id,
+                manifest_payload={
+                    "artifacts": [{
+                        "logical_path": "logs/stderr.tail.txt",
+                        "evidence_ref": (
+                            f"evidence://runs/{self.run.run_id}/logs/stderr.tail.txt"
+                        ),
+                        "sha256": evidence_object.sha256,
+                        "size_bytes": "not-an-integer",
+                    }],
+                },
+                objects={evidence_object.logical_path: evidence_object},
+                refs=(ref,),
+            )
+
+        with self.assertRaisesRegex(Exception, "manifest_size_mismatch"):
+            _verify_manifest_artifacts(
+                run_id=self.run.run_id,
+                manifest_payload={
+                    "artifacts": [{
+                        "logical_path": "logs/stderr.tail.txt",
+                        "evidence_ref": (
+                            f"evidence://runs/{self.run.run_id}/logs/stderr.tail.txt"
+                        ),
+                        "sha256": evidence_object.sha256,
+                        "size_bytes": str(evidence_object.size_bytes),
+                    }],
+                },
+                objects={evidence_object.logical_path: evidence_object},
+                refs=(ref,),
             )
 
     def _register(
@@ -265,6 +398,52 @@ class EvidenceBinderTests(unittest.TestCase):
             "source_revision": "source-revision-1",
             "platform_snapshot_ref": "snapshot:platform-1",
         }
+
+    def _register_manifest(
+        self, ref: str, boundary: dict[str, object]
+    ) -> tuple[object, str]:
+        manifest_payload = {
+            "schema": "pilot107.evidence_manifest.v1",
+            "run_id": self.run.run_id,
+            "owner": self.run.owner,
+            "job_id": "1001",
+            "workspace_digest": boundary["workspace_digest"],
+            "workspace_revision": None,
+            "legacy_boundary": True,
+            "source_revision": boundary["source_revision"],
+            "platform_snapshot_ref": boundary["platform_snapshot_ref"],
+            "artifacts": [{
+                "logical_path": "logs/stderr.tail.txt",
+                "size_bytes": len(b"verified\n"),
+                "sha256": self._sha(ref),
+                "content_type": "text/plain",
+                "evidence_ref": ref,
+            }],
+            "warnings": [],
+        }
+        manifest = self.evidence_store.write_json(
+            run_id=self.run.run_id,
+            logical_path="manifest/manifest.json",
+            payload=manifest_payload,
+        )
+        manifest_ref = f"evidence://runs/{self.run.run_id}/{manifest.logical_path}"
+        self.store.upsert_evidence_objects(
+            self.run.run_id,
+            [{
+                "object_id": "ev_manifest",
+                "category": "manifest",
+                "logical_path": manifest.logical_path,
+                "store_path": str(manifest.path),
+                "source_uri": manifest_ref,
+                "sha256": manifest.sha256,
+                "size_bytes": manifest.size_bytes,
+                "mime_type": manifest.content_type,
+                "collection_status": "collected",
+                "finalized_at": "2026-08-31T00:00:00+00:00",
+                **boundary,
+            }],
+        )
+        return manifest, manifest_ref
 
     def _mark_run_ready(self, *, collection_state: str = "succeeded") -> None:
         with self.store.connect() as conn:

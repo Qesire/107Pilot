@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass, field
@@ -73,6 +74,10 @@ class RunRecord:
     attempt: int = 0
     workflow: dict[str, Any] = field(default_factory=dict)
     retry_not_before: str | None = None
+    workspace_revision: int | None = None
+    workspace_digest: str | None = None
+    source_revision: str | None = None
+    platform_snapshot_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,6 +129,7 @@ class EvidenceObjectRecord:
     source_revision: str | None = None
     platform_snapshot_ref: str | None = None
     integrity_checked_at: str | None = None
+    integrity_object_set_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -234,6 +240,10 @@ class RunStore:
                     submission_owner TEXT,
                     submission_fencing_token INTEGER NOT NULL DEFAULT 0,
                     resource_plan_json TEXT NOT NULL DEFAULT '{}',
+                    workspace_revision INTEGER,
+                    workspace_digest TEXT,
+                    source_revision TEXT,
+                    platform_snapshot_ref TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -302,6 +312,7 @@ class RunStore:
                     source_revision TEXT,
                     platform_snapshot_ref TEXT,
                     integrity_checked_at TEXT,
+                    integrity_object_set_digest TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE(run_id, logical_path)
@@ -501,6 +512,13 @@ class RunStore:
                 column="retry_not_before",
                 definition="TEXT",
             )
+            for column, definition in (
+                ("workspace_revision", "INTEGER"),
+                ("workspace_digest", "TEXT"),
+                ("source_revision", "TEXT"),
+                ("platform_snapshot_ref", "TEXT"),
+            ):
+                self._ensure_column(conn, table="runs", column=column, definition=definition)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id, created_at)"
             )
@@ -560,6 +578,12 @@ class RunStore:
                 column="integrity_checked_at",
                 definition="TEXT",
             )
+            self._ensure_column(
+                conn,
+                table="evidence_objects",
+                column="integrity_object_set_digest",
+                definition="TEXT",
+            )
 
     def create_run(
         self,
@@ -576,6 +600,10 @@ class RunStore:
         remediation_plan_id: str | None = None,
         workflow: dict[str, Any] | None = None,
         retry_not_before: str | None = None,
+        workspace_revision: int | None = None,
+        workspace_digest: str | None = None,
+        source_revision: str | None = None,
+        platform_snapshot_ref: str | None = None,
     ) -> RunRecord:
         now = utc_now_iso()
         with self.connect() as conn:
@@ -612,10 +640,11 @@ class RunStore:
                     diagnosis_state, capsule_state,
                     result_status, job_id, job_name, workdir, script, exit_code, terminal_state,
                     submit_strategy, submit_response_json, resource_plan_json,
+                    workspace_revision, workspace_digest, source_revision, platform_snapshot_ref,
                     created_at, updated_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL,
-                        NULL, '{}', ?, ?, ?)
+                        NULL, '{}', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -636,6 +665,10 @@ class RunStore:
                     workdir,
                     script,
                     json.dumps(resource_plan or {}, sort_keys=True),
+                    workspace_revision,
+                    workspace_digest,
+                    source_revision,
+                    platform_snapshot_ref,
                     now,
                     now,
                 ),
@@ -1882,7 +1915,30 @@ class RunStore:
     ) -> list[EvidenceObjectRecord]:
         now = utc_now_iso()
         with self.connect() as conn:
+            finalized = conn.execute(
+                "SELECT 1 FROM evidence_objects WHERE run_id = ? "
+                "AND integrity_object_set_digest IS NOT NULL LIMIT 1",
+                (run_id,),
+            ).fetchone()
             for obj in objects:
+                incoming = _evidence_object_values(obj)
+                existing = conn.execute(
+                    "SELECT * FROM evidence_objects WHERE run_id = ? AND logical_path = ?",
+                    (run_id, incoming["logical_path"]),
+                ).fetchone()
+                if finalized is not None and (
+                    existing is None
+                    or existing["integrity_checked_at"] is None
+                ):
+                    raise ValueError(
+                        "evidence object set is immutable after integrity finalization"
+                    )
+                if (
+                    existing is not None
+                    and existing["integrity_checked_at"] is not None
+                    and any(existing[field] != value for field, value in incoming.items())
+                ):
+                    raise ValueError("integrity-finalized evidence object is immutable")
                 conn.execute(
                     """
                     INSERT INTO evidence_objects (
@@ -1890,9 +1946,10 @@ class RunStore:
                         sha256, size_bytes, mime_type, collection_status, collection_note,
                         mutable_during_run, finalized_at, workspace_revision, workspace_digest,
                         source_revision, platform_snapshot_ref, integrity_checked_at,
+                        integrity_object_set_digest,
                         created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(run_id, logical_path) DO UPDATE SET
                         category = excluded.category,
                         store_path = excluded.store_path,
@@ -1911,6 +1968,10 @@ class RunStore:
                         integrity_checked_at = COALESCE(
                             evidence_objects.integrity_checked_at,
                             excluded.integrity_checked_at
+                        ),
+                        integrity_object_set_digest = COALESCE(
+                            evidence_objects.integrity_object_set_digest,
+                            excluded.integrity_object_set_digest
                         ),
                         updated_at = excluded.updated_at
                     """,
@@ -1953,6 +2014,11 @@ class RunStore:
                             if obj.get("integrity_checked_at") is None
                             else str(obj["integrity_checked_at"])
                         ),
+                        (
+                            None
+                            if obj.get("integrity_object_set_digest") is None
+                            else str(obj["integrity_object_set_digest"])
+                        ),
                         now,
                         now,
                     ),
@@ -1965,14 +2031,54 @@ class RunStore:
         logical_paths: tuple[str, ...] | list[str],
         *,
         checked_at: str | None = None,
-    ) -> None:
+    ) -> str:
         """Persist the timestamp of a successful terminal integrity verification."""
         paths = tuple(dict.fromkeys(str(path) for path in logical_paths if str(path)))
         if not paths:
-            return
+            raise ValueError("evidence integrity finalization requires objects")
         now = checked_at or utc_now_iso()
         placeholders = ",".join("?" for _ in paths)
         with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM evidence_objects WHERE run_id = ? AND logical_path IN ("
+                + placeholders
+                + ") ORDER BY logical_path",
+                (run_id, *paths),
+            ).fetchall()
+            if len(rows) != len(paths):
+                raise ValueError("evidence integrity finalization references unknown objects")
+            canonical = [
+                {
+                    "object_id": str(row["object_id"]),
+                    "logical_path": str(row["logical_path"]),
+                    "sha256": row["sha256"],
+                    "size_bytes": row["size_bytes"],
+                    "workspace_revision": row["workspace_revision"],
+                    "workspace_digest": row["workspace_digest"],
+                    "source_revision": row["source_revision"],
+                    "platform_snapshot_ref": row["platform_snapshot_ref"],
+                }
+                for row in rows
+            ]
+            digest = hashlib.sha256(
+                json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            prior = {
+                str(row["integrity_object_set_digest"])
+                for row in rows
+                if row["integrity_object_set_digest"]
+            }
+            if prior and prior != {digest}:
+                raise ValueError("evidence integrity object set digest changed")
+            persisted_times = {
+                str(row["integrity_checked_at"])
+                for row in rows
+                if row["integrity_checked_at"] is not None
+            }
+            if len(persisted_times) > 1:
+                raise ValueError("evidence integrity timestamps are inconsistent")
+            if persisted_times:
+                now = next(iter(persisted_times))
             conn.execute(
                 "UPDATE evidence_objects SET integrity_checked_at = COALESCE("
                 "integrity_checked_at, ?) WHERE run_id = ? AND logical_path IN ("
@@ -1980,6 +2086,12 @@ class RunStore:
                 + ")",
                 (now, run_id, *paths),
             )
+            conn.execute(
+                "UPDATE evidence_objects SET integrity_object_set_digest = ? "
+                "WHERE run_id = ? AND logical_path IN (" + placeholders + ")",
+                (digest, run_id, *paths),
+            )
+        return digest
 
     def list_evidence_objects(
         self,
@@ -2624,6 +2736,18 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
         updated_at=str(row["updated_at"]),
         job_name=None if row["job_name"] is None else str(row["job_name"]),
         resource_plan=json.loads(str(row["resource_plan_json"] or "{}")),
+        workspace_revision=(
+            None if row["workspace_revision"] is None else int(row["workspace_revision"])
+        ),
+        workspace_digest=(
+            None if row["workspace_digest"] is None else str(row["workspace_digest"])
+        ),
+        source_revision=(None if row["source_revision"] is None else str(row["source_revision"])),
+        platform_snapshot_ref=(
+            None
+            if row["platform_snapshot_ref"] is None
+            else str(row["platform_snapshot_ref"])
+        ),
     )
 
 
@@ -2755,6 +2879,11 @@ def _row_to_evidence_object(row: sqlite3.Row) -> EvidenceObjectRecord:
             None
             if row["integrity_checked_at"] is None
             else str(row["integrity_checked_at"])
+        ),
+        integrity_object_set_digest=(
+            None
+            if row["integrity_object_set_digest"] is None
+            else str(row["integrity_object_set_digest"])
         ),
     )
 

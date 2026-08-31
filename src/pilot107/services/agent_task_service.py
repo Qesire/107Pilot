@@ -490,6 +490,16 @@ class AgentTaskService:
                 automation_level="bounded_auto",
                 require_approval=False,
             ),
+            workspace_revision=_optional_non_negative_int(
+                request.payload.get("workspace_revision"), "workspace_revision"
+            ),
+            workspace_digest=request.workspace_snapshot_digest,
+            source_revision=_optional_provenance_text(
+                request.payload.get("source_revision"), "source_revision"
+            ),
+            platform_snapshot_ref=_optional_provenance_text(
+                request.payload.get("platform_snapshot_ref"), "platform_snapshot_ref"
+            ),
         )
 
     def _enqueue_ready(self, task: AgentTaskRecord) -> None:
@@ -731,3 +741,19 @@ def _tool_int(arguments: Mapping[str, object], key: str) -> int:
 
 def _tool_error(message: str) -> AgentToolGatewayError:
     return AgentToolGatewayError(message, code="AGENT.TOOL.INVALID")
+
+
+def _optional_non_negative_int(value: object, name: str) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _optional_provenance_text(value: object, name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or len(value) > 4096:
+        raise ValueError(f"{name} is invalid")
+    return value

@@ -813,6 +813,11 @@ class DemoEvidenceCollector:
                 ],
                 "warnings": warnings,
                 **provenance,
+                **(
+                    {"legacy_boundary": provenance.get("workspace_revision") is None}
+                    if "workspace_digest" in provenance
+                    else {}
+                ),
             },
         )
         self.run_store.upsert_evidence_objects(
@@ -1601,6 +1606,11 @@ class DockerSlurmEvidenceCollector:
             ],
             "warnings": warnings,
             **provenance,
+            **(
+                {"legacy_boundary": provenance.get("workspace_revision") is None}
+                if "workspace_digest" in provenance
+                else {}
+            ),
         }
         if self.run_store is not None:
             self.run_store.upsert_evidence_objects(
@@ -2260,10 +2270,18 @@ def _run_provenance_payload(run: RunRecord) -> dict[str, Any]:
     workspace revision or digest.
     """
     plan = run.resource_plan
-    digest = plan.get("workspace_digest", plan.get("workspace_snapshot_digest"))
-    revision = plan.get("workspace_revision")
-    source = plan.get("source_revision")
-    platform = plan.get("platform_snapshot_ref", plan.get("platform_snapshot_id"))
+    digest = run.workspace_digest or plan.get(
+        "workspace_digest", plan.get("workspace_snapshot_digest")
+    )
+    revision = (
+        run.workspace_revision
+        if run.workspace_digest is not None
+        else plan.get("workspace_revision")
+    )
+    source = run.source_revision or plan.get("source_revision")
+    platform = run.platform_snapshot_ref or plan.get(
+        "platform_snapshot_ref", plan.get("platform_snapshot_id")
+    )
     payload: dict[str, Any] = {}
     if digest is not None:
         payload["workspace_digest"] = str(digest)

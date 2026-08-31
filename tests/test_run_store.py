@@ -148,6 +148,10 @@ class RunStoreTests(unittest.TestCase):
 
         self.assertEqual(run.workflow, {})
         self.assertIsNone(run.retry_not_before)
+        self.assertIsNone(run.workspace_revision)
+        self.assertIsNone(run.workspace_digest)
+        self.assertIsNone(run.source_revision)
+        self.assertIsNone(run.platform_snapshot_ref)
 
     def test_submission_claim_is_atomic(self) -> None:
         run = self.store.create_run(
@@ -583,6 +587,55 @@ class RunStoreTests(unittest.TestCase):
             ],
             ["logs/stdout.tail.json"],
         )
+
+    def test_integrity_finalization_uses_canonical_object_set_and_rejects_changes(self) -> None:
+        run = self.store.create_run(
+            run_id="run_integrity_cas",
+            owner="alice",
+            workdir="/public/home/alice",
+            script="#!/bin/bash\ntrue\n",
+        )
+        payload = {
+            "object_id": "ev_cas",
+            "category": "logs",
+            "logical_path": "logs/stderr.txt",
+            "store_path": "/tmp/evidence/logs/stderr.txt",
+            "source_uri": f"evidence://runs/{run.run_id}/logs/stderr.txt",
+            "sha256": "a" * 64,
+            "size_bytes": 1,
+            "mime_type": "text/plain",
+            "collection_status": "collected",
+            "mutable_during_run": False,
+            "finalized_at": "2026-08-31T00:00:00+00:00",
+            "workspace_digest": "b" * 64,
+            "source_revision": "source-1",
+            "platform_snapshot_ref": "snapshot:1",
+        }
+        self.store.upsert_evidence_objects(run.run_id, [payload])
+        second_payload = {
+            **payload,
+            "object_id": "ev_cas_second",
+            "logical_path": "logs/stdout.txt",
+            "source_uri": f"evidence://runs/{run.run_id}/logs/stdout.txt",
+        }
+        self.store.upsert_evidence_objects(run.run_id, [second_payload])
+
+        digest = self.store.mark_evidence_integrity_checked(
+            run.run_id,
+            ("logs/stderr.txt",),
+            checked_at="2026-08-31T00:00:01+00:00",
+        )
+        self.assertEqual(len(digest), 64)
+        self.assertEqual(
+            self.store.list_evidence_objects(run.run_id)[0].integrity_checked_at,
+            "2026-08-31T00:00:01+00:00",
+        )
+        self.store.upsert_evidence_objects(run.run_id, [payload])
+        changed = {**payload, "sha256": "c" * 64}
+        with self.assertRaisesRegex(ValueError, "immutable|integrity"):
+            self.store.upsert_evidence_objects(run.run_id, [changed])
+        with self.assertRaisesRegex(ValueError, "immutable|integrity"):
+            self.store.upsert_evidence_objects(run.run_id, [second_payload])
 
     def _terminal_run_with_tasks(self):
         run = self.store.create_run(

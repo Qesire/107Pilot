@@ -64,6 +64,10 @@ class RunSubmitRequest:
     lineage_reason: str | None = None
     remediation_plan_id: str | None = None
     workflow: WorkflowPolicy = field(default_factory=lambda: WorkflowPolicy())
+    workspace_revision: int | None = None
+    workspace_digest: str | None = None
+    source_revision: str | None = None
+    platform_snapshot_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -350,19 +354,30 @@ class RunService:
         idempotent: bool = False,
     ) -> RunRecord:
         selected_run_id = run_id or f"run_{uuid4().hex}"
+        serialized_resource_plan = _resource_plan_to_dict(
+            request.resource_plan,
+            workspace_revision=request.workspace_revision,
+            workspace_digest=request.workspace_digest,
+            source_revision=request.source_revision,
+            platform_snapshot_ref=request.platform_snapshot_ref,
+        )
         try:
             created = self.store.create_run(
                 run_id=selected_run_id,
                 owner=request.owner,
                 workdir=str(request.workdir),
                 script=request.script,
-                resource_plan=_resource_plan_to_dict(request.resource_plan),
+                resource_plan=serialized_resource_plan,
                 job_name=request.job_name,
                 contract_id=request.contract_id,
                 parent_run_id=request.parent_run_id,
                 lineage_reason=request.lineage_reason,
                 remediation_plan_id=request.remediation_plan_id,
                 workflow=request.workflow.to_payload(),
+                workspace_revision=request.workspace_revision,
+                workspace_digest=request.workspace_digest,
+                source_revision=request.source_revision,
+                platform_snapshot_ref=request.platform_snapshot_ref,
             )
         except sqlite3.IntegrityError:
             if not idempotent:
@@ -377,8 +392,12 @@ class RunService:
             or created.workdir != str(request.workdir)
             or created.script != request.script
             or created.job_name != request.job_name
-            or created.resource_plan != _resource_plan_to_dict(request.resource_plan)
+            or created.resource_plan != serialized_resource_plan
             or created.workflow != request.workflow.to_payload()
+            or created.workspace_revision != request.workspace_revision
+            or created.workspace_digest != request.workspace_digest
+            or created.source_revision != request.source_revision
+            or created.platform_snapshot_ref != request.platform_snapshot_ref
         ):
             raise SlurmBackendError("idempotent run id refers to different content")
         return created
@@ -1461,7 +1480,14 @@ class RunService:
         raise SubmissionUncertainError(job_ids=list(result.matches))
 
 
-def _resource_plan_to_dict(plan: ResourcePlan) -> dict[str, Any]:
+def _resource_plan_to_dict(
+    plan: ResourcePlan,
+    *,
+    workspace_revision: int | None = None,
+    workspace_digest: str | None = None,
+    source_revision: str | None = None,
+    platform_snapshot_ref: str | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "partition": plan.partition,
         "qos": plan.qos,
@@ -1480,6 +1506,13 @@ def _resource_plan_to_dict(plan: ResourcePlan) -> dict[str, Any]:
             "expression": plan.array.expression,
             "max_concurrency": plan.array.max_concurrency,
         }
+    if workspace_digest is not None:
+        payload["workspace_snapshot_digest"] = workspace_digest
+        payload["workspace_revision"] = workspace_revision
+    if source_revision is not None:
+        payload["source_revision"] = source_revision
+    if platform_snapshot_ref is not None:
+        payload["platform_snapshot_ref"] = platform_snapshot_ref
     return payload
 
 

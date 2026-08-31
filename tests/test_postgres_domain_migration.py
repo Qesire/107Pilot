@@ -162,6 +162,28 @@ class PostgresDomainSqlTranslationTests(unittest.TestCase):
 
 
 class PostgresAgentSessionSchemaTests(unittest.TestCase):
+    def test_evidence_integrity_gate_migration_is_additive_and_complete(self) -> None:
+        from pilot107.core.postgres_domain_schema import _MIGRATIONS
+
+        migration_id, statements = next(
+            migration
+            for migration in _MIGRATIONS
+            if migration[0] == "004a.026.evidence_object_integrity_gates"
+        )
+        schema = "\n".join(statements)
+
+        self.assertEqual(migration_id, "004a.026.evidence_object_integrity_gates")
+        self.assertNotIn("CREATE TABLE", schema)
+        for column in (
+            "workspace_revision",
+            "workspace_digest",
+            "source_revision",
+            "platform_snapshot_ref",
+            "integrity_checked_at",
+            "integrity_object_set_digest",
+        ):
+            self.assertIn(f"ADD COLUMN IF NOT EXISTS {column}", schema)
+
     def test_agent_migration_uses_native_postgres_types_and_fencing_index(self) -> None:
         from pilot107.core.postgres_domain_schema import _MIGRATIONS
 

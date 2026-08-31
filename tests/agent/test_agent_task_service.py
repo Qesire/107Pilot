@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -184,6 +185,42 @@ def test_schedule_dispatches_one_linked_run_and_releases_processing_lease(
     assert harness.run_service.enqueue_submission(
         persisted.linked_run_id
     ).state == "pending"
+
+
+def test_agent_task_run_persists_provenance_without_inventing_values(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    request = replace(
+        _request(),
+        payload={
+            **_request().payload,
+            "workspace_revision": None,
+            "source_revision": "workspace-source-1",
+            "platform_snapshot_ref": "snapshot:platform-1",
+        },
+    )
+    task, _ = harness.service.schedule_validation(
+        owner="alice",
+        session_id=harness.session.session_id,
+        turn_id=harness.turn_id,
+        project_id="project-1",
+        workspace_id="workspace-1",
+        request_key="validation-provenance",
+        request=request,
+        envelope=_envelope(),
+    )
+
+    harness.service.dispatch_due(limit=10)
+    persisted = harness.task_store.get_task(task.task_id, owner="alice")
+    assert persisted.linked_run_id is not None
+    run = harness.run_store.get_run(persisted.linked_run_id)
+    assert run.workspace_revision is None
+    assert run.workspace_digest == request.workspace_snapshot_digest
+    assert run.source_revision == "workspace-source-1"
+    assert run.platform_snapshot_ref == "snapshot:platform-1"
+    assert run.resource_plan["workspace_snapshot_digest"] == request.workspace_snapshot_digest
+    assert run.resource_plan["workspace_revision"] is None
+    assert run.resource_plan["source_revision"] == "workspace-source-1"
+    assert run.resource_plan["platform_snapshot_ref"] == "snapshot:platform-1"
 
 
 def test_repair_profile_uses_the_same_bounded_validation_lifecycle(

@@ -219,22 +219,43 @@ class EvidenceBinder:
         )
 
         manifest_boundary = _workspace_boundary_values(manifest_payload, allow_missing=True)
+        for key in ("workspace_digest", "workspace_revision", "legacy_boundary"):
+            if manifest_boundary.get(key) is not None and manifest_boundary[key] != boundary[key]:
+                raise EvidenceBindingError(f"workspace_boundary_{key}_mismatch")
         effective_boundary = dict(boundary)
+        for key in ("workspace_digest", "workspace_revision", "legacy_boundary"):
+            if manifest_boundary.get(key) is not None:
+                effective_boundary[key] = manifest_boundary[key]
         for key in ("source_revision", "platform_snapshot_ref"):
-            if effective_boundary[key] is None:
-                effective_boundary[key] = manifest_boundary.get(key)
+            persisted_value = manifest_boundary.get(key)
+            if persisted_value is None:
+                raise EvidenceBindingError(f"{key}_binding_missing")
+            if effective_boundary[key] is not None and effective_boundary[key] != persisted_value:
+                raise EvidenceBindingError(f"{key}_binding_mismatch")
+            effective_boundary[key] = persisted_value
         _verify_provenance(
             objects=typed_objects,
             boundary=effective_boundary,
             manifest_boundary=manifest_boundary,
         )
-        digest = _sha256_file(Path(manifest_obj.store_path).expanduser().resolve())
         verified_at = utc_now_iso()
-        self.store.mark_evidence_integrity_checked(
+        digest = self.store.mark_evidence_integrity_checked(
             run_id,
             tuple(item.logical_path for item in typed_objects),
             checked_at=verified_at,
         )
+        typed_paths = {item.logical_path for item in typed_objects}
+        persisted_checked_at = {
+            obj.integrity_checked_at
+            for obj in self.store.list_evidence_objects(run_id)
+            if obj.logical_path in typed_paths
+        }
+        if len(persisted_checked_at) != 1 or None in persisted_checked_at:
+            raise EvidenceBindingError("integrity_timestamp_missing")
+        persisted_timestamp = next(iter(persisted_checked_at))
+        if persisted_timestamp is None:
+            raise EvidenceBindingError("integrity_timestamp_missing")
+        verified_at = persisted_timestamp
         return AgentTaskGateReceipt(
             task_id=task_id or run_id,
             run_id=run_id,
@@ -357,7 +378,7 @@ def _workspace_boundary_values(
         if revision < 0:
             raise EvidenceBindingError("workspace_revision_invalid")
     if legacy is None:
-        legacy = revision is None
+        raise EvidenceBindingError("workspace_boundary_legacy_marker_missing")
     if not isinstance(legacy, bool) or (revision is None and not legacy) or (
         revision is not None and legacy
     ):
@@ -374,10 +395,7 @@ def _workspace_boundary_values(
 def _successful_exit_code(value: str | None) -> bool:
     if value is None:
         return False
-    normalized = value.strip().upper()
-    return normalized in {"0", "0:0", "0:0:0"} or normalized.startswith("0:") and all(
-        part in {"0", ""} for part in normalized.split(":")
-    )
+    return value.strip() == "0:0"
 
 
 def _read_manifest(obj: EvidenceObjectRecord) -> dict[str, Any]:
@@ -417,10 +435,30 @@ def _verify_manifest_artifacts(
             raise EvidenceBindingError("manifest_object_missing")
         if str(raw.get("sha256") or "").lower() != obj.sha256.lower():
             raise EvidenceBindingError("manifest_sha256_mismatch")
-        if int(raw.get("size_bytes", -1)) != obj.size_bytes:
+        raw_size = raw.get("size_bytes")
+        if isinstance(raw_size, bool) or not isinstance(raw_size, int):
+            raise EvidenceBindingError("manifest_size_mismatch")
+        manifest_size = raw_size
+        if manifest_size != obj.size_bytes:
             raise EvidenceBindingError("manifest_size_mismatch")
         entries[ref] = raw
-    if set(entries) != set(ref for ref in refs if ref != f"evidence://runs/{run_id}/manifest/manifest.json"):
+    expected_refs = set(
+        ref for ref in refs if ref != f"evidence://runs/{run_id}/manifest/manifest.json"
+    )
+    registered_objects = [
+        obj for logical_path, obj in objects.items() if logical_path != "manifest/manifest.json"
+    ]
+    if any(
+        obj.collection_status != "collected" or obj.finalized_at is None
+        for obj in registered_objects
+    ):
+        raise EvidenceBindingError("registered_evidence_incomplete")
+    registered_refs = {
+        f"evidence://runs/{run_id}/{logical_path}"
+        for logical_path, obj in objects.items()
+        if logical_path != "manifest/manifest.json"
+    }
+    if set(entries) != expected_refs or set(entries) != registered_refs:
         raise EvidenceBindingError("manifest_refs_incomplete")
 
 
@@ -432,6 +470,12 @@ def _verify_provenance(
 ) -> None:
     if manifest_boundary.get("workspace_digest") is None:
         raise EvidenceBindingError("manifest_workspace_digest_missing")
+    for key, code in (
+        ("source_revision", "source_binding_missing"),
+        ("platform_snapshot_ref", "platform_binding_missing"),
+    ):
+        if boundary[key] is None:
+            raise EvidenceBindingError(code)
     for key in (
         "workspace_digest",
         "workspace_revision",
@@ -448,11 +492,17 @@ def _verify_provenance(
             raise EvidenceBindingError("workspace_binding_missing")
         if obj.workspace_digest.lower() != boundary["workspace_digest"]:
             raise EvidenceBindingError("workspace_binding_mismatch")
+        if boundary["workspace_revision"] is not None and obj.workspace_revision is None:
+            raise EvidenceBindingError("workspace_revision_missing")
         if (
             obj.workspace_revision is not None
             and obj.workspace_revision != boundary["workspace_revision"]
         ):
             raise EvidenceBindingError("workspace_revision_mismatch")
+        if obj.source_revision is None:
+            raise EvidenceBindingError("source_binding_missing")
+        if obj.platform_snapshot_ref is None:
+            raise EvidenceBindingError("platform_binding_missing")
         for attr, key, code in (
             ("source_revision", "source_revision", "source_binding_mismatch"),
             ("platform_snapshot_ref", "platform_snapshot_ref", "platform_binding_mismatch"),
