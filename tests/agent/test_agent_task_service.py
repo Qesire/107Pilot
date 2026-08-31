@@ -209,7 +209,7 @@ def test_agent_task_run_persists_provenance_without_inventing_values(tmp_path: P
         _request(),
         payload={
             **_request().payload,
-            "workspace_revision": None,
+            "workspace_revision": 7,
             "source_revision": "workspace-source-1",
             "platform_snapshot_ref": "snapshot:platform-1",
         },
