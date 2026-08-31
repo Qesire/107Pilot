@@ -1,4 +1,5 @@
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,16 @@ from pilot107.core.states import CollectionState, RunState
 
 
 class RunStoreTests(unittest.TestCase):
+    def test_head_snapshot_contains_evidence_upsert_dependencies(self) -> None:
+        source = subprocess.run(
+            ["git", "show", "HEAD:src/pilot107/core/run_store.py"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertIn("def _evidence_object_values", source)
+        self.assertIn("import hashlib", source)
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.store = RunStore(Path(self._tmp.name) / "pilot107.db")

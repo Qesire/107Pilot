@@ -168,8 +168,6 @@ class EvidenceBinder:
         snapshot digest and explicitly has no live revision.
         """
         run = self.store.get_run(run_id)
-        boundary = _workspace_boundary_values(workspace_boundary)
-
         if run.state is not RunState.SUCCEEDED:
             raise EvidenceBindingError("run_not_succeeded")
         if not _successful_exit_code(run.exit_code):
@@ -180,6 +178,19 @@ class EvidenceBinder:
             raise EvidenceBindingError("evidence_unavailable")
         if run.collection_state is not CollectionState.SUCCEEDED:
             raise EvidenceBindingError("collection_incomplete")
+
+        supplied_boundary = _workspace_boundary_values(workspace_boundary)
+        boundary = _run_provenance_boundary(run)
+        for key in (
+            "workspace_digest",
+            "workspace_revision",
+            "legacy_boundary",
+            "source_revision",
+            "platform_snapshot_ref",
+        ):
+            supplied_value = supplied_boundary.get(key)
+            if supplied_value is not None and supplied_value != boundary[key]:
+                raise EvidenceBindingError(f"caller_boundary_{key}_mismatch")
 
         refs = tuple(dict.fromkeys(str(ref).strip() for ref in evidence_refs if str(ref).strip()))
         if not refs:
@@ -238,17 +249,29 @@ class EvidenceBinder:
             boundary=effective_boundary,
             manifest_boundary=manifest_boundary,
         )
+        typed_paths = tuple(item.logical_path for item in typed_objects)
+        before_fingerprints = {
+            path: _stable_file_fingerprint(objects[path].store_path)
+            for path in typed_paths
+        }
         verified_at = utc_now_iso()
         digest = self.store.mark_evidence_integrity_checked(
             run_id,
-            tuple(item.logical_path for item in typed_objects),
+            typed_paths,
             checked_at=verified_at,
         )
-        typed_paths = {item.logical_path for item in typed_objects}
+        try:
+            for path in typed_paths:
+                if _stable_file_fingerprint(objects[path].store_path) != before_fingerprints[path]:
+                    raise EvidenceBindingError("evidence_file_changed_after_integrity_freeze")
+        except EvidenceBindingError:
+            self.store.revoke_evidence_integrity(run_id, typed_paths)
+            raise
+        typed_path_set = set(typed_paths)
         persisted_checked_at = {
             obj.integrity_checked_at
             for obj in self.store.list_evidence_objects(run_id)
-            if obj.logical_path in typed_paths
+            if obj.logical_path in typed_path_set
         }
         if len(persisted_checked_at) != 1 or None in persisted_checked_at:
             raise EvidenceBindingError("integrity_timestamp_missing")
@@ -286,6 +309,9 @@ class EvidenceBinder:
             raise EvidenceBindingError("bundle_limit")
         if obj.collection_status != "collected":
             raise EvidenceBindingError("not_collected")
+        expected_source_uri = f"evidence://runs/{run_id}/{obj.logical_path}"
+        if obj.source_uri != expected_source_uri:
+            raise EvidenceBindingError("source_uri_binding_mismatch")
         if not obj.sha256 or not re.fullmatch(r"[0-9a-fA-F]{64}", obj.sha256):
             raise EvidenceBindingError("missing_sha256")
         if obj.mutable_during_run and obj.finalized_at is None:
@@ -396,6 +422,43 @@ def _successful_exit_code(value: str | None) -> bool:
     if value is None:
         return False
     return value.strip() == "0:0"
+
+
+def _stable_file_fingerprint(path_value: str) -> tuple[int, int, int, str]:
+    try:
+        path = Path(path_value).expanduser().resolve(strict=True)
+        before = path.lstat()
+        digest = _sha256_file(path)
+        after = path.lstat()
+    except OSError as exc:
+        raise EvidenceBindingError("evidence_file_unreadable") from exc
+    before_identity = (before.st_ino, before.st_size, before.st_mtime_ns)
+    after_identity = (after.st_ino, after.st_size, after.st_mtime_ns)
+    if before_identity != after_identity:
+        raise EvidenceBindingError("evidence_file_changed_during_integrity_check")
+    return (*after_identity, digest)
+
+
+def _run_provenance_boundary(run: Any) -> dict[str, Any]:
+    digest = run.workspace_digest
+    if digest is None:
+        raise EvidenceBindingError("run_provenance_missing")
+    digest = str(digest).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise EvidenceBindingError("run_workspace_digest_invalid")
+    if run.workspace_revision is not None:
+        raise EvidenceBindingError("live_workspace_revision_unsupported")
+    if not isinstance(run.source_revision, str) or not run.source_revision:
+        raise EvidenceBindingError("run_source_revision_missing")
+    if not isinstance(run.platform_snapshot_ref, str) or not run.platform_snapshot_ref:
+        raise EvidenceBindingError("run_platform_snapshot_missing")
+    return {
+        "workspace_digest": digest,
+        "workspace_revision": None,
+        "legacy_boundary": True,
+        "source_revision": run.source_revision,
+        "platform_snapshot_ref": run.platform_snapshot_ref,
+    }
 
 
 def _read_manifest(obj: EvidenceObjectRecord) -> dict[str, Any]:

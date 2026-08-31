@@ -44,6 +44,45 @@ def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _bounded_event_reason(value: str) -> str:
+    """Keep operator-facing event reasons useful without persisting unbounded text."""
+    normalized = " ".join(value.split())
+    return normalized[:512]
+
+
+def _evidence_object_values(obj: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "object_id": str(obj["object_id"]),
+        "category": str(obj["category"]),
+        "logical_path": str(obj["logical_path"]),
+        "store_path": str(obj["store_path"]),
+        "source_uri": None if obj.get("source_uri") is None else str(obj["source_uri"]),
+        "sha256": None if obj.get("sha256") is None else str(obj["sha256"]),
+        "size_bytes": None if obj.get("size_bytes") is None else int(obj["size_bytes"]),
+        "mime_type": None if obj.get("mime_type") is None else str(obj["mime_type"]),
+        "collection_status": str(obj.get("collection_status") or "collected"),
+        "collection_note": (
+            None if obj.get("collection_note") is None else str(obj["collection_note"])
+        ),
+        "mutable_during_run": 1 if bool(obj.get("mutable_during_run", False)) else 0,
+        "finalized_at": None if obj.get("finalized_at") is None else str(obj["finalized_at"]),
+        "workspace_revision": (
+            None if obj.get("workspace_revision") is None else int(obj["workspace_revision"])
+        ),
+        "workspace_digest": (
+            None if obj.get("workspace_digest") is None else str(obj["workspace_digest"])
+        ),
+        "source_revision": (
+            None if obj.get("source_revision") is None else str(obj["source_revision"])
+        ),
+        "platform_snapshot_ref": (
+            None
+            if obj.get("platform_snapshot_ref") is None
+            else str(obj["platform_snapshot_ref"])
+        ),
+    }
+
+
 @dataclass(frozen=True)
 class RunRecord:
     run_id: str
@@ -2092,6 +2131,24 @@ class RunStore:
                 (digest, run_id, *paths),
             )
         return digest
+
+    def revoke_evidence_integrity(
+        self,
+        run_id: str,
+        logical_paths: tuple[str, ...] | list[str],
+    ) -> None:
+        paths = tuple(dict.fromkeys(str(path) for path in logical_paths if str(path)))
+        if not paths:
+            return
+        placeholders = ",".join("?" for _ in paths)
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE evidence_objects SET integrity_checked_at = NULL, "
+                "integrity_object_set_digest = NULL WHERE run_id = ? AND logical_path IN ("
+                + placeholders
+                + ")",
+                (run_id, *paths),
+            )
 
     def list_evidence_objects(
         self,

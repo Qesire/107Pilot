@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.run_store import RunStore
@@ -137,6 +138,7 @@ class EvidenceBinderTests(unittest.TestCase):
     def test_terminal_gate_binds_run_workspace_source_platform_and_manifest_digest(self) -> None:
         self._mark_run_ready()
         boundary = self._workspace_boundary()
+        self._set_run_provenance(boundary)
         ref = self._register(content="verified\n", metadata=boundary)
         manifest_payload = {
             "schema": "pilot107.evidence_manifest.v1",
@@ -247,6 +249,59 @@ class EvidenceBinderTests(unittest.TestCase):
                 spoofed,
             )
 
+    def test_terminal_gate_requires_persisted_run_provenance(self) -> None:
+        self._mark_run_ready()
+        boundary = self._workspace_boundary()
+        ref = self._register(content="verified\n", metadata=boundary)
+        _, manifest_ref = self._register_manifest(ref, boundary)
+        with self.store.connect() as conn:
+            conn.execute(
+                "UPDATE runs SET workspace_digest = NULL, source_revision = NULL, "
+                "platform_snapshot_ref = NULL WHERE run_id = ?",
+                (self.run.run_id,),
+            )
+
+        with self.assertRaisesRegex(Exception, "run.*provenance|provenance"):
+            self.binder.verify_terminal_gate(
+                self.run.run_id,
+                (ref, manifest_ref),
+                boundary,
+            )
+
+    def test_terminal_gate_rejects_file_changed_after_integrity_freeze(self) -> None:
+        self._mark_run_ready()
+        boundary = self._workspace_boundary()
+        self._set_run_provenance(boundary)
+        ref = self._register(content="verified\n", metadata=boundary)
+        _, manifest_ref = self._register_manifest(ref, boundary)
+        original_mark = self.store.mark_evidence_integrity_checked
+
+        def freeze_then_mutate(*args: object, **kwargs: object) -> str:
+            digest = original_mark(*args, **kwargs)
+            path = self.evidence_store.run_root(self.run.run_id) / "logs/stderr.tail.txt"
+            path.write_text("changed\n", encoding="utf-8")
+            return digest
+
+        with (
+            patch.object(
+                self.store,
+                "mark_evidence_integrity_checked",
+                side_effect=freeze_then_mutate,
+            ),
+            self.assertRaisesRegex(Exception, "stable|changed|integrity"),
+        ):
+            self.binder.verify_terminal_gate(
+                self.run.run_id,
+                (ref, manifest_ref),
+                boundary,
+            )
+        self.assertTrue(
+            all(
+                item.integrity_checked_at is None
+                for item in self.store.list_evidence_objects(self.run.run_id)
+            )
+        )
+
     def test_terminal_gate_requires_explicit_legacy_boundary_marker(self) -> None:
         self._mark_run_ready()
         boundary = self._workspace_boundary()
@@ -311,6 +366,18 @@ class EvidenceBinderTests(unittest.TestCase):
                 (ref,),
                 self._workspace_boundary(),
             )
+
+    def test_bind_requires_canonical_source_uri(self) -> None:
+        ref = self._register(content="verified\n")
+        with self.store.connect() as conn:
+            conn.execute(
+                "UPDATE evidence_objects SET source_uri = ? WHERE run_id = ?",
+                ("evidence://runs/other/logs/stderr.tail.txt", self.run.run_id),
+            )
+
+        bundle = self.binder.bind(self.run.run_id, (ref,))
+        self.assertEqual(bundle.objects, ())
+        self.assertIn("source_uri_binding_mismatch", bundle.warnings[0])
 
     def test_manifest_size_type_is_reported_as_binding_error(self) -> None:
         from pilot107.core.evidence_binding import _verify_manifest_artifacts
@@ -450,8 +517,29 @@ class EvidenceBinderTests(unittest.TestCase):
             conn.execute(
                 "UPDATE runs SET state = 'SUCCEEDED', job_id = '1001', exit_code = '0:0', "
                 "terminal_state = 'COMPLETED', result_status = 'COMPLETE', "
-                "collection_state = ? WHERE run_id = ?",
-                (collection_state, self.run.run_id),
+                "collection_state = ?, workspace_revision = NULL, workspace_digest = ?, "
+                "source_revision = ?, platform_snapshot_ref = ? WHERE run_id = ?",
+                (
+                    collection_state,
+                    "a" * 64,
+                    "source-revision-1",
+                    "snapshot:platform-1",
+                    self.run.run_id,
+                ),
+            )
+
+    def _set_run_provenance(self, boundary: dict[str, object]) -> None:
+        with self.store.connect() as conn:
+            conn.execute(
+                "UPDATE runs SET workspace_revision = ?, workspace_digest = ?, "
+                "source_revision = ?, platform_snapshot_ref = ? WHERE run_id = ?",
+                (
+                    boundary["workspace_revision"],
+                    boundary["workspace_digest"],
+                    boundary["source_revision"],
+                    boundary["platform_snapshot_ref"],
+                    self.run.run_id,
+                ),
             )
 
     def _sha(self, ref: str) -> str:

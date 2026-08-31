@@ -1028,6 +1028,16 @@ _EVIDENCE_OBJECT_GATE_SCHEMA = _statements(
     "ALTER TABLE evidence_objects ADD COLUMN IF NOT EXISTS integrity_object_set_digest TEXT"
 )
 
+_RUN_PROVENANCE_SCHEMA = _statements(
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS workspace_revision INTEGER"
+    "\n-- statement\n"
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS workspace_digest TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS source_revision TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS platform_snapshot_ref TEXT"
+)
+
 _WORKFLOW_MANIFEST_SCHEMA = _statements(
     """
     CREATE TABLE workflow_manifests (
@@ -1414,6 +1424,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.024.agent_task_evidence_gates", _AGENT_TASK_EVIDENCE_GATE_SCHEMA),
     ("004a.025.agent_task_stage_identities", _AGENT_TASK_STAGE_IDENTITY_SCHEMA),
     ("004a.026.evidence_object_integrity_gates", _EVIDENCE_OBJECT_GATE_SCHEMA),
+    ("004a.027.run_provenance", _RUN_PROVENANCE_SCHEMA),
 )
 
 

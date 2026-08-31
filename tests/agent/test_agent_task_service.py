@@ -72,7 +72,13 @@ def _envelope() -> AgentResourceEnvelope:
 
 
 class Harness:
-    def __init__(self, tmp_path: Path, *, profile_id: str = "experiment_builder") -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        profile_id: str = "experiment_builder",
+        provenance_authority: bool = True,
+    ) -> None:
         self.clock = MutableClock()
         self.database = tmp_path / "pilot107.db"
         self.workspace = tmp_path / "workspace"
@@ -102,6 +108,16 @@ class Harness:
             run_service=self.run_service,
             control_repository=self.control,
             workspace_resolver=lambda owner, workspace_id, digest: self.workspace,
+            provenance_authority_resolver=(
+                (
+                    lambda owner, workspace_id, digest: (
+                        "workspace-source-1",
+                        "snapshot:platform-1",
+                    )
+                )
+                if provenance_authority
+                else None
+            ),
             worker_id="task-worker",
             lease_seconds=30,
         )
@@ -188,7 +204,7 @@ def test_schedule_dispatches_one_linked_run_and_releases_processing_lease(
 
 
 def test_agent_task_run_persists_provenance_without_inventing_values(tmp_path: Path) -> None:
-    harness = Harness(tmp_path)
+    harness = Harness(tmp_path, provenance_authority=True)
     request = replace(
         _request(),
         payload={
@@ -221,6 +237,34 @@ def test_agent_task_run_persists_provenance_without_inventing_values(tmp_path: P
     assert run.resource_plan["workspace_revision"] is None
     assert run.resource_plan["source_revision"] == "workspace-source-1"
     assert run.resource_plan["platform_snapshot_ref"] == "snapshot:platform-1"
+
+
+def test_agent_task_does_not_copy_model_provenance_fields_into_run(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, provenance_authority=False)
+    request = replace(
+        _request(),
+        payload={
+            **_request().payload,
+            "source_revision": "model-spoof",
+            "platform_snapshot_ref": "model-spoof",
+        },
+    )
+    task, _ = harness.service.schedule_validation(
+        owner="alice",
+        session_id=harness.session.session_id,
+        turn_id=harness.turn_id,
+        project_id="project-1",
+        workspace_id="workspace-1",
+        request_key="validation-model-provenance",
+        request=request,
+        envelope=_envelope(),
+    )
+
+    batch = harness.service.dispatch_due(limit=10)
+    assert batch.succeeded == 0
+    assert batch.errors
+    persisted = harness.task_store.get_task(task.task_id, owner="alice")
+    assert persisted.linked_run_id is None
 
 
 def test_repair_profile_uses_the_same_bounded_validation_lifecycle(

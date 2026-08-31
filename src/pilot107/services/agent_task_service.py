@@ -38,6 +38,7 @@ AGENT_TASK_READY_TOPIC = "agent.task.ready.v1"
 type WorkspaceResolver = Callable[[str, str, str], Path]
 type RunWorkdirResolver = Callable[[str], Path]
 type EnvelopeResolver = Callable[[str, str], AgentResourceEnvelope]
+type ProvenanceAuthorityResolver = Callable[[str, str, str], tuple[str, str]]
 
 _MAX_SNAPSHOT_FILES = 256
 _MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024
@@ -67,6 +68,7 @@ class AgentTaskService:
         run_service: RunService,
         control_repository: ControlRepository,
         workspace_resolver: WorkspaceResolver,
+        provenance_authority_resolver: ProvenanceAuthorityResolver | None = None,
         run_workdir_resolver: RunWorkdirResolver | None = None,
         worker_id: str,
         lease_seconds: int = 60,
@@ -84,6 +86,7 @@ class AgentTaskService:
         self.run_service = run_service
         self.control_repository = control_repository
         self.workspace_resolver = workspace_resolver
+        self.provenance_authority_resolver = provenance_authority_resolver
         self.run_workdir_resolver = run_workdir_resolver
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
@@ -458,6 +461,16 @@ class AgentTaskService:
         ).resolve()
         if not workspace.is_dir():
             raise ValueError("AgentTask Workspace is unavailable")
+        source_revision: str | None = None
+        platform_snapshot_ref: str | None = None
+        if self.provenance_authority_resolver is not None:
+            source_revision, platform_snapshot_ref = self.provenance_authority_resolver(
+                task.owner,
+                task.workspace_id,
+                request.workspace_snapshot_digest,
+            )
+        elif "source_revision" in request.payload or "platform_snapshot_ref" in request.payload:
+            raise ValueError("AgentTask provenance payload fields are not trusted")
         script = request.payload.get("script")
         if not isinstance(script, str) or not script or len(script.encode()) > 262_144:
             raise ValueError("AgentTask validation script is invalid")
@@ -490,15 +503,14 @@ class AgentTaskService:
                 automation_level="bounded_auto",
                 require_approval=False,
             ),
-            workspace_revision=_optional_non_negative_int(
-                request.payload.get("workspace_revision"), "workspace_revision"
-            ),
+            # Phase 1 only permits the immutable legacy snapshot boundary.  A
+            # live workspace revision must come from the Phase 3 authority
+            # resolver and is deliberately not accepted from task payloads.
+            workspace_revision=None,
             workspace_digest=request.workspace_snapshot_digest,
-            source_revision=_optional_provenance_text(
-                request.payload.get("source_revision"), "source_revision"
-            ),
+            source_revision=_optional_provenance_text(source_revision, "source_revision"),
             platform_snapshot_ref=_optional_provenance_text(
-                request.payload.get("platform_snapshot_ref"), "platform_snapshot_ref"
+                platform_snapshot_ref, "platform_snapshot_ref"
             ),
         )
 
@@ -741,14 +753,6 @@ def _tool_int(arguments: Mapping[str, object], key: str) -> int:
 
 def _tool_error(message: str) -> AgentToolGatewayError:
     return AgentToolGatewayError(message, code="AGENT.TOOL.INVALID")
-
-
-def _optional_non_negative_int(value: object, name: str) -> int | None:
-    if value is None:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"{name} must be a non-negative integer")
-    return value
 
 
 def _optional_provenance_text(value: object, name: str) -> str | None:
