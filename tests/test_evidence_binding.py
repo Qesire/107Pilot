@@ -9,7 +9,11 @@ from contextlib import suppress
 from pathlib import Path
 from unittest.mock import patch
 
-from pilot107.core.evidence_binding import EvidenceBinder, EvidenceBindingError
+from pilot107.core.evidence_binding import (
+    EvidenceBinder,
+    EvidenceBindingError,
+    _open_directory_component,
+)
 from pilot107.core.run_store import RunStore
 from pilot107.worker.evidence import EvidenceStore
 
@@ -50,6 +54,64 @@ class EvidenceBinderTests(unittest.TestCase):
             with suppress(FileNotFoundError):
                 path.chmod(mode)
         self._tmp.cleanup()
+
+    def test_directory_component_closes_descriptor_when_parent_fsync_fails(self) -> None:
+        """Removing pre-transfer cleanup leaks one fd after a successful open."""
+
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        root_fd = os.open(self.root, flags)
+        try:
+            with (
+                patch("pilot107.core.evidence_binding.os.fsync", side_effect=OSError("disk")),
+                self.assertRaises(OSError),
+            ):
+                _open_directory_component(root_fd, "seals", flags=flags, create=True)
+            created = self.root / "seals"
+            self.assertEqual(self._descriptor_count_for_paths((created,)), 0)
+
+            retried_fd = _open_directory_component(root_fd, "seals", flags=flags, create=True)
+            os.close(retried_fd)
+            self.assertEqual(self._descriptor_count_for_paths((created,)), 0)
+        finally:
+            os.close(root_fd)
+
+    def test_repeated_directory_fsync_failures_do_not_accumulate_descriptors(self) -> None:
+        """Dropping cleanup grows /proc/self/fd once per failed directory creation."""
+
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        root_fd = os.open(self.root, flags)
+        try:
+            created: list[Path] = []
+            for attempt in range(8):
+                with (
+                    patch(
+                        "pilot107.core.evidence_binding.os.fsync",
+                        side_effect=OSError("disk"),
+                    ),
+                    self.assertRaises(OSError),
+                ):
+                    _open_directory_component(
+                        root_fd,
+                        f"seal-{attempt}",
+                        flags=flags,
+                        create=True,
+                    )
+                created.append(self.root / f"seal-{attempt}")
+            self.assertEqual(self._descriptor_count_for_paths(tuple(created)), 0)
+        finally:
+            os.close(root_fd)
+
+    def _descriptor_count_for_paths(self, paths: tuple[Path, ...]) -> int:
+        identities = {(path.stat().st_dev, path.stat().st_ino) for path in paths}
+        count = 0
+        for entry in Path("/proc/self/fd").iterdir():
+            try:
+                metadata = os.fstat(int(entry.name))
+            except (FileNotFoundError, OSError):
+                continue
+            if (metadata.st_dev, metadata.st_ino) in identities:
+                count += 1
+        return count
 
     def test_binds_hash_verified_text_and_redacts_secrets(self) -> None:
         ref = self._register(

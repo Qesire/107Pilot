@@ -914,22 +914,22 @@ def _open_seal_directory(
     if re.fullmatch(r"[A-Za-z0-9_.:-]+", run_id) is None:
         raise EvidenceBindingError("evidence_seal_run_id_invalid")
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-    descriptors: list[int] = []
+    root_fd: int | None = None
+    seals_fd: int | None = None
+    run_fd: int | None = None
     try:
         root_fd = os.open(evidence_root, flags)
-        descriptors.append(root_fd)
         seals_fd = _open_directory_component(root_fd, "seals", flags=flags, create=create)
-        descriptors.append(seals_fd)
         run_fd = _open_directory_component(seals_fd, run_id, flags=flags, create=create)
-        descriptors.append(run_fd)
         yield run_fd, seals_fd
     except EvidenceBindingError:
         raise
     except OSError as exc:
         raise EvidenceBindingError("evidence_seal_marker_directory_invalid") from exc
     finally:
-        for descriptor in reversed(descriptors):
-            os.close(descriptor)
+        for descriptor in (run_fd, seals_fd, root_fd):
+            if descriptor is not None:
+                os.close(descriptor)
 
 
 def _open_directory_component(
@@ -947,29 +947,37 @@ def _open_directory_component(
         except FileExistsError:
             created = False
     descriptor = os.open(name, flags, dir_fd=parent_fd)
-    if created:
-        os.fsync(parent_fd)
+    try:
+        if created:
+            os.fsync(parent_fd)
+    except BaseException:
+        with suppress(OSError):
+            os.close(descriptor)
+        raise
     return descriptor
 
 
 def _read_file_at(directory_fd: int, name: str) -> bytes:
+    descriptor: int | None = None
     try:
         descriptor = os.open(
             name,
             os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=directory_fd,
         )
-    except OSError as exc:
-        raise EvidenceBindingError("evidence_seal_marker_unreadable") from exc
-    try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise EvidenceBindingError("evidence_seal_marker_not_regular")
         chunks: list[bytes] = []
         while chunk := os.read(descriptor, 64 * 1024):
             chunks.append(chunk)
         return b"".join(chunks)
+    except EvidenceBindingError:
+        raise
+    except OSError as exc:
+        raise EvidenceBindingError("evidence_seal_marker_unreadable") from exc
     finally:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _read_seal_marker(evidence_root: Path, run_id: str) -> bytes:
@@ -1050,21 +1058,24 @@ def _make_evidence_tree_read_only(*, run_root: Path, files: tuple[Path, ...]) ->
 
 def _make_marker_read_only(evidence_root: Path, run_id: str) -> None:
     with _open_seal_directory(evidence_root, run_id, create=False) as (run_fd, seals_fd):
+        marker_fd: int | None = None
         try:
             marker_fd = os.open(
                 "seal.json",
                 os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=run_fd,
             )
-        except OSError as exc:
-            raise EvidenceBindingError("evidence_seal_marker_unreadable") from exc
-        try:
             if not stat.S_ISREG(os.fstat(marker_fd).st_mode):
                 raise EvidenceBindingError("evidence_seal_marker_not_regular")
             os.fchmod(marker_fd, 0o444)
             os.fsync(marker_fd)
+        except EvidenceBindingError:
+            raise
+        except OSError as exc:
+            raise EvidenceBindingError("evidence_seal_marker_unreadable") from exc
         finally:
-            os.close(marker_fd)
+            if marker_fd is not None:
+                os.close(marker_fd)
         os.fchmod(run_fd, 0o555)
         os.fsync(run_fd)
         os.fsync(seals_fd)
