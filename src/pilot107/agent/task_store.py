@@ -43,7 +43,6 @@ _GATE_STATE_RANK = {
     AgentTaskGateState.AWAITING_INTEGRITY: 7,
     AgentTaskGateState.AWAITING_CAPSULE: 8,
     AgentTaskGateState.COMPLETED: 9,
-    AgentTaskGateState.INPUT_REQUIRED: 9,
     AgentTaskGateState.CANCELLING: 9,
     AgentTaskGateState.CANCELLED: 9,
     AgentTaskGateState.FAILED: 9,
@@ -547,6 +546,8 @@ class SQLiteAgentTaskStore:
                 raise ValueError("gate_state is invalid") from exc
         if gate_state is AgentTaskGateState.COMPLETED:
             raise AgentTaskConflict("completed gate state is written only by finalize_task")
+        if gate_state is AgentTaskGateState.INPUT_REQUIRED:
+            raise AgentTaskConflict("INPUT_REQUIRED is not a progress gate state")
         if receipt is not None and not isinstance(
             receipt, (AgentTaskGateReceipt, AgentTaskScheduleReceipt)
         ):
@@ -559,6 +560,7 @@ class SQLiteAgentTaskStore:
             except (TypeError, ValueError) as exc:
                 raise ValueError("completion_policy is invalid") from exc
         receipt_payload = None
+        receipt_identity = None
         schedule_ref = None
         evidence_refs = None
         evidence_digest = None
@@ -567,9 +569,11 @@ class SQLiteAgentTaskStore:
         capsule_state = "not_required"
         if isinstance(receipt, AgentTaskScheduleReceipt):
             receipt_payload = _json(agent_task_schedule_receipt_payload(receipt))
+            receipt_identity = _receipt_identity(receipt_payload)
             schedule_ref = receipt.receipt_id
         elif isinstance(receipt, AgentTaskGateReceipt):
             receipt_payload = _json(agent_task_gate_receipt_payload(receipt))
+            receipt_identity = _receipt_identity(receipt_payload)
             evidence_refs = _json_array(receipt.evidence_refs)
             evidence_digest = receipt.evidence_digest
             integrity_checked_at = receipt.integrity_verified_at
@@ -583,17 +587,34 @@ class SQLiteAgentTaskStore:
             current_row = self._assert_lease(connection, lease)
             current = _task_from_row(current_row)
             target_policy = completion_policy or current.completion_policy
+            if current.gate_state is AgentTaskGateState.INPUT_REQUIRED:
+                raise AgentTaskConflict("INPUT_REQUIRED gate must resume before progress")
+            if (
+                current.schedule_receipt is not None
+                and current.schedule_receipt.completion_policy is not target_policy
+            ):
+                raise AgentTaskConflict("schedule receipt policy is immutable")
+            if current.gate_receipt is not None and current.completion_policy is not target_policy:
+                raise AgentTaskConflict("gate receipt policy is immutable")
             if _GATE_STATE_RANK[gate_state] < _GATE_STATE_RANK[current.gate_state]:
                 raise AgentTaskConflict("gate state transition is not monotonic")
             if receipt is not None:
-                if receipt.task_id != current.task_id:
-                    raise AgentTaskConflict("AgentTask receipt task binding is invalid")
-                if current.linked_run_id is not None and receipt.run_id != current.linked_run_id:
-                    raise AgentTaskConflict("AgentTask receipt Run does not match linked Run")
-                if isinstance(receipt, AgentTaskScheduleReceipt) and (
-                    receipt.completion_policy is not target_policy
+                _validate_receipt_identity(current, receipt, target_policy, gate_state)
+                stored_identity = (
+                    current_row["durable_operation_key"]
+                    if _row_has(current_row, "durable_operation_key")
+                    else None
+                )
+                if stored_identity is not None and stored_identity != receipt_identity:
+                    raise AgentTaskConflict("receipt identity conflicts with stored operation")
+                if (
+                    isinstance(receipt, AgentTaskScheduleReceipt)
+                    and current.schedule_receipt is not None
                 ):
-                    raise AgentTaskConflict("AgentTask schedule policy conflicts")
+                    if current.schedule_receipt != receipt:
+                        raise AgentTaskConflict("immutable schedule receipt conflicts")
+                    if gate_state is current.gate_state:
+                        return current
                 if isinstance(receipt, AgentTaskGateReceipt) and current.gate_receipt is not None:
                     if (
                         current.gate_receipt == receipt
@@ -602,10 +623,26 @@ class SQLiteAgentTaskStore:
                         return current
                     if current.gate_receipt != receipt:
                         raise AgentTaskConflict("immutable gate receipt conflicts")
+            candidate_schedule = (
+                receipt
+                if isinstance(receipt, AgentTaskScheduleReceipt)
+                else current.schedule_receipt
+            )
+            candidate_gate = (
+                receipt if isinstance(receipt, AgentTaskGateReceipt) else current.gate_receipt
+            )
+            replace(
+                current,
+                completion_policy=target_policy,
+                gate_state=gate_state,
+                schedule_receipt=candidate_schedule,
+                gate_receipt=candidate_gate,
+            )
             updated = connection.execute(
                 "UPDATE agent_tasks SET completion_policy = ?, gate_state = ?, "
                 "schedule_receipt_ref = COALESCE(?, schedule_receipt_ref), "
                 "schedule_receipt = COALESCE(?, schedule_receipt), "
+                "durable_operation_key = COALESCE(?, durable_operation_key), "
                 "evidence_refs_json = COALESCE(?, evidence_refs_json), "
                 "evidence_digest = COALESCE(?, evidence_digest), "
                 "integrity_checked_at = COALESCE(?, integrity_checked_at), "
@@ -622,6 +659,7 @@ class SQLiteAgentTaskStore:
                     gate_state.value,
                     schedule_ref,
                     receipt_payload if isinstance(receipt, AgentTaskScheduleReceipt) else None,
+                    receipt_identity,
                     evidence_refs,
                     evidence_digest,
                     integrity_checked_at,
@@ -657,8 +695,6 @@ class SQLiteAgentTaskStore:
             raise AgentTaskConflict("AgentTask lease binding is invalid")
         if not isinstance(result, AgentTaskResult):
             raise TypeError("result must be AgentTaskResult")
-        if result.status == "succeeded" and not isinstance(gate_receipt, AgentTaskGateReceipt):
-            raise AgentTaskConflict("successful AgentTask finalization requires a gate receipt")
         if gate_receipt is not None and not isinstance(gate_receipt, AgentTaskGateReceipt):
             raise TypeError("gate_receipt must be AgentTaskGateReceipt")
         with self.connect() as connection:
@@ -670,13 +706,25 @@ class SQLiteAgentTaskStore:
             if existing is None:
                 raise KeyError(task_id)
             current = _task_from_row(existing)
-            self._assert_lease(connection, lease)
             if current.state in TERMINAL_TASK_STATES:
-                if current.result == result and (
-                    gate_receipt is None or current.gate_receipt == gate_receipt
+                stored_identity = (
+                    existing["durable_operation_key"]
+                    if _row_has(existing, "durable_operation_key")
+                    else None
+                )
+                if (
+                    gate_receipt is not None
+                    and current.result == result
+                    and current.gate_receipt == gate_receipt
+                    and stored_identity == _receipt_identity(
+                        _json(agent_task_gate_receipt_payload(gate_receipt))
+                    )
                 ):
                     return current
-                raise AgentTaskConflict("AgentTask terminal result replay conflicts")
+                raise AgentTaskConflict("terminal AgentTask replay has no matching identity")
+            self._assert_lease(connection, lease)
+            if result.status == "succeeded" and gate_receipt is None:
+                raise AgentTaskConflict("successful AgentTask finalization requires a gate receipt")
             receipt_payload = None
             evidence_refs = _json_array(result.evidence_refs)
             evidence_digest = None
@@ -685,9 +733,9 @@ class SQLiteAgentTaskStore:
             capsule_state = "not_required"
             if gate_receipt is not None:
                 if gate_receipt.task_id != current.task_id:
-                    raise AgentTaskConflict("AgentTask gate receipt task binding is invalid")
+                    raise AgentTaskConflict("AgentTask gate receipt identity is invalid")
                 if current.linked_run_id is None or gate_receipt.run_id != current.linked_run_id:
-                    raise AgentTaskConflict("AgentTask gate receipt Run does not match linked Run")
+                    raise AgentTaskConflict("AgentTask gate receipt identity is invalid")
                 if current.gate_receipt is not None and current.gate_receipt != gate_receipt:
                     raise AgentTaskConflict("immutable gate receipt conflicts")
                 if tuple(result.evidence_refs) != tuple(gate_receipt.evidence_refs):
@@ -699,6 +747,7 @@ class SQLiteAgentTaskStore:
                 ):
                     raise AgentTaskConflict("Capsule-required AgentTask needs a READY Capsule")
                 receipt_payload = _json(agent_task_gate_receipt_payload(gate_receipt))
+                receipt_identity = _receipt_identity(receipt_payload)
                 evidence_refs = _json_array(gate_receipt.evidence_refs)
                 evidence_digest = gate_receipt.evidence_digest
                 integrity_checked_at = gate_receipt.integrity_verified_at
@@ -708,6 +757,7 @@ class SQLiteAgentTaskStore:
             updated = connection.execute(
                 "UPDATE agent_tasks SET state = ?, result_json = ?, gate_state = ?, "
                 "gate_receipt = COALESCE(?, gate_receipt), evidence_refs_json = ?, "
+                "durable_operation_key = COALESCE(?, durable_operation_key), "
                 "evidence_digest = COALESCE(?, evidence_digest), "
                 "integrity_checked_at = COALESCE(?, integrity_checked_at), "
                 "capsule_ref = COALESCE(?, capsule_ref), capsule_state = ?, "
@@ -726,6 +776,7 @@ class SQLiteAgentTaskStore:
                     ),
                     receipt_payload,
                     evidence_refs,
+                    receipt_identity if gate_receipt is not None else None,
                     evidence_digest,
                     integrity_checked_at,
                     capsule_ref,
@@ -1106,6 +1157,75 @@ def gate_state_for_result(result: AgentTaskState) -> AgentTaskGateState:
     if result is AgentTaskState.FAILED:
         return AgentTaskGateState.FAILED
     return AgentTaskGateState.BLOCKED
+
+
+def _receipt_identity(payload: str) -> str:
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _validate_receipt_identity(
+    current: AgentTaskRecord,
+    receipt: AgentTaskGateReceipt | AgentTaskScheduleReceipt,
+    policy: AgentTaskCompletionPolicy,
+    gate_state: AgentTaskGateState,
+) -> None:
+    if isinstance(receipt, AgentTaskScheduleReceipt):
+        required = (
+            receipt.owner,
+            receipt.session_id,
+            receipt.originating_turn_id,
+            receipt.request_digest,
+            receipt.idempotency_key,
+            receipt.resource_envelope_id,
+            receipt.workspace_digest,
+            receipt.created_at,
+        )
+        if any(value is None for value in required):
+            raise AgentTaskConflict("schedule receipt identity is incomplete")
+        expected_request = _receipt_identity(_json(_request_payload(current.request)))
+        expected_envelope = _receipt_identity(
+            _json(_envelope_payload(current.resource_envelope))
+        )
+        expected_state = {
+            "admitted": AgentTaskGateState.ADMITTED,
+            "submitting": AgentTaskGateState.SUBMITTING,
+            "pending": AgentTaskGateState.PENDING,
+            "submitted": AgentTaskGateState.PENDING,
+            "submission_uncertain": AgentTaskGateState.PENDING,
+        }[receipt.submit_state]
+        if (
+            receipt.task_id != current.task_id
+            or receipt.owner != current.owner
+            or receipt.session_id != current.session_id
+            or receipt.originating_turn_id != current.turn_id
+            or receipt.completion_policy is not policy
+            or receipt.request_digest != expected_request
+            or receipt.idempotency_key != current.request_key
+            or receipt.resource_envelope_id != expected_envelope
+            or receipt.workspace_digest != current.request.workspace_snapshot_digest
+            or receipt.workspace_revision is not None
+            or receipt.legacy_boundary is not True
+            or gate_state is not expected_state
+        ):
+            raise AgentTaskConflict("schedule receipt identity does not match AgentTask")
+        if current.linked_run_id is not None and receipt.run_id != current.linked_run_id:
+            raise AgentTaskConflict("schedule receipt identity does not match AgentTask Run")
+        return
+
+    if receipt.task_id != current.task_id:
+        raise AgentTaskConflict("gate receipt identity does not match AgentTask")
+    if current.linked_run_id is None or receipt.run_id != current.linked_run_id:
+        raise AgentTaskConflict("gate receipt identity does not match AgentTask Run")
+    if gate_state not in {
+        AgentTaskGateState.AWAITING_INTEGRITY,
+        AgentTaskGateState.AWAITING_CAPSULE,
+    }:
+        raise AgentTaskConflict("gate receipt does not match gate state")
+    if policy.requires_capsule:
+        if receipt.capsule_state != "READY" or receipt.capsule_ref is None:
+            raise AgentTaskConflict("Capsule gate receipt is not policy-compatible")
+    elif gate_state is AgentTaskGateState.AWAITING_CAPSULE:
+        raise AgentTaskConflict("Capsule gate state is not policy-compatible")
 
 
 def _loaded(value: object) -> dict[str, Any]:

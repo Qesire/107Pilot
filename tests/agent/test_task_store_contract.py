@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Callable
@@ -262,6 +263,66 @@ def _terminal_gate(task: AgentTaskRecord, *, capsule: bool = False) -> AgentTask
     )
 
 
+def _schedule_receipt(task: AgentTaskRecord, **overrides: object) -> AgentTaskScheduleReceipt:
+    request_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "partition": task.request.partition,
+                "qos": task.request.qos,
+                "cpus": task.request.cpus,
+                "memory_mib": task.request.memory_mib,
+                "gpu_type": task.request.gpu_type,
+                "gpus": task.request.gpus,
+                "walltime_seconds": task.request.walltime_seconds,
+                "tasks": task.request.tasks,
+                "submissions": task.request.submissions,
+                "workspace_snapshot_digest": task.request.workspace_snapshot_digest,
+                "payload": task.request.payload,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    values: dict[str, object] = {
+        "task_id": task.task_id,
+        "run_id": "run-1",
+        "completion_policy": task.completion_policy,
+        "submit_state": "admitted",
+        "receipt_id": "receipt-1",
+        "owner": task.owner,
+        "session_id": task.session_id,
+        "originating_turn_id": task.turn_id,
+        "request_digest": request_digest,
+        "idempotency_key": task.request_key,
+        "resource_envelope_id": hashlib.sha256(
+            json.dumps(
+                {
+                    "partition": task.resource_envelope.partition,
+                    "qos": task.resource_envelope.qos,
+                    "cpus": task.resource_envelope.cpus,
+                    "memory_mib": task.resource_envelope.memory_mib,
+                    "gpu_type": task.resource_envelope.gpu_type,
+                    "gpus": task.resource_envelope.gpus,
+                    "walltime_seconds": task.resource_envelope.walltime_seconds,
+                    "max_tasks": task.resource_envelope.max_tasks,
+                    "max_submissions": task.resource_envelope.max_submissions,
+                    "workspace_snapshot_digest": task.resource_envelope.workspace_snapshot_digest,
+                    "expires_at": task.resource_envelope.expires_at,
+                    "approved_by": task.resource_envelope.approved_by,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest(),
+        "workspace_digest": task.request.workspace_snapshot_digest,
+        "workspace_revision": None,
+        "legacy_boundary": True,
+        "created_at": "2026-08-19T00:00:00Z",
+    }
+    values.update(overrides)
+    return AgentTaskScheduleReceipt(**values)  # type: ignore[arg-type]
+
+
 def test_store_rejects_success_without_terminal_gate(tmp_path: Path) -> None:
     store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
     task, _ = _create(store)
@@ -391,7 +452,7 @@ def test_gate_receipt_is_immutable_and_same_replay_is_idempotent(tmp_path: Path)
     assert replay == first
     changed = replace(receipt, evidence_digest="c" * 64)
     replay_lease = replace(replay_lease, version=replay.version)
-    with pytest.raises(AgentTaskConflict, match="immutable"):
+    with pytest.raises(AgentTaskConflict, match="identity"):
         store.advance_gate(
             task.task_id,
             lease=replay_lease,
@@ -453,13 +514,13 @@ def test_terminal_finalize_replay_checks_lease_before_receipt(tmp_path: Path) ->
         gate_receipt=_terminal_gate(task),
         result=AgentTaskResult.succeeded(("evidence-1",)),
     )
-    with pytest.raises(AgentTaskConflict, match="lease"):
-        store.finalize_task(
-            task.task_id,
-            lease=lease,
-            gate_receipt=_terminal_gate(task),
-            result=AgentTaskResult.succeeded(("evidence-1",)),
-        )
+    replay = store.finalize_task(
+        task.task_id,
+        lease=lease,
+        gate_receipt=_terminal_gate(task),
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+    )
+    assert replay.state is AgentTaskState.SUCCEEDED
 
 
 def test_claim_and_renew_update_heartbeat_at(tmp_path: Path) -> None:
@@ -534,6 +595,151 @@ def test_finalize_persists_verified_gate_and_releases_lease(tmp_path: Path) -> N
     assert completed.gate_receipt is not None
     assert completed.legacy_gate_unverified is False
     assert completed.lease_owner is None
+
+
+def test_terminal_finalize_replay_allows_exact_immutable_identity_without_lease(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    lease = replace(lease, version=linked.version)
+    gate = _terminal_gate(task)
+    store.finalize_task(
+        task.task_id,
+        lease=lease,
+        gate_receipt=gate,
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+    )
+
+    replay = store.finalize_task(
+        task.task_id,
+        lease=lease,
+        gate_receipt=gate,
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+    )
+
+    assert replay.state is AgentTaskState.SUCCEEDED
+
+
+def test_terminal_finalize_replay_rejects_missing_or_different_stage_identity(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    lease = replace(lease, version=linked.version)
+    gate = _terminal_gate(task)
+    store.finalize_task(
+        task.task_id,
+        lease=lease,
+        gate_receipt=gate,
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+    )
+    with pytest.raises(AgentTaskConflict, match="identity"):
+        store.finalize_task(
+            task.task_id,
+            lease=lease,
+            gate_receipt=None,
+            result=AgentTaskResult.succeeded(("evidence-1",)),
+        )
+    with pytest.raises(AgentTaskConflict, match="identity"):
+        store.finalize_task(
+            task.task_id,
+            lease=lease,
+            gate_receipt=replace(gate, evidence_digest="c" * 64),
+            result=AgentTaskResult.succeeded(("evidence-1",)),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("task_id", "task-other"),
+        ("run_id", "run-other"),
+        ("owner", "bob"),
+        ("session_id", "session-2"),
+        ("originating_turn_id", "turn-2"),
+        ("completion_policy", AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED),
+        ("request_digest", "c" * 64),
+        ("idempotency_key", "validate-2"),
+        ("resource_envelope_id", "d" * 64),
+        ("workspace_digest", "e" * 64),
+    ],
+)
+def test_schedule_receipt_identity_must_match_task(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    lease = replace(lease, version=linked.version)
+    with pytest.raises(AgentTaskConflict, match="identity"):
+        store.advance_gate(
+            task.task_id,
+            lease=lease,
+            gate_state=AgentTaskGateState.ADMITTED,
+            receipt=_schedule_receipt(task, **{field: value}),
+        )
+
+
+def test_valid_schedule_receipt_is_persisted_with_stage_identity(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    advanced = store.advance_gate(
+        task.task_id,
+        lease=replace(lease, version=linked.version),
+        gate_state=AgentTaskGateState.ADMITTED,
+        receipt=_schedule_receipt(task),
+    )
+
+    assert advanced.schedule_receipt is not None
+    assert advanced.schedule_receipt.idempotency_key == task.request_key
+
+
+def test_advance_gate_rejects_policy_incompatible_receipt_before_update(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    lease = replace(lease, version=linked.version)
+    waiting = store.advance_gate(
+        task.task_id,
+        lease=lease,
+        gate_state=AgentTaskGateState.AWAITING_CAPSULE,
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED,
+    )
+    with pytest.raises(AgentTaskConflict, match="Capsule"):
+        store.advance_gate(
+            task.task_id,
+            lease=replace(lease, version=waiting.version),
+            gate_state=AgentTaskGateState.AWAITING_CAPSULE,
+            receipt=_terminal_gate(task),
+        )
+    assert store.get_task(task.task_id, owner="alice").gate_receipt is None
+
+
+def test_input_required_is_not_a_progress_gate_target(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    with pytest.raises(AgentTaskConflict, match="INPUT_REQUIRED"):
+        store.advance_gate(
+            task.task_id,
+            lease=lease,
+            gate_state=AgentTaskGateState.INPUT_REQUIRED,
+        )
 
 
 def test_capsule_required_policy_requires_ready_capsule_on_gate_receipt(
@@ -889,12 +1095,12 @@ def exercise_agent_task_store_contract(
     assert completed.legacy_gate_unverified is False
     assert completed.result is not None
     assert completed.result.evidence_refs == ("evidence-1",)
-    with pytest.raises(AgentTaskConflict, match="lease"):
-        store.complete_task(
-            task.task_id,
-            lease=finalized_lease,
-            result=AgentTaskResult.succeeded(("evidence-1",)),
-        )
+    replay = store.complete_task(
+        task.task_id,
+        lease=finalized_lease,
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+    )
+    assert replay == completed
 
     cancellable, _ = _create(store, request_key="validate-cancel")
     cancelled = store.request_cancel(
