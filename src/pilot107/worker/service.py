@@ -72,8 +72,10 @@ from pilot107.core.platform import (
     docker_sim_capability_profile,
     load_capability_profile,
 )
+from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.postgres_domain_stores import (
     PostgresContractStore,
+    PostgresPlatformSnapshotStore,
     PostgresRemediationStore,
     PostgresRunStore,
 )
@@ -97,7 +99,11 @@ from pilot107.runtime_watch.service import (
 )
 from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
-from pilot107.services.agent_task_service import AgentTaskService
+from pilot107.services.agent_task_service import (
+    AgentTaskService,
+    build_server_provenance_authority,
+    build_verified_capsule_authority,
+)
 from pilot107.services.remediation_service import RemediationService
 from pilot107.worker.agent_turn_worker import AgentTurnWorker
 from pilot107.worker.capsule import RawCapsuleService
@@ -307,9 +313,7 @@ class WorkerService:
             "observability_errors": result.observability_errors,
             "formal_results_checked": result.formal_results_checked,
             "formal_results_succeeded": result.formal_results_succeeded,
-            "formal_result_errors": redact_sensitive_structure(
-                result.formal_result_errors
-            ),
+            "formal_result_errors": redact_sensitive_structure(result.formal_result_errors),
             "errors": redact_sensitive_structure([error.__dict__ for error in result.errors]),
             "task_errors": redact_sensitive_structure(
                 [error.__dict__ for error in result.task_errors]
@@ -441,11 +445,7 @@ def config_from_env(
         db_path=_path(values, "PILOT107_DB_PATH", runtime_dir / "pilot107.db"),
         evidence_root=_path(values, "PILOT107_EVIDENCE_ROOT", runtime_dir / "evidence"),
         database_mode=_database_mode(values, postgres_dsn=postgres_dsn),
-        control_postgres_dsn=(
-            values.get("PILOT107_CONTROL_POSTGRES_DSN")
-            or postgres_dsn
-            or None
-        ),
+        control_postgres_dsn=(values.get("PILOT107_CONTROL_POSTGRES_DSN") or postgres_dsn or None),
         postgres_dsn=postgres_dsn,
         backend=values.get("PILOT107_WORKER_BACKEND")
         or values.get("PILOT107_BACKEND", "docker-compose-command"),
@@ -525,12 +525,8 @@ def config_from_env(
         agentd_token=values.get("PILOT107_AGENTD_TOKEN") or None,
         agentd_model_profile=values.get("PILOT107_AGENTD_MODEL_PROFILE") or None,
         agentd_timeout_seconds=_float(values, "PILOT107_AGENTD_TIMEOUT_SECONDS", 60.0),
-        agentd_max_output_tokens=_int(
-            values, "PILOT107_AGENTD_MAX_OUTPUT_TOKENS", 1_200
-        ),
-        phase_aware_builder=_bool(
-            values, "PILOT107_PHASE_AWARE_BUILDER", False
-        ),
+        agentd_max_output_tokens=_int(values, "PILOT107_AGENTD_MAX_OUTPUT_TOKENS", 1_200),
+        phase_aware_builder=_bool(values, "PILOT107_PHASE_AWARE_BUILDER", False),
         agent_a1_enabled=(
             _bool(values, "PILOT107_AGENT_A1_ENABLED", False)
             or bool(values.get("PILOT107_AGENT_CAPABILITY_HMAC_SECRET"))
@@ -593,10 +589,15 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     if not selection.is_postgres:
         store = RunStore(selection.sqlite_path)
         contract_store = ContractStore(selection.sqlite_path)
+        platform_snapshot_store = PlatformSnapshotStore(selection.sqlite_path)
         remediation_store = RemediationStore(selection.sqlite_path)
     else:
         store = PostgresRunStore(postgres_dsn, compatibility_path=selection.sqlite_path)
         contract_store = PostgresContractStore(
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
+        )
+        platform_snapshot_store = PostgresPlatformSnapshotStore(
             postgres_dsn,
             compatibility_path=selection.sqlite_path,
         )
@@ -646,6 +647,14 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             phase_aware_builder=config.phase_aware_builder,
         )
     evidence_store = EvidenceStore(config.evidence_root)
+    capsule_service: RawCapsuleService | None = None
+    if config.auto_capsule_enabled and config.capsule_root is not None:
+        capsule_service = RawCapsuleService(
+            store=store,
+            evidence_store=evidence_store,
+            capsule_root=config.capsule_root,
+            creator="pilot107-worker",
+        )
     backend, task_handler, reconcile_backend, baseline_executor = _build_backend_and_task_handler(
         config, store, evidence_store, contract_store
     )
@@ -675,9 +684,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     if agent_session_store is not None and agent_session_service is not None:
         assert project_store is not None
 
-        def resolve_agent_workspace(
-            owner: str, workspace_id: str, snapshot_digest: str
-        ) -> Path:
+        def resolve_agent_workspace(owner: str, workspace_id: str, snapshot_digest: str) -> Path:
             workspace = project_store.get_workspace(workspace_id, owner=owner)
             if workspace.snapshot.digest != snapshot_digest:
                 raise ValueError("AgentTask Workspace snapshot has changed")
@@ -699,9 +706,20 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             run_service=run_service,
             control_repository=control_repository,
             workspace_resolver=resolve_agent_workspace,
-            run_workdir_resolver=(
-                resolve_agent_run_workdir if effective_roots else None
+            provenance_authority_resolver=build_server_provenance_authority(
+                workspace_resolver=resolve_agent_workspace,
+                platform_snapshot_store=platform_snapshot_store,
             ),
+            evidence_binder=EvidenceBinder(
+                store=store,
+                evidence_root=config.evidence_root,
+            ),
+            capsule_authority_resolver=(
+                None
+                if capsule_service is None
+                else build_verified_capsule_authority(capsule_service)
+            ),
+            run_workdir_resolver=(resolve_agent_run_workdir if effective_roots else None),
             worker_id=f"{config.worker_id}-agent-task",
             lease_seconds=min(3600, max(30, config.task_lease_seconds)),
         )
@@ -750,14 +768,6 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         contract_store=contract_store,
         evidence_store=evidence_store,
     )
-    capsule_service: RawCapsuleService | None = None
-    if config.auto_capsule_enabled and config.capsule_root is not None:
-        capsule_service = RawCapsuleService(
-            store=store,
-            evidence_store=evidence_store,
-            capsule_root=config.capsule_root,
-            creator="pilot107-worker",
-        )
     runtime_watch_service: RuntimeWatchService | None = None
     runtime_transport = _build_runtime_watch_transport(config)
     if runtime_transport is not None and effective_roots:
@@ -793,26 +803,18 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             worker_id=config.worker_id,
             on_terminal_drained=release_logs_finalize,
             default_connection_id=(
-                config.ssh_connection_id
-                if config.backend == "real107-ssh"
-                else "default"
+                config.ssh_connection_id if config.backend == "real107-ssh" else "default"
             ),
         )
     observability_collector: ObservabilityCollector | None = None
     if config.observability_enabled:
         if baseline_executor is None:
-            raise ValueError(
-                "resource observability requires a bounded command executor backend"
-            )
+            raise ValueError("resource observability requires a bounded command executor backend")
         observation_user = (
-            config.ssh_slurm_user
-            if config.backend == "real107-ssh"
-            else config.slurm_username
+            config.ssh_slurm_user if config.backend == "real107-ssh" else config.slurm_username
         )
         if not observation_user:
-            raise ValueError(
-                "resource observability requires PILOT107_SLURM_USER_NAME"
-            )
+            raise ValueError("resource observability requires PILOT107_SLURM_USER_NAME")
         observation_store = (
             SQLiteObservabilityStore(config.db_path)
             if not selection.is_postgres
@@ -836,13 +838,9 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
             ),
             worker_id=f"{config.worker_id}-observability",
             policy=ObservabilityCollectorPolicy(
-                max_commands_per_minute=(
-                    config.observability_max_commands_per_minute
-                ),
+                max_commands_per_minute=(config.observability_max_commands_per_minute),
                 batch_size=config.observability_batch_size,
-                command_deadline_seconds=max(
-                    1, int(config.command_timeout_seconds)
-                ),
+                command_deadline_seconds=max(1, int(config.command_timeout_seconds)),
             ),
         )
     worker = RuntimeReconcileWorker(
@@ -860,9 +858,7 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         runtime_watch_service=runtime_watch_service,
         observability_collector=observability_collector,
         observability_connection_id=(
-            config.ssh_connection_id
-            if config.backend == "real107-ssh"
-            else "default"
+            config.ssh_connection_id if config.backend == "real107-ssh" else "default"
         ),
         formal_result_evidence_binder=(
             formal_result_evidence_binder
@@ -1298,12 +1294,8 @@ def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> Work
         ],
         observability_cycles=left.observability_cycles + right.observability_cycles,
         observability_samples=left.observability_samples + right.observability_samples,
-        observability_summaries=(
-            left.observability_summaries + right.observability_summaries
-        ),
-        observability_commands=(
-            left.observability_commands + right.observability_commands
-        ),
+        observability_summaries=(left.observability_summaries + right.observability_summaries),
+        observability_commands=(left.observability_commands + right.observability_commands),
         observability_budget_skipped=(
             left.observability_budget_skipped or right.observability_budget_skipped
         ),
@@ -1311,12 +1303,8 @@ def _merge_tick_results(left: WorkerTickResult, right: WorkerTickResult) -> Work
             *left.observability_errors,
             *right.observability_errors,
         ],
-        formal_results_checked=(
-            left.formal_results_checked + right.formal_results_checked
-        ),
-        formal_results_succeeded=(
-            left.formal_results_succeeded + right.formal_results_succeeded
-        ),
+        formal_results_checked=(left.formal_results_checked + right.formal_results_checked),
+        formal_results_succeeded=(left.formal_results_succeeded + right.formal_results_succeeded),
         formal_result_errors=[
             *left.formal_result_errors,
             *right.formal_result_errors,
@@ -1382,9 +1370,7 @@ def _path(values: Mapping[str, str], name: str, default: Path) -> Path:
     return Path(value).expanduser() if value else default
 
 
-def _database_mode(
-    values: Mapping[str, str], *, postgres_dsn: str | None
-) -> DatabaseMode:
+def _database_mode(values: Mapping[str, str], *, postgres_dsn: str | None) -> DatabaseMode:
     configured = values.get("PILOT107_DATABASE_MODE")
     inferred = "postgres" if postgres_dsn else "sqlite"
     try:

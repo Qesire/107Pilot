@@ -26,6 +26,8 @@ from pilot107.agent.store import SQLiteAgentSessionStore
 from pilot107.agent.task_store import SQLiteAgentTaskStore
 from pilot107.agent.tasks import (
     AgentResourceEnvelope,
+    AgentTaskGateReceipt,
+    AgentTaskGateState,
     AgentTaskRequest,
     AgentTaskResult,
     AgentTaskState,
@@ -269,9 +271,26 @@ class A4Harness:
         )
         assert lease is not None
         self.task_store.link_run(task.task_id, lease=lease, run_id=self.validation_run.run_id)
-        return self.task_store.complete_task(
+        receipt = AgentTaskGateReceipt(
+            task_id=task.task_id,
+            run_id=self.validation_run.run_id,
+            run_terminal_state="completed",
+            evidence_refs=(self.validation_ref,),
+            evidence_digest="d" * 64,
+            integrity_verified_at="2026-08-19T00:05:00Z",
+            workspace_revision=None,
+            workspace_digest="a" * 64,
+            legacy_boundary=True,
+            capsule_ref=None,
+            capsule_state="not_required",
+            source_revision="workspace-snapshot:sha256:" + "a" * 64,
+            platform_snapshot_ref="snapshot:platform-a4",
+            terminal_at=self.validation_run.updated_at,
+        )
+        return self.task_store.finalize_task(
             task.task_id,
             lease=lease,
+            gate_receipt=receipt,
             result=AgentTaskResult.succeeded((self.validation_ref,)),
         )
 
@@ -466,7 +485,13 @@ class _OneTaskStore:
 @pytest.mark.parametrize(
     "task_patch",
     [
-        {"state": AgentTaskState.PENDING, "result": None, "linked_run_id": None},
+        {
+            "state": AgentTaskState.PENDING,
+            "result": None,
+            "linked_run_id": None,
+            "gate_receipt": None,
+            "gate_state": AgentTaskGateState.CREATED,
+        },
         {
             "state": AgentTaskState.FAILED,
             "result": AgentTaskResult(
@@ -483,9 +508,7 @@ class _OneTaskStore:
 def test_formal_candidate_rejects_untrusted_or_unbound_agent_tasks(
     harness: A4Harness, task_patch: dict[str, object]
 ) -> None:
-    harness.service.agent_task_store = _OneTaskStore(
-        replace(harness.validation_task, **task_patch)
-    )
+    harness.service.agent_task_store = _OneTaskStore(replace(harness.validation_task, **task_patch))
 
     with pytest.raises(ValueError, match="AgentTask|Evidence|lineage"):
         harness.service.prepare_formal_run_candidate(
@@ -550,9 +573,9 @@ def test_formal_submit_rechecks_remote_published_snapshot(
         validation_evidence_refs=(harness.validation_ref,),
         formal_contract_payload=payload,
     )
-    harness.publication_relay.files[
-        "/public/home/alice/a4-project/main.py"
-    ] = b"external change after publication\n"
+    harness.publication_relay.files["/public/home/alice/a4-project/main.py"] = (
+        b"external change after publication\n"
+    )
 
     with pytest.raises(ValueError, match="published Workspace changed"):
         harness.service.approve_and_submit_formal_run(

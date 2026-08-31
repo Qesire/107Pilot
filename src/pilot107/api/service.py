@@ -134,7 +134,11 @@ from pilot107.runtime_watch.postgres_store import PostgresRuntimeWatchStore
 from pilot107.runtime_watch.service import RuntimeWatchRegistrar
 from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
-from pilot107.services.agent_task_service import AgentTaskService
+from pilot107.services.agent_task_service import (
+    AgentTaskService,
+    build_server_provenance_authority,
+    build_verified_capsule_authority,
+)
 from pilot107.services.builder_workflow_service import BuilderWorkflowService
 from pilot107.services.platform_snapshot_freshness import SnapshotCollectionMonitor
 from pilot107.services.platform_snapshot_service import PlatformSnapshotService
@@ -243,11 +247,7 @@ def config_from_env(
         evidence_root=_path(values, "PILOT107_EVIDENCE_ROOT", runtime_dir / "evidence"),
         capsule_root=_path(values, "PILOT107_CAPSULE_ROOT", runtime_dir / "capsules"),
         database_mode=_database_mode(values, postgres_dsn=postgres_dsn),
-        control_postgres_dsn=(
-            values.get("PILOT107_CONTROL_POSTGRES_DSN")
-            or postgres_dsn
-            or None
-        ),
+        control_postgres_dsn=(values.get("PILOT107_CONTROL_POSTGRES_DSN") or postgres_dsn or None),
         postgres_dsn=postgres_dsn,
         backend=values.get("PILOT107_API_BACKEND") or values.get("PILOT107_BACKEND", "none"),
         allowed_roots=tuple(_split_csv(values.get("PILOT107_ALLOWED_ROOTS", ""))),
@@ -319,12 +319,8 @@ def config_from_env(
         agentd_token=values.get("PILOT107_AGENTD_TOKEN") or None,
         agentd_model_profile=values.get("PILOT107_AGENTD_MODEL_PROFILE") or None,
         agentd_timeout_seconds=_float(values, "PILOT107_AGENTD_TIMEOUT_SECONDS", 60.0),
-        agentd_max_output_tokens=_int(
-            values, "PILOT107_AGENTD_MAX_OUTPUT_TOKENS", 1_200
-        ),
-        phase_aware_builder=_bool(
-            values, "PILOT107_PHASE_AWARE_BUILDER", False
-        ),
+        agentd_max_output_tokens=_int(values, "PILOT107_AGENTD_MAX_OUTPUT_TOKENS", 1_200),
+        phase_aware_builder=_bool(values, "PILOT107_PHASE_AWARE_BUILDER", False),
         agent_a1_enabled=(
             _bool(values, "PILOT107_AGENT_A1_ENABLED", False)
             or bool(values.get("PILOT107_AGENT_CAPABILITY_HMAC_SECRET"))
@@ -712,6 +708,12 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
     # EvidenceStore instance for evidence_query, capsule_service, and the
     # remediation path to avoid divergent roots.
     shared_evidence_store = EvidenceStore(config.evidence_root)
+    capsule_service = RawCapsuleService(
+        store=store,
+        evidence_store=shared_evidence_store,
+        capsule_root=config.capsule_root,
+        creator="pilot107-api",
+    )
     evidence_query = EvidenceQueryService(
         store=store,
         evidence_store=shared_evidence_store,
@@ -786,9 +788,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 relay=workspace_source,
                 owner_roots=workspace_owner_roots,
             )
-            if isinstance(
-                workspace_source, (HttpCommandGatewayExecutor, SshRelayExecutor)
-            )
+            if isinstance(workspace_source, (HttpCommandGatewayExecutor, SshRelayExecutor))
             and workspace_owner_roots
             else None
         )
@@ -815,9 +815,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             runtime_watch_service=RuntimeWatchRegistrar(
                 store=runtime_watch_store,
                 default_connection_id=(
-                    config.ssh_connection_id
-                    if config.backend == "real107-ssh"
-                    else "default"
+                    config.ssh_connection_id if config.backend == "real107-ssh" else "default"
                 ),
             ),
             agent_session_service=agent_session_service,
@@ -853,6 +851,15 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
                 run_service=run_service,
                 control_repository=control_repository,
                 workspace_resolver=resolve_agent_workspace,
+                provenance_authority_resolver=build_server_provenance_authority(
+                    workspace_resolver=resolve_agent_workspace,
+                    platform_snapshot_store=platform_snapshot_store,
+                ),
+                evidence_binder=EvidenceBinder(
+                    store=store,
+                    evidence_root=config.evidence_root,
+                ),
+                capsule_authority_resolver=build_verified_capsule_authority(capsule_service),
                 run_workdir_resolver=(resolve_agent_run_workdir if workspace_owner_roots else None),
                 worker_id="api-agent-task",
             )
@@ -930,12 +937,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         worker_metrics_root=config.worker_metrics_root,
         metrics=metrics,
         evidence_query=evidence_query,
-        capsule_service=RawCapsuleService(
-            store=store,
-            evidence_store=shared_evidence_store,
-            capsule_root=config.capsule_root,
-            creator="pilot107-api",
-        ),
+        capsule_service=capsule_service,
         run_service=run_service,
         recipe_catalog=catalog,
         contract_service=contract_service,
@@ -1443,9 +1445,7 @@ def _path(values: Mapping[str, str], name: str, default: Path) -> Path:
     return Path(value).expanduser() if value else default
 
 
-def _database_mode(
-    values: Mapping[str, str], *, postgres_dsn: str | None
-) -> DatabaseMode:
+def _database_mode(values: Mapping[str, str], *, postgres_dsn: str | None) -> DatabaseMode:
     configured = values.get("PILOT107_DATABASE_MODE")
     inferred = "postgres" if postgres_dsn else "sqlite"
     try:

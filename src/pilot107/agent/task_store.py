@@ -124,6 +124,9 @@ class AgentTaskStore(Protocol):
         request_key: str,
         request: AgentTaskRequest,
         envelope: AgentResourceEnvelope,
+        completion_policy: AgentTaskCompletionPolicy = (
+            AgentTaskCompletionPolicy.EVIDENCE_REQUIRED
+        ),
     ) -> tuple[AgentTaskRecord, bool]: ...
 
     def get_task(self, task_id: str, *, owner: str) -> AgentTaskRecord: ...
@@ -143,15 +146,11 @@ class AgentTaskStore(Protocol):
         lease_seconds: int,
     ) -> AgentTaskLease | None: ...
 
-    def renew_task(
-        self, lease: AgentTaskLease, *, lease_seconds: int
-    ) -> AgentTaskLease: ...
+    def renew_task(self, lease: AgentTaskLease, *, lease_seconds: int) -> AgentTaskLease: ...
 
     def release_task(self, lease: AgentTaskLease) -> AgentTaskRecord: ...
 
-    def link_run(
-        self, task_id: str, *, lease: AgentTaskLease, run_id: str
-    ) -> AgentTaskRecord: ...
+    def link_run(self, task_id: str, *, lease: AgentTaskLease, run_id: str) -> AgentTaskRecord: ...
 
     def complete_task(
         self, task_id: str, *, lease: AgentTaskLease, result: AgentTaskResult
@@ -224,6 +223,9 @@ class SQLiteAgentTaskStore:
         request_key: str,
         request: AgentTaskRequest,
         envelope: AgentResourceEnvelope,
+        completion_policy: AgentTaskCompletionPolicy = (
+            AgentTaskCompletionPolicy.EVIDENCE_REQUIRED
+        ),
     ) -> tuple[AgentTaskRecord, bool]:
         _key(owner, "owner")
         _key(request_key, "request_key")
@@ -243,6 +245,7 @@ class SQLiteAgentTaskStore:
                 task_kind=task_kind,
                 request=request,
                 envelope=envelope,
+                completion_policy=completion_policy,
             )
             return replay, False
         candidate = _new_task(
@@ -255,6 +258,7 @@ class SQLiteAgentTaskStore:
             request_key=request_key,
             request=request,
             envelope=envelope,
+            completion_policy=completion_policy,
             now=self._clock_value(),
         )
         with self.connect() as connection:
@@ -298,9 +302,7 @@ class SQLiteAgentTaskStore:
             raise KeyError(task_id)
         return _task_from_row(row)
 
-    def list_tasks(
-        self, *, owner: str, session_id: str, limit: int = 100
-    ) -> list[AgentTaskRecord]:
+    def list_tasks(self, *, owner: str, session_id: str, limit: int = 100) -> list[AgentTaskRecord]:
         _key(owner, "owner")
         _key(session_id, "session_id")
         _limit(limit)
@@ -386,9 +388,7 @@ class SQLiteAgentTaskStore:
             expires_at=expires_at,
         )
 
-    def renew_task(
-        self, lease: AgentTaskLease, *, lease_seconds: int
-    ) -> AgentTaskLease:
+    def renew_task(self, lease: AgentTaskLease, *, lease_seconds: int) -> AgentTaskLease:
         _lease_seconds(lease_seconds)
         now = self._clock_value()
         expires_at = timestamp(now + timedelta(seconds=lease_seconds))
@@ -438,9 +438,7 @@ class SQLiteAgentTaskStore:
             raise AgentTaskConflict("AgentTask release was fenced")
         return _task_from_row(updated)
 
-    def link_run(
-        self, task_id: str, *, lease: AgentTaskLease, run_id: str
-    ) -> AgentTaskRecord:
+    def link_run(self, task_id: str, *, lease: AgentTaskLease, run_id: str) -> AgentTaskRecord:
         _key(task_id, "task_id")
         _key(run_id, "run_id")
         if task_id != lease.task_id:
@@ -485,9 +483,7 @@ class SQLiteAgentTaskStore:
         if result.status == "succeeded":
             current = self.get_task(task_id, owner=lease.owner)
             if current.gate_receipt is None:
-                raise AgentTaskConflict(
-                    "successful AgentTask completion requires a gate receipt"
-                )
+                raise AgentTaskConflict("successful AgentTask completion requires a gate receipt")
             return self.finalize_task(
                 task_id,
                 lease=lease,
@@ -507,10 +503,7 @@ class SQLiteAgentTaskStore:
                 current.state in TERMINAL_TASK_STATES
                 or current.state is AgentTaskState.AUTH_REQUIRED
             ):
-                if (
-                    current.result == result
-                    and current.fencing_token == lease.fencing_token
-                ):
+                if current.result == result and current.fencing_token == lease.fencing_token:
                     return current
                 raise AgentTaskConflict("AgentTask terminal result replay conflicts")
             self._assert_lease(connection, lease)
@@ -629,10 +622,7 @@ class SQLiteAgentTaskStore:
                 if isinstance(receipt, AgentTaskGateReceipt) and current.gate_receipt is not None:
                     if _stored_stage_key(current_row, "gate") != stage_operation_key:
                         raise AgentTaskConflict("gate stage identity conflicts")
-                    if (
-                        current.gate_receipt == receipt
-                        and gate_state is current.gate_state
-                    ):
+                    if current.gate_receipt == receipt and gate_state is current.gate_state:
                         return current
                     if current.gate_receipt != receipt:
                         raise AgentTaskConflict("immutable gate receipt conflicts")
@@ -753,9 +743,7 @@ class SQLiteAgentTaskStore:
                 raise AgentTaskConflict("terminal AgentTask replay has no matching identity")
             self._assert_lease(connection, lease)
             stored_root = (
-                existing["causation_root_key"]
-                if _row_has(existing, "causation_root_key")
-                else None
+                existing["causation_root_key"] if _row_has(existing, "causation_root_key") else None
             )
             if stored_root is not None and stored_root != causation_root_key:
                 raise AgentTaskConflict("gate identity conflicts with causation root")
@@ -836,9 +824,7 @@ class SQLiteAgentTaskStore:
             raise AgentTaskConflict("AgentTask finalization was fenced")
         return _task_from_row(updated)
 
-    def request_cancel(
-        self, task_id: str, *, owner: str, expected_version: int
-    ) -> AgentTaskRecord:
+    def request_cancel(self, task_id: str, *, owner: str, expected_version: int) -> AgentTaskRecord:
         _key(task_id, "task_id")
         _key(owner, "owner")
         _version(expected_version)
@@ -914,9 +900,7 @@ class SQLiteAgentTaskStore:
                 raise AgentTaskConflict("AgentTask authentication resume is invalid")
         return _task_from_row(updated)
 
-    def _assert_lease(
-        self, connection: sqlite3.Connection, lease: AgentTaskLease
-    ) -> Any:
+    def _assert_lease(self, connection: sqlite3.Connection, lease: AgentTaskLease) -> Any:
         row = connection.execute(
             "SELECT * FROM agent_tasks WHERE task_id = ? AND owner = ? "
             "AND state = 'running' AND lease_owner = ? AND lease_expires_at > ? "
@@ -954,6 +938,7 @@ def _new_task(
     request_key: str,
     request: AgentTaskRequest,
     envelope: AgentResourceEnvelope,
+    completion_policy: AgentTaskCompletionPolicy,
     now: datetime,
 ) -> AgentTaskRecord:
     for value, label in (
@@ -971,6 +956,11 @@ def _new_task(
         raise TypeError("request must be AgentTaskRequest")
     if not isinstance(envelope, AgentResourceEnvelope):
         raise TypeError("envelope must be AgentResourceEnvelope")
+    if not isinstance(completion_policy, AgentTaskCompletionPolicy):
+        try:
+            completion_policy = AgentTaskCompletionPolicy(completion_policy)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("completion_policy is invalid") from exc
     envelope.assert_allows(request, owner=owner, now=now)
     now_text = timestamp(now)
     digest = hashlib.sha256(f"{owner}\0{request_key}".encode()).hexdigest()
@@ -995,6 +985,7 @@ def _new_task(
         fencing_token=0,
         created_at=now_text,
         updated_at=now_text,
+        completion_policy=completion_policy,
     )
 
 
@@ -1028,6 +1019,7 @@ def _assert_create_replay(existing: AgentTaskRecord, candidate: AgentTaskRecord)
         "request_key",
         "request",
         "resource_envelope",
+        "completion_policy",
     )
     if any(getattr(existing, name) != getattr(candidate, name) for name in immutable):
         raise AgentTaskConflict("AgentTask request-key replay conflicts")
@@ -1043,6 +1035,7 @@ def _assert_create_arguments(
     task_kind: AgentTaskKind,
     request: AgentTaskRequest,
     envelope: AgentResourceEnvelope,
+    completion_policy: AgentTaskCompletionPolicy,
 ) -> None:
     expected = (
         (existing.session_id, session_id),
@@ -1052,6 +1045,7 @@ def _assert_create_arguments(
         (existing.task_kind, task_kind),
         (existing.request, request),
         (existing.resource_envelope, envelope),
+        (existing.completion_policy, completion_policy),
     )
     if any(actual != candidate for actual, candidate in expected):
         raise AgentTaskConflict("AgentTask request-key replay conflicts")
@@ -1064,10 +1058,7 @@ def _task_from_row(row: Mapping[str, Any] | Any) -> AgentTaskRecord:
     critical_gate_columns = ("completion_policy", "gate_state", "legacy_gate_unverified")
     legacy_gate_unverified = (
         True
-        if any(
-            not _row_has(row, column) or row[column] is None
-            for column in critical_gate_columns
-        )
+        if any(not _row_has(row, column) or row[column] is None for column in critical_gate_columns)
         else bool(row["legacy_gate_unverified"])
     )
     raw_policy = row["completion_policy"] if _row_has(row, "completion_policy") else None
@@ -1086,19 +1077,13 @@ def _task_from_row(row: Mapping[str, Any] | Any) -> AgentTaskRecord:
         version=int(row["version"]),
         request_key=str(row["request_key"]),
         request=_request_from_payload(_loaded(row["request_json"])),
-        resource_envelope=_envelope_from_payload(
-            _loaded(row["resource_envelope_json"])
-        ),
-        linked_run_id=(
-            str(row["linked_run_id"]) if row["linked_run_id"] is not None else None
-        ),
+        resource_envelope=_envelope_from_payload(_loaded(row["resource_envelope_json"])),
+        linked_run_id=(str(row["linked_run_id"]) if row["linked_run_id"] is not None else None),
         result=_result_from_payload(result_value) if result_value is not None else None,
         cancel_requested=bool(row["cancel_requested"]),
         lease_owner=(str(row["lease_owner"]) if row["lease_owner"] is not None else None),
         lease_expires_at=(
-            str(row["lease_expires_at"])
-            if row["lease_expires_at"] is not None
-            else None
+            str(row["lease_expires_at"]) if row["lease_expires_at"] is not None else None
         ),
         fencing_token=int(row["fencing_token"]),
         created_at=str(row["created_at"]),
@@ -1114,15 +1099,9 @@ def _task_from_row(row: Mapping[str, Any] | Any) -> AgentTaskRecord:
             else AgentTaskGateState.CREATED
         ),
         schedule_receipt=(
-            AgentTaskScheduleReceipt(**_loaded(raw_schedule))
-            if raw_schedule is not None
-            else None
+            AgentTaskScheduleReceipt(**_loaded(raw_schedule)) if raw_schedule is not None else None
         ),
-        gate_receipt=(
-            AgentTaskGateReceipt(**_loaded(raw_gate))
-            if raw_gate is not None
-            else None
-        ),
+        gate_receipt=(AgentTaskGateReceipt(**_loaded(raw_gate)) if raw_gate is not None else None),
         legacy_gate_unverified=legacy_gate_unverified,
     )
 
@@ -1248,9 +1227,7 @@ def _validate_receipt_identity(
         if any(value is None for value in required):
             raise AgentTaskConflict("schedule receipt identity is incomplete")
         expected_request = _receipt_identity(_json(_request_payload(current.request)))
-        expected_envelope = _receipt_identity(
-            _json(_envelope_payload(current.resource_envelope))
-        )
+        expected_envelope = _receipt_identity(_json(_envelope_payload(current.resource_envelope)))
         expected_state = {
             "admitted": AgentTaskGateState.ADMITTED,
             "submitting": AgentTaskGateState.SUBMITTING,

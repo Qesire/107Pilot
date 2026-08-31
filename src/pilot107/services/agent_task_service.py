@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import shlex
 import stat
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Protocol
 
 from pilot107.agent.project import ProjectBlueprint, is_project_agent_profile
 from pilot107.agent.store import AgentSessionStore
@@ -18,18 +20,22 @@ from pilot107.agent.task_store import AgentTaskStore
 from pilot107.agent.tasks import (
     TERMINAL_TASK_STATES,
     AgentResourceEnvelope,
+    AgentTaskCompletionPolicy,
+    AgentTaskGateState,
     AgentTaskLease,
     AgentTaskRecord,
     AgentTaskRequest,
     AgentTaskResult,
+    AgentTaskScheduleReceipt,
     AgentTaskState,
     ResourceEnvelopeExceeded,
 )
 from pilot107.agent.tool_gateway import AgentReadHandler, AgentReadResult, AgentToolGatewayError
 from pilot107.core.control_repository import ControlRepository, OutboxMessage
+from pilot107.core.evidence_binding import EvidenceBinder, EvidenceBindingError
 from pilot107.core.resources import ResourcePlan
 from pilot107.core.run_service import RunService, RunSubmitRequest, WorkflowPolicy
-from pilot107.core.states import TERMINAL_RUN_STATES, RunState
+from pilot107.core.states import TERMINAL_RUN_STATES, CapsuleState, CollectionState, RunState
 from pilot107.services.agent_session_service import AgentSessionService
 
 AGENT_TASK_EXECUTE_TOPIC = "agent.task.execute.v1"
@@ -39,6 +45,7 @@ type WorkspaceResolver = Callable[[str, str, str], Path]
 type RunWorkdirResolver = Callable[[str], Path]
 type EnvelopeResolver = Callable[[str, str], AgentResourceEnvelope]
 type ProvenanceAuthorityResolver = Callable[[str, str, str], tuple[str, str]]
+type CapsuleAuthorityResolver = Callable[[str], str]
 
 _MAX_SNAPSHOT_FILES = 256
 _MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024
@@ -49,6 +56,78 @@ class AgentTaskDispatchError:
     task_id: str
     message: str
     retryable: bool = True
+    code: str = "AGENT.TASK.DISPATCH_FAILED"
+
+
+class AgentTaskProvenanceError(ValueError):
+    """Stable fail-closed error for unavailable server-side provenance."""
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class PlatformSnapshotAuthorityStore(Protocol):
+    def latest_usable(self, *, owner: str) -> object | None: ...
+
+
+class CapsuleAuthorityService(Protocol):
+    def get_raw_capsule(self, run_id: str) -> object: ...
+
+
+def build_server_provenance_authority(
+    *,
+    workspace_resolver: WorkspaceResolver,
+    platform_snapshot_store: PlatformSnapshotAuthorityStore,
+) -> ProvenanceAuthorityResolver:
+    """Bind Run provenance only to approved Workspace and platform authorities."""
+
+    def resolve(owner: str, workspace_id: str, snapshot_digest: str) -> tuple[str, str]:
+        workspace_resolver(owner, workspace_id, snapshot_digest)
+        try:
+            selection = platform_snapshot_store.latest_usable(owner=owner)
+        except Exception as exc:
+            raise AgentTaskProvenanceError(
+                "AgentTask 平台事实权威不可用，未创建 Run。",
+                code="AGENT.TASK.PROVENANCE_AUTHORITY_UNAVAILABLE",
+            ) from exc
+        record = None if selection is None else getattr(selection, "record", None)
+        snapshot_id = None if record is None else getattr(record, "snapshot_id", None)
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise AgentTaskProvenanceError(
+                "AgentTask 平台事实权威不可用，未创建 Run。",
+                code="AGENT.TASK.PROVENANCE_AUTHORITY_UNAVAILABLE",
+            )
+        return (
+            f"workspace-snapshot:sha256:{snapshot_digest}",
+            f"snapshot:{snapshot_id}",
+        )
+
+    return resolve
+
+
+def build_verified_capsule_authority(
+    service: CapsuleAuthorityService,
+) -> CapsuleAuthorityResolver:
+    """Return manifest-bound references only for verified raw Capsules."""
+
+    def resolve(run_id: str) -> str:
+        capsule = service.get_raw_capsule(run_id)
+        if getattr(capsule, "valid", None) is not True:
+            raise ValueError("Capsule integrity verification failed")
+        capsule_id = getattr(capsule, "capsule_id", None)
+        if not isinstance(capsule_id, str) or not capsule_id or "\0" in capsule_id:
+            raise ValueError("Capsule identity is invalid")
+        digest = getattr(capsule, "manifest_sha256", None)
+        if not isinstance(digest, str) or len(digest) != 64:
+            raise ValueError("Capsule manifest digest is invalid")
+        try:
+            int(digest, 16)
+        except ValueError as exc:
+            raise ValueError("Capsule manifest digest is invalid") from exc
+        return f"capsule:{capsule_id}:sha256:{digest.lower()}"
+
+    return resolve
 
 
 @dataclass(frozen=True)
@@ -69,6 +148,8 @@ class AgentTaskService:
         control_repository: ControlRepository,
         workspace_resolver: WorkspaceResolver,
         provenance_authority_resolver: ProvenanceAuthorityResolver | None = None,
+        evidence_binder: EvidenceBinder | None = None,
+        capsule_authority_resolver: CapsuleAuthorityResolver | None = None,
         run_workdir_resolver: RunWorkdirResolver | None = None,
         worker_id: str,
         lease_seconds: int = 60,
@@ -87,6 +168,8 @@ class AgentTaskService:
         self.control_repository = control_repository
         self.workspace_resolver = workspace_resolver
         self.provenance_authority_resolver = provenance_authority_resolver
+        self.evidence_binder = evidence_binder
+        self.capsule_authority_resolver = capsule_authority_resolver
         self.run_workdir_resolver = run_workdir_resolver
         self.worker_id = worker_id
         self.lease_seconds = lease_seconds
@@ -103,6 +186,9 @@ class AgentTaskService:
         request_key: str,
         request: AgentTaskRequest,
         envelope: AgentResourceEnvelope,
+        completion_policy: AgentTaskCompletionPolicy = (
+            AgentTaskCompletionPolicy.EVIDENCE_REQUIRED
+        ),
     ) -> tuple[AgentTaskRecord, bool]:
         session = self.session_store.get_session(session_id, owner=owner)
         turn = self.session_store.get_turn(turn_id, owner=owner)
@@ -125,6 +211,7 @@ class AgentTaskService:
             request_key=request_key,
             request=request,
             envelope=envelope,
+            completion_policy=completion_policy,
         )
         self.control_repository.enqueue(
             message_id=_execute_message_id(task.task_id, task.version),
@@ -151,9 +238,7 @@ class AgentTaskService:
         if not isinstance(blueprint, ProjectBlueprint):
             raise TypeError("blueprint must be a ProjectBlueprint")
         validations = [
-            validation
-            for validation in blueprint.validations
-            if validation.execution == "slurm"
+            validation for validation in blueprint.validations if validation.execution == "slurm"
         ]
         if len(validations) != 1:
             raise ValueError("Blueprint must declare exactly one Slurm validation")
@@ -193,9 +278,7 @@ class AgentTaskService:
             envelope=envelope,
         )
 
-    def request_cancel(
-        self, task_id: str, *, owner: str, expected_version: int
-    ) -> AgentTaskRecord:
+    def request_cancel(self, task_id: str, *, owner: str, expected_version: int) -> AgentTaskRecord:
         task = self.store.request_cancel(
             task_id,
             owner=owner,
@@ -322,14 +405,10 @@ class AgentTaskService:
                     processed = self._dispatch_ready(message)
                 else:
                     processed = self._dispatch_execute(message)
-            except Exception:
-                self._retry(message, "AgentTask dispatch failed")
-                errors.append(
-                    AgentTaskDispatchError(
-                        task_id=message.aggregate_id,
-                        message="AgentTask dispatch failed",
-                    )
-                )
+            except Exception as exc:
+                error = _dispatch_error(message.aggregate_id, exc)
+                self._retry(message, error.message)
+                errors.append(error)
             else:
                 succeeded += int(processed)
         return AgentTaskDispatchBatch(checked=checked, succeeded=succeeded, errors=errors)
@@ -384,12 +463,15 @@ class AgentTaskService:
         try:
             task = self.store.get_task(task_id, owner=owner)
             if task.cancel_requested:
-                completed = self.store.complete_task(
-                    task_id,
-                    lease=lease,
-                    result=AgentTaskResult.cancelled("cancelled before Run creation"),
+                self._persist_terminal_and_enqueue(
+                    task_id=task.task_id,
+                    owner=task.owner,
+                    persist=lambda: self.store.complete_task(
+                        task_id,
+                        lease=lease,
+                        result=AgentTaskResult.cancelled("cancelled before Run creation"),
+                    ),
                 )
-                self._enqueue_ready(completed)
                 self._acknowledge(message)
                 return True
             run_request = self._run_request(task)
@@ -397,9 +479,35 @@ class AgentTaskService:
             self.run_service.prepare(run_request, run_id=run_id, idempotent=True)
             self.store.link_run(task_id, lease=lease, run_id=run_id)
             self.run_service.enqueue_submission(run_id)
-            self.store.release_task(lease)
+            scheduled = self.store.advance_gate(
+                task_id,
+                lease=lease,
+                gate_state=AgentTaskGateState.PENDING,
+                receipt=_schedule_receipt(task, run_id),
+                completion_policy=task.completion_policy,
+            )
+            self.store.release_task(replace(lease, version=scheduled.version))
             self._acknowledge(message)
             return True
+        except AgentTaskProvenanceError as exc:
+            try:
+                self._finalize_without_gate(
+                    task=task,
+                    lease=lease,
+                    result=AgentTaskResult(
+                        status="failed",
+                        evidence_refs=(),
+                        error_code=exc.code,
+                        message=str(exc),
+                    ),
+                    gate_state=AgentTaskGateState.BLOCKED,
+                )
+                self._acknowledge(message)
+                return True
+            except Exception:
+                with suppress(Exception):
+                    self.store.release_task(lease)
+                raise
         except Exception:
             with suppress(Exception):
                 self.store.release_task(lease)
@@ -415,7 +523,10 @@ class AgentTaskService:
             or message_version < 0
         ):
             raise ValueError("AgentTask ready message version is invalid")
-        if task.version != message_version:
+        if task.version < message_version:
+            self._retry(message, "AgentTask terminal transition is not committed")
+            return False
+        if task.version > message_version:
             self._acknowledge(message)
             return True
         if (
@@ -423,6 +534,12 @@ class AgentTaskService:
             and task.state is not AgentTaskState.AUTH_REQUIRED
         ):
             raise RuntimeError("AgentTask is not ready to wake its Session")
+        if task.state is AgentTaskState.SUCCEEDED and (
+            task.gate_state is not AgentTaskGateState.COMPLETED
+            or task.gate_receipt is None
+            or task.legacy_gate_unverified
+        ):
+            raise RuntimeError("AgentTask successful result has no verified Evidence gate")
         session = self.session_store.get_session(task.session_id, owner=owner)
         self.session_service.submit_message(
             session_id=task.session_id,
@@ -445,12 +562,265 @@ class AgentTaskService:
         if task.cancel_requested and run.state not in TERMINAL_RUN_STATES:
             run = self.run_service.cancel(run.run_id)
         if run.state not in TERMINAL_RUN_STATES:
-            self.store.release_task(lease)
+            waiting = self.store.advance_gate(
+                task_id,
+                lease=lease,
+                gate_state=AgentTaskGateState.AWAITING_RUN_TERMINAL,
+            )
+            self.store.release_task(replace(lease, version=waiting.version))
             return False
-        result = _result_for_run(run.state, run.run_id)
-        completed = self.store.complete_task(task_id, lease=lease, result=result)
+        if run.state is RunState.AUTH_REQUIRED:
+            return self._finalize_without_gate(
+                task=task,
+                lease=lease,
+                result=_result_for_run(run.state, run.run_id),
+                gate_state=AgentTaskGateState.INPUT_REQUIRED,
+            )
+        if run.state is not RunState.SUCCEEDED:
+            if run.state is RunState.CANCELLED:
+                return self._finalize_without_gate(
+                    task=task,
+                    lease=lease,
+                    result=_result_for_run(run.state, run.run_id),
+                    gate_state=AgentTaskGateState.CANCELLED,
+                )
+            if run.state is RunState.COLLECTION_FAILED or run.collection_state in {
+                CollectionState.FAILED,
+                CollectionState.DEGRADED,
+            }:
+                return self._finalize_without_gate(
+                    task=task,
+                    lease=lease,
+                    result=AgentTaskResult(
+                        status="failed",
+                        evidence_refs=self._terminal_evidence_refs(run.run_id),
+                        error_code="EVIDENCE.UNAVAILABLE",
+                        message="Evidence 收集已达到重试上限，任务无法完成。",
+                    ),
+                    gate_state=AgentTaskGateState.FAILED,
+                )
+            if run.state is RunState.FAILED and run.collection_state in {
+                CollectionState.PENDING,
+                CollectionState.RUNNING,
+            }:
+                waiting = self.store.advance_gate(
+                    task_id,
+                    lease=lease,
+                    gate_state=AgentTaskGateState.AWAITING_EVIDENCE,
+                )
+                self.store.release_task(replace(lease, version=waiting.version))
+                return False
+            refs = self._terminal_evidence_refs(run.run_id)
+            return self._finalize_without_gate(
+                task=task,
+                lease=lease,
+                result=_result_for_run(run.state, run.run_id, evidence_refs=refs),
+                gate_state=(
+                    AgentTaskGateState.ORPHANED
+                    if run.state is RunState.ORPHANED
+                    else AgentTaskGateState.FAILED
+                ),
+            )
+        if run.collection_state in {CollectionState.PENDING, CollectionState.RUNNING}:
+            waiting = self.store.advance_gate(
+                task_id,
+                lease=lease,
+                gate_state=AgentTaskGateState.AWAITING_EVIDENCE,
+            )
+            self.store.release_task(replace(lease, version=waiting.version))
+            return False
+        if run.collection_state in {CollectionState.FAILED, CollectionState.DEGRADED}:
+            return self._finalize_without_gate(
+                task=task,
+                lease=lease,
+                result=AgentTaskResult(
+                    status="failed",
+                    evidence_refs=self._terminal_evidence_refs(run.run_id),
+                    error_code="EVIDENCE.UNAVAILABLE",
+                    message="Evidence 收集已达到重试上限，任务无法完成。",
+                ),
+                gate_state=AgentTaskGateState.FAILED,
+            )
+        if self.evidence_binder is None:
+            return self._finalize_without_gate(
+                task=task,
+                lease=lease,
+                result=AgentTaskResult(
+                    status="failed",
+                    evidence_refs=(),
+                    error_code="EVIDENCE.AUTHORITY_UNAVAILABLE",
+                    message="Evidence 权威校验服务不可用，任务已安全终止。",
+                ),
+                gate_state=AgentTaskGateState.BLOCKED,
+            )
+        refs = self._terminal_evidence_refs(run.run_id)
+        try:
+            receipt = self.evidence_binder.verify_terminal_gate(
+                run.run_id,
+                refs,
+                {
+                    "workspace_revision": run.workspace_revision,
+                    "workspace_digest": run.workspace_digest,
+                    "legacy_boundary": run.workspace_revision is None,
+                    "source_revision": run.source_revision,
+                    "platform_snapshot_ref": run.platform_snapshot_ref,
+                },
+                task_id=task.task_id,
+            )
+        except EvidenceBindingError:
+            return self._finalize_without_gate(
+                task=task,
+                lease=lease,
+                result=AgentTaskResult(
+                    status="failed",
+                    evidence_refs=refs,
+                    error_code="EVIDENCE.INTEGRITY_FAILED",
+                    message="Evidence 完整性校验失败，任务已阻止完成。",
+                ),
+                gate_state=AgentTaskGateState.BLOCKED,
+            )
+        except Exception:
+            return self._finalize_without_gate(
+                task=task,
+                lease=lease,
+                result=AgentTaskResult(
+                    status="failed",
+                    evidence_refs=refs,
+                    error_code="EVIDENCE.AUTHORITY_UNAVAILABLE",
+                    message="Evidence 权威校验服务不可用，任务已安全终止。",
+                ),
+                gate_state=AgentTaskGateState.BLOCKED,
+            )
+        if task.completion_policy.requires_capsule:
+            if self.capsule_authority_resolver is None:
+                return self._finalize_without_gate(
+                    task=task,
+                    lease=lease,
+                    result=AgentTaskResult(
+                        status="failed",
+                        evidence_refs=refs,
+                        error_code="CAPSULE.AUTHORITY_UNAVAILABLE",
+                        message="Capsule 权威校验服务不可用，任务已安全终止。",
+                    ),
+                    gate_state=AgentTaskGateState.BLOCKED,
+                )
+            if run.capsule_state in {CapsuleState.PENDING, CapsuleState.RUNNING}:
+                waiting = self.store.advance_gate(
+                    task_id,
+                    lease=lease,
+                    gate_state=AgentTaskGateState.AWAITING_CAPSULE,
+                )
+                self.store.release_task(replace(lease, version=waiting.version))
+                return False
+            if run.capsule_state is not CapsuleState.READY:
+                return self._finalize_without_gate(
+                    task=task,
+                    lease=lease,
+                    result=AgentTaskResult(
+                        status="failed",
+                        evidence_refs=refs,
+                        error_code="CAPSULE.UNAVAILABLE",
+                        message="Capsule 构建失败，任务已安全终止。",
+                    ),
+                    gate_state=AgentTaskGateState.FAILED,
+                )
+            try:
+                capsule_ref = self.capsule_authority_resolver(run.run_id)
+                receipt = replace(
+                    receipt,
+                    capsule_ref=_required_provenance_text(capsule_ref, "capsule_ref"),
+                    capsule_state="READY",
+                )
+            except Exception:
+                return self._finalize_without_gate(
+                    task=task,
+                    lease=lease,
+                    result=AgentTaskResult(
+                        status="failed",
+                        evidence_refs=refs,
+                        error_code="CAPSULE.INTEGRITY_FAILED",
+                        message="Capsule 完整性校验失败，任务已阻止完成。",
+                    ),
+                    gate_state=AgentTaskGateState.BLOCKED,
+                )
+            gate_state = AgentTaskGateState.AWAITING_CAPSULE
+        else:
+            gate_state = AgentTaskGateState.AWAITING_INTEGRITY
+        gated = self.store.advance_gate(
+            task_id,
+            lease=lease,
+            gate_state=gate_state,
+            receipt=receipt,
+        )
+        final_lease = replace(lease, version=gated.version)
+        completed = self._persist_terminal_and_enqueue(
+            task_id=task.task_id,
+            owner=task.owner,
+            persist=lambda: self.store.finalize_task(
+                task_id,
+                lease=final_lease,
+                gate_receipt=receipt,
+                result=AgentTaskResult.succeeded(receipt.evidence_refs),
+            ),
+        )
+        return completed.state is AgentTaskState.SUCCEEDED
+
+    def _terminal_evidence_refs(self, run_id: str) -> tuple[str, ...]:
+        return tuple(
+            f"evidence://runs/{run_id}/{item.logical_path}"
+            for item in self.run_service.store.list_evidence_objects(run_id)
+        )
+
+    def _finalize_without_gate(
+        self,
+        *,
+        task: AgentTaskRecord,
+        lease: AgentTaskLease,
+        result: AgentTaskResult,
+        gate_state: AgentTaskGateState,
+    ) -> bool:
+        current_lease = lease
+        if gate_state is not AgentTaskGateState.INPUT_REQUIRED:
+            advanced = self.store.advance_gate(
+                task.task_id,
+                lease=current_lease,
+                gate_state=gate_state,
+            )
+            current_lease = replace(current_lease, version=advanced.version)
+        completed = self._persist_terminal_and_enqueue(
+            task_id=task.task_id,
+            owner=task.owner,
+            persist=lambda: self.store.complete_task(
+                task.task_id,
+                lease=current_lease,
+                result=result,
+            ),
+        )
+        return (
+            completed.state in TERMINAL_TASK_STATES
+            or completed.state is AgentTaskState.AUTH_REQUIRED
+        )
+
+    def _persist_terminal_and_enqueue(
+        self,
+        *,
+        task_id: str,
+        owner: str,
+        persist: Callable[[], AgentTaskRecord],
+    ) -> AgentTaskRecord:
+        try:
+            completed = persist()
+        except Exception:
+            with suppress(Exception):
+                recovered = self.store.get_task(task_id, owner=owner)
+                if (
+                    recovered.state in TERMINAL_TASK_STATES
+                    or recovered.state is AgentTaskState.AUTH_REQUIRED
+                ):
+                    self._enqueue_ready(recovered)
+            raise
         self._enqueue_ready(completed)
-        return True
+        return completed
 
     def _run_request(self, task: AgentTaskRecord) -> RunSubmitRequest:
         request = task.request
@@ -462,25 +832,45 @@ class AgentTaskService:
         if not workspace.is_dir():
             raise ValueError("AgentTask Workspace is unavailable")
         if "source_revision" in request.payload or "platform_snapshot_ref" in request.payload:
-            raise ValueError("AgentTask provenance payload fields are not trusted")
+            raise AgentTaskProvenanceError(
+                "请求包含不可信的 provenance 字段。",
+                code="AGENT.TASK.PROVENANCE_PAYLOAD_FORBIDDEN",
+            )
         if self.provenance_authority_resolver is None:
-            raise ValueError("AgentTask provenance authority is unavailable")
-        authority_values = self.provenance_authority_resolver(
-            task.owner,
-            task.workspace_id,
-            request.workspace_snapshot_digest,
-        )
-        if (
-            not isinstance(authority_values, tuple)
-            or len(authority_values) != 2
-        ):
-            raise ValueError("AgentTask provenance authority returned invalid values")
+            raise AgentTaskProvenanceError(
+                "AgentTask 权威来源不可用，未创建 Run。",
+                code="AGENT.TASK.PROVENANCE_AUTHORITY_UNAVAILABLE",
+            )
+        try:
+            authority_values = self.provenance_authority_resolver(
+                task.owner,
+                task.workspace_id,
+                request.workspace_snapshot_digest,
+            )
+        except AgentTaskProvenanceError:
+            raise
+        except Exception as exc:
+            raise AgentTaskProvenanceError(
+                "AgentTask 权威来源不可用，未创建 Run。",
+                code="AGENT.TASK.PROVENANCE_AUTHORITY_UNAVAILABLE",
+            ) from exc
+        if not isinstance(authority_values, tuple) or len(authority_values) != 2:
+            raise AgentTaskProvenanceError(
+                "AgentTask 权威来源返回了无效事实，未创建 Run。",
+                code="AGENT.TASK.PROVENANCE_AUTHORITY_INVALID",
+            )
         source_revision, platform_snapshot_ref = authority_values
-        source_revision = _required_provenance_text(source_revision, "source_revision")
-        platform_snapshot_ref = _required_provenance_text(
-            platform_snapshot_ref,
-            "platform_snapshot_ref",
-        )
+        try:
+            source_revision = _required_provenance_text(source_revision, "source_revision")
+            platform_snapshot_ref = _required_provenance_text(
+                platform_snapshot_ref,
+                "platform_snapshot_ref",
+            )
+        except (TypeError, ValueError) as exc:
+            raise AgentTaskProvenanceError(
+                "AgentTask 权威来源返回了无效事实，未创建 Run。",
+                code="AGENT.TASK.PROVENANCE_AUTHORITY_INVALID",
+            ) from exc
         script = request.payload.get("script")
         if not isinstance(script, str) or not script or len(script.encode()) > 262_144:
             raise ValueError("AgentTask validation script is invalid")
@@ -523,14 +913,21 @@ class AgentTaskService:
         )
 
     def _enqueue_ready(self, task: AgentTaskRecord) -> None:
+        self._enqueue_ready_intent(
+            task_id=task.task_id,
+            owner=task.owner,
+            version=task.version,
+        )
+
+    def _enqueue_ready_intent(self, *, task_id: str, owner: str, version: int) -> None:
         self.control_repository.enqueue(
-            message_id=_ready_message_id(task.task_id, task.version),
+            message_id=_ready_message_id(task_id, version),
             topic=AGENT_TASK_READY_TOPIC,
-            aggregate_id=task.task_id,
+            aggregate_id=task_id,
             payload={
-                "task_id": task.task_id,
-                "owner": task.owner,
-                "version": task.version,
+                "task_id": task_id,
+                "owner": owner,
+                "version": version,
             },
         )
 
@@ -571,30 +968,111 @@ def _message_identity(message: OutboxMessage, topic: str) -> tuple[str, str]:
     return task_id, owner
 
 
-def _result_for_run(state: RunState, run_id: str) -> AgentTaskResult:
-    evidence_refs = (f"run:{run_id}",)
+def _dispatch_error(task_id: str, error: Exception) -> AgentTaskDispatchError:
+    if isinstance(error, AgentTaskProvenanceError):
+        return AgentTaskDispatchError(
+            task_id=task_id,
+            message=str(error),
+            retryable=True,
+            code=error.code,
+        )
+    return AgentTaskDispatchError(
+        task_id=task_id,
+        message="AgentTask 调度失败。",
+    )
+
+
+def _result_for_run(
+    state: RunState,
+    run_id: str,
+    *,
+    evidence_refs: tuple[str, ...] | None = None,
+) -> AgentTaskResult:
+    refs = evidence_refs if evidence_refs is not None else (f"run:{run_id}",)
     if state is RunState.SUCCEEDED:
-        return AgentTaskResult.succeeded(evidence_refs)
+        return AgentTaskResult.succeeded(refs)
     if state is RunState.CANCELLED:
         return AgentTaskResult(
             status="cancelled",
-            evidence_refs=evidence_refs,
+            evidence_refs=refs,
             error_code=None,
             message="validation Run was cancelled",
         )
     if state is RunState.AUTH_REQUIRED:
         return AgentTaskResult(
             status="auth_required",
-            evidence_refs=evidence_refs,
+            evidence_refs=refs,
             error_code="AUTH.REQUIRED",
             message="cluster authentication is required",
         )
     return AgentTaskResult(
         status="failed",
-        evidence_refs=evidence_refs,
+        evidence_refs=refs,
         error_code="VALIDATION.RUN_FAILED",
         message=f"validation Run ended in {state.value}",
     )
+
+
+def _schedule_receipt(task: AgentTaskRecord, run_id: str) -> AgentTaskScheduleReceipt:
+    request_digest = _canonical_digest(
+        {
+            "partition": task.request.partition,
+            "qos": task.request.qos,
+            "cpus": task.request.cpus,
+            "memory_mib": task.request.memory_mib,
+            "gpu_type": task.request.gpu_type,
+            "gpus": task.request.gpus,
+            "walltime_seconds": task.request.walltime_seconds,
+            "tasks": task.request.tasks,
+            "submissions": task.request.submissions,
+            "workspace_snapshot_digest": task.request.workspace_snapshot_digest,
+            "payload": task.request.payload,
+        }
+    )
+    envelope_digest = _canonical_digest(
+        {
+            "partition": task.resource_envelope.partition,
+            "qos": task.resource_envelope.qos,
+            "cpus": task.resource_envelope.cpus,
+            "memory_mib": task.resource_envelope.memory_mib,
+            "gpu_type": task.resource_envelope.gpu_type,
+            "gpus": task.resource_envelope.gpus,
+            "walltime_seconds": task.resource_envelope.walltime_seconds,
+            "max_tasks": task.resource_envelope.max_tasks,
+            "max_submissions": task.resource_envelope.max_submissions,
+            "workspace_snapshot_digest": (task.resource_envelope.workspace_snapshot_digest),
+            "expires_at": task.resource_envelope.expires_at,
+            "approved_by": task.resource_envelope.approved_by,
+        }
+    )
+    return AgentTaskScheduleReceipt(
+        receipt_id=f"receipt-{hashlib.sha256(f'{task.task_id}:{run_id}'.encode()).hexdigest()[:40]}",
+        task_id=task.task_id,
+        owner=task.owner,
+        session_id=task.session_id,
+        originating_turn_id=task.turn_id,
+        request_digest=request_digest,
+        idempotency_key=task.request_key,
+        run_id=run_id,
+        submit_state="pending",
+        resource_envelope_id=envelope_digest,
+        workspace_revision=None,
+        workspace_digest=task.request.workspace_snapshot_digest,
+        completion_policy=task.completion_policy,
+        created_at=task.updated_at,
+        legacy_boundary=True,
+    )
+
+
+def _canonical_digest(value: Mapping[str, object]) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _followup_message(task: AgentTaskRecord) -> str:
@@ -602,8 +1080,7 @@ def _followup_message(task: AgentTaskRecord) -> str:
     status = result.status if result is not None else task.state.value
     refs = ", ".join(result.evidence_refs if result is not None else ()) or "none"
     return (
-        f"Validation task {task.task_id} is {status}. "
-        f"Review persisted Evidence references: {refs}."
+        f"Validation task {task.task_id} is {status}. Review persisted Evidence references: {refs}."
     )
 
 
@@ -659,7 +1136,7 @@ def _materialize_snapshot_script(workspace: Path, validation_script: str) -> str
         "#!/bin/bash",
         "set -euo pipefail",
         'pilot107_workspace="$(mktemp -d "${SLURM_TMPDIR:-/tmp}/pilot107-agent-task-XXXXXX")"',
-        'trap \'rm -rf -- "$pilot107_workspace"\' EXIT',
+        "trap 'rm -rf -- \"$pilot107_workspace\"' EXIT",
     ]
     for relative_path, content, mode in files:
         quoted_path = shlex.quote(relative_path.as_posix())
@@ -684,9 +1161,7 @@ def _without_shebang(script: str) -> str:
     return remainder if separator else ""
 
 
-def _resource_text(
-    hints: Mapping[str, str | int], key: str, default: str
-) -> str:
+def _resource_text(hints: Mapping[str, str | int], key: str, default: str) -> str:
     value = hints.get(key, default)
     if not isinstance(value, str):
         raise TypeError(f"Blueprint resource hint {key} must be text")
@@ -707,9 +1182,7 @@ def _resource_int(
     return value
 
 
-def _resource_walltime(
-    hints: Mapping[str, str | int], default_seconds: int
-) -> int:
+def _resource_walltime(hints: Mapping[str, str | int], default_seconds: int) -> int:
     value = hints.get("time_limit")
     if value is None:
         return default_seconds
@@ -743,9 +1216,7 @@ def _resource_walltime(
     return total
 
 
-def _tool_string(
-    arguments: Mapping[str, object], key: str, *, maximum: int = 128
-) -> str:
+def _tool_string(arguments: Mapping[str, object], key: str, *, maximum: int = 128) -> str:
     value = arguments.get(key)
     if not isinstance(value, str) or not value or len(value) > maximum or "\0" in value:
         raise _tool_error("validation request is invalid")

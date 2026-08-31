@@ -14,14 +14,27 @@ from pilot107.agent.project import (
 )
 from pilot107.agent.store import SQLiteAgentSessionStore
 from pilot107.agent.task_store import SQLiteAgentTaskStore
-from pilot107.agent.tasks import AgentResourceEnvelope, AgentTaskRequest, AgentTaskState
+from pilot107.agent.tasks import (
+    AgentResourceEnvelope,
+    AgentTaskCompletionPolicy,
+    AgentTaskGateState,
+    AgentTaskRequest,
+    AgentTaskState,
+)
 from pilot107.agent.tool_gateway import AgentToolGatewayError
 from pilot107.core.control_repository import SQLiteControlRepository
+from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
-from pilot107.core.states import RunState
+from pilot107.core.states import CapsuleState, RunState
 from pilot107.services.agent_session_service import AgentSessionService
-from pilot107.services.agent_task_service import AgentTaskService
+from pilot107.services.agent_task_service import (
+    AgentTaskProvenanceError,
+    AgentTaskService,
+    build_server_provenance_authority,
+    build_verified_capsule_authority,
+)
+from pilot107.worker.evidence import EvidenceStore
 
 
 class MutableClock:
@@ -33,6 +46,85 @@ class MutableClock:
 
     def advance(self, seconds: int) -> None:
         self.value += timedelta(seconds=seconds)
+
+
+def test_server_provenance_authority_binds_workspace_and_platform_snapshot(
+    tmp_path: Path,
+) -> None:
+    class Snapshot:
+        snapshot_id = "platform-1"
+
+    class Selection:
+        record = Snapshot()
+
+    class SnapshotStore:
+        def latest_usable(self, *, owner: str):
+            assert owner == "alice"
+            return Selection()
+
+    seen: list[tuple[str, str, str]] = []
+    resolver = build_server_provenance_authority(
+        workspace_resolver=lambda owner, workspace_id, digest: (
+            seen.append((owner, workspace_id, digest)) or tmp_path
+        ),
+        platform_snapshot_store=SnapshotStore(),
+    )
+
+    assert resolver("alice", "workspace-1", "a" * 64) == (
+        f"workspace-snapshot:sha256:{'a' * 64}",
+        "snapshot:platform-1",
+    )
+    assert seen == [("alice", "workspace-1", "a" * 64)]
+
+
+def test_server_provenance_authority_fails_closed_without_platform_snapshot(
+    tmp_path: Path,
+) -> None:
+    class SnapshotStore:
+        def latest_usable(self, *, owner: str):
+            return None
+
+    resolver = build_server_provenance_authority(
+        workspace_resolver=lambda owner, workspace_id, digest: tmp_path,
+        platform_snapshot_store=SnapshotStore(),
+    )
+
+    with pytest.raises(AgentTaskProvenanceError) as error:
+        resolver("alice", "workspace-1", "a" * 64)
+    assert error.value.code == "AGENT.TASK.PROVENANCE_AUTHORITY_UNAVAILABLE"
+    assert "权威" in str(error.value)
+
+
+def test_verified_capsule_authority_returns_manifest_bound_reference() -> None:
+    class Capsule:
+        valid = True
+        capsule_id = "capsule_1"
+        manifest_sha256 = "a" * 64
+
+    class CapsuleService:
+        def get_raw_capsule(self, run_id: str):
+            assert run_id == "run_1"
+            return Capsule()
+
+    resolver = build_verified_capsule_authority(CapsuleService())
+
+    assert resolver("run_1") == f"capsule:capsule_1:sha256:{'a' * 64}"
+
+
+def test_verified_capsule_authority_rejects_malformed_manifest_digest() -> None:
+    class Capsule:
+        valid = True
+        capsule_id = "capsule_1"
+        manifest_sha256 = "model-claimed-digest"
+
+    class CapsuleService:
+        def get_raw_capsule(self, run_id: str):
+            return Capsule()
+
+    resolver = build_verified_capsule_authority(CapsuleService())
+
+    with pytest.raises(ValueError, match="manifest digest"):
+        resolver("run_1")
 
 
 def _request() -> AgentTaskRequest:
@@ -88,6 +180,7 @@ class Harness:
         self.session_store = SQLiteAgentSessionStore(self.database, clock=self.clock)
         self.task_store = SQLiteAgentTaskStore(self.database, clock=self.clock)
         self.run_store = RunStore(self.database)
+        self.evidence_store = EvidenceStore(tmp_path / "evidence")
         self.backend = InMemorySlurmBackend()
         self.run_service = RunService(
             store=self.run_store,
@@ -118,6 +211,11 @@ class Harness:
                 if provenance_authority
                 else None
             ),
+            evidence_binder=EvidenceBinder(
+                store=self.run_store,
+                evidence_root=self.evidence_store.root,
+            ),
+            capsule_authority_resolver=lambda run_id: f"capsule:{run_id}",
             worker_id="task-worker",
             lease_seconds=30,
         )
@@ -161,7 +259,13 @@ class Harness:
         )
         self.turn_id = turn.turn_id
 
-    def schedule(self):
+    def schedule(
+        self,
+        *,
+        completion_policy: AgentTaskCompletionPolicy = (
+            AgentTaskCompletionPolicy.EVIDENCE_REQUIRED
+        ),
+    ):
         return self.service.schedule_validation(
             owner="alice",
             session_id=self.session.session_id,
@@ -171,7 +275,106 @@ class Harness:
             request_key="validation-1",
             request=_request(),
             envelope=_envelope(),
+            completion_policy=completion_policy,
         )
+
+    def finish_run(self, run_id: str, *, exit_code: str = "0:0") -> None:
+        self.run_service.dispatch_due_submissions(limit=10)
+        run = self.run_store.get_run(run_id)
+        assert run.job_id is not None
+        self.backend.advance_job(
+            job_id=run.job_id,
+            raw_state="COMPLETED" if exit_code == "0:0" else "FAILED",
+            exit_code=exit_code,
+        )
+        self.run_service.reconcile_once(run_id)
+
+    def finalize_evidence(self, run_id: str, *, content: str = "validated\n") -> tuple[str, ...]:
+        run = self.run_store.get_run(run_id)
+        artifact = self.evidence_store.write_text(
+            run_id=run_id,
+            logical_path="logs/stdout.txt",
+            content=content,
+            content_type="text/plain",
+        )
+        artifact_ref = f"evidence://runs/{run_id}/{artifact.logical_path}"
+        boundary = {
+            "workspace_revision": run.workspace_revision,
+            "workspace_digest": run.workspace_digest,
+            "source_revision": run.source_revision,
+            "platform_snapshot_ref": run.platform_snapshot_ref,
+        }
+        finalized_at = "2026-08-31T00:00:00+00:00"
+        self.run_store.upsert_evidence_objects(
+            run_id,
+            [
+                {
+                    "object_id": f"ev-{run_id}-stdout",
+                    "category": "logs",
+                    "logical_path": artifact.logical_path,
+                    "store_path": str(artifact.path),
+                    "source_uri": artifact_ref,
+                    "sha256": artifact.sha256,
+                    "size_bytes": artifact.size_bytes,
+                    "mime_type": artifact.content_type,
+                    "collection_status": "collected",
+                    "mutable_during_run": False,
+                    "finalized_at": finalized_at,
+                    **boundary,
+                }
+            ],
+        )
+        manifest = self.evidence_store.write_json(
+            run_id=run_id,
+            logical_path="manifest/manifest.json",
+            payload={
+                "schema": "pilot107.evidence_manifest.v1",
+                "run_id": run_id,
+                "owner": run.owner,
+                "job_id": run.job_id,
+                "workspace_revision": run.workspace_revision,
+                "workspace_digest": run.workspace_digest,
+                "legacy_boundary": True,
+                "source_revision": run.source_revision,
+                "platform_snapshot_ref": run.platform_snapshot_ref,
+                "artifacts": [
+                    {
+                        "logical_path": artifact.logical_path,
+                        "size_bytes": artifact.size_bytes,
+                        "sha256": artifact.sha256,
+                        "content_type": artifact.content_type,
+                        "evidence_ref": artifact_ref,
+                    }
+                ],
+                "warnings": [],
+            },
+        )
+        manifest_ref = f"evidence://runs/{run_id}/{manifest.logical_path}"
+        self.run_store.upsert_evidence_objects(
+            run_id,
+            [
+                {
+                    "object_id": f"ev-{run_id}-manifest",
+                    "category": "manifest",
+                    "logical_path": manifest.logical_path,
+                    "store_path": str(manifest.path),
+                    "source_uri": manifest_ref,
+                    "sha256": manifest.sha256,
+                    "size_bytes": manifest.size_bytes,
+                    "mime_type": manifest.content_type,
+                    "collection_status": "collected",
+                    "mutable_during_run": False,
+                    "finalized_at": finalized_at,
+                    **boundary,
+                }
+            ],
+        )
+        with self.run_store.connect() as connection:
+            connection.execute(
+                "UPDATE runs SET collection_state = 'succeeded' WHERE run_id = ?",
+                (run_id,),
+            )
+        return artifact_ref, manifest_ref
 
 
 def test_schedule_dispatches_one_linked_run_and_releases_processing_lease(
@@ -198,9 +401,7 @@ def test_schedule_dispatches_one_linked_run_and_releases_processing_lease(
     assert "validate.py" in runs[0].script
     assert "cHJpbnQoJ3NuYXBzaG90IHZhbGlkYXRpb24nKQo=" in runs[0].script
     assert runs[0].resource_plan["memory_unit"] == "M"
-    assert harness.run_service.enqueue_submission(
-        persisted.linked_run_id
-    ).state == "pending"
+    assert harness.run_service.enqueue_submission(persisted.linked_run_id).state == "pending"
 
 
 def test_agent_task_run_persists_provenance_without_inventing_values(tmp_path: Path) -> None:
@@ -258,10 +459,15 @@ def test_agent_task_does_not_copy_model_provenance_fields_into_run(tmp_path: Pat
         envelope=_envelope(),
     )
 
-    batch = harness.service.dispatch_due(limit=10)
-    assert batch.succeeded == 0
-    assert batch.errors
+    batch = harness.service.dispatch_due(limit=1)
+    assert batch.succeeded == 1
+    assert batch.errors == []
     persisted = harness.task_store.get_task(task.task_id, owner="alice")
+    assert persisted.state is AgentTaskState.FAILED
+    assert persisted.gate_state is AgentTaskGateState.BLOCKED
+    assert persisted.result is not None
+    assert persisted.result.error_code == "AGENT.TASK.PROVENANCE_PAYLOAD_FORBIDDEN"
+    assert "不可信" in persisted.result.message
     assert persisted.linked_run_id is None
 
 
@@ -269,11 +475,16 @@ def test_agent_task_without_provenance_authority_creates_no_run(tmp_path: Path) 
     harness = Harness(tmp_path, provenance_authority=False)
     task, _ = harness.schedule()
 
-    batch = harness.service.dispatch_due(limit=10)
+    batch = harness.service.dispatch_due(limit=1)
 
-    assert batch.succeeded == 0
-    assert batch.errors
+    assert batch.succeeded == 1
+    assert batch.errors == []
     persisted = harness.task_store.get_task(task.task_id, owner="alice")
+    assert persisted.state is AgentTaskState.FAILED
+    assert persisted.gate_state is AgentTaskGateState.BLOCKED
+    assert persisted.result is not None
+    assert persisted.result.error_code == "AGENT.TASK.PROVENANCE_AUTHORITY_UNAVAILABLE"
+    assert "权威来源不可用" in persisted.result.message
     assert persisted.linked_run_id is None
     runs, _ = harness.run_store.list_runs_page(owner="alice")
     assert runs == []
@@ -287,11 +498,16 @@ def test_agent_task_authority_missing_fields_creates_no_run(tmp_path: Path) -> N
     )
     task, _ = harness.schedule()
 
-    batch = harness.service.dispatch_due(limit=10)
+    batch = harness.service.dispatch_due(limit=1)
 
-    assert batch.succeeded == 0
-    assert batch.errors
+    assert batch.succeeded == 1
+    assert batch.errors == []
     persisted = harness.task_store.get_task(task.task_id, owner="alice")
+    assert persisted.state is AgentTaskState.FAILED
+    assert persisted.gate_state is AgentTaskGateState.BLOCKED
+    assert persisted.result is not None
+    assert persisted.result.error_code == "AGENT.TASK.PROVENANCE_AUTHORITY_INVALID"
+    assert "无效事实" in persisted.result.message
     assert persisted.linked_run_id is None
     runs, _ = harness.run_store.list_runs_page(owner="alice")
     assert runs == []
@@ -306,11 +522,16 @@ def test_agent_task_authority_exception_creates_no_run(tmp_path: Path) -> None:
     harness.service.provenance_authority_resolver = fail_authority
     task, _ = harness.schedule()
 
-    batch = harness.service.dispatch_due(limit=10)
+    batch = harness.service.dispatch_due(limit=1)
 
-    assert batch.succeeded == 0
-    assert batch.errors
+    assert batch.succeeded == 1
+    assert batch.errors == []
     persisted = harness.task_store.get_task(task.task_id, owner="alice")
+    assert persisted.state is AgentTaskState.FAILED
+    assert persisted.gate_state is AgentTaskGateState.BLOCKED
+    assert persisted.result is not None
+    assert persisted.result.error_code == "AGENT.TASK.PROVENANCE_AUTHORITY_UNAVAILABLE"
+    assert "权威来源不可用" in persisted.result.message
     assert persisted.linked_run_id is None
     runs, _ = harness.run_store.list_runs_page(owner="alice")
     assert runs == []
@@ -335,15 +556,8 @@ def test_terminal_validation_wakes_exactly_one_followup_turn(tmp_path: Path) -> 
     persisted = harness.task_store.get_task(task.task_id, owner="alice")
     assert persisted.linked_run_id is not None
     run_id = persisted.linked_run_id
-    harness.run_service.dispatch_due_submissions(limit=10)
-    run = harness.run_store.get_run(run_id)
-    assert run.job_id is not None
-    harness.backend.advance_job(
-        job_id=run.job_id,
-        raw_state="COMPLETED",
-        exit_code="0:0",
-    )
-    harness.run_service.reconcile_once(run_id)
+    harness.finish_run(run_id)
+    evidence_refs = harness.finalize_evidence(run_id)
 
     first = harness.service.reconcile_active(limit=10)
     ready = harness.service.dispatch_due(limit=10)
@@ -360,7 +574,317 @@ def test_terminal_validation_wakes_exactly_one_followup_turn(tmp_path: Path) -> 
     assert second.succeeded == 0
     assert completed.state is AgentTaskState.SUCCEEDED
     assert completed.result is not None
-    assert completed.result.evidence_refs == (f"run:{run_id}",)
+    assert completed.result.evidence_refs == evidence_refs
+    assert len(followups) == 1
+
+
+def test_schedule_receipt_never_completes_agent_task(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+
+    harness.service.dispatch_due(limit=10)
+    scheduled = harness.task_store.get_task(task.task_id, owner="alice")
+    assert scheduled.state is AgentTaskState.RUNNING
+    assert scheduled.schedule_receipt is not None
+    assert scheduled.schedule_receipt.is_terminal is False
+    with harness.control.connect() as connection:
+        ready_count = connection.execute(
+            "SELECT COUNT(*) FROM control_outbox WHERE topic = ?",
+            ("agent.task.ready.v1",),
+        ).fetchone()[0]
+    assert ready_count == 0
+
+
+def test_run_terminal_without_finalized_evidence_stays_awaiting_evidence(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+
+    batch = harness.service.reconcile_active(limit=10)
+    waiting = harness.task_store.get_task(task.task_id, owner="alice")
+
+    assert batch.succeeded == 0
+    assert batch.errors == []
+    assert waiting.state is AgentTaskState.RUNNING
+    assert waiting.gate_state is AgentTaskGateState.AWAITING_EVIDENCE
+    with harness.control.connect() as connection:
+        ready_count = connection.execute(
+            "SELECT COUNT(*) FROM control_outbox WHERE topic = ?",
+            ("agent.task.ready.v1",),
+        ).fetchone()[0]
+    assert ready_count == 0
+
+
+def test_evidence_required_task_completes_without_capsule(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    refs = harness.finalize_evidence(running.linked_run_id)
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    completed = harness.task_store.get_task(task.task_id, owner="alice")
+
+    assert completed.state is AgentTaskState.SUCCEEDED
+    assert completed.gate_state is AgentTaskGateState.COMPLETED
+    assert completed.gate_receipt is not None
+    assert completed.gate_receipt.capsule_state == "not_required"
+    assert completed.result is not None
+    assert completed.result.evidence_refs == refs
+
+
+def test_evidence_and_capsule_task_waits_for_capsule_ready(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule(
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
+    )
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 0
+    waiting = harness.task_store.get_task(task.task_id, owner="alice")
+    assert waiting.state is AgentTaskState.RUNNING
+    assert waiting.gate_state is AgentTaskGateState.AWAITING_CAPSULE
+
+    harness.run_store.update_capsule_state(
+        running.linked_run_id,
+        CapsuleState.READY,
+        event_type="test.capsule_ready",
+    )
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    completed = harness.task_store.get_task(task.task_id, owner="alice")
+    assert completed.gate_receipt is not None
+    assert completed.gate_receipt.capsule_state == "READY"
+    assert completed.gate_receipt.capsule_ref == f"capsule:{running.linked_run_id}"
+
+
+def test_capsule_authority_malformed_reference_blocks_completion(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    harness.service.capsule_authority_resolver = lambda run_id: ""
+    task, _ = harness.schedule(
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
+    )
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    harness.run_store.update_capsule_state(
+        running.linked_run_id,
+        CapsuleState.READY,
+        event_type="test.capsule_ready",
+    )
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    blocked = harness.task_store.get_task(task.task_id, owner="alice")
+    assert blocked.state is AgentTaskState.FAILED
+    assert blocked.gate_state is AgentTaskGateState.BLOCKED
+    assert blocked.result is not None
+    assert blocked.result.error_code == "CAPSULE.INTEGRITY_FAILED"
+
+
+def test_integrity_failure_blocks_task(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    evidence_path = harness.evidence_store.run_root(running.linked_run_id) / "logs/stdout.txt"
+    evidence_path.write_text("tampered\n", encoding="utf-8")
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    blocked = harness.task_store.get_task(task.task_id, owner="alice")
+    assert blocked.state is AgentTaskState.FAILED
+    assert blocked.gate_state is AgentTaskGateState.BLOCKED
+    assert blocked.result is not None
+    assert blocked.result.error_code == "EVIDENCE.INTEGRITY_FAILED"
+
+
+def test_evidence_authority_runtime_failure_terminates_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    assert harness.service.evidence_binder is not None
+
+    def authority_failure(*args, **kwargs):
+        raise RuntimeError("evidence database unavailable")
+
+    monkeypatch.setattr(
+        harness.service.evidence_binder,
+        "verify_terminal_gate",
+        authority_failure,
+    )
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    blocked = harness.task_store.get_task(task.task_id, owner="alice")
+    assert blocked.state is AgentTaskState.FAILED
+    assert blocked.gate_state is AgentTaskGateState.BLOCKED
+    assert blocked.result is not None
+    assert blocked.result.error_code == "EVIDENCE.AUTHORITY_UNAVAILABLE"
+    assert "权威校验" in blocked.result.message
+
+
+def test_collection_exhaustion_finishes_as_evidence_unavailable(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    with harness.run_store.connect() as connection:
+        connection.execute(
+            "UPDATE runs SET collection_state = 'failed' WHERE run_id = ?",
+            (running.linked_run_id,),
+        )
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    failed = harness.task_store.get_task(task.task_id, owner="alice")
+    assert failed.state is AgentTaskState.FAILED
+    assert failed.gate_state is AgentTaskGateState.FAILED
+    assert failed.result is not None
+    assert failed.result.error_code == "EVIDENCE.UNAVAILABLE"
+
+
+def test_failed_run_with_collection_exhaustion_reports_evidence_unavailable(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id, exit_code="1:0")
+    with harness.run_store.connect() as connection:
+        connection.execute(
+            "UPDATE runs SET collection_state = 'failed' WHERE run_id = ?",
+            (running.linked_run_id,),
+        )
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    failed = harness.task_store.get_task(task.task_id, owner="alice")
+    assert failed.state is AgentTaskState.FAILED
+    assert failed.result is not None
+    assert failed.result.error_code == "EVIDENCE.UNAVAILABLE"
+
+
+def test_orphaned_run_without_collection_tasks_terminates_instead_of_polling(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.run_store.update_state(
+        running.linked_run_id,
+        RunState.ORPHANED,
+        event_type="test.orphaned",
+    )
+
+    assert harness.service.reconcile_active(limit=10).succeeded == 1
+    failed = harness.task_store.get_task(task.task_id, owner="alice")
+    assert failed.state is AgentTaskState.FAILED
+    assert failed.gate_state is AgentTaskGateState.ORPHANED
+    assert failed.result is not None
+    assert failed.result.error_code == "VALIDATION.RUN_FAILED"
+
+
+def test_ready_followup_is_idempotent_after_finalizer_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    original_finalize = harness.task_store.finalize_task
+    crashed = False
+
+    def finalize_then_crash(*args, **kwargs):
+        nonlocal crashed
+        completed = original_finalize(*args, **kwargs)
+        if not crashed:
+            crashed = True
+            raise RuntimeError("simulated crash after task finalizer")
+        return completed
+
+    monkeypatch.setattr(harness.task_store, "finalize_task", finalize_then_crash)
+    first = harness.service.reconcile_active(limit=10)
+    ready = harness.service.dispatch_due(limit=10)
+    replay = harness.service.dispatch_due(limit=10)
+    followups = [
+        turn
+        for turn in harness.session_store.list_recoverable_turns(limit=10)
+        if turn.request_key == f"agent-task:{task.task_id}:ready"
+    ]
+
+    assert len(first.errors) == 1
+    assert ready.succeeded == 1
+    assert replay.checked == 0
+    assert len(followups) == 1
+
+
+def test_ready_intent_is_not_visible_before_terminal_finalizer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    original_finalize = harness.task_store.finalize_task
+
+    def crash_before_finalize(*args, **kwargs):
+        raise RuntimeError("simulated crash before task finalizer")
+
+    monkeypatch.setattr(harness.task_store, "finalize_task", crash_before_finalize)
+    failed = harness.service.reconcile_active(limit=10)
+
+    with harness.control.connect() as connection:
+        ready_count = connection.execute(
+            "SELECT COUNT(*) FROM control_outbox WHERE topic = ?",
+            ("agent.task.ready.v1",),
+        ).fetchone()[0]
+    assert len(failed.errors) == 1
+    assert ready_count == 0
+
+    monkeypatch.setattr(harness.task_store, "finalize_task", original_finalize)
+    harness.clock.advance(31)
+    replay = harness.service.reconcile_active(limit=10)
+    ready = harness.service.dispatch_due(limit=10)
+    followups = [
+        turn
+        for turn in harness.session_store.list_recoverable_turns(limit=10)
+        if turn.request_key == f"agent-task:{task.task_id}:ready"
+    ]
+
+    assert replay.succeeded == 1
+    assert ready.succeeded == 1
     assert len(followups) == 1
 
 
@@ -398,9 +922,7 @@ def test_validation_tool_uses_server_approved_envelope_and_terminates_turn(
     tmp_path: Path,
 ) -> None:
     harness = Harness(tmp_path)
-    handler = harness.service.build_tool_handler(
-        lambda owner, session_id: _envelope()
-    )
+    handler = harness.service.build_tool_handler(lambda owner, session_id: _envelope())
     arguments: dict[str, object] = {
         "project_id": "project-1",
         "workspace_id": "workspace-1",
@@ -429,9 +951,7 @@ def test_validation_tool_uses_server_approved_envelope_and_terminates_turn(
 
 def test_validation_tool_returns_stable_resource_envelope_error(tmp_path: Path) -> None:
     harness = Harness(tmp_path)
-    handler = harness.service.build_tool_handler(
-        lambda owner, session_id: _envelope()
-    )
+    handler = harness.service.build_tool_handler(lambda owner, session_id: _envelope())
     arguments: dict[str, object] = {
         "project_id": "project-1",
         "workspace_id": "workspace-1",
@@ -627,6 +1147,7 @@ def test_auth_pause_can_resume_same_linked_run_without_duplicate_submit(
         exit_code="0:0",
     )
     harness.run_service.reconcile_once(run.run_id)
+    harness.finalize_evidence(run.run_id)
     harness.service.reconcile_active(limit=10)
     harness.service.dispatch_due(limit=10)
     completed = harness.task_store.get_task(task.task_id, owner="alice")
