@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -37,6 +40,18 @@ from pilot107.services.agent_task_service import (
     build_verified_capsule_authority,
 )
 from pilot107.worker.evidence import EvidenceStore
+
+
+@pytest.fixture(autouse=True)
+def _restore_test_tree_permissions(tmp_path: Path) -> Iterator[None]:
+    """Keep pytest cleanup safe after production code seals fixture directories."""
+
+    yield
+    for path in sorted(tmp_path.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if path.is_symlink():
+            continue
+        with suppress(FileNotFoundError):
+            path.chmod(0o700 if path.is_dir() else 0o600)
 
 
 class MutableClock:
@@ -794,7 +809,7 @@ def test_integrity_failure_blocks_task(tmp_path: Path) -> None:
     assert blocked.result.error_code == "EVIDENCE.INTEGRITY_FAILED"
 
 
-def test_terminal_revalidation_rejects_evidence_tampered_after_first_gate(
+def test_terminal_seal_rejects_evidence_tamper_after_first_gate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -809,13 +824,17 @@ def test_terminal_revalidation_rejects_evidence_tampered_after_first_gate(
     assert harness.service.evidence_binder is not None
     original_verify = harness.service.evidence_binder.verify_terminal_gate
     calls = 0
+    mutation_error: OSError | None = None
 
     def verify_then_tamper(*args, **kwargs):
-        nonlocal calls
+        nonlocal calls, mutation_error
         calls += 1
         receipt = original_verify(*args, **kwargs)
         if calls == 1:
-            evidence_path.write_text("tampered after first gate\n", encoding="utf-8")
+            try:
+                evidence_path.write_text("tampered after first gate\n", encoding="utf-8")
+            except OSError as exc:
+                mutation_error = exc
         return receipt
 
     monkeypatch.setattr(
@@ -825,16 +844,15 @@ def test_terminal_revalidation_rejects_evidence_tampered_after_first_gate(
     )
 
     harness.service.reconcile_active(limit=10)
-    blocked = harness.task_store.get_task(task.task_id, owner="alice")
+    completed = harness.task_store.get_task(task.task_id, owner="alice")
 
-    assert calls == 2
-    assert blocked.state is AgentTaskState.FAILED
-    assert blocked.gate_state is AgentTaskGateState.BLOCKED
-    assert blocked.result is not None
-    assert blocked.result.error_code == "EVIDENCE.INTEGRITY_FAILED"
+    assert calls >= 1
+    assert isinstance(mutation_error, PermissionError)
+    assert completed.state is AgentTaskState.SUCCEEDED
+    assert completed.gate_state is AgentTaskGateState.COMPLETED
 
 
-def test_terminal_revalidation_rejects_run_provenance_changed_after_first_gate(
+def test_terminal_run_provenance_trigger_rejects_change_after_first_gate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -848,17 +866,21 @@ def test_terminal_revalidation_rejects_run_provenance_changed_after_first_gate(
     assert harness.service.evidence_binder is not None
     original_verify = harness.service.evidence_binder.verify_terminal_gate
     calls = 0
+    update_rejected = False
 
     def verify_then_mutate_run(*args, **kwargs):
-        nonlocal calls
+        nonlocal calls, update_rejected
         calls += 1
         receipt = original_verify(*args, **kwargs)
         if calls == 1:
-            with harness.run_store.connect() as connection:
-                connection.execute(
-                    "UPDATE runs SET source_revision = ? WHERE run_id = ?",
-                    ("workspace-source-tampered", running.linked_run_id),
-                )
+            try:
+                with harness.run_store.connect() as connection:
+                    connection.execute(
+                        "UPDATE runs SET source_revision = ? WHERE run_id = ?",
+                        ("workspace-source-tampered", running.linked_run_id),
+                    )
+            except sqlite3.IntegrityError:
+                update_rejected = True
         return receipt
 
     monkeypatch.setattr(
@@ -868,13 +890,12 @@ def test_terminal_revalidation_rejects_run_provenance_changed_after_first_gate(
     )
 
     harness.service.reconcile_active(limit=10)
-    blocked = harness.task_store.get_task(task.task_id, owner="alice")
+    completed = harness.task_store.get_task(task.task_id, owner="alice")
 
-    assert calls == 2
-    assert blocked.state is AgentTaskState.FAILED
-    assert blocked.gate_state is AgentTaskGateState.BLOCKED
-    assert blocked.result is not None
-    assert blocked.result.error_code == "EVIDENCE.INTEGRITY_FAILED"
+    assert calls >= 1
+    assert update_rejected is True
+    assert completed.state is AgentTaskState.SUCCEEDED
+    assert completed.gate_state is AgentTaskGateState.COMPLETED
 
 
 def test_missing_evidence_authority_blocks_task(tmp_path: Path) -> None:

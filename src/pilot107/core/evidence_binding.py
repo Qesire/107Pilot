@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
+import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from contextlib import suppress
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 from pilot107.agent.tasks import AgentTaskGateReceipt
-from pilot107.core.run_store import EvidenceObjectRecord, RunStore, utc_now_iso
-from pilot107.core.states import CollectionState, RunState
+from pilot107.core.run_store import EvidenceObjectRecord, EvidenceSealRecord, RunStore, utc_now_iso
+from pilot107.core.states import CollectionState, EvidenceSealState, RunState
 
 _SENSITIVE_ASSIGNMENT = re.compile(
     r"(?im)^(?P<prefix>[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY)"
@@ -160,7 +164,119 @@ class EvidenceBinder:
         *,
         task_id: str | None = None,
     ) -> AgentTaskGateReceipt:
-        """Re-read authoritative Run/Evidence facts and issue an immutable gate receipt.
+        """Issue a receipt only for a sealed, still-consistent Evidence tree."""
+
+        seal = self.store.get_evidence_seal(run_id)
+        if seal.state is not EvidenceSealState.SEALED:
+            raise EvidenceBindingError(
+                "evidence_seal_invalid"
+                if seal.state is EvidenceSealState.INVALID
+                else "evidence_not_sealed"
+            )
+        if seal.digest is None or seal.marker_ref is None:
+            raise EvidenceBindingError("evidence_seal_metadata_missing")
+        receipt = self._verify_terminal_gate_facts(
+            run_id,
+            evidence_refs,
+            workspace_boundary,
+            task_id=task_id,
+        )
+        marker_bytes = _seal_marker_bytes(
+            run=self.store.get_run(run_id),
+            objects=self.store.list_evidence_objects(run_id),
+            object_set_digest=receipt.evidence_digest,
+        )
+        marker_path = _seal_marker_path(self.evidence_root, run_id)
+        expected_ref = _seal_marker_ref(run_id)
+        if seal.marker_ref != expected_ref:
+            raise EvidenceBindingError("evidence_seal_marker_binding_mismatch")
+        try:
+            persisted = marker_path.read_bytes()
+        except OSError as exc:
+            raise EvidenceBindingError("evidence_seal_marker_unreadable") from exc
+        if persisted != marker_bytes:
+            raise EvidenceBindingError("evidence_seal_marker_mismatch")
+        digest = hashlib.sha256(persisted).hexdigest()
+        if digest != seal.digest:
+            raise EvidenceBindingError("evidence_seal_digest_mismatch")
+        return replace(
+            receipt,
+            seal_digest=digest,
+            seal_marker_ref=seal.marker_ref,
+        )
+
+    def seal_terminal_evidence(
+        self,
+        run_id: str,
+        evidence_refs: tuple[str, ...] | list[str],
+        workspace_boundary: Mapping[str, Any] | Any,
+        *,
+        task_id: str | None = None,
+    ) -> EvidenceSealRecord:
+        """Recoverably publish one terminal Run's registered Evidence as read-only."""
+
+        run = self.store.get_run(run_id)
+        if run.state is not RunState.SUCCEEDED:
+            raise EvidenceBindingError("run_not_succeeded")
+        if run.collection_state is CollectionState.FAILED:
+            raise EvidenceBindingError("evidence_unavailable")
+        if run.collection_state is not CollectionState.SUCCEEDED:
+            raise EvidenceBindingError("collection_incomplete")
+        try:
+            current = self.store.begin_evidence_seal(run_id)
+            if current.state is EvidenceSealState.SEALED:
+                return current
+            receipt = self._verify_terminal_gate_facts(
+                run_id,
+                evidence_refs,
+                workspace_boundary,
+                task_id=task_id,
+            )
+            run = self.store.get_run(run_id)
+            objects = self.store.list_evidence_objects(run_id)
+            paths = _validate_registered_tree(
+                evidence_root=self.evidence_root,
+                run_id=run_id,
+                objects=objects,
+            )
+            marker_bytes = _seal_marker_bytes(
+                run=run,
+                objects=objects,
+                object_set_digest=receipt.evidence_digest,
+            )
+            marker_path = _seal_marker_path(self.evidence_root, run_id)
+            _write_seal_marker(marker_path, marker_bytes)
+            before = {path: _stable_file_fingerprint(str(path)) for path in paths}
+            _make_evidence_tree_read_only(
+                run_root=(self.evidence_root / "runs" / run_id),
+                files=paths,
+            )
+            _make_marker_read_only(marker_path)
+            for path, fingerprint in before.items():
+                if _stable_file_fingerprint(str(path)) != fingerprint:
+                    raise EvidenceBindingError("evidence_file_changed_during_seal")
+            digest = hashlib.sha256(marker_bytes).hexdigest()
+            return self.store.complete_evidence_seal(
+                run_id,
+                digest=digest,
+                marker_ref=_seal_marker_ref(run_id),
+            )
+        except EvidenceBindingError as exc:
+            self.store.invalidate_evidence_seal(run_id, reason=exc.code)
+            raise
+        except ValueError as exc:
+            self.store.invalidate_evidence_seal(run_id, reason=str(exc))
+            raise EvidenceBindingError("evidence_seal_invalid") from exc
+
+    def _verify_terminal_gate_facts(
+        self,
+        run_id: str,
+        evidence_refs: tuple[str, ...] | list[str],
+        workspace_boundary: Mapping[str, Any] | Any,
+        *,
+        task_id: str | None = None,
+    ) -> AgentTaskGateReceipt:
+        """Re-read authoritative Run/Evidence facts without claiming filesystem atomicity.
 
         This method deliberately performs no orchestration.  It only verifies the
         already-persisted terminal Run, finalized object rows, and manifest.  A
@@ -635,3 +751,156 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _seal_marker_ref(run_id: str) -> str:
+    return f"evidence-seal://runs/{run_id}/seal.json"
+
+
+def _seal_marker_path(evidence_root: Path, run_id: str) -> Path:
+    if re.fullmatch(r"[A-Za-z0-9_.:-]+", run_id) is None:
+        raise EvidenceBindingError("evidence_seal_run_id_invalid")
+    return evidence_root / "seals" / run_id / "seal.json"
+
+
+def _seal_marker_bytes(
+    *,
+    run: Any,
+    objects: list[EvidenceObjectRecord],
+    object_set_digest: str,
+) -> bytes:
+    payload = {
+        "schema": "pilot107.evidence_seal.v1",
+        "run_id": run.run_id,
+        "object_set_digest": object_set_digest,
+        "objects": [
+            {
+                "logical_path": obj.logical_path,
+                "sha256": obj.sha256,
+                "size_bytes": obj.size_bytes,
+            }
+            for obj in sorted(objects, key=lambda item: item.logical_path)
+        ],
+        "provenance": {
+            "workspace_revision": run.workspace_revision,
+            "workspace_digest": run.workspace_digest,
+            "source_revision": run.source_revision,
+            "platform_snapshot_ref": run.platform_snapshot_ref,
+        },
+    }
+    return (
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+
+
+def _validate_registered_tree(
+    *,
+    evidence_root: Path,
+    run_id: str,
+    objects: list[EvidenceObjectRecord],
+) -> tuple[Path, ...]:
+    run_root_path = evidence_root / "runs" / run_id
+    if run_root_path.is_symlink():
+        raise EvidenceBindingError("evidence_run_root_symlink")
+    try:
+        run_root = run_root_path.resolve(strict=True)
+    except OSError as exc:
+        raise EvidenceBindingError("evidence_run_root_missing") from exc
+    if not run_root.is_dir():
+        raise EvidenceBindingError("evidence_run_root_invalid")
+    expected: dict[Path, EvidenceObjectRecord] = {}
+    for obj in objects:
+        logical = Path(obj.logical_path)
+        if logical.is_absolute() or ".." in logical.parts:
+            raise EvidenceBindingError("evidence_logical_path_invalid")
+        path = run_root / logical
+        if path.is_symlink():
+            raise EvidenceBindingError("symlink")
+        try:
+            resolved = path.resolve(strict=True)
+            metadata = path.lstat()
+        except OSError as exc:
+            raise EvidenceBindingError("missing_file") from exc
+        if not resolved.is_relative_to(run_root):
+            raise EvidenceBindingError("outside_run_root")
+        if Path(obj.store_path).expanduser().resolve(strict=True) != resolved:
+            raise EvidenceBindingError("store_path_binding_mismatch")
+        if not stat.S_ISREG(metadata.st_mode):
+            raise EvidenceBindingError("not_regular_file")
+        if obj.size_bytes is None or metadata.st_size != obj.size_bytes:
+            raise EvidenceBindingError("size_mismatch")
+        if obj.sha256 is None or _sha256_file(resolved).lower() != obj.sha256.lower():
+            raise EvidenceBindingError("sha256_mismatch")
+        expected[resolved] = obj
+    if not expected:
+        raise EvidenceBindingError("evidence_refs_missing")
+    discovered: set[Path] = set()
+    for path in run_root.rglob("*"):
+        if path.is_symlink():
+            raise EvidenceBindingError("symlink")
+        metadata = path.lstat()
+        if stat.S_ISDIR(metadata.st_mode):
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise EvidenceBindingError("special_file")
+        discovered.add(path.resolve(strict=True))
+    if discovered != set(expected):
+        raise EvidenceBindingError("evidence_registered_tree_mismatch")
+    return tuple(sorted(expected, key=lambda item: item.as_posix()))
+
+
+def _write_seal_marker(marker_path: Path, content: bytes) -> None:
+    marker_dir = marker_path.parent
+    marker_dir.mkdir(parents=True, exist_ok=True)
+    if marker_path.is_symlink():
+        raise EvidenceBindingError("evidence_seal_marker_symlink")
+    if marker_path.exists():
+        try:
+            if marker_path.read_bytes() != content:
+                raise EvidenceBindingError("evidence_seal_marker_mismatch")
+        except OSError as exc:
+            raise EvidenceBindingError("evidence_seal_marker_unreadable") from exc
+        return
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=marker_dir,
+            prefix=".seal-",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_name = handle.name
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, marker_path)
+        temporary_name = None
+        _fsync_directory(marker_dir)
+    finally:
+        if temporary_name is not None:
+            with suppress(FileNotFoundError):
+                Path(temporary_name).unlink()
+
+
+def _make_evidence_tree_read_only(*, run_root: Path, files: tuple[Path, ...]) -> None:
+    for path in files:
+        path.chmod(0o444)
+    directories = [path for path in run_root.rglob("*") if path.is_dir()]
+    directories.append(run_root)
+    for directory in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+        directory.chmod(0o555)
+
+
+def _make_marker_read_only(marker_path: Path) -> None:
+    marker_path.chmod(0o444)
+    marker_path.parent.chmod(0o555)
+    _fsync_directory(marker_path.parent.parent)
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ from pilot107.core.states import (
     CapsuleState,
     CollectionState,
     DiagnosisState,
+    EvidenceSealState,
     ResultStatus,
     RunState,
 )
@@ -173,6 +175,16 @@ class EvidenceObjectRecord:
 
 
 @dataclass(frozen=True)
+class EvidenceSealRecord:
+    run_id: str
+    state: EvidenceSealState
+    digest: str | None
+    marker_ref: str | None
+    sealed_at: str | None
+    invalid_reason: str | None
+
+
+@dataclass(frozen=True)
 class DiagnosisRecord:
     diagnosis_id: str
     run_id: str
@@ -284,6 +296,11 @@ class RunStore:
                     workspace_digest TEXT,
                     source_revision TEXT,
                     platform_snapshot_ref TEXT,
+                    evidence_seal_state TEXT NOT NULL DEFAULT 'OPEN',
+                    evidence_seal_digest TEXT,
+                    evidence_seal_marker_ref TEXT,
+                    evidence_sealed_at TEXT,
+                    evidence_seal_invalid_reason TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -558,8 +575,14 @@ class RunStore:
                 ("workspace_digest", "TEXT"),
                 ("source_revision", "TEXT"),
                 ("platform_snapshot_ref", "TEXT"),
+                ("evidence_seal_state", "TEXT NOT NULL DEFAULT 'OPEN'"),
+                ("evidence_seal_digest", "TEXT"),
+                ("evidence_seal_marker_ref", "TEXT"),
+                ("evidence_sealed_at", "TEXT"),
+                ("evidence_seal_invalid_reason", "TEXT"),
             ):
                 self._ensure_column(conn, table="runs", column=column, definition=definition)
+            self._ensure_run_provenance_guard(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id, created_at)"
             )
@@ -1956,6 +1979,142 @@ class RunStore:
                 self._refresh_collection_state(conn, run_id)
         return updated.rowcount == 1
 
+    def get_evidence_seal(self, run_id: str) -> EvidenceSealRecord:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT run_id, evidence_seal_state, evidence_seal_digest, "
+                "evidence_seal_marker_ref, evidence_sealed_at, "
+                "evidence_seal_invalid_reason FROM runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        return EvidenceSealRecord(
+            run_id=str(row["run_id"]),
+            state=EvidenceSealState(str(row["evidence_seal_state"])),
+            digest=(
+                None if row["evidence_seal_digest"] is None
+                else str(row["evidence_seal_digest"])
+            ),
+            marker_ref=(
+                None if row["evidence_seal_marker_ref"] is None
+                else str(row["evidence_seal_marker_ref"])
+            ),
+            sealed_at=(
+                None if row["evidence_sealed_at"] is None else str(row["evidence_sealed_at"])
+            ),
+            invalid_reason=(
+                None
+                if row["evidence_seal_invalid_reason"] is None
+                else str(row["evidence_seal_invalid_reason"])
+            ),
+        )
+
+    def begin_evidence_seal(self, run_id: str) -> EvidenceSealRecord:
+        """CAS a terminal, fully collected Run into recoverable seal preparation."""
+
+        terminal_values = sorted(state.value for state in TERMINAL_RUN_STATES)
+        placeholders = ",".join("?" for _ in terminal_values)
+        now = utc_now_iso()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT state, collection_state, evidence_seal_state FROM runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            seal_state = EvidenceSealState(str(row["evidence_seal_state"]))
+            if seal_state is EvidenceSealState.INVALID:
+                raise ValueError("Evidence seal is invalid")
+            if seal_state is EvidenceSealState.SEALED:
+                return self.get_evidence_seal(run_id)
+            if str(row["state"]) not in terminal_values:
+                raise ValueError("Evidence can only be sealed for a terminal Run")
+            if str(row["collection_state"]) != CollectionState.SUCCEEDED.value:
+                raise ValueError("Evidence can only be sealed after complete collection")
+            conn.execute(
+                f"UPDATE runs SET evidence_seal_state = ?, updated_at = ? "
+                f"WHERE run_id = ? AND state IN ({placeholders}) "
+                "AND collection_state = ? AND evidence_seal_state = ?",
+                (
+                    EvidenceSealState.PREPARING.value,
+                    now,
+                    run_id,
+                    *terminal_values,
+                    CollectionState.SUCCEEDED.value,
+                    EvidenceSealState.OPEN.value,
+                ),
+            )
+        return self.get_evidence_seal(run_id)
+
+    def complete_evidence_seal(
+        self,
+        run_id: str,
+        *,
+        digest: str,
+        marker_ref: str,
+    ) -> EvidenceSealRecord:
+        if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError("Evidence seal digest is invalid")
+        if not marker_ref:
+            raise ValueError("Evidence seal marker reference is required")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            current = conn.execute(
+                "SELECT evidence_seal_state, evidence_seal_digest, "
+                "evidence_seal_marker_ref FROM runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if current is None:
+                raise KeyError(run_id)
+            state = EvidenceSealState(str(current["evidence_seal_state"]))
+            if state is EvidenceSealState.SEALED:
+                if (
+                    str(current["evidence_seal_digest"]) != digest
+                    or str(current["evidence_seal_marker_ref"]) != marker_ref
+                ):
+                    raise ValueError("Evidence seal replay changed immutable facts")
+                return self.get_evidence_seal(run_id)
+            result = conn.execute(
+                "UPDATE runs SET evidence_seal_state = ?, evidence_seal_digest = ?, "
+                "evidence_seal_marker_ref = ?, evidence_sealed_at = ?, "
+                "evidence_seal_invalid_reason = NULL, updated_at = ? "
+                "WHERE run_id = ? AND evidence_seal_state = ?",
+                (
+                    EvidenceSealState.SEALED.value,
+                    digest,
+                    marker_ref,
+                    now,
+                    now,
+                    run_id,
+                    EvidenceSealState.PREPARING.value,
+                ),
+            )
+            if result.rowcount != 1:
+                raise ValueError("Evidence seal is not preparing")
+        return self.get_evidence_seal(run_id)
+
+    def invalidate_evidence_seal(self, run_id: str, *, reason: str) -> EvidenceSealRecord:
+        bounded_reason = " ".join(reason.split())[:512] or "evidence_seal_invalid"
+        now = utc_now_iso()
+        with self.connect() as conn:
+            result = conn.execute(
+                "UPDATE runs SET evidence_seal_state = ?, evidence_seal_invalid_reason = ?, "
+                "updated_at = ? WHERE run_id = ? AND evidence_seal_state != ?",
+                (
+                    EvidenceSealState.INVALID.value,
+                    bounded_reason,
+                    now,
+                    run_id,
+                    EvidenceSealState.INVALID.value,
+                ),
+            )
+            if result.rowcount == 0:
+                exists = conn.execute("SELECT 1 FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+                if exists is None:
+                    raise KeyError(run_id)
+        return self.get_evidence_seal(run_id)
+
     def upsert_evidence_objects(
         self,
         run_id: str,
@@ -1963,6 +2122,14 @@ class RunStore:
     ) -> list[EvidenceObjectRecord]:
         now = utc_now_iso()
         with self.connect() as conn:
+            seal_row = conn.execute(
+                "SELECT evidence_seal_state FROM runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if seal_row is None:
+                raise KeyError(run_id)
+            if str(seal_row["evidence_seal_state"]) != EvidenceSealState.OPEN.value:
+                raise ValueError("Evidence object writes are forbidden after seal preparation")
             finalized = conn.execute(
                 "SELECT 1 FROM evidence_objects WHERE run_id = ? "
                 "AND integrity_object_set_digest IS NOT NULL LIMIT 1",
@@ -2771,6 +2938,25 @@ class RunStore:
                         )
                     )
                 ) THEN RAISE(ABORT, 'integrity-frozen evidence object is immutable') END;
+            END
+            """
+        )
+
+    def _ensure_run_provenance_guard(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS runs_provenance_immutable_guard
+            BEFORE UPDATE ON runs
+            FOR EACH ROW
+            WHEN NOT (
+                NEW.workspace_revision IS OLD.workspace_revision
+                AND NEW.workspace_digest IS OLD.workspace_digest
+                AND NEW.source_revision IS OLD.source_revision
+                AND NEW.platform_snapshot_ref IS OLD.platform_snapshot_ref
+                AND NEW.resource_plan_json IS OLD.resource_plan_json
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'Run provenance is immutable');
             END
             """
         )

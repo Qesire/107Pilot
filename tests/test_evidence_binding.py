@@ -1,6 +1,9 @@
+import os
 import sqlite3
+import stat
 import tempfile
 import unittest
+from contextlib import suppress
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,9 +28,25 @@ class EvidenceBinderTests(unittest.TestCase):
             owner="alice",
             workdir="/public/home/alice/project",
             script="#!/bin/bash\nfalse\n",
+            resource_plan={
+                "workspace_snapshot_digest": "a" * 64,
+                "workspace_revision": None,
+                "source_revision": "source-revision-1",
+                "platform_snapshot_ref": "snapshot:platform-1",
+            },
+            workspace_revision=None,
+            workspace_digest="a" * 64,
+            source_revision="source-revision-1",
+            platform_snapshot_ref="snapshot:platform-1",
         )
 
     def tearDown(self) -> None:
+        for path in sorted(self.root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if path.is_symlink():
+                continue
+            mode = 0o700 if path.is_dir() else 0o600
+            with suppress(FileNotFoundError):
+                path.chmod(mode)
         self._tmp.cleanup()
 
     def test_binds_hash_verified_text_and_redacts_secrets(self) -> None:
@@ -114,7 +133,7 @@ class EvidenceBinderTests(unittest.TestCase):
         self._mark_run_ready(collection_state="pending")
 
         with self.assertRaisesRegex(Exception, "not_collected|finalized|collection"):
-            self.binder.verify_terminal_gate(
+            self.binder.seal_terminal_evidence(
                 self.run.run_id,
                 (ref,),
                 self._workspace_boundary(),
@@ -130,7 +149,7 @@ class EvidenceBinderTests(unittest.TestCase):
             )
 
         with self.assertRaisesRegex(Exception, "size_mismatch|integrity"):
-            self.binder.verify_terminal_gate(
+            self.binder.seal_terminal_evidence(
                 self.run.run_id,
                 (ref,),
                 self._workspace_boundary(),
@@ -185,6 +204,25 @@ class EvidenceBinderTests(unittest.TestCase):
             ],
         )
 
+        with self.assertRaisesRegex(Exception, "not_sealed"):
+            self.binder.verify_terminal_gate(
+                self.run.run_id,
+                (ref, manifest_ref),
+                {
+                    "workspace_digest": boundary["workspace_digest"],
+                    "workspace_revision": None,
+                    "legacy_boundary": True,
+                },
+            )
+        seal = self.binder.seal_terminal_evidence(
+            self.run.run_id,
+            (ref, manifest_ref),
+            {
+                "workspace_digest": boundary["workspace_digest"],
+                "workspace_revision": None,
+                "legacy_boundary": True,
+            },
+        )
         receipt = self.binder.verify_terminal_gate(
             self.run.run_id,
             (ref, manifest_ref),
@@ -204,6 +242,11 @@ class EvidenceBinderTests(unittest.TestCase):
         self.assertEqual(receipt.evidence_refs, (ref, manifest_ref))
         self.assertEqual(len(receipt.evidence_digest), 64)
         self.assertNotEqual(receipt.evidence_digest, manifest.sha256)
+        self.assertEqual(receipt.seal_digest, seal.digest)
+        self.assertEqual(receipt.seal_marker_ref, seal.marker_ref)
+        evidence_path = self.evidence_store.run_root(self.run.run_id) / "logs/stderr.tail.txt"
+        self.assertEqual(stat.S_IMODE(evidence_path.stat().st_mode), 0o444)
+        self.assertEqual(stat.S_IMODE(evidence_path.parent.stat().st_mode), 0o555)
         self.assertTrue(
             all(
                 item.integrity_checked_at is not None
@@ -221,6 +264,15 @@ class EvidenceBinderTests(unittest.TestCase):
         )
         self.assertEqual(repeated.integrity_verified_at, receipt.integrity_verified_at)
         self.assertEqual(repeated.evidence_digest, receipt.evidence_digest)
+        marker_path = self.root / "evidence" / "seals" / self.run.run_id / "seal.json"
+        marker_bytes = marker_path.read_bytes()
+        replayed = self.binder.seal_terminal_evidence(
+            self.run.run_id,
+            (ref, manifest_ref),
+            boundary,
+        )
+        self.assertEqual(replayed.digest, seal.digest)
+        self.assertEqual(marker_path.read_bytes(), marker_bytes)
         self.store.revoke_evidence_integrity(
             self.run.run_id,
             ("logs/stderr.tail.txt", "manifest/manifest.json"),
@@ -236,12 +288,111 @@ class EvidenceBinderTests(unittest.TestCase):
                 },
             )
 
+    def test_legacy_open_evidence_row_fails_closed_until_sealed(self) -> None:
+        boundary, refs = self._prepare_sealable_evidence()
+
+        self.assertEqual(self.store.get_evidence_seal(self.run.run_id).state.value, "OPEN")
+        with self.assertRaisesRegex(Exception, "evidence_not_sealed"):
+            self.binder.verify_terminal_gate(self.run.run_id, refs, boundary)
+
+    def test_seal_replay_recovers_after_crash_before_db_commit(self) -> None:
+        boundary, refs = self._prepare_sealable_evidence()
+
+        with (
+            patch.object(
+                self.store,
+                "complete_evidence_seal",
+                side_effect=SystemExit("simulated process crash"),
+            ),
+            self.assertRaises(SystemExit),
+        ):
+            self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
+
+        preparing = self.store.get_evidence_seal(self.run.run_id)
+        self.assertEqual(preparing.state.value, "PREPARING_SEAL")
+        marker_path = self.root / "evidence" / "seals" / self.run.run_id / "seal.json"
+        self.assertTrue(marker_path.is_file())
+
+        sealed = self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
+        receipt = self.binder.verify_terminal_gate(self.run.run_id, refs, boundary)
+
+        self.assertEqual(sealed.state.value, "SEALED")
+        self.assertEqual(receipt.seal_digest, sealed.digest)
+
+    def test_seal_replay_resumes_preparing_without_marker(self) -> None:
+        boundary, refs = self._prepare_sealable_evidence()
+        preparing = self.store.begin_evidence_seal(self.run.run_id)
+        self.assertEqual(preparing.state.value, "PREPARING_SEAL")
+
+        sealed = self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
+
+        self.assertEqual(sealed.state.value, "SEALED")
+
+    def test_sealed_marker_tamper_is_rejected(self) -> None:
+        boundary, refs = self._prepare_sealable_evidence()
+        self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
+        marker_path = self.root / "evidence" / "seals" / self.run.run_id / "seal.json"
+        marker_path.parent.chmod(0o755)
+        marker_path.chmod(0o644)
+        marker_path.write_text("{}\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(Exception, "marker_mismatch|digest_mismatch"):
+            self.binder.verify_terminal_gate(self.run.run_id, refs, boundary)
+
+    def test_seal_rejects_symlink_and_marks_run_invalid(self) -> None:
+        boundary, refs = self._prepare_sealable_evidence()
+        evidence_path = self.evidence_store.run_root(self.run.run_id) / "logs/stderr.tail.txt"
+        outside = self.root / "outside-same-bytes.txt"
+        outside.write_text("verified\n", encoding="utf-8")
+        evidence_path.unlink()
+        evidence_path.symlink_to(outside)
+
+        with self.assertRaisesRegex(Exception, "integrity|symlink"):
+            self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
+
+        self.assertEqual(self.store.get_evidence_seal(self.run.run_id).state.value, "INVALID")
+
+    def test_seal_rejects_registered_path_escape(self) -> None:
+        boundary, refs = self._prepare_sealable_evidence()
+        outside = self.root / "outside-registered.txt"
+        outside.write_text("verified\n", encoding="utf-8")
+        with self.store.connect() as conn:
+            conn.execute(
+                "UPDATE evidence_objects SET store_path = ? "
+                "WHERE run_id = ? AND logical_path = 'logs/stderr.tail.txt'",
+                (str(outside), self.run.run_id),
+            )
+
+        with self.assertRaisesRegex(Exception, "integrity|outside|binding"):
+            self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
+
+        self.assertEqual(self.store.get_evidence_seal(self.run.run_id).state.value, "INVALID")
+
+    def test_sealed_tree_rejects_collector_write_replace_and_upsert(self) -> None:
+        boundary, refs = self._prepare_sealable_evidence()
+        self.binder.seal_terminal_evidence(self.run.run_id, refs, boundary)
+        evidence_path = self.evidence_store.run_root(self.run.run_id) / "logs/stderr.tail.txt"
+
+        with self.assertRaises(PermissionError):
+            self.evidence_store.write_text(
+                run_id=self.run.run_id,
+                logical_path="logs/stderr.tail.txt",
+                content="collector retry\n",
+                content_type="text/plain",
+            )
+        replacement = self.root / "replacement.txt"
+        replacement.write_text("replacement\n", encoding="utf-8")
+        with self.assertRaises(PermissionError):
+            os.replace(replacement, evidence_path)
+        with self.assertRaisesRegex(ValueError, "forbidden"):
+            self.store.upsert_evidence_objects(self.run.run_id, [])
+
     def test_terminal_gate_rejects_bounded_collection_exhaustion(self) -> None:
         self._mark_run_ready(collection_state="failed")
         ref = self._register(content="error\n")
 
         with self.assertRaisesRegex(Exception, "evidence_unavailable|collection_failed"):
-            self.binder.verify_terminal_gate(
+            self.binder.seal_terminal_evidence(
                 self.run.run_id,
                 (ref,),
                 self._workspace_boundary(),
@@ -258,7 +409,7 @@ class EvidenceBinderTests(unittest.TestCase):
         }
 
         with self.assertRaisesRegex(Exception, "workspace|provenance|boundary"):
-            self.binder.verify_terminal_gate(
+            self.binder.seal_terminal_evidence(
                 self.run.run_id,
                 (ref, manifest_ref),
                 spoofed,
@@ -269,18 +420,11 @@ class EvidenceBinderTests(unittest.TestCase):
         boundary = self._workspace_boundary()
         ref = self._register(content="verified\n", metadata=boundary)
         _, manifest_ref = self._register_manifest(ref, boundary)
-        with self.store.connect() as conn:
+        with self.assertRaises(sqlite3.IntegrityError), self.store.connect() as conn:
             conn.execute(
                 "UPDATE runs SET workspace_digest = NULL, source_revision = NULL, "
                 "platform_snapshot_ref = NULL WHERE run_id = ?",
                 (self.run.run_id,),
-            )
-
-        with self.assertRaisesRegex(Exception, "run.*provenance|provenance"):
-            self.binder.verify_terminal_gate(
-                self.run.run_id,
-                (ref, manifest_ref),
-                boundary,
             )
 
     def test_terminal_gate_rejects_file_changed_after_integrity_freeze(self) -> None:
@@ -305,7 +449,7 @@ class EvidenceBinderTests(unittest.TestCase):
             ),
             self.assertRaisesRegex(Exception, "stable|changed|integrity"),
         ):
-            self.binder.verify_terminal_gate(
+            self.binder.seal_terminal_evidence(
                 self.run.run_id,
                 (ref, manifest_ref),
                 boundary,
@@ -339,7 +483,7 @@ class EvidenceBinderTests(unittest.TestCase):
         missing_marker = {key: value for key, value in boundary.items() if key != "legacy_boundary"}
 
         with self.assertRaisesRegex(Exception, "legacy|boundary"):
-            self.binder.verify_terminal_gate(
+            self.binder.seal_terminal_evidence(
                 self.run.run_id,
                 (ref, manifest_ref),
                 missing_marker,
@@ -374,7 +518,7 @@ class EvidenceBinderTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(Exception, "manifest|registered|object"):
-            self.binder.verify_terminal_gate(
+            self.binder.seal_terminal_evidence(
                 self.run.run_id,
                 (ref, manifest_ref),
                 boundary,
@@ -390,7 +534,7 @@ class EvidenceBinderTests(unittest.TestCase):
         ref = self._register(content="verified\n")
 
         with self.assertRaisesRegex(Exception, "exit_code"):
-            self.binder.verify_terminal_gate(
+            self.binder.seal_terminal_evidence(
                 self.run.run_id,
                 (ref,),
                 self._workspace_boundary(),
@@ -446,6 +590,13 @@ class EvidenceBinderTests(unittest.TestCase):
                 objects={evidence_object.logical_path: evidence_object},
                 refs=(ref,),
             )
+
+    def _prepare_sealable_evidence(self) -> tuple[dict[str, object], tuple[str, str]]:
+        self._mark_run_ready()
+        boundary = self._workspace_boundary()
+        ref = self._register(content="verified\n", metadata=boundary)
+        _, manifest_ref = self._register_manifest(ref, boundary)
+        return boundary, (ref, manifest_ref)
 
     def _register(
         self,

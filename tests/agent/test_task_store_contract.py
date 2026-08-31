@@ -86,6 +86,28 @@ def test_gate_receipt_carries_legacy_workspace_boundary_without_inventing_revisi
     assert receipt.capsule_state == "not_required"
 
 
+def test_gate_receipt_round_trip_preserves_optional_evidence_seal_binding() -> None:
+    receipt = AgentTaskGateReceipt(
+        task_id="task-1",
+        run_id="run-1",
+        run_terminal_state="completed",
+        evidence_refs=("evidence-1",),
+        evidence_digest="a" * 64,
+        integrity_verified_at="2026-08-19T00:05:00Z",
+        workspace_revision=None,
+        workspace_digest="b" * 64,
+        legacy_boundary=True,
+        capsule_ref=None,
+        capsule_state="not_required",
+        seal_digest="c" * 64,
+        seal_marker_ref="evidence-seal://runs/run-1/seal.json",
+    )
+
+    payload = agent_task_gate_receipt_payload(receipt)
+
+    assert AgentTaskGateReceipt(**payload) == receipt
+
+
 def test_gate_state_preserves_legacy_terminal_wire_state() -> None:
     assert AgentTaskGateState.COMPLETED.value == "completed"
     assert AgentTaskState.SUCCEEDED.value == "succeeded"

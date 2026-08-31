@@ -221,6 +221,49 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
         self.assertIn("CREATE TRIGGER evidence_objects_integrity_guard", schema)
         self.assertIn("IS DISTINCT FROM", schema)
 
+    def test_evidence_seal_migration_adds_recoverable_run_state(self) -> None:
+        from pilot107.core.postgres_domain_schema import _MIGRATIONS
+
+        migration_id, statements = next(
+            migration
+            for migration in _MIGRATIONS
+            if migration[0] == "004a.030.evidence_seal_state"
+        )
+        schema = "\n".join(statements)
+
+        self.assertEqual(migration_id, "004a.030.evidence_seal_state")
+        for column in (
+            "evidence_seal_state",
+            "evidence_seal_digest",
+            "evidence_seal_marker_ref",
+            "evidence_sealed_at",
+            "evidence_seal_invalid_reason",
+        ):
+            self.assertIn(f"ADD COLUMN IF NOT EXISTS {column}", schema)
+        self.assertIn("DEFAULT 'OPEN'", schema)
+
+    def test_run_provenance_guard_migration_freezes_all_effective_sources(self) -> None:
+        from pilot107.core.postgres_domain_schema import _MIGRATIONS
+
+        migration_id, statements = next(
+            migration
+            for migration in _MIGRATIONS
+            if migration[0] == "004a.031.run_provenance_immutable_guard"
+        )
+        schema = "\n".join(statements)
+
+        self.assertEqual(migration_id, "004a.031.run_provenance_immutable_guard")
+        self.assertIn("pilot107_run_provenance_immutable_guard", schema)
+        for column in (
+            "workspace_revision",
+            "workspace_digest",
+            "source_revision",
+            "platform_snapshot_ref",
+            "resource_plan_json",
+        ):
+            self.assertIn(f"NEW.{column} IS DISTINCT FROM OLD.{column}", schema)
+        self.assertIn("CREATE TRIGGER runs_provenance_immutable_guard", schema)
+
     def test_agent_migration_uses_native_postgres_types_and_fencing_index(self) -> None:
         from pilot107.core.postgres_domain_schema import _MIGRATIONS
 

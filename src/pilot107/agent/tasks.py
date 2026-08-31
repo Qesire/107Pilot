@@ -330,6 +330,8 @@ class AgentTaskGateReceipt:
     platform_snapshot_ref: str | None = None
     source_revision: str | None = None
     terminal_at: str | None = None
+    seal_digest: str | None = None
+    seal_marker_ref: str | None = None
 
     def __post_init__(self) -> None:
         _identifier(self.task_id, "task_id")
@@ -377,6 +379,10 @@ class AgentTaskGateReceipt:
             _bounded_text(self.platform_snapshot_ref, "platform_snapshot_ref", maximum=4096)
         if self.source_revision is not None:
             _bounded_text(self.source_revision, "source_revision", maximum=4096)
+        if self.seal_digest is not None:
+            _digest(self.seal_digest, "seal_digest")
+        if self.seal_marker_ref is not None:
+            _bounded_text(self.seal_marker_ref, "seal_marker_ref", maximum=4096)
         if self.terminal_at is not None:
             object.__setattr__(
                 self, "terminal_at", timestamp(parse_timestamp(self.terminal_at, "terminal_at"))
@@ -679,6 +685,10 @@ def agent_task_gate_receipt_payload(value: AgentTaskGateReceipt) -> dict[str, An
         payload["source_revision"] = value.source_revision
     if value.terminal_at is not None:
         payload["terminal_at"] = value.terminal_at
+    if value.seal_digest is not None:
+        payload["seal_digest"] = value.seal_digest
+    if value.seal_marker_ref is not None:
+        payload["seal_marker_ref"] = value.seal_marker_ref
     return payload
 
 

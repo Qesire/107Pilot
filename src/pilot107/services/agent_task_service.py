@@ -670,6 +670,18 @@ class AgentTaskService:
             )
         refs = self._terminal_evidence_refs(run.run_id)
         try:
+            self.evidence_binder.seal_terminal_evidence(
+                run.run_id,
+                refs,
+                {
+                    "workspace_revision": run.workspace_revision,
+                    "workspace_digest": run.workspace_digest,
+                    "legacy_boundary": run.workspace_revision is None,
+                    "source_revision": run.source_revision,
+                    "platform_snapshot_ref": run.platform_snapshot_ref,
+                },
+                task_id=task.task_id,
+            )
             receipt = self.evidence_binder.verify_terminal_gate(
                 run.run_id,
                 refs,
@@ -829,11 +841,11 @@ class AgentTaskService:
     ) -> AgentTaskGateReceipt:
         """Re-read cross-store authorities immediately before the Task CAS.
 
-        This is an auditable convergence protocol, not a claim that the Task DB,
-        Run DB, Capsule store, and filesystem share one atomic transaction.  The
-        second immutable receipt closes normal orchestration races; an
-        administrator who can mutate authorities after this read remains outside
-        the application trust boundary.
+        This is defense in depth, not the filesystem finalization protocol.  The
+        durable Evidence seal and Run provenance trigger close normal application
+        races; this re-read only checks that the Task CAS still binds the same
+        authoritative receipt.  An administrator who can chmod sealed trees or
+        disable database triggers remains outside the application trust boundary.
         """
         if self.evidence_binder is None or task.linked_run_id is None:
             raise RuntimeError("Evidence authority is unavailable")

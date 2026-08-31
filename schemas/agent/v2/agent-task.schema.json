@@ -192,7 +192,9 @@
         "legacy_boundary": {"type": "boolean"},
         "capsule_ref": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1, "maxLength": 4096}]},
         "capsule_state": {"enum": ["READY", "not_required"]},
-        "terminal_at": {"$ref": "#/$defs/timestamp"}
+        "terminal_at": {"$ref": "#/$defs/timestamp"},
+        "seal_digest": {"$ref": "#/$defs/digest"},
+        "seal_marker_ref": {"type": "string", "minLength": 1, "maxLength": 4096}
       },
       "additionalProperties": false,
       "allOf": [

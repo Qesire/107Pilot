@@ -59,6 +59,15 @@ class ResultStatus(StrEnum):
     INVALID = "INVALID"
 
 
+class EvidenceSealState(StrEnum):
+    """Durable publication state for one Run's authoritative Evidence tree."""
+
+    OPEN = "OPEN"
+    PREPARING = "PREPARING_SEAL"
+    SEALED = "SEALED"
+    INVALID = "INVALID"
+
+
 ACTIVE_JOB_RUN_STATES = frozenset(
     {
         RunState.SUBMITTED,

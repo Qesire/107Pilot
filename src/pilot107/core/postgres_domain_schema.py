@@ -1045,6 +1045,47 @@ _RUN_PROVENANCE_SCHEMA = _statements(
     "ALTER TABLE runs ADD COLUMN IF NOT EXISTS platform_snapshot_ref TEXT"
 )
 
+_EVIDENCE_SEAL_SCHEMA = _statements(
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS evidence_seal_state "
+    "TEXT NOT NULL DEFAULT 'OPEN'"
+    "\n-- statement\n"
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS evidence_seal_digest TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS evidence_seal_marker_ref TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS evidence_sealed_at TIMESTAMPTZ"
+    "\n-- statement\n"
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS evidence_seal_invalid_reason TEXT"
+)
+
+_RUN_PROVENANCE_IMMUTABLE_GUARD_SCHEMA = _statements(
+    """
+    CREATE OR REPLACE FUNCTION pilot107_run_provenance_immutable_guard()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+        IF NEW.workspace_revision IS DISTINCT FROM OLD.workspace_revision OR
+           NEW.workspace_digest IS DISTINCT FROM OLD.workspace_digest OR
+           NEW.source_revision IS DISTINCT FROM OLD.source_revision OR
+           NEW.platform_snapshot_ref IS DISTINCT FROM OLD.platform_snapshot_ref OR
+           NEW.resource_plan_json IS DISTINCT FROM OLD.resource_plan_json THEN
+            RAISE EXCEPTION 'Run provenance is immutable';
+        END IF;
+        RETURN NEW;
+    END;
+    $$
+    """
+    "\n-- statement\n"
+    "DROP TRIGGER IF EXISTS runs_provenance_immutable_guard ON runs"
+    "\n-- statement\n"
+    """
+    CREATE TRIGGER runs_provenance_immutable_guard
+    BEFORE UPDATE ON runs
+    FOR EACH ROW EXECUTE FUNCTION pilot107_run_provenance_immutable_guard()
+    """
+)
+
 _EVIDENCE_OBJECT_IMMUTABLE_GUARD_SCHEMA = _statements(
     "ALTER TABLE evidence_objects ADD COLUMN IF NOT EXISTS integrity_invalidated_at TIMESTAMPTZ"
     "\n-- statement\n"
@@ -1508,6 +1549,11 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.027.run_provenance", _RUN_PROVENANCE_SCHEMA),
     ("004a.028.evidence_object_immutable_guard", _EVIDENCE_OBJECT_IMMUTABLE_GUARD_SCHEMA),
     ("004a.029.agent_task_ready_recovery", _AGENT_TASK_READY_RECOVERY_SCHEMA),
+    ("004a.030.evidence_seal_state", _EVIDENCE_SEAL_SCHEMA),
+    (
+        "004a.031.run_provenance_immutable_guard",
+        _RUN_PROVENANCE_IMMUTABLE_GUARD_SCHEMA,
+    ),
 )
 
 
