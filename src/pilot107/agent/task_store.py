@@ -32,6 +32,25 @@ from pilot107.agent.tasks import (
 )
 from pilot107.core.schema_migrations import SchemaMigration, apply_schema_migrations
 
+_GATE_STATE_RANK = {
+    AgentTaskGateState.CREATED: 0,
+    AgentTaskGateState.ADMITTED: 1,
+    AgentTaskGateState.SUBMITTING: 2,
+    AgentTaskGateState.PENDING: 3,
+    AgentTaskGateState.RUNNING: 4,
+    AgentTaskGateState.AWAITING_RUN_TERMINAL: 5,
+    AgentTaskGateState.AWAITING_EVIDENCE: 6,
+    AgentTaskGateState.AWAITING_INTEGRITY: 7,
+    AgentTaskGateState.AWAITING_CAPSULE: 8,
+    AgentTaskGateState.COMPLETED: 9,
+    AgentTaskGateState.INPUT_REQUIRED: 9,
+    AgentTaskGateState.CANCELLING: 9,
+    AgentTaskGateState.CANCELLED: 9,
+    AgentTaskGateState.FAILED: 9,
+    AgentTaskGateState.BLOCKED: 9,
+    AgentTaskGateState.ORPHANED: 9,
+}
+
 AGENT_TASK_MIGRATIONS = (
     SchemaMigration(
         migration_id="006c.001.agent_tasks",
@@ -245,7 +264,7 @@ class SQLiteAgentTaskStore:
                     evidence_refs_json, capsule_state, legacy_gate_unverified
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, NULL, NULL,
                           0, NULL, NULL, 0, ?, ?, ?, 'created', '[]',
-                          'not_required', 1)
+                          'not_required', 0)
                 ON CONFLICT (owner, request_key) DO NOTHING
                 """,
                 _insert_values(candidate),
@@ -322,7 +341,7 @@ class SQLiteAgentTaskStore:
                 UPDATE agent_tasks
                 SET state = 'running', lease_owner = ?, lease_expires_at = ?,
                     fencing_token = fencing_token + 1, version = version + 1,
-                    updated_at = ?
+                    heartbeat_at = ?, updated_at = ?
                 WHERE task_id = ? AND owner = ?
                   AND ((state = 'pending' AND cancel_requested = 0
                     AND envelope_expires_at > ?) OR (
@@ -335,6 +354,7 @@ class SQLiteAgentTaskStore:
                 (
                     worker_id,
                     expires_at,
+                    now_text,
                     now_text,
                     task_id,
                     owner,
@@ -368,12 +388,13 @@ class SQLiteAgentTaskStore:
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             updated = connection.execute(
-                "UPDATE agent_tasks SET lease_expires_at = ?, updated_at = ? "
+                "UPDATE agent_tasks SET lease_expires_at = ?, heartbeat_at = ?, updated_at = ? "
                 "WHERE task_id = ? AND owner = ? AND state = 'running' "
                 "AND lease_owner = ? AND lease_expires_at > ? "
                 "AND fencing_token = ? AND version = ?",
                 (
                     expires_at,
+                    timestamp(now),
                     timestamp(now),
                     lease.task_id,
                     lease.owner,
@@ -454,6 +475,18 @@ class SQLiteAgentTaskStore:
         if not isinstance(result, AgentTaskResult):
             raise TypeError("result must be AgentTaskResult")
         target = AgentTaskState(result.status)
+        if result.status == "succeeded":
+            current = self.get_task(task_id, owner=lease.owner)
+            if current.gate_receipt is None:
+                raise AgentTaskConflict(
+                    "successful AgentTask completion requires a gate receipt"
+                )
+            return self.finalize_task(
+                task_id,
+                lease=lease,
+                gate_receipt=current.gate_receipt,
+                result=result,
+            )
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
@@ -512,6 +545,8 @@ class SQLiteAgentTaskStore:
                 gate_state = AgentTaskGateState(gate_state)
             except (TypeError, ValueError) as exc:
                 raise ValueError("gate_state is invalid") from exc
+        if gate_state is AgentTaskGateState.COMPLETED:
+            raise AgentTaskConflict("completed gate state is written only by finalize_task")
         if receipt is not None and not isinstance(
             receipt, (AgentTaskGateReceipt, AgentTaskScheduleReceipt)
         ):
@@ -540,11 +575,16 @@ class SQLiteAgentTaskStore:
             integrity_checked_at = receipt.integrity_verified_at
             capsule_ref = receipt.capsule_ref
             capsule_state = receipt.capsule_state
+        # Reject malformed or terminal candidates before touching the database.
+        if receipt is not None and not receipt_payload:
+            raise ValueError("gate receipt candidate is invalid")
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             current_row = self._assert_lease(connection, lease)
             current = _task_from_row(current_row)
             target_policy = completion_policy or current.completion_policy
+            if _GATE_STATE_RANK[gate_state] < _GATE_STATE_RANK[current.gate_state]:
+                raise AgentTaskConflict("gate state transition is not monotonic")
             if receipt is not None:
                 if receipt.task_id != current.task_id:
                     raise AgentTaskConflict("AgentTask receipt task binding is invalid")
@@ -554,6 +594,14 @@ class SQLiteAgentTaskStore:
                     receipt.completion_policy is not target_policy
                 ):
                     raise AgentTaskConflict("AgentTask schedule policy conflicts")
+                if isinstance(receipt, AgentTaskGateReceipt) and current.gate_receipt is not None:
+                    if (
+                        current.gate_receipt == receipt
+                        and gate_state is current.gate_state
+                    ):
+                        return current
+                    if current.gate_receipt != receipt:
+                        raise AgentTaskConflict("immutable gate receipt conflicts")
             updated = connection.execute(
                 "UPDATE agent_tasks SET completion_policy = ?, gate_state = ?, "
                 "schedule_receipt_ref = COALESCE(?, schedule_receipt_ref), "
@@ -622,13 +670,13 @@ class SQLiteAgentTaskStore:
             if existing is None:
                 raise KeyError(task_id)
             current = _task_from_row(existing)
+            self._assert_lease(connection, lease)
             if current.state in TERMINAL_TASK_STATES:
                 if current.result == result and (
                     gate_receipt is None or current.gate_receipt == gate_receipt
                 ):
                     return current
                 raise AgentTaskConflict("AgentTask terminal result replay conflicts")
-            self._assert_lease(connection, lease)
             receipt_payload = None
             evidence_refs = _json_array(result.evidence_refs)
             evidence_digest = None
@@ -640,6 +688,10 @@ class SQLiteAgentTaskStore:
                     raise AgentTaskConflict("AgentTask gate receipt task binding is invalid")
                 if current.linked_run_id is None or gate_receipt.run_id != current.linked_run_id:
                     raise AgentTaskConflict("AgentTask gate receipt Run does not match linked Run")
+                if current.gate_receipt is not None and current.gate_receipt != gate_receipt:
+                    raise AgentTaskConflict("immutable gate receipt conflicts")
+                if tuple(result.evidence_refs) != tuple(gate_receipt.evidence_refs):
+                    raise AgentTaskConflict("Evidence references do not match gate receipt")
                 if result.status == "succeeded" and gate_receipt.run_terminal_state != "completed":
                     raise AgentTaskConflict("successful AgentTask requires a completed Run")
                 if current.completion_policy.requires_capsule and (
@@ -916,17 +968,13 @@ def _task_from_row(row: Mapping[str, Any] | Any) -> AgentTaskRecord:
     raw_result = row["result_json"]
     result_value = _loaded(raw_result) if raw_result is not None else None
     state = AgentTaskState(str(row["state"]))
-    gate_columns = (
-        "completion_policy",
-        "gate_state",
-        "schedule_receipt",
-        "gate_receipt",
-        "legacy_gate_unverified",
-    )
+    critical_gate_columns = ("completion_policy", "gate_state", "legacy_gate_unverified")
     legacy_gate_unverified = (
         True
-        if any(not _row_has(row, column) for column in gate_columns)
-        or row["legacy_gate_unverified"] is None
+        if any(
+            not _row_has(row, column) or row[column] is None
+            for column in critical_gate_columns
+        )
         else bool(row["legacy_gate_unverified"])
     )
     raw_policy = row["completion_policy"] if _row_has(row, "completion_policy") else None

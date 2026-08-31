@@ -12,7 +12,7 @@ import pytest
 
 from pilot107.agent.postgres_task_store import PostgresAgentTaskStore
 from pilot107.agent.store_factory import build_agent_task_store
-from pilot107.agent.task_store import AgentTaskStore, SQLiteAgentTaskStore
+from pilot107.agent.task_store import AgentTaskStore, SQLiteAgentTaskStore, _task_from_row
 from pilot107.agent.tasks import (
     AgentResourceEnvelope,
     AgentTaskCompletionPolicy,
@@ -279,6 +279,47 @@ def test_store_rejects_success_without_terminal_gate(tmp_path: Path) -> None:
         )
 
 
+def test_new_task_is_not_marked_legacy_gate_unverified(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+
+    assert task.legacy_gate_unverified is False
+
+
+def test_complete_task_rejects_success_without_terminal_gate(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+
+    with pytest.raises(AgentTaskConflict, match="gate"):
+        store.complete_task(
+            task.task_id,
+            lease=lease,
+            result=AgentTaskResult.succeeded(("evidence-1",)),
+        )
+
+
+def test_advance_gate_validates_candidate_before_opening_sql_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+
+    def fail_if_sql_is_opened() -> object:
+        raise AssertionError("invalid gate candidate must be rejected before SQL")
+
+    monkeypatch.setattr(store, "connect", fail_if_sql_is_opened)
+    with pytest.raises(AgentTaskConflict, match="finalize"):
+        store.advance_gate(
+            task.task_id,
+            lease=lease,
+            gate_state="completed",  # type: ignore[arg-type]
+        )
+
+
 def test_stale_fence_cannot_finalize_gate(tmp_path: Path) -> None:
     clock = MutableClock()
     store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=clock)
@@ -324,6 +365,122 @@ def test_advance_gate_persists_receipt_and_uses_task_cas(tmp_path: Path) -> None
             gate_state=AgentTaskGateState.AWAITING_INTEGRITY,
             receipt=None,
         )
+
+
+def test_gate_receipt_is_immutable_and_same_replay_is_idempotent(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    lease = replace(lease, version=linked.version)
+    receipt = _terminal_gate(task)
+    first = store.advance_gate(
+        task.task_id,
+        lease=lease,
+        gate_state=AgentTaskGateState.AWAITING_INTEGRITY,
+        receipt=receipt,
+    )
+    replay_lease = replace(lease, version=first.version)
+    replay = store.advance_gate(
+        task.task_id,
+        lease=replay_lease,
+        gate_state=AgentTaskGateState.AWAITING_INTEGRITY,
+        receipt=receipt,
+    )
+    assert replay == first
+    changed = replace(receipt, evidence_digest="c" * 64)
+    replay_lease = replace(replay_lease, version=replay.version)
+    with pytest.raises(AgentTaskConflict, match="immutable"):
+        store.advance_gate(
+            task.task_id,
+            lease=replay_lease,
+            gate_state=AgentTaskGateState.AWAITING_INTEGRITY,
+            receipt=changed,
+        )
+
+
+def test_finalize_rejects_evidence_refs_that_differ_from_gate(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    lease = replace(lease, version=linked.version)
+    with pytest.raises(AgentTaskConflict, match="Evidence"):
+        store.finalize_task(
+            task.task_id,
+            lease=lease,
+            gate_receipt=_terminal_gate(task),
+            result=AgentTaskResult.succeeded(("evidence-other",)),
+        )
+
+
+def test_advance_gate_is_monotonic_and_never_writes_completed(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    awaiting = store.advance_gate(
+        task.task_id,
+        lease=lease,
+        gate_state=AgentTaskGateState.AWAITING_EVIDENCE,
+    )
+    with pytest.raises(AgentTaskConflict, match="monotonic"):
+        store.advance_gate(
+            task.task_id,
+            lease=replace(lease, version=awaiting.version),
+            gate_state=AgentTaskGateState.CREATED,
+        )
+    with pytest.raises(AgentTaskConflict, match="finalize"):
+        store.advance_gate(
+            task.task_id,
+            lease=replace(lease, version=awaiting.version),
+            gate_state=AgentTaskGateState.COMPLETED,
+        )
+
+
+def test_terminal_finalize_replay_checks_lease_before_receipt(tmp_path: Path) -> None:
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    linked = store.link_run(task.task_id, lease=lease, run_id="run-1")
+    lease = replace(lease, version=linked.version)
+    store.finalize_task(
+        task.task_id,
+        lease=lease,
+        gate_receipt=_terminal_gate(task),
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+    )
+    with pytest.raises(AgentTaskConflict, match="lease"):
+        store.finalize_task(
+            task.task_id,
+            lease=lease,
+            gate_receipt=_terminal_gate(task),
+            result=AgentTaskResult.succeeded(("evidence-1",)),
+        )
+
+
+def test_claim_and_renew_update_heartbeat_at(tmp_path: Path) -> None:
+    clock = MutableClock()
+    store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=clock)
+    task, _ = _create(store)
+    lease = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=30)
+    assert lease is not None
+    with store.connect() as connection:
+        claimed_heartbeat = connection.execute(
+            "SELECT heartbeat_at FROM agent_tasks WHERE task_id = ?", (task.task_id,)
+        ).fetchone()[0]
+    assert claimed_heartbeat == clock.value.isoformat().replace("+00:00", "Z")
+    clock.advance(timedelta(seconds=5))
+    renewed = store.renew_task(lease, lease_seconds=30)
+    with store.connect() as connection:
+        renewed_heartbeat = connection.execute(
+            "SELECT heartbeat_at FROM agent_tasks WHERE task_id = ?", (task.task_id,)
+        ).fetchone()[0]
+    assert renewed_heartbeat == clock.value.isoformat().replace("+00:00", "Z")
+    assert renewed.expires_at != lease.expires_at
 
 
 def test_finalize_requires_policy_compatible_ready_capsule(tmp_path: Path) -> None:
@@ -444,8 +601,13 @@ def test_new_gate_columns_with_null_value_remain_legacy_unverified(
     store = SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
     task, _ = _create(store)
     with store.connect() as connection:
-        connection.execute("UPDATE agent_tasks SET gate_receipt = NULL")
-    assert store.get_task(task.task_id, owner="alice").legacy_gate_unverified is True
+        row = dict(
+            connection.execute(
+                "SELECT * FROM agent_tasks WHERE task_id = ?", (task.task_id,)
+            ).fetchone()
+        )
+    row.update(completion_policy=None, gate_state=None, legacy_gate_unverified=0)
+    assert _task_from_row(row).legacy_gate_unverified is True
 
 
 @pytest.mark.parametrize("receipt_type", [AgentTaskScheduleReceipt, AgentTaskGateReceipt])
@@ -657,7 +819,7 @@ def exercise_agent_task_store_contract(
     assert created is True
     assert task.state is AgentTaskState.PENDING
     assert task.version == 0
-    assert task.legacy_gate_unverified is True
+    assert task.legacy_gate_unverified is False
 
     replay, replay_created = _create(store)
     assert replay_created is False
@@ -710,20 +872,29 @@ def exercise_agent_task_store_contract(
             result=AgentTaskResult.succeeded(("evidence-1",)),
         )
 
-    completed = store.complete_task(
+    gate = _terminal_gate(task)
+    advanced = store.advance_gate(
         task.task_id,
         lease=second,
+        gate_state=AgentTaskGateState.AWAITING_INTEGRITY,
+        receipt=gate,
+    )
+    finalized_lease = replace(second, version=advanced.version)
+    completed = store.complete_task(
+        task.task_id,
+        lease=finalized_lease,
         result=AgentTaskResult.succeeded(("evidence-1",)),
     )
     assert completed.state is AgentTaskState.SUCCEEDED
-    assert completed.legacy_gate_unverified is True
+    assert completed.legacy_gate_unverified is False
     assert completed.result is not None
     assert completed.result.evidence_refs == ("evidence-1",)
-    assert store.complete_task(
-        task.task_id,
-        lease=second,
-        result=AgentTaskResult.succeeded(("evidence-1",)),
-    ) == completed
+    with pytest.raises(AgentTaskConflict, match="lease"):
+        store.complete_task(
+            task.task_id,
+            lease=finalized_lease,
+            result=AgentTaskResult.succeeded(("evidence-1",)),
+        )
 
     cancellable, _ = _create(store, request_key="validate-cancel")
     cancelled = store.request_cancel(
