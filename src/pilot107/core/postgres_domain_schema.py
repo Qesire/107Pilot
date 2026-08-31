@@ -1038,6 +1038,69 @@ _RUN_PROVENANCE_SCHEMA = _statements(
     "ALTER TABLE runs ADD COLUMN IF NOT EXISTS platform_snapshot_ref TEXT"
 )
 
+_EVIDENCE_OBJECT_IMMUTABLE_GUARD_SCHEMA = _statements(
+    "ALTER TABLE evidence_objects ADD COLUMN IF NOT EXISTS integrity_invalidated_at TIMESTAMPTZ"
+    "\n-- statement\n"
+    """
+    CREATE OR REPLACE FUNCTION pilot107_evidence_object_integrity_guard()
+    RETURNS TRIGGER
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE
+        protected_changed BOOLEAN;
+        state_changed BOOLEAN;
+        explicit_invalidation BOOLEAN;
+    BEGIN
+        IF OLD.integrity_checked_at IS NULL
+           AND OLD.integrity_invalidated_at IS NULL THEN
+            RETURN NEW;
+        END IF;
+        protected_changed :=
+            NEW.object_id IS DISTINCT FROM OLD.object_id OR
+            NEW.run_id IS DISTINCT FROM OLD.run_id OR
+            NEW.category IS DISTINCT FROM OLD.category OR
+            NEW.logical_path IS DISTINCT FROM OLD.logical_path OR
+            NEW.store_path IS DISTINCT FROM OLD.store_path OR
+            NEW.source_uri IS DISTINCT FROM OLD.source_uri OR
+            NEW.sha256 IS DISTINCT FROM OLD.sha256 OR
+            NEW.size_bytes IS DISTINCT FROM OLD.size_bytes OR
+            NEW.mime_type IS DISTINCT FROM OLD.mime_type OR
+            NEW.collection_status IS DISTINCT FROM OLD.collection_status OR
+            NEW.collection_note IS DISTINCT FROM OLD.collection_note OR
+            NEW.mutable_during_run IS DISTINCT FROM OLD.mutable_during_run OR
+            NEW.finalized_at IS DISTINCT FROM OLD.finalized_at OR
+            NEW.workspace_revision IS DISTINCT FROM OLD.workspace_revision OR
+            NEW.workspace_digest IS DISTINCT FROM OLD.workspace_digest OR
+            NEW.source_revision IS DISTINCT FROM OLD.source_revision OR
+            NEW.platform_snapshot_ref IS DISTINCT FROM OLD.platform_snapshot_ref;
+        state_changed :=
+            NEW.integrity_checked_at IS DISTINCT FROM OLD.integrity_checked_at OR
+            NEW.integrity_object_set_digest IS DISTINCT FROM OLD.integrity_object_set_digest OR
+            NEW.integrity_invalidated_at IS DISTINCT FROM OLD.integrity_invalidated_at;
+        explicit_invalidation :=
+            OLD.integrity_checked_at IS NOT NULL AND
+            OLD.integrity_invalidated_at IS NULL AND
+            NEW.integrity_checked_at IS NULL AND
+            NEW.integrity_object_set_digest IS NULL AND
+            NEW.integrity_invalidated_at IS NOT NULL AND
+            NOT protected_changed;
+        IF (protected_changed OR state_changed) AND NOT explicit_invalidation THEN
+            RAISE EXCEPTION 'integrity-frozen evidence object is immutable';
+        END IF;
+        RETURN NEW;
+    END;
+    $$
+    """
+    "\n-- statement\n"
+    "DROP TRIGGER IF EXISTS evidence_objects_integrity_guard ON evidence_objects"
+    "\n-- statement\n"
+    """
+    CREATE TRIGGER evidence_objects_integrity_guard
+    BEFORE UPDATE ON evidence_objects
+    FOR EACH ROW EXECUTE FUNCTION pilot107_evidence_object_integrity_guard()
+    """
+)
+
 _WORKFLOW_MANIFEST_SCHEMA = _statements(
     """
     CREATE TABLE workflow_manifests (
@@ -1425,6 +1488,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.025.agent_task_stage_identities", _AGENT_TASK_STAGE_IDENTITY_SCHEMA),
     ("004a.026.evidence_object_integrity_gates", _EVIDENCE_OBJECT_GATE_SCHEMA),
     ("004a.027.run_provenance", _RUN_PROVENANCE_SCHEMA),
+    ("004a.028.evidence_object_immutable_guard", _EVIDENCE_OBJECT_IMMUTABLE_GUARD_SCHEMA),
 )
 
 

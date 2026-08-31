@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -220,6 +221,20 @@ class EvidenceBinderTests(unittest.TestCase):
         )
         self.assertEqual(repeated.integrity_verified_at, receipt.integrity_verified_at)
         self.assertEqual(repeated.evidence_digest, receipt.evidence_digest)
+        self.store.revoke_evidence_integrity(
+            self.run.run_id,
+            ("logs/stderr.tail.txt", "manifest/manifest.json"),
+        )
+        with self.assertRaisesRegex(Exception, "invalidat|integrity"):
+            self.binder.verify_terminal_gate(
+                self.run.run_id,
+                (ref, manifest_ref),
+                {
+                    "workspace_digest": boundary["workspace_digest"],
+                    "workspace_revision": None,
+                    "legacy_boundary": True,
+                },
+            )
 
     def test_terminal_gate_rejects_bounded_collection_exhaustion(self) -> None:
         self._mark_run_ready(collection_state="failed")
@@ -301,6 +316,20 @@ class EvidenceBinderTests(unittest.TestCase):
                 for item in self.store.list_evidence_objects(self.run.run_id)
             )
         )
+
+    def test_direct_sql_cannot_mutate_frozen_provenance(self) -> None:
+        ref = self._register(content="verified\n")
+        logical_path = ref.rsplit("/", 1)[-1]
+        self.store.mark_evidence_integrity_checked(
+            self.run.run_id,
+            (f"logs/{logical_path}" if logical_path == "stderr.tail.txt" else logical_path,),
+        )
+
+        with self.assertRaises(sqlite3.IntegrityError), self.store.connect() as conn:
+            conn.execute(
+                "UPDATE evidence_objects SET workspace_digest = ? WHERE run_id = ?",
+                ("b" * 64, self.run.run_id),
+            )
 
     def test_terminal_gate_requires_explicit_legacy_boundary_marker(self) -> None:
         self._mark_run_ready()

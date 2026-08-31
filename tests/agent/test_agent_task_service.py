@@ -210,8 +210,6 @@ def test_agent_task_run_persists_provenance_without_inventing_values(tmp_path: P
         payload={
             **_request().payload,
             "workspace_revision": 7,
-            "source_revision": "workspace-source-1",
-            "platform_snapshot_ref": "snapshot:platform-1",
         },
     )
     task, _ = harness.service.schedule_validation(
@@ -265,6 +263,57 @@ def test_agent_task_does_not_copy_model_provenance_fields_into_run(tmp_path: Pat
     assert batch.errors
     persisted = harness.task_store.get_task(task.task_id, owner="alice")
     assert persisted.linked_run_id is None
+
+
+def test_agent_task_without_provenance_authority_creates_no_run(tmp_path: Path) -> None:
+    harness = Harness(tmp_path, provenance_authority=False)
+    task, _ = harness.schedule()
+
+    batch = harness.service.dispatch_due(limit=10)
+
+    assert batch.succeeded == 0
+    assert batch.errors
+    persisted = harness.task_store.get_task(task.task_id, owner="alice")
+    assert persisted.linked_run_id is None
+    runs, _ = harness.run_store.list_runs_page(owner="alice")
+    assert runs == []
+
+
+def test_agent_task_authority_missing_fields_creates_no_run(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+    harness.service.provenance_authority_resolver = lambda owner, workspace_id, digest: (
+        "",
+        "snapshot:platform-1",
+    )
+    task, _ = harness.schedule()
+
+    batch = harness.service.dispatch_due(limit=10)
+
+    assert batch.succeeded == 0
+    assert batch.errors
+    persisted = harness.task_store.get_task(task.task_id, owner="alice")
+    assert persisted.linked_run_id is None
+    runs, _ = harness.run_store.list_runs_page(owner="alice")
+    assert runs == []
+
+
+def test_agent_task_authority_exception_creates_no_run(tmp_path: Path) -> None:
+    harness = Harness(tmp_path)
+
+    def fail_authority(owner: str, workspace_id: str, digest: str) -> tuple[str, str]:
+        raise RuntimeError("authority unavailable")
+
+    harness.service.provenance_authority_resolver = fail_authority
+    task, _ = harness.schedule()
+
+    batch = harness.service.dispatch_due(limit=10)
+
+    assert batch.succeeded == 0
+    assert batch.errors
+    persisted = harness.task_store.get_task(task.task_id, owner="alice")
+    assert persisted.linked_run_id is None
+    runs, _ = harness.run_store.list_runs_page(owner="alice")
+    assert runs == []
 
 
 def test_repair_profile_uses_the_same_bounded_validation_lifecycle(

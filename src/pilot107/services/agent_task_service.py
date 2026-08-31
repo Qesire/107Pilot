@@ -461,16 +461,26 @@ class AgentTaskService:
         ).resolve()
         if not workspace.is_dir():
             raise ValueError("AgentTask Workspace is unavailable")
-        source_revision: str | None = None
-        platform_snapshot_ref: str | None = None
-        if self.provenance_authority_resolver is not None:
-            source_revision, platform_snapshot_ref = self.provenance_authority_resolver(
-                task.owner,
-                task.workspace_id,
-                request.workspace_snapshot_digest,
-            )
-        elif "source_revision" in request.payload or "platform_snapshot_ref" in request.payload:
+        if "source_revision" in request.payload or "platform_snapshot_ref" in request.payload:
             raise ValueError("AgentTask provenance payload fields are not trusted")
+        if self.provenance_authority_resolver is None:
+            raise ValueError("AgentTask provenance authority is unavailable")
+        authority_values = self.provenance_authority_resolver(
+            task.owner,
+            task.workspace_id,
+            request.workspace_snapshot_digest,
+        )
+        if (
+            not isinstance(authority_values, tuple)
+            or len(authority_values) != 2
+        ):
+            raise ValueError("AgentTask provenance authority returned invalid values")
+        source_revision, platform_snapshot_ref = authority_values
+        source_revision = _required_provenance_text(source_revision, "source_revision")
+        platform_snapshot_ref = _required_provenance_text(
+            platform_snapshot_ref,
+            "platform_snapshot_ref",
+        )
         script = request.payload.get("script")
         if not isinstance(script, str) or not script or len(script.encode()) > 262_144:
             raise ValueError("AgentTask validation script is invalid")
@@ -508,10 +518,8 @@ class AgentTaskService:
             # resolver and is deliberately not accepted from task payloads.
             workspace_revision=None,
             workspace_digest=request.workspace_snapshot_digest,
-            source_revision=_optional_provenance_text(source_revision, "source_revision"),
-            platform_snapshot_ref=_optional_provenance_text(
-                platform_snapshot_ref, "platform_snapshot_ref"
-            ),
+            source_revision=source_revision,
+            platform_snapshot_ref=platform_snapshot_ref,
         )
 
     def _enqueue_ready(self, task: AgentTaskRecord) -> None:
@@ -761,3 +769,10 @@ def _optional_provenance_text(value: object, name: str) -> str | None:
     if not isinstance(value, str) or not value or len(value) > 4096:
         raise ValueError(f"{name} is invalid")
     return value
+
+
+def _required_provenance_text(value: object, name: str) -> str:
+    normalized = _optional_provenance_text(value, name)
+    if normalized is None:
+        raise ValueError(f"{name} is required from the provenance authority")
+    return normalized

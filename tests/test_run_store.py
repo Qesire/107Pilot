@@ -22,6 +22,8 @@ class RunStoreTests(unittest.TestCase):
             text=True,
         ).stdout
         self.assertIn("def _evidence_object_values", source)
+        self.assertIn("def _ensure_evidence_integrity_guard", source)
+        self.assertIn("integrity_invalidated_at", source)
         self.assertIn("import hashlib", source)
 
     def setUp(self) -> None:

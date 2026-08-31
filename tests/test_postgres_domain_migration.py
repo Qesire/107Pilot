@@ -204,6 +204,23 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
         ):
             self.assertIn(f"ADD COLUMN IF NOT EXISTS {column}", schema)
 
+    def test_evidence_integrity_migration_installs_immutable_guard(self) -> None:
+        from pilot107.core.postgres_domain_schema import _MIGRATIONS
+
+        migration_id, statements = next(
+            migration
+            for migration in _MIGRATIONS
+            if migration[0] == "004a.028.evidence_object_immutable_guard"
+        )
+        schema = "\n".join(statements)
+
+        self.assertEqual(migration_id, "004a.028.evidence_object_immutable_guard")
+        self.assertIn("ADD COLUMN IF NOT EXISTS integrity_invalidated_at", schema)
+        self.assertIn("pilot107_evidence_object_integrity_guard", schema)
+        self.assertIn("DROP TRIGGER IF EXISTS", schema)
+        self.assertIn("CREATE TRIGGER evidence_objects_integrity_guard", schema)
+        self.assertIn("IS DISTINCT FROM", schema)
+
     def test_agent_migration_uses_native_postgres_types_and_fencing_index(self) -> None:
         from pilot107.core.postgres_domain_schema import _MIGRATIONS
 

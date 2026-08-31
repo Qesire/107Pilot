@@ -169,6 +169,7 @@ class EvidenceObjectRecord:
     platform_snapshot_ref: str | None = None
     integrity_checked_at: str | None = None
     integrity_object_set_digest: str | None = None
+    integrity_invalidated_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -352,6 +353,7 @@ class RunStore:
                     platform_snapshot_ref TEXT,
                     integrity_checked_at TEXT,
                     integrity_object_set_digest TEXT,
+                    integrity_invalidated_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     UNIQUE(run_id, logical_path)
@@ -1058,7 +1060,11 @@ class RunStore:
                 conn,
                 run_id=run_id,
                 event_type=event_type,
-                payload={"state": state.value},
+                payload={
+                    "state": state.value,
+                    **({"failure_reason": _bounded_event_reason(failure_reason)}
+                       if failure_reason else {}),
+                },
             )
         return self.get_run(run_id)
 
@@ -2086,6 +2092,8 @@ class RunStore:
             ).fetchall()
             if len(rows) != len(paths):
                 raise ValueError("evidence integrity finalization references unknown objects")
+            if any(row["integrity_invalidated_at"] is not None for row in rows):
+                raise ValueError("evidence integrity was invalidated")
             canonical = [
                 {
                     "object_id": str(row["object_id"]),
@@ -2144,10 +2152,11 @@ class RunStore:
         with self.connect() as conn:
             conn.execute(
                 "UPDATE evidence_objects SET integrity_checked_at = NULL, "
-                "integrity_object_set_digest = NULL WHERE run_id = ? AND logical_path IN ("
+                "integrity_object_set_digest = NULL, integrity_invalidated_at = ? "
+                "WHERE run_id = ? AND logical_path IN ("
                 + placeholders
                 + ")",
-                (run_id, *paths),
+                (utc_now_iso(), run_id, *paths),
             )
 
     def list_evidence_objects(
@@ -2709,6 +2718,60 @@ class RunStore:
         if column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
+    def _ensure_evidence_integrity_guard(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS evidence_objects_integrity_guard
+            BEFORE UPDATE ON evidence_objects
+            FOR EACH ROW
+            WHEN OLD.integrity_checked_at IS NOT NULL
+              OR OLD.integrity_invalidated_at IS NOT NULL
+            BEGIN
+                SELECT CASE WHEN NOT (
+                    NEW.object_id IS OLD.object_id
+                    AND NEW.run_id IS OLD.run_id
+                    AND NEW.category IS OLD.category
+                    AND NEW.logical_path IS OLD.logical_path
+                    AND NEW.store_path IS OLD.store_path
+                    AND NEW.source_uri IS OLD.source_uri
+                    AND NEW.sha256 IS OLD.sha256
+                    AND NEW.size_bytes IS OLD.size_bytes
+                    AND NEW.mime_type IS OLD.mime_type
+                    AND NEW.collection_status IS OLD.collection_status
+                    AND NEW.collection_note IS OLD.collection_note
+                    AND NEW.mutable_during_run IS OLD.mutable_during_run
+                    AND NEW.finalized_at IS OLD.finalized_at
+                    AND NEW.workspace_revision IS OLD.workspace_revision
+                    AND NEW.workspace_digest IS OLD.workspace_digest
+                    AND NEW.source_revision IS OLD.source_revision
+                    AND NEW.platform_snapshot_ref IS OLD.platform_snapshot_ref
+                    AND (
+                        (
+                            NEW.integrity_checked_at IS OLD.integrity_checked_at
+                            AND NEW.integrity_object_set_digest IS OLD.integrity_object_set_digest
+                            AND NEW.integrity_invalidated_at IS OLD.integrity_invalidated_at
+                        )
+                        OR (
+                            OLD.integrity_checked_at IS NOT NULL
+                            AND OLD.integrity_object_set_digest IS NULL
+                            AND OLD.integrity_invalidated_at IS NULL
+                            AND NEW.integrity_checked_at IS OLD.integrity_checked_at
+                            AND NEW.integrity_object_set_digest IS NOT NULL
+                            AND NEW.integrity_invalidated_at IS NULL
+                        )
+                        OR (
+                            OLD.integrity_checked_at IS NOT NULL
+                            AND OLD.integrity_invalidated_at IS NULL
+                            AND NEW.integrity_checked_at IS NULL
+                            AND NEW.integrity_object_set_digest IS NULL
+                            AND NEW.integrity_invalidated_at IS NOT NULL
+                        )
+                    )
+                ) THEN RAISE(ABORT, 'integrity-frozen evidence object is immutable') END;
+            END
+            """
+        )
+
     def _append_event(
         self,
         conn: sqlite3.Connection,
@@ -2941,6 +3004,11 @@ def _row_to_evidence_object(row: sqlite3.Row) -> EvidenceObjectRecord:
             None
             if row["integrity_object_set_digest"] is None
             else str(row["integrity_object_set_digest"])
+        ),
+        integrity_invalidated_at=(
+            None
+            if row["integrity_invalidated_at"] is None
+            else str(row["integrity_invalidated_at"])
         ),
     )
 
