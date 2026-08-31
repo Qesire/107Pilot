@@ -144,3 +144,11 @@ AGENT_TASK_EVIDENCE_GATE_MIGRATION = SchemaMigration(
         "gate_state, reconciliation_attempt, updated_at)",
     ),
 )
+
+AGENT_TASK_STAGE_IDENTITY_MIGRATION = SchemaMigration(
+    migration_id="006c.003.agent_task_stage_identities",
+    statements=(
+        "ALTER TABLE agent_tasks ADD COLUMN schedule_operation_key TEXT",
+        "ALTER TABLE agent_tasks ADD COLUMN gate_operation_key TEXT",
+    ),
+)

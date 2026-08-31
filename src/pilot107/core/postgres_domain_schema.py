@@ -1008,6 +1008,12 @@ _AGENT_TASK_EVIDENCE_GATE_SCHEMA = _statements(
     "CREATE INDEX idx_agent_tasks_gate_reconciliation ON agent_tasks(gate_state, reconciliation_attempt, updated_at)"
 )
 
+_AGENT_TASK_STAGE_IDENTITY_SCHEMA = _statements(
+    "ALTER TABLE agent_tasks ADD COLUMN schedule_operation_key TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE agent_tasks ADD COLUMN gate_operation_key TEXT"
+)
+
 _WORKFLOW_MANIFEST_SCHEMA = _statements(
     """
     CREATE TABLE workflow_manifests (
@@ -1392,6 +1398,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("004a.022.ssh_connection_sessions", _SSH_CONNECTION_SCHEMA),
     ("004a.023.agent_builder_submissions", _AGENT_BUILDER_SUBMISSION_SCHEMA),
     ("004a.024.agent_task_evidence_gates", _AGENT_TASK_EVIDENCE_GATE_SCHEMA),
+    ("004a.025.agent_task_stage_identities", _AGENT_TASK_STAGE_IDENTITY_SCHEMA),
 )
 
 

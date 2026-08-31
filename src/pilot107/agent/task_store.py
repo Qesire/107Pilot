@@ -11,7 +11,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from pilot107.agent.migrations import AGENT_TASK_EVIDENCE_GATE_MIGRATION
+from pilot107.agent.migrations import (
+    AGENT_TASK_EVIDENCE_GATE_MIGRATION,
+    AGENT_TASK_STAGE_IDENTITY_MIGRATION,
+)
 from pilot107.agent.tasks import (
     TERMINAL_TASK_STATES,
     AgentResourceEnvelope,
@@ -104,6 +107,7 @@ AGENT_TASK_MIGRATIONS = (
         ),
     ),
     AGENT_TASK_EVIDENCE_GATE_MIGRATION,
+    AGENT_TASK_STAGE_IDENTITY_MIGRATION,
 )
 
 
@@ -161,6 +165,8 @@ class AgentTaskStore(Protocol):
         gate_state: AgentTaskGateState,
         receipt: AgentTaskGateReceipt | AgentTaskScheduleReceipt | None = None,
         completion_policy: AgentTaskCompletionPolicy | None = None,
+        causation_root_key: str | None = None,
+        stage_operation_key: str | None = None,
     ) -> AgentTaskRecord: ...
 
     def finalize_task(
@@ -170,6 +176,8 @@ class AgentTaskStore(Protocol):
         lease: AgentTaskLease,
         gate_receipt: AgentTaskGateReceipt | None,
         result: AgentTaskResult,
+        causation_root_key: str | None = None,
+        stage_operation_key: str | None = None,
     ) -> AgentTaskRecord: ...
 
     def request_cancel(
@@ -533,6 +541,8 @@ class SQLiteAgentTaskStore:
         gate_state: AgentTaskGateState,
         receipt: AgentTaskGateReceipt | AgentTaskScheduleReceipt | None = None,
         completion_policy: AgentTaskCompletionPolicy | None = None,
+        causation_root_key: str | None = None,
+        stage_operation_key: str | None = None,
     ) -> AgentTaskRecord:
         """Advance the durable gate projection under the current task lease."""
 
@@ -582,6 +592,8 @@ class SQLiteAgentTaskStore:
         # Reject malformed or terminal candidates before touching the database.
         if receipt is not None and not receipt_payload:
             raise ValueError("gate receipt candidate is invalid")
+        stage_operation_key = _stage_key(stage_operation_key, receipt_payload)
+        causation_root_key = _root_key(causation_root_key, task_id)
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             current_row = self._assert_lease(connection, lease)
@@ -589,6 +601,13 @@ class SQLiteAgentTaskStore:
             target_policy = completion_policy or current.completion_policy
             if current.gate_state is AgentTaskGateState.INPUT_REQUIRED:
                 raise AgentTaskConflict("INPUT_REQUIRED gate must resume before progress")
+            stored_root = (
+                current_row["causation_root_key"]
+                if _row_has(current_row, "causation_root_key")
+                else None
+            )
+            if stored_root is not None and stored_root != causation_root_key:
+                raise AgentTaskConflict("receipt identity conflicts with causation root")
             if (
                 current.schedule_receipt is not None
                 and current.schedule_receipt.completion_policy is not target_policy
@@ -600,22 +619,19 @@ class SQLiteAgentTaskStore:
                 raise AgentTaskConflict("gate state transition is not monotonic")
             if receipt is not None:
                 _validate_receipt_identity(current, receipt, target_policy, gate_state)
-                stored_identity = (
-                    current_row["durable_operation_key"]
-                    if _row_has(current_row, "durable_operation_key")
-                    else None
-                )
-                if stored_identity is not None and stored_identity != receipt_identity:
-                    raise AgentTaskConflict("receipt identity conflicts with stored operation")
                 if (
                     isinstance(receipt, AgentTaskScheduleReceipt)
                     and current.schedule_receipt is not None
                 ):
+                    if _stored_stage_key(current_row, "schedule") != stage_operation_key:
+                        raise AgentTaskConflict("schedule stage identity conflicts")
                     if current.schedule_receipt != receipt:
                         raise AgentTaskConflict("immutable schedule receipt conflicts")
                     if gate_state is current.gate_state:
                         return current
                 if isinstance(receipt, AgentTaskGateReceipt) and current.gate_receipt is not None:
+                    if _stored_stage_key(current_row, "gate") != stage_operation_key:
+                        raise AgentTaskConflict("gate stage identity conflicts")
                     if (
                         current.gate_receipt == receipt
                         and gate_state is current.gate_state
@@ -643,6 +659,11 @@ class SQLiteAgentTaskStore:
                 "schedule_receipt_ref = COALESCE(?, schedule_receipt_ref), "
                 "schedule_receipt = COALESCE(?, schedule_receipt), "
                 "durable_operation_key = COALESCE(?, durable_operation_key), "
+                "causation_root_key = COALESCE(?, causation_root_key), "
+                "schedule_operation_key = CASE WHEN ? IS NOT NULL THEN ? "
+                "ELSE schedule_operation_key END, "
+                "gate_operation_key = CASE WHEN ? IS NOT NULL THEN ? "
+                "ELSE gate_operation_key END, "
                 "evidence_refs_json = COALESCE(?, evidence_refs_json), "
                 "evidence_digest = COALESCE(?, evidence_digest), "
                 "integrity_checked_at = COALESCE(?, integrity_checked_at), "
@@ -660,6 +681,11 @@ class SQLiteAgentTaskStore:
                     schedule_ref,
                     receipt_payload if isinstance(receipt, AgentTaskScheduleReceipt) else None,
                     receipt_identity,
+                    causation_root_key,
+                    stage_operation_key if isinstance(receipt, AgentTaskScheduleReceipt) else None,
+                    stage_operation_key if isinstance(receipt, AgentTaskScheduleReceipt) else None,
+                    stage_operation_key if isinstance(receipt, AgentTaskGateReceipt) else None,
+                    stage_operation_key if isinstance(receipt, AgentTaskGateReceipt) else None,
                     evidence_refs,
                     evidence_digest,
                     integrity_checked_at,
@@ -687,6 +713,8 @@ class SQLiteAgentTaskStore:
         lease: AgentTaskLease,
         gate_receipt: AgentTaskGateReceipt | None,
         result: AgentTaskResult,
+        causation_root_key: str | None = None,
+        stage_operation_key: str | None = None,
     ) -> AgentTaskRecord:
         """Finalize a task only after an authoritative, policy-compatible gate."""
 
@@ -697,6 +725,16 @@ class SQLiteAgentTaskStore:
             raise TypeError("result must be AgentTaskResult")
         if gate_receipt is not None and not isinstance(gate_receipt, AgentTaskGateReceipt):
             raise TypeError("gate_receipt must be AgentTaskGateReceipt")
+        gate_payload = (
+            _json(agent_task_gate_receipt_payload(gate_receipt))
+            if gate_receipt is not None
+            else None
+        )
+        receipt_identity = (
+            _receipt_identity(gate_payload) if gate_payload is not None else None
+        )
+        stage_operation_key = _stage_key(stage_operation_key, gate_payload)
+        causation_root_key = _root_key(causation_root_key, task_id)
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
@@ -716,13 +754,26 @@ class SQLiteAgentTaskStore:
                     gate_receipt is not None
                     and current.result == result
                     and current.gate_receipt == gate_receipt
-                    and stored_identity == _receipt_identity(
-                        _json(agent_task_gate_receipt_payload(gate_receipt))
+                    and stored_identity == receipt_identity
+                    and (
+                        not _row_has(existing, "causation_root_key")
+                        or existing["causation_root_key"] == causation_root_key
                     )
+                    and _stored_stage_key(existing, "gate") == stage_operation_key
                 ):
                     return current
                 raise AgentTaskConflict("terminal AgentTask replay has no matching identity")
             self._assert_lease(connection, lease)
+            stored_root = (
+                existing["causation_root_key"]
+                if _row_has(existing, "causation_root_key")
+                else None
+            )
+            if stored_root is not None and stored_root != causation_root_key:
+                raise AgentTaskConflict("gate identity conflicts with causation root")
+            stored_gate_key = _stored_stage_key(existing, "gate")
+            if stored_gate_key is not None and stored_gate_key != stage_operation_key:
+                raise AgentTaskConflict("gate stage identity conflicts")
             if result.status == "succeeded" and gate_receipt is None:
                 raise AgentTaskConflict("successful AgentTask finalization requires a gate receipt")
             receipt_payload = None
@@ -746,8 +797,7 @@ class SQLiteAgentTaskStore:
                     gate_receipt.capsule_state != "READY" or gate_receipt.capsule_ref is None
                 ):
                     raise AgentTaskConflict("Capsule-required AgentTask needs a READY Capsule")
-                receipt_payload = _json(agent_task_gate_receipt_payload(gate_receipt))
-                receipt_identity = _receipt_identity(receipt_payload)
+                receipt_payload = gate_payload
                 evidence_refs = _json_array(gate_receipt.evidence_refs)
                 evidence_digest = gate_receipt.evidence_digest
                 integrity_checked_at = gate_receipt.integrity_verified_at
@@ -758,6 +808,8 @@ class SQLiteAgentTaskStore:
                 "UPDATE agent_tasks SET state = ?, result_json = ?, gate_state = ?, "
                 "gate_receipt = COALESCE(?, gate_receipt), evidence_refs_json = ?, "
                 "durable_operation_key = COALESCE(?, durable_operation_key), "
+                "causation_root_key = COALESCE(?, causation_root_key), "
+                "gate_operation_key = COALESCE(?, gate_operation_key), "
                 "evidence_digest = COALESCE(?, evidence_digest), "
                 "integrity_checked_at = COALESCE(?, integrity_checked_at), "
                 "capsule_ref = COALESCE(?, capsule_ref), capsule_state = ?, "
@@ -777,6 +829,8 @@ class SQLiteAgentTaskStore:
                     receipt_payload,
                     evidence_refs,
                     receipt_identity if gate_receipt is not None else None,
+                    causation_root_key,
+                    stage_operation_key if gate_receipt is not None else None,
                     evidence_digest,
                     integrity_checked_at,
                     capsule_ref,
@@ -1161,6 +1215,29 @@ def gate_state_for_result(result: AgentTaskState) -> AgentTaskGateState:
 
 def _receipt_identity(payload: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _root_key(value: str | None, task_id: str) -> str:
+    if value is None:
+        return _receipt_identity(f"causation\0{task_id}")
+    _key(value, "causation_root_key")
+    return value
+
+
+def _stage_key(value: str | None, payload: str | None) -> str | None:
+    if value is None:
+        return _receipt_identity(payload) if payload is not None else None
+    _key(value, "stage_operation_key")
+    return value
+
+
+def _stored_stage_key(row: Mapping[str, Any] | Any, stage: str) -> str | None:
+    column = f"{stage}_operation_key"
+    if _row_has(row, column) and row[column] is not None:
+        return str(row[column])
+    if _row_has(row, "durable_operation_key") and row["durable_operation_key"] is not None:
+        return str(row["durable_operation_key"])
+    return None
 
 
 def _validate_receipt_identity(
