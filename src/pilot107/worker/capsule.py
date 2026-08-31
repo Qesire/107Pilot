@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pilot107.core.run_store import RunStore, utc_now_iso
-from pilot107.core.states import CapsuleState, CollectionState
+from pilot107.agent.tasks import AgentTaskGateReceipt
+from pilot107.core.evidence_binding import EvidenceBinder, EvidenceBindingError
+from pilot107.core.run_store import RunStore
+from pilot107.core.states import CapsuleState, CollectionState, EvidenceSealState
 from pilot107.worker.evidence import EvidenceStore
 
 
@@ -69,10 +74,27 @@ class RawCapsuleService:
         run = self.store.get_run(run_id)
         if run.collection_state != CollectionState.SUCCEEDED:
             raise CapsuleError(f"run evidence is not fully collected: {run.collection_state}")
+        seal = self.store.get_evidence_seal(run_id)
+        if (
+            seal.state is not EvidenceSealState.SEALED
+            or seal.digest is None
+            or seal.marker_ref is None
+            or seal.sealed_at is None
+        ):
+            raise CapsuleError("run evidence is not sealed")
+
+        evidence_receipt = self._verify_sealed_evidence(run_id)
 
         self.store.update_capsule_state(run_id, CapsuleState.RUNNING, event_type="capsule.running")
         try:
-            result = self._build_raw_capsule(run_id)
+            with _capsule_build_lock(self.capsule_root, run_id):
+                result = self._build_raw_capsule(
+                    run_id,
+                    evidence_digest=evidence_receipt.evidence_digest,
+                    evidence_seal_digest=evidence_receipt.seal_digest or "",
+                    evidence_seal_ref=evidence_receipt.seal_marker_ref or "",
+                    evidence_sealed_at=seal.sealed_at,
+                )
         except CapsuleError as exc:
             self.store.update_capsule_state(
                 run_id,
@@ -118,6 +140,7 @@ class RawCapsuleService:
         if not isinstance(manifest, dict):
             raise CapsuleError("raw Capsule manifest is invalid")
         verify = verify_raw_capsule(capsule_dir)
+        self._validate_capsule_evidence_binding(run_id, capsule_dir)
         capsule_id = str(manifest.get("capsule_id") or "")
         if not capsule_id:
             raise CapsuleError("raw Capsule manifest has no capsule_id")
@@ -138,7 +161,15 @@ class RawCapsuleService:
             errors=verify.errors,
         )
 
-    def _build_raw_capsule(self, run_id: str) -> CapsuleBuildResult:
+    def _build_raw_capsule(
+        self,
+        run_id: str,
+        *,
+        evidence_digest: str,
+        evidence_seal_digest: str,
+        evidence_seal_ref: str,
+        evidence_sealed_at: str,
+    ) -> CapsuleBuildResult:
         run = self.store.get_run(run_id)
         evidence_root = self.evidence_store.run_root(run_id).resolve()
         evidence_manifest_path = evidence_root / "manifest" / "manifest.json"
@@ -146,8 +177,19 @@ class RawCapsuleService:
             raise CapsuleError(f"evidence manifest missing: {evidence_manifest_path}")
         evidence_manifest = json.loads(evidence_manifest_path.read_text(encoding="utf-8"))
 
-        capsule_id = f"capsule_{uuid4().hex}"
+        capsule_id = "capsule_" + hashlib.sha256(
+            f"raw\0{run_id}\0{evidence_seal_digest}".encode()
+        ).hexdigest()[:32]
         capsule_dir = (self.capsule_root / "runs" / run_id / "raw").resolve()
+        if capsule_dir.exists():
+            return self._existing_build_result(
+                run_id,
+                capsule_dir,
+                expected_capsule_id=capsule_id,
+                expected_evidence_digest=evidence_digest,
+                expected_evidence_seal_digest=evidence_seal_digest,
+                expected_evidence_seal_ref=evidence_seal_ref,
+            )
         temp_dir = capsule_dir.with_name(f".raw-{uuid4().hex}.tmp")
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
@@ -180,10 +222,13 @@ class RawCapsuleService:
             provenance = {
                 "schema_version": "107pilot.capsule_provenance.v1",
                 "run_id": run_id,
-                "created_at": utc_now_iso(),
+                "created_at": evidence_sealed_at,
                 "creator": self.creator,
                 "source_evidence_manifest_sha256": _sha256(evidence_manifest_path),
                 "source_evidence_manifest_ref": f"evidence://runs/{run_id}/manifest/manifest.json",
+                "source_evidence_object_set_digest": evidence_digest,
+                "source_evidence_seal_digest": evidence_seal_digest,
+                "source_evidence_seal_ref": evidence_seal_ref,
             }
             _write_json(temp_dir / "provenance.json", provenance)
 
@@ -200,7 +245,7 @@ class RawCapsuleService:
                 "capsule_id": capsule_id,
                 "capsule_type": "raw",
                 "run_id": run_id,
-                "created_at": utc_now_iso(),
+                "created_at": evidence_sealed_at,
                 "creator": self.creator,
                 "run_summary": {
                     "job_id": run.job_id,
@@ -236,6 +281,73 @@ class RawCapsuleService:
             manifest_sha256=_sha256(capsule_dir / "manifest.json"),
             files_copied=len(copied),
             warnings=warnings,
+        )
+
+    def _verify_sealed_evidence(self, run_id: str) -> AgentTaskGateReceipt:
+        run = self.store.get_run(run_id)
+        refs = tuple(
+            f"evidence://runs/{run_id}/{item.logical_path}"
+            for item in self.store.list_evidence_objects(run_id)
+        )
+        try:
+            return EvidenceBinder(
+                store=self.store,
+                evidence_root=self.evidence_store.root,
+            ).verify_terminal_gate(
+                run_id,
+                refs,
+                {
+                    "workspace_revision": run.workspace_revision,
+                    "workspace_digest": run.workspace_digest,
+                    "legacy_boundary": run.workspace_revision is None,
+                    "source_revision": run.source_revision,
+                    "platform_snapshot_ref": run.platform_snapshot_ref,
+                },
+            )
+        except EvidenceBindingError as exc:
+            raise CapsuleError(f"sealed Evidence verification failed: {exc.code}") from exc
+
+    def _validate_capsule_evidence_binding(self, run_id: str, capsule_dir: Path) -> None:
+        receipt = self._verify_sealed_evidence(run_id)
+        provenance = _read_json_object(capsule_dir / "provenance.json", "Capsule provenance")
+        expected = {
+            "source_evidence_object_set_digest": receipt.evidence_digest,
+            "source_evidence_seal_digest": receipt.seal_digest,
+            "source_evidence_seal_ref": receipt.seal_marker_ref,
+        }
+        if any(provenance.get(key) != value for key, value in expected.items()):
+            raise CapsuleError("raw Capsule is not bound to the current sealed Evidence")
+
+    def _existing_build_result(
+        self,
+        run_id: str,
+        capsule_dir: Path,
+        *,
+        expected_capsule_id: str,
+        expected_evidence_digest: str,
+        expected_evidence_seal_digest: str,
+        expected_evidence_seal_ref: str,
+    ) -> CapsuleBuildResult:
+        verify = verify_raw_capsule(capsule_dir)
+        if not verify.valid or verify.capsule_id != expected_capsule_id:
+            raise CapsuleError("existing raw Capsule is invalid")
+        provenance = _read_json_object(capsule_dir / "provenance.json", "Capsule provenance")
+        if (
+            provenance.get("source_evidence_object_set_digest") != expected_evidence_digest
+            or provenance.get("source_evidence_seal_digest") != expected_evidence_seal_digest
+            or provenance.get("source_evidence_seal_ref") != expected_evidence_seal_ref
+        ):
+            raise CapsuleError("existing raw Capsule has a different Evidence seal")
+        manifest = _read_json_object(capsule_dir / "manifest.json", "Capsule manifest")
+        files = manifest.get("files")
+        limitations = manifest.get("limitations")
+        return CapsuleBuildResult(
+            run_id=run_id,
+            capsule_id=expected_capsule_id,
+            capsule_dir=capsule_dir,
+            manifest_sha256=_sha256(capsule_dir / "manifest.json"),
+            files_copied=len(files) if isinstance(files, list) else 0,
+            warnings=[str(item) for item in limitations] if isinstance(limitations, list) else [],
         )
 
 
@@ -342,3 +454,26 @@ def _build_checksums(capsule_dir: Path) -> str:
         logical_path = path.relative_to(capsule_dir).as_posix()
         lines.append(f"{_sha256(path)}  {logical_path}")
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _read_json_object(path: Path, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise CapsuleError(f"{label} is unreadable") from exc
+    if not isinstance(value, dict):
+        raise CapsuleError(f"{label} is invalid")
+    return value
+
+
+@contextmanager
+def _capsule_build_lock(capsule_root: Path, run_id: str) -> Iterator[None]:
+    run_root = _safe_join((capsule_root / "runs").resolve(), run_id)
+    run_root.mkdir(parents=True, exist_ok=True)
+    lock_path = run_root / ".raw.lock"
+    with lock_path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

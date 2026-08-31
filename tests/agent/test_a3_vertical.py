@@ -231,7 +231,7 @@ def test_pending_validation_releases_turn_and_terminal_task_wakes_once(
         )
     second_tick = worker.tick()
     completed_task = task_store.get_task(task.task_id, owner="alice")
-    followups = [
+    followups_before_ready_dispatch = [
         item
         for item in session_store.list_recoverable_turns(limit=10)
         if item.request_key == f"agent-task:{task.task_id}:ready"
@@ -239,4 +239,12 @@ def test_pending_validation_releases_turn_and_terminal_task_wakes_once(
 
     assert second_tick.agent_tasks_succeeded >= 1
     assert completed_task.state is AgentTaskState.SUCCEEDED
+    assert followups_before_ready_dispatch == []
+
+    worker.tick()
+    followups = [
+        item
+        for item in session_store.list_recoverable_turns(limit=10)
+        if item.request_key == f"agent-task:{task.task_id}:ready"
+    ]
     assert len(followups) == 1

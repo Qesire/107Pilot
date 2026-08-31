@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ from pilot107.adapters.slurm import JobSnapshot, SubmissionStrategy, SubmitRecei
 from pilot107.api.evidence_query import EvidenceQueryService
 from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
+from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.run_store import RunStore
 from pilot107.core.states import RunState
 from pilot107.core.template_market import (
@@ -62,6 +64,15 @@ class TemplateVerificationTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        for path in sorted(
+            Path(self._temporary.name).rglob("*"),
+            key=lambda item: len(item.parts),
+            reverse=True,
+        ):
+            if path.is_symlink():
+                continue
+            with suppress(FileNotFoundError):
+                path.chmod(0o700 if path.is_dir() else 0o600)
         self._temporary.cleanup()
 
     def test_verification_is_derived_from_adoption_run_and_final_evidence(self) -> None:
@@ -160,6 +171,7 @@ class TemplateVerificationTests(unittest.TestCase):
         tampered_path = (
             self.capsule_root / "runs" / tampered_run / "raw" / "slurm" / "accounting.json"
         )
+        tampered_path.chmod(0o600)
         tampered_path.write_text("tampered", encoding="utf-8")
         with self.assertRaises(TemplateMarketError) as tampered:
             self.verification_service.verify_from_run(
@@ -325,6 +337,9 @@ class TemplateVerificationTests(unittest.TestCase):
             script="echo ok",
             resource_plan={"gpus_total": 0},
             contract_id=contract_id,
+            workspace_digest="b" * 64,
+            source_revision="workspace-snapshot:sha256:" + "b" * 64,
+            platform_snapshot_ref="snapshot:template-verification",
         )
         self.run_store.apply_submit_receipt(
             run.run_id,
@@ -364,13 +379,26 @@ class TemplateVerificationTests(unittest.TestCase):
             payload={
                 "schema": "pilot107.evidence_manifest.v1",
                 "run_id": run.run_id,
+                "owner": run.owner,
+                "job_id": "10701",
+                "workspace_revision": None,
+                "workspace_digest": "b" * 64,
+                "legacy_boundary": True,
+                "source_revision": "workspace-snapshot:sha256:" + "b" * 64,
+                "platform_snapshot_ref": "snapshot:template-verification",
                 "artifacts": [
                     {
                         "logical_path": artifact.logical_path,
                         "sha256": artifact.sha256,
+                        "size_bytes": artifact.size_bytes,
+                        "content_type": artifact.content_type,
+                        "evidence_ref": (
+                            f"evidence://runs/{run.run_id}/{artifact.logical_path}"
+                        ),
                     }
                     for artifact in (accounting, summary)
                 ],
+                "warnings": [],
             },
         )
         objects = [
@@ -379,16 +407,39 @@ class TemplateVerificationTests(unittest.TestCase):
                 "category": artifact.logical_path.split("/", 1)[0],
                 "logical_path": artifact.logical_path,
                 "store_path": str(artifact.path),
+                "source_uri": f"evidence://runs/{run.run_id}/{artifact.logical_path}",
                 "sha256": artifact.sha256,
                 "size_bytes": artifact.size_bytes,
                 "mime_type": artifact.content_type,
                 "collection_status": "collected",
                 "mutable_during_run": False,
                 "finalized_at": finalized_at,
+                "workspace_revision": None,
+                "workspace_digest": "b" * 64,
+                "source_revision": "workspace-snapshot:sha256:" + "b" * 64,
+                "platform_snapshot_ref": "snapshot:template-verification",
             }
             for index, artifact in enumerate((manifest, accounting, summary))
         ]
         self.run_store.upsert_evidence_objects(run.run_id, objects)
+        refs = tuple(
+            f"evidence://runs/{run.run_id}/{artifact.logical_path}"
+            for artifact in (manifest, accounting, summary)
+        )
+        EvidenceBinder(
+            store=self.run_store,
+            evidence_root=self.evidence_store.root,
+        ).seal_terminal_evidence(
+            run.run_id,
+            refs,
+            {
+                "workspace_revision": None,
+                "workspace_digest": "b" * 64,
+                "legacy_boundary": True,
+                "source_revision": "workspace-snapshot:sha256:" + "b" * 64,
+                "platform_snapshot_ref": "snapshot:template-verification",
+            },
+        )
         if capsule_ready:
             RawCapsuleService(
                 store=self.run_store,

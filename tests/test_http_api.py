@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from contextlib import suppress
 from pathlib import Path
 
 from pilot107.adapters.slurm import (
@@ -49,6 +50,13 @@ class HttpApiTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        for path in sorted(
+            Path(self._tmp.name).rglob("*"), key=lambda item: len(item.parts), reverse=True
+        ):
+            if path.is_symlink():
+                continue
+            with suppress(FileNotFoundError):
+                path.chmod(0o700 if path.is_dir() else 0o600)
         self._tmp.cleanup()
 
     def test_proxy_signature_guards_forwarded_identity_and_replay(self) -> None:
@@ -246,6 +254,9 @@ class HttpApiTests(unittest.TestCase):
             owner="alice",
             workdir="/public/home/alice",
             script="#!/bin/bash\ntrue\n",
+            workspace_digest="a" * 64,
+            source_revision="workspace-snapshot:sha256:" + "a" * 64,
+            platform_snapshot_ref="snapshot:platform-http",
         )
         self.run_store.apply_submit_receipt(
             run.run_id,
@@ -273,18 +284,68 @@ class HttpApiTests(unittest.TestCase):
             content=run.script,
             content_type="text/x-shellscript",
         )
-        self.evidence_store.write_json(
+        artifact_ref = f"evidence://runs/{run.run_id}/{artifact.logical_path}"
+        manifest = self.evidence_store.write_json(
             run_id=run.run_id,
             logical_path="manifest/manifest.json",
             payload={
                 "schema": "pilot107.evidence_manifest.v1",
+                "run_id": run.run_id,
+                "owner": run.owner,
+                "job_id": "capsule-job",
+                "workspace_revision": None,
+                "workspace_digest": "a" * 64,
+                "legacy_boundary": True,
+                "source_revision": "workspace-snapshot:sha256:" + "a" * 64,
+                "platform_snapshot_ref": "snapshot:platform-http",
                 "artifacts": [
                     {
                         "logical_path": artifact.logical_path,
                         "sha256": artifact.sha256,
                         "size_bytes": artifact.size_bytes,
+                        "content_type": artifact.content_type,
+                        "evidence_ref": artifact_ref,
                     }
                 ],
+            },
+        )
+        manifest_ref = f"evidence://runs/{run.run_id}/{manifest.logical_path}"
+        finalized_at = "2026-09-01T00:00:00+00:00"
+        self.run_store.upsert_evidence_objects(
+            run.run_id,
+            [
+                {
+                    "object_id": f"ev-http-{index}",
+                    "category": item.logical_path.split("/", 1)[0],
+                    "logical_path": item.logical_path,
+                    "store_path": str(item.path),
+                    "source_uri": f"evidence://runs/{run.run_id}/{item.logical_path}",
+                    "sha256": item.sha256,
+                    "size_bytes": item.size_bytes,
+                    "mime_type": item.content_type,
+                    "collection_status": "collected",
+                    "mutable_during_run": False,
+                    "finalized_at": finalized_at,
+                    "workspace_revision": None,
+                    "workspace_digest": "a" * 64,
+                    "source_revision": "workspace-snapshot:sha256:" + "a" * 64,
+                    "platform_snapshot_ref": "snapshot:platform-http",
+                }
+                for index, item in enumerate((artifact, manifest))
+            ],
+        )
+        EvidenceBinder(
+            store=self.run_store,
+            evidence_root=self.evidence_store.root,
+        ).seal_terminal_evidence(
+            run.run_id,
+            (artifact_ref, manifest_ref),
+            {
+                "workspace_revision": None,
+                "workspace_digest": "a" * 64,
+                "legacy_boundary": True,
+                "source_revision": "workspace-snapshot:sha256:" + "a" * 64,
+                "platform_snapshot_ref": "snapshot:platform-http",
             },
         )
         capsule_service = RawCapsuleService(

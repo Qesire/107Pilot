@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -25,7 +26,12 @@ from pilot107.core.diagnosis import DiagnosisService
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import CollectionTaskFenceConflict, CollectionTaskRecord
-from pilot107.core.states import TERMINAL_RUN_STATES, CapsuleState, CollectionState
+from pilot107.core.states import (
+    TERMINAL_RUN_STATES,
+    CapsuleState,
+    CollectionState,
+    EvidenceSealState,
+)
 from pilot107.core.workflow_manifest import WorkflowArtifactGateError, WorkflowService
 from pilot107.observability.adapters import RunObservationTarget
 from pilot107.observability.collector import (
@@ -343,10 +349,6 @@ class RuntimeReconcileWorker:
                 ):
                     self.service.store.defer_logs_finalize_for_runtime_watch(reconciled.run_id)
 
-        if self.agent_task_service is not None:
-            run_agent_task_phase("reconcile", self.agent_task_service.reconcile_active)
-            run_agent_task_phase("ready-dispatch", self.agent_task_service.dispatch_due)
-
         observability_result: ObservabilityTickResult | None = None
         if self.observability_collector is not None:
             try:
@@ -394,10 +396,24 @@ class RuntimeReconcileWorker:
         tasks_succeeded = 0
         task_errors: list[WorkerTaskError] = []
         capsule_stats = _CapsuleBuildStats()
+        capsule_candidates = self._agent_task_capsule_candidates()
         if self.task_handler is not None:
-            tasks_checked, tasks_succeeded, task_errors = self._dispatch_collection_tasks(
-                capsule_stats
-            )
+            (
+                tasks_checked,
+                tasks_succeeded,
+                task_errors,
+                collected_run_ids,
+            ) = self._dispatch_collection_tasks()
+            for run_id in collected_run_ids:
+                capsule_candidates.setdefault(run_id, _run_causation_root(run_id))
+
+        if self.agent_task_service is not None:
+            run_agent_task_phase("evidence-gate", self.agent_task_service.reconcile_active)
+
+        self._dispatch_capsule_candidates(capsule_candidates, capsule_stats)
+
+        if self.agent_task_service is not None:
+            run_agent_task_phase("finalize", self.agent_task_service.reconcile_active)
 
         formal_results_checked = 0
         formal_results_succeeded = 0
@@ -522,13 +538,12 @@ class RuntimeReconcileWorker:
 
     def _dispatch_collection_tasks(
         self,
-        capsule_stats: _CapsuleBuildStats,
-    ) -> tuple[int, int, list[WorkerTaskError]]:
+    ) -> tuple[int, int, list[WorkerTaskError], tuple[str, ...]]:
         if self.task_handler is None:
-            return 0, 0, []
+            return 0, 0, [], ()
         repository = self.service.control_repository
         if repository is None:
-            return self._dispatch_legacy_collection_tasks(capsule_stats)
+            return self._dispatch_legacy_collection_tasks()
 
         for task in self.service.store.list_collection_tasks_for_dispatch(limit=self.batch_size):
             repository.enqueue(
@@ -545,6 +560,7 @@ class RuntimeReconcileWorker:
         checked = 0
         succeeded = 0
         errors: list[WorkerTaskError] = []
+        completed_run_ids: list[str] = []
         for _ in range(self.batch_size):
             claimed = repository.claim_outbox(
                 owner=self.worker_id,
@@ -585,8 +601,8 @@ class RuntimeReconcileWorker:
             if error is not None:
                 errors.append(error)
             if completed and run_id is not None:
-                self._record_auto_capsule(run_id, capsule_stats)
-        return checked, succeeded, errors
+                completed_run_ids.append(run_id)
+        return checked, succeeded, errors, tuple(dict.fromkeys(completed_run_ids))
 
     def _execute_collection_message(
         self,
@@ -691,8 +707,7 @@ class RuntimeReconcileWorker:
 
     def _dispatch_legacy_collection_tasks(
         self,
-        capsule_stats: _CapsuleBuildStats,
-    ) -> tuple[int, int, list[WorkerTaskError]]:
+    ) -> tuple[int, int, list[WorkerTaskError], tuple[str, ...]]:
         assert self.task_handler is not None
         tasks = self.service.store.acquire_due_collection_tasks(
             lease_owner=self.worker_id,
@@ -701,6 +716,7 @@ class RuntimeReconcileWorker:
         )
         succeeded = 0
         errors: list[WorkerTaskError] = []
+        completed_run_ids: list[str] = []
         for task in tasks:
             run = self.service.store.get_run(task.run_id)
             try:
@@ -743,8 +759,150 @@ class RuntimeReconcileWorker:
                 },
             )
             succeeded += 1
-            self._record_auto_capsule(task.run_id, capsule_stats)
-        return len(tasks), succeeded, errors
+            completed_run_ids.append(task.run_id)
+        return len(tasks), succeeded, errors, tuple(dict.fromkeys(completed_run_ids))
+
+    def _dispatch_capsule_candidates(
+        self,
+        candidates: Mapping[str, str],
+        capsule_stats: _CapsuleBuildStats,
+    ) -> None:
+        if self.capsule_service is None:
+            return
+        repository = self.service.control_repository
+        if repository is None:
+            for run_id in candidates:
+                self._record_auto_capsule(run_id, capsule_stats)
+            return
+        for run_id, causation_root_key in candidates.items():
+            run = self.service.store.get_run(run_id)
+            seal = self.service.store.get_evidence_seal(run_id)
+            if (
+                run.collection_state is not CollectionState.SUCCEEDED
+                or run.capsule_state is CapsuleState.READY
+                or seal.state is not EvidenceSealState.SEALED
+                or seal.digest is None
+            ):
+                continue
+            operation_key = _capsule_operation_key(causation_root_key, seal.digest)
+            repository.enqueue(
+                message_id=f"capsule:{operation_key}",
+                topic="capsule.build.v1",
+                aggregate_id=run_id,
+                payload={
+                    "run_id": run_id,
+                    "evidence_seal_digest": seal.digest,
+                    "causation_root_key": causation_root_key,
+                    "operation_key": operation_key,
+                },
+            )
+        for _ in range(self.batch_size):
+            claimed = repository.claim_outbox(
+                owner=f"{self.worker_id}-capsule",
+                limit=1,
+                lease_seconds=self.task_lease_seconds,
+                topics=("capsule.build.v1",),
+            )
+            if not claimed:
+                break
+            message = claimed[0]
+            try:
+                self._execute_capsule_message(message, capsule_stats)
+            except Exception as exc:
+                with suppress(ControlRepositoryConflict, RuntimeError):
+                    repository.retry(
+                        message_id=message.message_id,
+                        owner=message.lease_owner or f"{self.worker_id}-capsule",
+                        fencing_token=message.fencing_token,
+                        error=str(exc),
+                        delay_seconds=_retry_delay_seconds(message.attempts),
+                        max_attempts=self.collection_max_attempts,
+                    )
+                capsule_stats.errors.append(
+                    WorkerRunError(
+                        run_id=message.aggregate_id,
+                        message=str(exc),
+                        code=WorkerErrorCode.CAPSULE_AUTO_BUILD_ERROR.value,
+                        retryable=True,
+                    )
+                )
+
+    def _execute_capsule_message(
+        self,
+        message: OutboxMessage,
+        capsule_stats: _CapsuleBuildStats,
+    ) -> None:
+        repository = self.service.control_repository
+        if repository is None or message.lease_owner is None:
+            raise RuntimeError("capsule outbox dependencies are unavailable")
+        run_id, seal_digest, causation_root_key, operation_key = _capsule_message_identity(message)
+        current_seal = self.service.store.get_evidence_seal(run_id)
+        if (
+            current_seal.state is not EvidenceSealState.SEALED
+            or current_seal.digest != seal_digest
+            or operation_key != _capsule_operation_key(causation_root_key, seal_digest)
+        ):
+            repository.retry(
+                message_id=message.message_id,
+                owner=message.lease_owner,
+                fencing_token=message.fencing_token,
+                error="Evidence seal changed before Capsule build",
+                delay_seconds=0,
+                max_attempts=1,
+            )
+            self.service.store.update_capsule_state(
+                run_id,
+                CapsuleState.FAILED,
+                event_type="capsule.auto_build_failed",
+                payload={"reason": "evidence_seal_changed", "retryable": False},
+            )
+            return
+        capsule_stats.attempted += 1
+        try:
+            with _OutboxHeartbeat(
+                repository=repository,
+                message=message,
+                lease_seconds=self.task_lease_seconds,
+            ):
+                assert self.capsule_service is not None
+                self.capsule_service.build_raw_capsule(run_id)
+        except Exception as exc:
+            can_retry = message.attempts < self.collection_max_attempts
+            self.service.store.update_capsule_state(
+                run_id,
+                CapsuleState.PENDING if can_retry else CapsuleState.FAILED,
+                event_type="capsule.auto_build_retry" if can_retry else "capsule.auto_build_failed",
+                payload={"message": str(exc), "retryable": can_retry},
+            )
+            repository.retry(
+                message_id=message.message_id,
+                owner=message.lease_owner,
+                fencing_token=message.fencing_token,
+                error=str(exc),
+                delay_seconds=_retry_delay_seconds(message.attempts) if can_retry else 0,
+                max_attempts=self.collection_max_attempts,
+            )
+            if not isinstance(exc, CapsuleError):
+                capsule_stats.errors.append(
+                    WorkerRunError(
+                        run_id=run_id,
+                        message=str(exc),
+                        code=WorkerErrorCode.CAPSULE_AUTO_BUILD_ERROR.value,
+                        retryable=can_retry,
+                    )
+                )
+            return
+        repository.acknowledge(
+            message_id=message.message_id,
+            owner=message.lease_owner,
+            fencing_token=message.fencing_token,
+        )
+        capsule_stats.succeeded += 1
+        self.service.store.append_event(
+            run_id=run_id,
+            event_type="capsule.auto_build_completed",
+            payload={"worker_id": self.worker_id, "operation_key": operation_key},
+        )
 
     def _record_auto_capsule(
         self,
@@ -799,6 +957,17 @@ class RuntimeReconcileWorker:
             event_type="capsule.auto_build_completed",
             payload={"worker_id": self.worker_id},
         )
+
+    def _agent_task_capsule_candidates(self) -> dict[str, str]:
+        if self.agent_task_service is None or self.capsule_service is None:
+            return {}
+        candidates: dict[str, str] = {}
+        for task in self.agent_task_service.store.list_recoverable_tasks(limit=self.batch_size):
+            if task.linked_run_id is not None:
+                candidates[task.linked_run_id] = hashlib.sha256(
+                    f"causation\0{task.task_id}".encode()
+                ).hexdigest()
+        return candidates
 
     def run_until_idle(
         self,
@@ -904,6 +1073,37 @@ class RuntimeReconcileWorker:
 
 def _collection_message_id(task: CollectionTaskRecord) -> str:
     return f"collection:{task.task_id}:{task.generation}"
+
+
+def _run_causation_root(run_id: str) -> str:
+    return hashlib.sha256(f"causation\0run:{run_id}".encode()).hexdigest()
+
+
+def _capsule_operation_key(causation_root_key: str, evidence_seal_digest: str) -> str:
+    return hashlib.sha256(
+        f"{causation_root_key}\0capsule\0{evidence_seal_digest}".encode()
+    ).hexdigest()
+
+
+def _capsule_message_identity(message: OutboxMessage) -> tuple[str, str, str, str]:
+    run_id = message.payload.get("run_id")
+    seal_digest = message.payload.get("evidence_seal_digest")
+    causation_root_key = message.payload.get("causation_root_key")
+    operation_key = message.payload.get("operation_key")
+    if (
+        message.topic != "capsule.build.v1"
+        or not isinstance(run_id, str)
+        or not run_id
+        or message.aggregate_id != run_id
+        or not isinstance(seal_digest, str)
+        or len(seal_digest) != 64
+        or not isinstance(causation_root_key, str)
+        or len(causation_root_key) != 64
+        or not isinstance(operation_key, str)
+        or len(operation_key) != 64
+    ):
+        raise ValueError("capsule outbox identity is invalid")
+    return run_id, seal_digest, causation_root_key, operation_key
 
 
 def _collection_message_identity(

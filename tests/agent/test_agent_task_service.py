@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -39,7 +40,9 @@ from pilot107.services.agent_task_service import (
     build_server_provenance_authority,
     build_verified_capsule_authority,
 )
+from pilot107.worker.capsule import CapsuleError, RawCapsuleService
 from pilot107.worker.evidence import EvidenceStore
+from pilot107.worker.runtime_worker import RuntimeReconcileWorker
 
 
 @pytest.fixture(autouse=True)
@@ -744,6 +747,297 @@ def test_evidence_and_capsule_task_waits_for_capsule_ready(tmp_path: Path) -> No
     assert completed.gate_receipt is not None
     assert completed.gate_receipt.capsule_state == "READY"
     assert completed.gate_receipt.capsule_ref == f"capsule:{running.linked_run_id}"
+
+
+def test_runtime_worker_builds_required_capsule_after_seal_before_ready_followup(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path)
+    capsule_service = RawCapsuleService(
+        store=harness.run_store,
+        evidence_store=harness.evidence_store,
+        capsule_root=tmp_path / "capsules",
+    )
+    harness.service.capsule_authority_resolver = build_verified_capsule_authority(
+        capsule_service
+    )
+    task, _ = harness.schedule(
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
+    )
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    worker = RuntimeReconcileWorker(
+        service=harness.run_service,
+        agent_task_service=harness.service,
+        capsule_service=capsule_service,
+    )
+
+    first = worker.tick()
+    terminal = harness.task_store.get_task(task.task_id, owner="alice")
+    followups_before_dispatch = [
+        turn
+        for turn in harness.session_store.list_recoverable_turns(limit=10)
+        if turn.request_key == f"agent-task:{task.task_id}:ready"
+    ]
+
+    assert first.capsule_builds_succeeded == 1
+    assert harness.run_store.get_run(running.linked_run_id).capsule_state is CapsuleState.READY
+    assert terminal.state is AgentTaskState.SUCCEEDED
+    assert terminal.gate_receipt is not None
+    assert terminal.gate_receipt.capsule_state == "READY"
+    assert followups_before_dispatch == []
+    with harness.control.connect() as connection:
+        capsule_messages = connection.execute(
+            "SELECT topic, state, attempts, payload_json FROM control_outbox "
+            "WHERE topic = 'capsule.build.v1'"
+        ).fetchall()
+        task_identity = connection.execute(
+            "SELECT causation_root_key, gate_operation_key FROM agent_tasks WHERE task_id = ?",
+            (task.task_id,),
+        ).fetchone()
+    assert len(capsule_messages) == 1
+    topic, state, attempts, payload_json = tuple(capsule_messages[0])
+    assert (topic, state, attempts) == ("capsule.build.v1", "succeeded", 1)
+    capsule_identity = json.loads(payload_json)
+    assert capsule_identity["causation_root_key"] == task_identity["causation_root_key"]
+    assert capsule_identity["operation_key"] != task_identity["gate_operation_key"]
+
+    worker.tick()
+    followups = [
+        turn
+        for turn in harness.session_store.list_recoverable_turns(limit=10)
+        if turn.request_key == f"agent-task:{task.task_id}:ready"
+    ]
+    assert len(followups) == 1
+
+
+def test_capsule_outbox_ack_crash_recovers_same_artifact_without_duplicate_followup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SimulatedProcessCrash(BaseException):
+        pass
+
+    harness = Harness(tmp_path)
+    capsule_service = RawCapsuleService(
+        store=harness.run_store,
+        evidence_store=harness.evidence_store,
+        capsule_root=tmp_path / "capsules",
+    )
+    harness.service.capsule_authority_resolver = build_verified_capsule_authority(
+        capsule_service
+    )
+    task, _ = harness.schedule(
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
+    )
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    worker = RuntimeReconcileWorker(
+        service=harness.run_service,
+        agent_task_service=harness.service,
+        capsule_service=capsule_service,
+        task_lease_seconds=30,
+    )
+    original_acknowledge = harness.control.acknowledge
+
+    def crash_capsule_ack(*, message_id: str, owner: str, fencing_token: int) -> None:
+        if message_id.startswith("capsule:"):
+            raise SimulatedProcessCrash("crash after Capsule publication")
+        original_acknowledge(
+            message_id=message_id,
+            owner=owner,
+            fencing_token=fencing_token,
+        )
+
+    monkeypatch.setattr(harness.control, "acknowledge", crash_capsule_ack)
+    with pytest.raises(SimulatedProcessCrash):
+        worker.tick()
+    first = capsule_service.get_raw_capsule(running.linked_run_id)
+
+    monkeypatch.setattr(harness.control, "acknowledge", original_acknowledge)
+    harness.clock.advance(31)
+    worker.tick()
+    recovered = capsule_service.get_raw_capsule(running.linked_run_id)
+    worker.tick()
+
+    assert recovered.capsule_id == first.capsule_id
+    assert recovered.manifest_sha256 == first.manifest_sha256
+    with harness.control.connect() as connection:
+        rows = connection.execute(
+            "SELECT state, attempts FROM control_outbox WHERE topic = 'capsule.build.v1'"
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [("succeeded", 2)]
+    followups = [
+        turn
+        for turn in harness.session_store.list_recoverable_turns(limit=10)
+        if turn.request_key == f"agent-task:{task.task_id}:ready"
+    ]
+    assert len(followups) == 1
+
+
+def test_required_capsule_retry_exhaustion_leaves_authoritative_task_failure(
+    tmp_path: Path,
+) -> None:
+    class FailingCapsuleService:
+        def build_raw_capsule(self, run_id: str):  # type: ignore[no-untyped-def]
+            raise CapsuleError("Capsule storage unavailable")
+
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule(
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
+    )
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    worker = RuntimeReconcileWorker(
+        service=harness.run_service,
+        agent_task_service=harness.service,
+        capsule_service=FailingCapsuleService(),  # type: ignore[arg-type]
+        collection_max_attempts=2,
+    )
+
+    first = worker.tick()
+    pending = harness.task_store.get_task(task.task_id, owner="alice")
+    assert first.capsule_builds_attempted == 1
+    assert pending.state is AgentTaskState.RUNNING
+    assert pending.gate_state is AgentTaskGateState.AWAITING_CAPSULE
+    assert harness.run_store.get_run(running.linked_run_id).capsule_state is CapsuleState.PENDING
+
+    harness.clock.advance(2)
+    second = worker.tick()
+    failed = harness.task_store.get_task(task.task_id, owner="alice")
+
+    assert second.capsule_builds_attempted == 1
+    assert harness.run_store.get_run(running.linked_run_id).capsule_state is CapsuleState.FAILED
+    assert failed.state is AgentTaskState.FAILED
+    assert failed.result is not None
+    assert failed.result.error_code == "CAPSULE.UNAVAILABLE"
+    with harness.control.connect() as connection:
+        state, attempts = connection.execute(
+            "SELECT state, attempts FROM control_outbox WHERE topic = 'capsule.build.v1'"
+        ).fetchone()
+    assert (state, attempts) == ("dead_letter", 2)
+
+
+def test_runtime_worker_collection_exhaustion_finishes_task_without_fake_evidence(
+    tmp_path: Path,
+) -> None:
+    class FailingCollector:
+        def collect(self, *, run, task_type: str):  # type: ignore[no-untyped-def]
+            raise RuntimeError(f"collector unavailable for {task_type}")
+
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    worker = RuntimeReconcileWorker(
+        service=harness.run_service,
+        agent_task_service=harness.service,
+        task_handler=FailingCollector(),  # type: ignore[arg-type]
+        collection_max_attempts=1,
+    )
+
+    result = worker.tick()
+    failed = harness.task_store.get_task(task.task_id, owner="alice")
+
+    assert result.tasks_checked == 7
+    assert result.tasks_succeeded == 0
+    assert len(result.task_errors) == 7
+    assert failed.state is AgentTaskState.FAILED
+    assert failed.result is not None
+    assert failed.result.error_code == "EVIDENCE.UNAVAILABLE"
+    assert failed.result.evidence_refs == ()
+    assert harness.run_store.get_evidence_seal(running.linked_run_id).state.value == "OPEN"
+
+
+def test_runtime_worker_optional_capsule_failure_does_not_block_evidence_policy(
+    tmp_path: Path,
+) -> None:
+    class FailingCapsuleService:
+        def build_raw_capsule(self, run_id: str):  # type: ignore[no-untyped-def]
+            raise CapsuleError("optional Capsule backend unavailable")
+
+    harness = Harness(tmp_path)
+    task, _ = harness.schedule()
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    worker = RuntimeReconcileWorker(
+        service=harness.run_service,
+        agent_task_service=harness.service,
+        capsule_service=FailingCapsuleService(),  # type: ignore[arg-type]
+    )
+
+    worker.tick()
+    completed = harness.task_store.get_task(task.task_id, owner="alice")
+
+    assert completed.state is AgentTaskState.SUCCEEDED
+    assert completed.gate_receipt is not None
+    assert completed.gate_receipt.capsule_state == "not_required"
+    assert harness.run_store.get_run(running.linked_run_id).capsule_state is CapsuleState.PENDING
+
+
+def test_two_runtime_workers_publish_one_capsule_and_one_terminal_task(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path)
+    capsule_service = RawCapsuleService(
+        store=harness.run_store,
+        evidence_store=harness.evidence_store,
+        capsule_root=tmp_path / "capsules",
+    )
+    harness.service.capsule_authority_resolver = build_verified_capsule_authority(
+        capsule_service
+    )
+    task, _ = harness.schedule(
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
+    )
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    first_service = harness.service
+    harness.restart_task_service()
+    second_service = harness.service
+    workers = (
+        RuntimeReconcileWorker(
+            service=harness.run_service,
+            agent_task_service=first_service,
+            capsule_service=capsule_service,
+            worker_id="runtime-a",
+        ),
+        RuntimeReconcileWorker(
+            service=harness.run_service,
+            agent_task_service=second_service,
+            capsule_service=capsule_service,
+            worker_id="runtime-b",
+        ),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda worker: worker.tick(), workers))
+
+    completed = harness.task_store.get_task(task.task_id, owner="alice")
+    assert sum(result.capsule_builds_succeeded for result in results) == 1
+    assert completed.state is AgentTaskState.SUCCEEDED
+    with harness.control.connect() as connection:
+        rows = connection.execute(
+            "SELECT state, attempts FROM control_outbox WHERE topic = 'capsule.build.v1'"
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [("succeeded", 1)]
 
 
 def test_capsule_authority_unavailable_blocks_required_task(tmp_path: Path) -> None:

@@ -59,6 +59,23 @@ class FailingAgentTaskService:
         raise RuntimeError("task reconciliation unavailable")
 
 
+class PhaseRecordingAgentTaskService:
+    def __init__(self, phases: list[str]) -> None:
+        self.phases = phases
+
+    def dispatch_due(self, *, limit: int):  # type: ignore[no-untyped-def]
+        from pilot107.services.agent_task_service import AgentTaskDispatchBatch
+
+        self.phases.append("task-dispatch")
+        return AgentTaskDispatchBatch(checked=0, succeeded=0)
+
+    def reconcile_active(self, *, limit: int):  # type: ignore[no-untyped-def]
+        from pilot107.services.agent_task_service import AgentTaskDispatchBatch
+
+        self.phases.append("task-reconcile")
+        return AgentTaskDispatchBatch(checked=0, succeeded=0)
+
+
 class FakeObservabilityCollector:
     def __init__(self) -> None:
         self.observed: list[tuple[RunObservationTarget, str]] = []
@@ -122,6 +139,15 @@ class FakeTaskHandler:
                 )
             ],
         )
+
+
+class PhaseRecordingTaskHandler:
+    def __init__(self, phases: list[str]) -> None:
+        self.phases = phases
+
+    def collect(self, *, run: RunRecord, task_type: str) -> EvidenceCollectionResult:
+        self.phases.append("collection")
+        return EvidenceCollectionResult(run_id=run.run_id, task_type=task_type, artifacts=[])
 
 
 class DiagnosingTaskHandler:
@@ -213,6 +239,34 @@ class RuntimeReconcileWorkerTests(unittest.TestCase):
         self.assertTrue(
             all(error.code == "AGENT.TASK_SERVICE_ERROR" for error in result.agent_task_errors)
         )
+
+    def test_agent_task_reconciliation_runs_only_after_evidence_collection(self) -> None:
+        phases: list[str] = []
+        backend = InMemorySlurmBackend()
+        service = RunService(store=self.store, backend=backend)
+        run = service.submit(
+            RunSubmitRequest(
+                owner="alice",
+                workdir=Path("/public/home/alice"),
+                script="#!/bin/bash\nhostname\n",
+                resource_plan=_plan(),
+            )
+        )
+        backend.advance_job(job_id=run.job_id or "", raw_state="COMPLETED", exit_code="0:0")
+
+        RuntimeReconcileWorker(
+            service=service,
+            task_handler=PhaseRecordingTaskHandler(phases),
+            agent_task_service=PhaseRecordingAgentTaskService(phases),  # type: ignore[arg-type]
+        ).tick()
+
+        first_collection = phases.index("collection")
+        reconcile_positions = [
+            index for index, phase in enumerate(phases) if phase == "task-reconcile"
+        ]
+        assert reconcile_positions
+        assert all(index > first_collection for index in reconcile_positions)
+        assert phases[-1] == "task-reconcile"
 
     def test_tick_registers_reconciled_run_before_collecting_observations(self) -> None:
         backend = InMemorySlurmBackend()
