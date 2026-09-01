@@ -1067,6 +1067,13 @@ _EVIDENCE_SEAL_CLAIM_SCHEMA = _statements(
     "BIGINT NOT NULL DEFAULT 0"
 )
 
+_CAPSULE_BUILD_FENCE_SCHEMA = _statements(
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS capsule_operation_key TEXT"
+    "\n-- statement\n"
+    "ALTER TABLE runs ADD COLUMN IF NOT EXISTS capsule_build_fencing_token "
+    "BIGINT NOT NULL DEFAULT 0"
+)
+
 _RUN_PROVENANCE_IMMUTABLE_GUARD_SCHEMA = _statements(
     """
     CREATE OR REPLACE FUNCTION pilot107_run_provenance_immutable_guard()
@@ -1564,6 +1571,7 @@ _MIGRATIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         _RUN_PROVENANCE_IMMUTABLE_GUARD_SCHEMA,
     ),
     ("004a.032.evidence_seal_claim", _EVIDENCE_SEAL_CLAIM_SCHEMA),
+    ("004a.033.capsule_build_fence", _CAPSULE_BUILD_FENCE_SCHEMA),
 )
 
 

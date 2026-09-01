@@ -14,7 +14,11 @@ from pilot107.core.template_market import (
     TemplateMarketStore,
     TemplateVerificationRecord,
 )
-from pilot107.worker.capsule import verify_raw_capsule
+from pilot107.worker.capsule import (
+    CapsuleError,
+    capsule_authority_from_store,
+    verify_raw_capsule,
+)
 
 _ENVIRONMENTS = frozenset({"docker", "real107_cpu", "real107_gpu"})
 _REQUIRED_EVIDENCE = frozenset(
@@ -87,8 +91,15 @@ class TemplateVerificationService:
                 "verification Capsule is not ready",
                 code="TEMPLATE.VERIFICATION_CAPSULE_INCOMPLETE",
             )
-        capsule_dir = (self.capsule_root / "runs" / run.run_id / "raw").resolve()
-        capsule_check = verify_raw_capsule(capsule_dir)
+        capsule_dir = (self.capsule_root / "runs" / run.run_id / "raw").absolute()
+        try:
+            capsule_authority = capsule_authority_from_store(self.run_store, run_id)
+        except CapsuleError as exc:
+            raise TemplateMarketError(
+                "verification Capsule authority is unavailable",
+                code="TEMPLATE.VERIFICATION_CAPSULE_INCOMPLETE",
+            ) from exc
+        capsule_check = verify_raw_capsule(capsule_dir, authority=capsule_authority)
         if not capsule_check.valid:
             raise TemplateMarketError(
                 "verification Capsule failed integrity validation",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
@@ -859,6 +860,9 @@ def test_capsule_outbox_ack_crash_recovers_same_artifact_without_duplicate_follo
     with pytest.raises(SimulatedProcessCrash):
         worker.tick()
     first = capsule_service.get_raw_capsule(running.linked_run_id)
+    first_fence = harness.run_store.get_run(
+        running.linked_run_id
+    ).capsule_build_fencing_token
 
     monkeypatch.setattr(harness.control, "acknowledge", original_acknowledge)
     harness.clock.advance(31)
@@ -868,6 +872,10 @@ def test_capsule_outbox_ack_crash_recovers_same_artifact_without_duplicate_follo
 
     assert recovered.capsule_id == first.capsule_id
     assert recovered.manifest_sha256 == first.manifest_sha256
+    assert (
+        harness.run_store.get_run(running.linked_run_id).capsule_build_fencing_token
+        > first_fence
+    )
     with harness.control.connect() as connection:
         rows = connection.execute(
             "SELECT state, attempts FROM control_outbox WHERE topic = 'capsule.build.v1'"
@@ -881,11 +889,206 @@ def test_capsule_outbox_ack_crash_recovers_same_artifact_without_duplicate_follo
     assert len(followups) == 1
 
 
+def test_runtime_worker_lease_takeover_fences_old_builder_before_publish(
+    tmp_path: Path,
+) -> None:
+    reached_publish = threading.Event()
+    release_old = threading.Event()
+    new_entered_build = threading.Event()
+    old_received_lease_assert: list[bool] = []
+
+    class BlockingCapsuleService(RawCapsuleService):
+        def build_raw_capsule(self, run_id: str, **kwargs):  # type: ignore[no-untyped-def]
+            lease_assert = kwargs.get("lease_assert")
+            if threading.current_thread().name == "old-runtime":
+                old_received_lease_assert.append(callable(lease_assert))
+                lease_assert_calls = 0
+
+                def block_then_assert() -> None:
+                    nonlocal lease_assert_calls
+                    lease_assert_calls += 1
+                    if lease_assert_calls == 1:
+                        if not callable(lease_assert):
+                            raise CapsuleError("worker did not provide an outbox lease assertion")
+                        lease_assert()
+                        return
+                    reached_publish.set()
+                    release_old.wait(timeout=5)
+                    if not callable(lease_assert):
+                        raise CapsuleError("worker did not provide an outbox lease assertion")
+                    lease_assert()
+
+                kwargs["lease_assert"] = block_then_assert
+            else:
+                new_entered_build.set()
+            return super().build_raw_capsule(run_id, **kwargs)
+
+    harness = Harness(tmp_path)
+    capsule_service = BlockingCapsuleService(
+        store=harness.run_store,
+        evidence_store=harness.evidence_store,
+        capsule_root=tmp_path / "capsules",
+    )
+    harness.service.capsule_authority_resolver = build_verified_capsule_authority(
+        capsule_service
+    )
+    task, _ = harness.schedule(
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
+    )
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    workers = (
+        RuntimeReconcileWorker(
+            service=harness.run_service,
+            agent_task_service=harness.service,
+            capsule_service=capsule_service,
+            worker_id="runtime-old",
+            task_lease_seconds=30,
+        ),
+        RuntimeReconcileWorker(
+            service=harness.run_service,
+            agent_task_service=harness.service,
+            capsule_service=capsule_service,
+            worker_id="runtime-new",
+            task_lease_seconds=30,
+        ),
+    )
+    old_errors: list[BaseException] = []
+
+    def run_old() -> None:
+        try:
+            workers[0].tick()
+        except BaseException as exc:
+            old_errors.append(exc)
+
+    old_thread = threading.Thread(target=run_old, name="old-runtime")
+    old_thread.start()
+    assert reached_publish.wait(timeout=5)
+    harness.clock.advance(31)
+    with harness.control.connect() as connection:
+        payload = json.loads(
+            connection.execute(
+                "SELECT payload_json FROM control_outbox WHERE topic = 'capsule.build.v1'"
+            ).fetchone()[0]
+        )
+    new_thread = threading.Thread(target=workers[1].tick, name="new-runtime")
+    new_thread.start()
+    assert new_entered_build.wait(timeout=5)
+    for _ in range(100):
+        if (
+            harness.run_store.get_run(running.linked_run_id).capsule_build_fencing_token
+            >= 2
+        ):
+            break
+        threading.Event().wait(0.01)
+    else:
+        raise AssertionError("takeover worker did not fence the stale Capsule builder")
+    release_old.set()
+    old_thread.join(timeout=5)
+    new_thread.join(timeout=5)
+
+    assert not old_thread.is_alive()
+    assert not new_thread.is_alive()
+    assert old_received_lease_assert == [True]
+    completed = harness.run_store.get_run(running.linked_run_id)
+    assert completed.capsule_state is CapsuleState.READY
+    assert completed.capsule_operation_key == payload["operation_key"]
+    assert completed.capsule_build_fencing_token >= 2
+    with harness.control.connect() as connection:
+        state, attempts = connection.execute(
+            "SELECT state, attempts FROM control_outbox WHERE topic = 'capsule.build.v1'"
+        ).fetchone()
+    assert (state, attempts) == ("succeeded", 2)
+
+
+def test_runtime_worker_lease_takeover_reuses_publish_but_rejects_old_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published = threading.Event()
+    release_old = threading.Event()
+    harness = Harness(tmp_path)
+    capsule_service = RawCapsuleService(
+        store=harness.run_store,
+        evidence_store=harness.evidence_store,
+        capsule_root=tmp_path / "capsules",
+    )
+    harness.service.capsule_authority_resolver = build_verified_capsule_authority(
+        capsule_service
+    )
+    task, _ = harness.schedule(
+        completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
+    )
+    harness.service.dispatch_due(limit=10)
+    running = harness.task_store.get_task(task.task_id, owner="alice")
+    assert running.linked_run_id is not None
+    harness.finish_run(running.linked_run_id)
+    harness.finalize_evidence(running.linked_run_id)
+    original_finish = harness.run_store.finish_capsule_build
+
+    def block_old_ready(run_id: str, *, state: CapsuleState, **kwargs):  # type: ignore[no-untyped-def]
+        if state is CapsuleState.READY and threading.current_thread().name == "old-runtime":
+            published.set()
+            release_old.wait(timeout=5)
+        return original_finish(run_id, state=state, **kwargs)
+
+    monkeypatch.setattr(harness.run_store, "finish_capsule_build", block_old_ready)
+    workers = (
+        RuntimeReconcileWorker(
+            service=harness.run_service,
+            agent_task_service=harness.service,
+            capsule_service=capsule_service,
+            worker_id="runtime-old",
+            task_lease_seconds=30,
+        ),
+        RuntimeReconcileWorker(
+            service=harness.run_service,
+            agent_task_service=harness.service,
+            capsule_service=capsule_service,
+            worker_id="runtime-new",
+            task_lease_seconds=30,
+        ),
+    )
+    old_thread = threading.Thread(target=workers[0].tick, name="old-runtime")
+    old_thread.start()
+    assert published.wait(timeout=5)
+    raw = tmp_path / "capsules" / "runs" / running.linked_run_id / "raw"
+    published_manifest = (raw / "manifest.json").read_bytes()
+    harness.clock.advance(31)
+    with harness.control.connect() as connection:
+        payload = json.loads(
+            connection.execute(
+                "SELECT payload_json FROM control_outbox WHERE topic = 'capsule.build.v1'"
+            ).fetchone()[0]
+        )
+    new_thread = threading.Thread(target=workers[1].tick, name="new-runtime")
+    new_thread.start()
+    new_thread.join(timeout=5)
+    release_old.set()
+    old_thread.join(timeout=5)
+
+    assert not old_thread.is_alive()
+    assert not new_thread.is_alive()
+    assert (raw / "manifest.json").read_bytes() == published_manifest
+    completed = harness.run_store.get_run(running.linked_run_id)
+    assert completed.capsule_state is CapsuleState.READY
+    assert completed.capsule_operation_key == payload["operation_key"]
+    assert completed.capsule_build_fencing_token >= 2
+    with harness.control.connect() as connection:
+        state, attempts = connection.execute(
+            "SELECT state, attempts FROM control_outbox WHERE topic = 'capsule.build.v1'"
+        ).fetchone()
+    assert (state, attempts) == ("succeeded", 2)
+
+
 def test_required_capsule_retry_exhaustion_leaves_authoritative_task_failure(
     tmp_path: Path,
 ) -> None:
     class FailingCapsuleService:
-        def build_raw_capsule(self, run_id: str):  # type: ignore[no-untyped-def]
+        def build_raw_capsule(self, run_id: str, **kwargs):  # type: ignore[no-untyped-def]
             raise CapsuleError("Capsule storage unavailable")
 
     harness = Harness(tmp_path)
@@ -964,7 +1167,7 @@ def test_runtime_worker_optional_capsule_failure_does_not_block_evidence_policy(
     tmp_path: Path,
 ) -> None:
     class FailingCapsuleService:
-        def build_raw_capsule(self, run_id: str):  # type: ignore[no-untyped-def]
+        def build_raw_capsule(self, run_id: str, **kwargs):  # type: ignore[no-untyped-def]
             raise CapsuleError("optional Capsule backend unavailable")
 
     harness = Harness(tmp_path)

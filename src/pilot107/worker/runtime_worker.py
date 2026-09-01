@@ -836,12 +836,28 @@ class RuntimeReconcileWorker:
         if repository is None or message.lease_owner is None:
             raise RuntimeError("capsule outbox dependencies are unavailable")
         run_id, seal_digest, causation_root_key, operation_key = _capsule_message_identity(message)
+
+        def assert_outbox_lease() -> None:
+            repository.renew_outbox(
+                message_id=message.message_id,
+                owner=message.lease_owner or "",
+                fencing_token=message.fencing_token,
+                lease_seconds=self.task_lease_seconds,
+            )
+
         current_seal = self.service.store.get_evidence_seal(run_id)
         if (
             current_seal.state is not EvidenceSealState.SEALED
             or current_seal.digest != seal_digest
             or operation_key != _capsule_operation_key(causation_root_key, seal_digest)
         ):
+            self._finish_unclaimed_capsule_failure(
+                run_id,
+                operation_key=operation_key,
+                state=CapsuleState.FAILED,
+                message="Evidence seal changed before Capsule build",
+                lease_assert=assert_outbox_lease,
+            )
             repository.retry(
                 message_id=message.message_id,
                 owner=message.lease_owner,
@@ -850,29 +866,32 @@ class RuntimeReconcileWorker:
                 delay_seconds=0,
                 max_attempts=1,
             )
-            self.service.store.update_capsule_state(
-                run_id,
-                CapsuleState.FAILED,
-                event_type="capsule.auto_build_failed",
-                payload={"reason": "evidence_seal_changed", "retryable": False},
-            )
             return
         capsule_stats.attempted += 1
+        can_retry = message.attempts < self.collection_max_attempts
         try:
+
             with _OutboxHeartbeat(
                 repository=repository,
                 message=message,
                 lease_seconds=self.task_lease_seconds,
             ):
                 assert self.capsule_service is not None
-                self.capsule_service.build_raw_capsule(run_id)
+                self.capsule_service.build_raw_capsule(
+                    run_id,
+                    operation_key=operation_key,
+                    lease_assert=assert_outbox_lease,
+                    failure_state=(
+                        CapsuleState.PENDING if can_retry else CapsuleState.FAILED
+                    ),
+                )
         except Exception as exc:
-            can_retry = message.attempts < self.collection_max_attempts
-            self.service.store.update_capsule_state(
+            self._finish_unclaimed_capsule_failure(
                 run_id,
-                CapsuleState.PENDING if can_retry else CapsuleState.FAILED,
-                event_type="capsule.auto_build_retry" if can_retry else "capsule.auto_build_failed",
-                payload={"message": str(exc), "retryable": can_retry},
+                operation_key=operation_key,
+                state=CapsuleState.PENDING if can_retry else CapsuleState.FAILED,
+                message=str(exc),
+                lease_assert=assert_outbox_lease,
             )
             repository.retry(
                 message_id=message.message_id,
@@ -902,6 +921,38 @@ class RuntimeReconcileWorker:
             run_id=run_id,
             event_type="capsule.auto_build_completed",
             payload={"worker_id": self.worker_id, "operation_key": operation_key},
+        )
+
+    def _finish_unclaimed_capsule_failure(
+        self,
+        run_id: str,
+        *,
+        operation_key: str,
+        state: CapsuleState,
+        message: str,
+        lease_assert: Callable[[], None],
+    ) -> None:
+        lease_assert()
+        run = self.service.store.get_run(run_id)
+        if run.capsule_operation_key == operation_key and run.capsule_state is state:
+            return
+        if run.capsule_state in {CapsuleState.RUNNING, CapsuleState.READY}:
+            return
+        claim = self.service.store.begin_capsule_build(
+            run_id,
+            operation_key=operation_key,
+        )
+        self.service.store.finish_capsule_build(
+            run_id,
+            operation_key=operation_key,
+            fencing_token=claim.fencing_token,
+            state=state,
+            event_type=(
+                "capsule.auto_build_retry"
+                if state is CapsuleState.PENDING
+                else "capsule.auto_build_failed"
+            ),
+            payload={"message": message, "retryable": state is CapsuleState.PENDING},
         )
 
     def _record_auto_capsule(

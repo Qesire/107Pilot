@@ -228,6 +228,35 @@ class TemplateVerificationTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.code, "TEMPLATE.VERIFICATION_EVIDENCE_INCOMPLETE")
 
+    def test_verification_rejects_raw_capsule_symlink_outside_capsule_root(self) -> None:
+        release = self._release()
+        adoption = self.template_store.adopt_release(
+            release.release_id,
+            adopter="bob",
+            request_key="bob-symlink-adoption",
+        )
+        run_id = self._terminal_run(
+            contract_id=str(adoption.target_contract_id),
+            run_id="run_symlink_capsule",
+        )
+        raw = self.capsule_root / "runs" / run_id / "raw"
+        escaped = Path(self._temporary.name) / "escaped-capsule"
+        raw.rename(escaped)
+        raw.symlink_to(escaped, target_is_directory=True)
+
+        with self.assertRaises(TemplateMarketError) as raised:
+            self.verification_service.verify_from_run(
+                release_id=release.release_id,
+                run_id=run_id,
+                actor="bob",
+                request_key="symlink-capsule",
+            )
+
+        self.assertEqual(
+            raised.exception.code,
+            "TEMPLATE.VERIFICATION_CAPSULE_INCOMPLETE",
+        )
+
     def test_api_rejects_client_asserted_verification_facts(self) -> None:
         release = self._release()
         adoption = self.template_store.adopt_release(

@@ -1,5 +1,8 @@
+import hashlib
 import json
+import os
 import tempfile
+import threading
 import unittest
 from contextlib import suppress
 from pathlib import Path
@@ -9,7 +12,12 @@ from pilot107.adapters.slurm import JobSnapshot, SubmissionStrategy, SubmitRecei
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.run_store import RunStore
 from pilot107.core.states import CapsuleState, CollectionState, RunState
-from pilot107.worker.capsule import CapsuleError, RawCapsuleService, verify_raw_capsule
+from pilot107.worker.capsule import (
+    CapsuleError,
+    RawCapsuleService,
+    capsule_authority_from_store,
+    verify_raw_capsule,
+)
 from pilot107.worker.evidence import EvidenceStore
 
 
@@ -40,7 +48,10 @@ class RawCapsuleTests(unittest.TestCase):
         )
 
         result = service.build_raw_capsule(run_id)
-        verify = verify_raw_capsule(result.capsule_dir)
+        verify = verify_raw_capsule(
+            result.capsule_dir,
+            authority=capsule_authority_from_store(self.store, run_id),
+        )
         read = service.get_raw_capsule(run_id)
 
         self.assertTrue(verify.valid, verify.errors)
@@ -88,16 +99,200 @@ class RawCapsuleTests(unittest.TestCase):
         copied_script.chmod(0o600)
         copied_script.write_text("changed\n", encoding="utf-8")
 
-        verify = verify_raw_capsule(result.capsule_dir)
-        read = RawCapsuleService(
-            store=self.store,
-            evidence_store=self.evidence_store,
-            capsule_root=self.capsule_root,
-        ).get_raw_capsule(run_id)
+        verify = verify_raw_capsule(
+            result.capsule_dir,
+            authority=capsule_authority_from_store(self.store, run_id),
+        )
 
         self.assertFalse(verify.valid)
         self.assertTrue(any("mismatch" in error for error in verify.errors))
-        self.assertFalse(read.valid)
+        with self.assertRaises(CapsuleError):
+            self._service().get_raw_capsule(run_id)
+
+    def test_verify_rejects_regular_file_missing_from_manifest_and_checksums(self) -> None:
+        run_id = self._collected_run()
+        result = self._service().build_raw_capsule(run_id)
+        (result.capsule_dir / "attacker-extra.txt").write_text("unsigned\n", encoding="utf-8")
+
+        verify = verify_raw_capsule(result.capsule_dir)
+
+        self.assertFalse(verify.valid)
+        self.assertTrue(any("unexpected" in error for error in verify.errors), verify.errors)
+
+    def test_get_rejects_resigned_capsule_with_empty_authoritative_payload(self) -> None:
+        run_id = self._collected_run()
+        service = self._service()
+        result = service.build_raw_capsule(run_id)
+        manifest_path = result.capsule_dir / "manifest.json"
+        manifest_path.chmod(0o600)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for entry in manifest["files"]:
+            payload = result.capsule_dir / entry["logical_path"]
+            payload.chmod(0o600)
+            payload.unlink()
+        for directory in sorted(
+            (item for item in result.capsule_dir.rglob("*") if item.is_dir()),
+            key=lambda item: len(item.parts),
+            reverse=True,
+        ):
+            directory.rmdir()
+        manifest["files"] = []
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+        self._resign_capsule(result.capsule_dir)
+
+        with self.assertRaises(CapsuleError):
+            service.get_raw_capsule(run_id)
+
+    def test_verify_rejects_resigned_capsule_missing_required_bookkeeping(self) -> None:
+        run_id = self._collected_run()
+        result = self._service().build_raw_capsule(run_id)
+        policy = result.capsule_dir / "collection_policy.json"
+        policy.chmod(0o600)
+        policy.unlink()
+        self._resign_capsule(result.capsule_dir)
+
+        verify = verify_raw_capsule(result.capsule_dir)
+
+        self.assertFalse(verify.valid)
+        self.assertTrue(any("collection_policy.json" in error for error in verify.errors))
+
+    def test_get_rejects_raw_directory_symlink_even_when_target_is_valid(self) -> None:
+        run_id = self._collected_run()
+        service = self._service()
+        result = service.build_raw_capsule(run_id)
+        escaped = Path(self._tmp.name) / "escaped-raw"
+        result.capsule_dir.rename(escaped)
+        result.capsule_dir.symlink_to(escaped, target_is_directory=True)
+
+        with self.assertRaisesRegex(CapsuleError, "symlink"):
+            service.get_raw_capsule(run_id)
+
+    def test_verify_rejects_symlink_fifo_and_hardlink_members(self) -> None:
+        for attack in ("symlink", "fifo", "hardlink"):
+            with self.subTest(attack=attack):
+                run_id = self._collected_run(run_id=f"run_{attack}")
+                result = self._service().build_raw_capsule(run_id)
+                member = result.capsule_dir / f"attacker-{attack}"
+                if attack == "symlink":
+                    member.symlink_to(result.capsule_dir / "manifest.json")
+                elif attack == "fifo":
+                    os.mkfifo(member)
+                else:
+                    os.link(result.capsule_dir / "manifest.json", member)
+
+                verify = verify_raw_capsule(result.capsule_dir)
+
+                self.assertFalse(verify.valid, (attack, verify.errors))
+
+    def test_build_rejects_partial_existing_raw_without_overwriting_it(self) -> None:
+        run_id = self._collected_run()
+        raw = self.capsule_root / "runs" / run_id / "raw"
+        raw.mkdir(parents=True)
+        marker = raw / "partial.txt"
+        marker.write_text("must survive\n", encoding="utf-8")
+
+        with self.assertRaises(CapsuleError):
+            self._service().build_raw_capsule(run_id)
+
+        self.assertEqual(marker.read_text(encoding="utf-8"), "must survive\n")
+
+    def test_stale_builder_losing_lease_before_publish_cannot_create_raw_or_ready(self) -> None:
+        run_id = self._collected_run()
+        operation_key = "d" * 64
+        reached_publish = threading.Event()
+        release_stale = threading.Event()
+        errors: list[BaseException] = []
+
+        def stale_lease_assert() -> None:
+            reached_publish.set()
+            release_stale.wait(timeout=5)
+            raise CapsuleError("outbox lease is stale")
+
+        def build_as_stale_worker() -> None:
+            try:
+                self._service().build_raw_capsule(
+                    run_id,
+                    operation_key=operation_key,
+                    lease_assert=stale_lease_assert,
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=build_as_stale_worker)
+        thread.start()
+        self.assertTrue(reached_publish.wait(timeout=5))
+        takeover = self.store.begin_capsule_build(run_id, operation_key=operation_key)
+        release_stale.set()
+        thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(errors)
+        self.assertFalse((self.capsule_root / "runs" / run_id / "raw").exists())
+        fenced = self.store.get_run(run_id)
+        self.assertEqual(fenced.capsule_state, CapsuleState.RUNNING)
+        self.assertEqual(fenced.capsule_build_fencing_token, takeover.fencing_token)
+
+        recovered = self._service().build_raw_capsule(
+            run_id,
+            operation_key=operation_key,
+        )
+        self.assertTrue(recovered.capsule_dir.is_dir())
+        self.assertEqual(self.store.get_run(run_id).capsule_state, CapsuleState.READY)
+
+    def test_stale_builder_fenced_after_publish_leaves_reusable_artifact_not_ready(self) -> None:
+        run_id = self._collected_run()
+        operation_key = "e" * 64
+        published = threading.Event()
+        release_stale = threading.Event()
+        errors: list[BaseException] = []
+
+        def block_stale_ready(
+            claimed_run_id: str,
+            *,
+            operation_key: str,
+            fencing_token: int,
+            state: CapsuleState,
+            **kwargs: object,
+        ):
+            if state is CapsuleState.READY:
+                published.set()
+                release_stale.wait(timeout=5)
+            return original_finish(
+                claimed_run_id,
+                operation_key=operation_key,
+                fencing_token=fencing_token,
+                state=state,
+                **kwargs,
+            )
+
+        def build_as_stale_worker() -> None:
+            try:
+                self._service().build_raw_capsule(run_id, operation_key=operation_key)
+            except BaseException as exc:
+                errors.append(exc)
+
+        original_finish = self.store.finish_capsule_build
+        with patch.object(self.store, "finish_capsule_build", block_stale_ready):
+            thread = threading.Thread(target=build_as_stale_worker)
+            thread.start()
+            self.assertTrue(published.wait(timeout=5))
+            takeover = self.store.begin_capsule_build(run_id, operation_key=operation_key)
+            release_stale.set()
+            thread.join(timeout=5)
+
+        raw = self.capsule_root / "runs" / run_id / "raw"
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(errors)
+        self.assertTrue(raw.is_dir())
+        fenced = self.store.get_run(run_id)
+        self.assertNotEqual(fenced.capsule_state, CapsuleState.READY)
+        self.assertEqual(fenced.capsule_build_fencing_token, takeover.fencing_token)
+        published_manifest = (raw / "manifest.json").read_bytes()
+
+        recovered = self._service().build_raw_capsule(run_id, operation_key=operation_key)
+        self.assertEqual((raw / "manifest.json").read_bytes(), published_manifest)
+        self.assertEqual(recovered.manifest_sha256, hashlib.sha256(published_manifest).hexdigest())
+        self.assertEqual(self.store.get_run(run_id).capsule_state, CapsuleState.READY)
 
     def test_build_rejects_unsafe_evidence_manifest_path(self) -> None:
         run_id = self._collected_run()
@@ -134,7 +329,7 @@ class RawCapsuleTests(unittest.TestCase):
             capsule_root=invalid_root,
         )
 
-        with self.assertRaisesRegex(CapsuleError, "raw Capsule build failed"):
+        with self.assertRaises(CapsuleError):
             service.build_raw_capsule(run_id)
 
         self.assertEqual(self.store.get_run(run_id).capsule_state, CapsuleState.FAILED)
@@ -149,18 +344,18 @@ class RawCapsuleTests(unittest.TestCase):
             evidence_store=self.evidence_store,
             capsule_root=self.capsule_root,
         )
-        original_update = self.store.update_capsule_state
+        original_finish = self.store.finish_capsule_build
         crashed = False
 
-        def crash_before_ready(run_id, state, **kwargs):  # type: ignore[no-untyped-def]
+        def crash_before_ready(run_id, *, state, **kwargs):  # type: ignore[no-untyped-def]
             nonlocal crashed
             if state is CapsuleState.READY and not crashed:
                 crashed = True
                 raise SimulatedProcessCrash("process stopped before READY receipt")
-            return original_update(run_id, state, **kwargs)
+            return original_finish(run_id, state=state, **kwargs)
 
         with (
-            patch.object(self.store, "update_capsule_state", crash_before_ready),
+            patch.object(self.store, "finish_capsule_build", crash_before_ready),
             self.assertRaises(SimulatedProcessCrash),
         ):
             service.build_raw_capsule(run_id)
@@ -173,9 +368,27 @@ class RawCapsuleTests(unittest.TestCase):
         self.assertEqual(recovered.manifest_sha256, service.get_raw_capsule(run_id).manifest_sha256)
         self.assertEqual(self.store.get_run(run_id).capsule_state, CapsuleState.READY)
 
-    def _collected_run(self, *, seal: bool = True) -> str:
+    def _service(self) -> RawCapsuleService:
+        return RawCapsuleService(
+            store=self.store,
+            evidence_store=self.evidence_store,
+            capsule_root=self.capsule_root,
+        )
+
+    def _resign_capsule(self, capsule_dir: Path) -> None:
+        checksums = capsule_dir / "checksums.txt"
+        checksums.chmod(0o600)
+        lines = []
+        for path in sorted(item for item in capsule_dir.rglob("*") if item.is_file()):
+            if path == checksums:
+                continue
+            logical_path = path.relative_to(capsule_dir).as_posix()
+            lines.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {logical_path}")
+        checksums.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _collected_run(self, *, seal: bool = True, run_id: str = "run_capsule") -> str:
         run = self.store.create_run(
-            run_id="run_capsule",
+            run_id=run_id,
             owner="alice",
             workdir="/public/home/alice",
             script="#!/bin/bash\nhostname\n",
@@ -276,7 +489,7 @@ class RawCapsuleTests(unittest.TestCase):
             run_id,
             [
                 {
-                    "object_id": f"ev-{index}",
+                    "object_id": f"ev-{run_id}-{index}",
                     "category": artifact.logical_path.split("/", 1)[0],
                     "logical_path": artifact.logical_path,
                     "store_path": str(artifact.path),

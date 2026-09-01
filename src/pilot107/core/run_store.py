@@ -50,6 +50,10 @@ class EvidenceSealFenceConflict(RuntimeError):
     """Raised when a stale Evidence sealer attempts to mutate seal state."""
 
 
+class CapsuleBuildFenceConflict(RuntimeError):
+    """Raised when a stale Capsule builder attempts to mutate Run truth."""
+
+
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -127,6 +131,15 @@ class RunRecord:
     workspace_digest: str | None = None
     source_revision: str | None = None
     platform_snapshot_ref: str | None = None
+    capsule_operation_key: str | None = None
+    capsule_build_fencing_token: int = 0
+
+
+@dataclass(frozen=True)
+class CapsuleBuildClaim:
+    run_id: str
+    operation_key: str
+    fencing_token: int
 
 
 @dataclass(frozen=True)
@@ -315,6 +328,8 @@ class RunStore:
                     evidence_seal_claim_owner TEXT,
                     evidence_seal_lease_expires_at TEXT,
                     evidence_seal_fencing_token INTEGER NOT NULL DEFAULT 0,
+                    capsule_operation_key TEXT,
+                    capsule_build_fencing_token INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -597,6 +612,8 @@ class RunStore:
                 ("evidence_seal_claim_owner", "TEXT"),
                 ("evidence_seal_lease_expires_at", "TEXT"),
                 ("evidence_seal_fencing_token", "INTEGER NOT NULL DEFAULT 0"),
+                ("capsule_operation_key", "TEXT"),
+                ("capsule_build_fencing_token", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 self._ensure_column(conn, table="runs", column=column, definition=definition)
             self._ensure_run_provenance_guard(conn)
@@ -1161,15 +1178,199 @@ class RunStore:
     ) -> RunRecord:
         now = utc_now_iso()
         with self.connect() as conn:
-            conn.execute(
-                "UPDATE runs SET capsule_state = ?, updated_at = ? WHERE run_id = ?",
+            result = conn.execute(
+                "UPDATE runs SET capsule_state = ?, updated_at = ? "
+                "WHERE run_id = ? AND capsule_operation_key IS NULL",
                 (state.value, now, run_id),
             )
+            if result.rowcount != 1:
+                raise CapsuleBuildFenceConflict(
+                    f"Capsule state requires a matching build fence: {run_id}"
+                )
             self._append_event(
                 conn,
                 run_id=run_id,
                 event_type=event_type,
                 payload={"capsule_state": state.value, **(payload or {})},
+            )
+        return self.get_run(run_id)
+
+    def begin_capsule_build(
+        self,
+        run_id: str,
+        *,
+        operation_key: str,
+    ) -> CapsuleBuildClaim:
+        if re.fullmatch(r"[0-9a-f]{64}", operation_key) is None:
+            raise ValueError("Capsule operation_key is invalid")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT capsule_state, capsule_operation_key, "
+                "capsule_build_fencing_token FROM runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            current_operation = (
+                None
+                if row["capsule_operation_key"] is None
+                else str(row["capsule_operation_key"])
+            )
+            current_fence = int(row["capsule_build_fencing_token"])
+            current_state = CapsuleState(str(row["capsule_state"]))
+            if current_state is CapsuleState.READY:
+                if current_operation != operation_key or current_fence <= 0:
+                    raise CapsuleBuildFenceConflict(
+                        f"READY Capsule has different build identity: {run_id}"
+                    )
+                next_fence = current_fence + 1
+                result = conn.execute(
+                    "UPDATE runs SET capsule_build_fencing_token = ?, updated_at = ? "
+                    "WHERE run_id = ? AND capsule_state = ? "
+                    "AND capsule_operation_key = ? AND capsule_build_fencing_token = ?",
+                    (
+                        next_fence,
+                        now,
+                        run_id,
+                        CapsuleState.READY.value,
+                        operation_key,
+                        current_fence,
+                    ),
+                )
+                if result.rowcount != 1:
+                    raise CapsuleBuildFenceConflict(
+                        f"READY Capsule reuse claim was not acquired: {run_id}"
+                    )
+                self._append_event(
+                    conn,
+                    run_id=run_id,
+                    event_type="capsule.reuse_claimed",
+                    payload={
+                        "capsule_state": CapsuleState.READY.value,
+                        "operation_key": operation_key,
+                        "fencing_token": next_fence,
+                    },
+                )
+                return CapsuleBuildClaim(run_id, operation_key, next_fence)
+            if current_operation is not None and current_operation != operation_key:
+                raise CapsuleBuildFenceConflict(
+                    f"Capsule operation identity changed: {run_id}"
+                )
+            next_fence = current_fence + 1
+            result = conn.execute(
+                "UPDATE runs SET capsule_state = ?, capsule_operation_key = ?, "
+                "capsule_build_fencing_token = ?, updated_at = ? "
+                "WHERE run_id = ? AND capsule_build_fencing_token = ? "
+                "AND (capsule_operation_key IS NULL OR capsule_operation_key = ?) "
+                "AND capsule_state != ?",
+                (
+                    CapsuleState.RUNNING.value,
+                    operation_key,
+                    next_fence,
+                    now,
+                    run_id,
+                    current_fence,
+                    operation_key,
+                    CapsuleState.READY.value,
+                ),
+            )
+            if result.rowcount != 1:
+                raise CapsuleBuildFenceConflict(
+                    f"Capsule build claim was not acquired: {run_id}"
+                )
+            self._append_event(
+                conn,
+                run_id=run_id,
+                event_type="capsule.running",
+                payload={
+                    "capsule_state": CapsuleState.RUNNING.value,
+                    "operation_key": operation_key,
+                    "fencing_token": next_fence,
+                },
+            )
+        return CapsuleBuildClaim(run_id, operation_key, next_fence)
+
+    def assert_capsule_build(
+        self,
+        run_id: str,
+        *,
+        operation_key: str,
+        fencing_token: int,
+    ) -> None:
+        if fencing_token <= 0:
+            raise ValueError("Capsule fencing_token must be positive")
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM runs WHERE run_id = ? AND capsule_state IN (?, ?) "
+                "AND capsule_operation_key = ? AND capsule_build_fencing_token = ?",
+                (
+                    run_id,
+                    CapsuleState.RUNNING.value,
+                    CapsuleState.READY.value,
+                    operation_key,
+                    fencing_token,
+                ),
+            ).fetchone()
+        if row is None:
+            raise CapsuleBuildFenceConflict(f"Capsule build claim is stale: {run_id}")
+
+    def finish_capsule_build(
+        self,
+        run_id: str,
+        *,
+        operation_key: str,
+        fencing_token: int,
+        state: CapsuleState,
+        event_type: str = "capsule.state_changed",
+        payload: dict[str, Any] | None = None,
+    ) -> RunRecord:
+        if state not in {CapsuleState.PENDING, CapsuleState.READY, CapsuleState.FAILED}:
+            raise ValueError("Capsule build finish state is invalid")
+        if fencing_token <= 0:
+            raise ValueError("Capsule fencing_token must be positive")
+        now = utc_now_iso()
+        with self.connect() as conn:
+            current = conn.execute(
+                "SELECT capsule_state, capsule_operation_key, "
+                "capsule_build_fencing_token FROM runs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if current is None:
+                raise KeyError(run_id)
+            if (
+                state is CapsuleState.READY
+                and str(current["capsule_state"]) == CapsuleState.READY.value
+                and str(current["capsule_operation_key"]) == operation_key
+                and int(current["capsule_build_fencing_token"]) == fencing_token
+            ):
+                return self.get_run(run_id)
+            result = conn.execute(
+                "UPDATE runs SET capsule_state = ?, updated_at = ? "
+                "WHERE run_id = ? AND capsule_state = ? "
+                "AND capsule_operation_key = ? AND capsule_build_fencing_token = ?",
+                (
+                    state.value,
+                    now,
+                    run_id,
+                    CapsuleState.RUNNING.value,
+                    operation_key,
+                    fencing_token,
+                ),
+            )
+            if result.rowcount != 1:
+                raise CapsuleBuildFenceConflict(f"Capsule build claim is stale: {run_id}")
+            self._append_event(
+                conn,
+                run_id=run_id,
+                event_type=event_type,
+                payload={
+                    "capsule_state": state.value,
+                    "operation_key": operation_key,
+                    "fencing_token": fencing_token,
+                    **(payload or {}),
+                },
             )
         return self.get_run(run_id)
 
@@ -3183,6 +3384,12 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
             if row["platform_snapshot_ref"] is None
             else str(row["platform_snapshot_ref"])
         ),
+        capsule_operation_key=(
+            None
+            if row["capsule_operation_key"] is None
+            else str(row["capsule_operation_key"])
+        ),
+        capsule_build_fencing_token=int(row["capsule_build_fencing_token"]),
     )
 
 

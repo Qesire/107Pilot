@@ -6,11 +6,12 @@ from pathlib import Path
 
 from pilot107.adapters.slurm import JobSnapshot, SubmissionStrategy, SubmitReceipt
 from pilot107.core.run_store import (
+    CapsuleBuildFenceConflict,
     CollectionTaskFenceConflict,
     RunStore,
     RunStoreFenceConflict,
 )
-from pilot107.core.states import CollectionState, RunState
+from pilot107.core.states import CapsuleState, CollectionState, RunState
 
 
 class RunStoreTests(unittest.TestCase):
@@ -186,6 +187,36 @@ class RunStoreTests(unittest.TestCase):
             ),
             1,
         )
+
+    def test_capsule_build_completion_rejects_stale_fence_after_takeover(self) -> None:
+        run = self.store.create_run(
+            run_id="run_capsule_fence",
+            owner="alice",
+            workdir="/public/home/alice",
+            script="echo capsule",
+        )
+        operation_key = "c" * 64
+        first = self.store.begin_capsule_build(run.run_id, operation_key=operation_key)
+        second = self.store.begin_capsule_build(run.run_id, operation_key=operation_key)
+
+        self.assertGreater(second.fencing_token, first.fencing_token)
+        with self.assertRaises(CapsuleBuildFenceConflict):
+            self.store.finish_capsule_build(
+                run.run_id,
+                operation_key=operation_key,
+                fencing_token=first.fencing_token,
+                state=CapsuleState.READY,
+            )
+
+        completed = self.store.finish_capsule_build(
+            run.run_id,
+            operation_key=operation_key,
+            fencing_token=second.fencing_token,
+            state=CapsuleState.READY,
+        )
+        self.assertEqual(completed.capsule_state, CapsuleState.READY)
+        self.assertEqual(completed.capsule_operation_key, operation_key)
+        self.assertEqual(completed.capsule_build_fencing_token, second.fencing_token)
 
     def test_submission_result_rejects_stale_fencing_token_after_reclaim(self) -> None:
         run = self.store.create_run(

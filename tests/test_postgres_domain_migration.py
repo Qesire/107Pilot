@@ -285,6 +285,25 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
             self.assertIn(f"ADD COLUMN IF NOT EXISTS {column}", schema)
         self.assertIn("DEFAULT 0", schema)
 
+    def test_capsule_build_fence_migration_adds_operation_and_fence_columns(self) -> None:
+        """PostgreSQL must preserve the same stale-builder fence as SQLite."""
+
+        from pilot107.core.postgres_domain_schema import _MIGRATIONS
+
+        migration_id, statements = next(
+            migration
+            for migration in _MIGRATIONS
+            if migration[0] == "004a.033.capsule_build_fence"
+        )
+        schema = "\n".join(statements)
+
+        self.assertEqual(migration_id, "004a.033.capsule_build_fence")
+        self.assertIn("ADD COLUMN IF NOT EXISTS capsule_operation_key TEXT", schema)
+        self.assertIn(
+            "ADD COLUMN IF NOT EXISTS capsule_build_fencing_token BIGINT NOT NULL DEFAULT 0",
+            schema,
+        )
+
     def test_agent_migration_uses_native_postgres_types_and_fencing_index(self) -> None:
         from pilot107.core.postgres_domain_schema import _MIGRATIONS
 
