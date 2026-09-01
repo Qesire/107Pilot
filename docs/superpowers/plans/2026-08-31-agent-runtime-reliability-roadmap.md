@@ -11,16 +11,20 @@
 ## Global Constraints
 
 - Main Agent owns and revises every implementation plan.
-- GPT-5.6 Luna performs repository code edits and test execution task-by-task.
+- Repository code edits and test execution may由接手模型执行；接手前必须完整阅读本路线图、对应 phase 计划和
+  [2026-09-01-agent-runtime-handoff.md](./2026-09-01-agent-runtime-handoff.md)，遵守既有 TDD、独立复审和 dirty-worktree 保护约束。
+- 产品运行时模型固定为 USTC107 配置中的 `deepseek v4 flash`。不得把执行代码的模型与 107Pilot 面向用户的运行时模型混为一谈。
 - No phase may overwrite unrelated dirty-worktree changes.
 - RED output, GREEN output, focused regression and completion verification must be recorded for every task.
 - Do not start a later phase when the earlier phase's completion gate is red.
 
 ---
 
-- [ ] **Phase 1 — AgentTask Evidence Gate (P0)**
+- [ ] **Phase 1 — AgentTask Evidence Gate (P0) — IN PROGRESS**
 
-Execute [2026-08-31-agent-task-evidence-gate.md](./2026-08-31-agent-task-evidence-gate.md). This removes the current premature follow-up race and is the first production-code phase.
+Task 1–5 已完成并经独立复审；Task 6 前端/live Slurm 验收于 2026-09-01 按用户要求暂停。
+继续执行 [2026-08-31-agent-task-evidence-gate.md](./2026-08-31-agent-task-evidence-gate.md) 的 Task 6，
+不得把 focused 后端测试替代真实前端入口验收。
 
 - [ ] **Phase 2 — Invocation Recovery (P0)**
 

@@ -8,6 +8,15 @@
 
 **Tech Stack:** Python 3.11+, dataclasses/enums, SQLite and PostgreSQL stores, durable outbox, Slurm Run reconciliation, EvidenceBinder, pytest, JSON Schema, React/TypeScript.
 
+## Current execution status — 2026-09-01
+
+- Task 1–5：完成并经独立复审。
+- Task 6：尚未执行完成；`agent-browser` 前端验收刚开始即按用户要求暂停，未产生 Task 6 代码提交。
+- 下方历史步骤的 checkbox 保留为原始执行模板；实际完成状态以本节和各 Task 标题为准。
+- 产品运行时模型：固定使用 USTC107 配置中的 `deepseek v4 flash`，不得自动切换到 qwen、Ascend 版本或其他 fallback。
+- 当前唯一接手入口：[2026-09-01-agent-runtime-handoff.md](./2026-09-01-agent-runtime-handoff.md)。
+- Phase 1 仍保持未完成，直到 Task 6 的公开 UI 路径和 live Slurm completion gate 通过。
+
 ## Global Constraints
 
 - Preserve schedule receipt as a non-terminal acknowledgement; do not hold a Pi Turn open while Slurm runs.
@@ -23,7 +32,7 @@
 
 ---
 
-### Task 1: Freeze AgentTask gate domain and wire contract
+### Task 1: Freeze AgentTask gate domain and wire contract — COMPLETE
 
 **Files:**
 - Modify: `src/pilot107/agent/tasks.py`
@@ -113,7 +122,7 @@ git add src/pilot107/agent/tasks.py schemas/agent/v2/agent-task.schema.json \
 git commit -m "feat: define agent task completion gates"
 ```
 
-### Task 2: Add additive Task persistence and CAS transitions
+### Task 2: Add additive Task persistence and CAS transitions — COMPLETE
 
 **Files:**
 - Modify: `src/pilot107/agent/task_store.py`
@@ -171,7 +180,7 @@ git add src/pilot107/agent/task_store.py src/pilot107/agent/postgres_task_store.
 git commit -m "feat: persist agent task evidence gates"
 ```
 
-### Task 3: Produce an immutable Evidence gate receipt
+### Task 3: Produce an immutable Evidence gate receipt — COMPLETE
 
 **Files:**
 - Modify: `src/pilot107/core/evidence_binding.py`
@@ -226,7 +235,7 @@ git add src/pilot107/core/evidence_binding.py src/pilot107/core/run_store.py \
 git commit -m "feat: verify terminal agent task evidence"
 ```
 
-### Task 4: Gate AgentTask finalization and follow-up creation
+### Task 4: Gate AgentTask finalization and follow-up creation — COMPLETE
 
 **Files:**
 - Modify: `src/pilot107/services/agent_task_service.py`
@@ -309,7 +318,7 @@ git add src/pilot107/services/agent_task_service.py \
 git commit -m "fix: gate agent task followups on evidence"
 ```
 
-### Task 5: Reorder Runtime Worker reconciliation and enforce Capsule policy
+### Task 5: Reorder Runtime Worker reconciliation and enforce Capsule policy — COMPLETE
 
 **Files:**
 - Modify: `src/pilot107/worker/runtime_worker.py`
@@ -360,7 +369,7 @@ git add src/pilot107/worker/runtime_worker.py src/pilot107/worker/capsule.py \
 git commit -m "fix: finalize agent tasks after evidence collection"
 ```
 
-### Task 6: Update API/UI terminology and prove the live Slurm chain
+### Task 6: Update API/UI terminology and prove the live Slurm chain — PAUSED / NEXT
 
 **Files:**
 - Modify: `src/pilot107/api/agent_task_routes.py`

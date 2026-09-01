@@ -1,9 +1,10 @@
 # Agent Runtime Reliability Closure Design
 
 - 日期：2026-08-31
-- 状态：principal-agent revised；等待用户确认后进入实施计划
+- 状态：已批准并进入实施；Phase 1 Task 1–5 已完成，Task 6 前端/live 验收暂停待续
 - 范围：AgentSession、AgentTurn、pilot-agentd、AgentTask、Run、Evidence、Workspace 及其 Worker/Outbox 生命周期
 - 目标环境：CPU-RC VM、vm-local Slurm；同一协议适用于真实 Slurm
+- 运行时模型：固定使用 USTC107 配置中的 `deepseek v4 flash`；不得自动改用 qwen、Ascend 版本或未获用户确认的 fallback
 
 本文是以下规格的可靠性补充，保持它们已经确认的边界：
 
