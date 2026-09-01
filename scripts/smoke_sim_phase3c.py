@@ -26,7 +26,7 @@ from pilot107.core.postgres_domain_stores import (
 )
 from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.run_service import RunService
-from pilot107.core.run_store import RunStore
+from pilot107.core.run_store import RunRecord, RunStore
 from pilot107.core.states import CapsuleState, CollectionState, RunState
 from pilot107.core.template_market import TemplateMarketStore
 from pilot107.core.template_policy import (
@@ -34,7 +34,11 @@ from pilot107.core.template_policy import (
     TemplateRoleDirectory,
 )
 from pilot107.core.template_verification import TemplateVerificationService
-from pilot107.worker.capsule import RawCapsuleService, verify_raw_capsule
+from pilot107.worker.capsule import (
+    CapsuleVerifyResult,
+    RawCapsuleService,
+    verify_raw_capsule,
+)
 from pilot107.worker.evidence import DockerSlurmEvidenceCollector, EvidenceStore
 from pilot107.worker.runtime_worker import RuntimeReconcileWorker
 
@@ -60,6 +64,7 @@ def main() -> int:
         db_path = runtime_root / "pilot107.db"
         evidence_store = EvidenceStore(runtime_root / "evidence")
         postgres_dsn = _test_postgres_dsn()
+        control_repository: SQLiteControlRepository | PostgresControlRepository
         if postgres_dsn is None:
             run_store = RunStore(db_path)
             contract_store = ContractStore(db_path)
@@ -254,7 +259,12 @@ def main() -> int:
             expected=200,
         )
         capsule_dir = runtime_root / "capsules" / "runs" / run_id / "raw"
-        capsule_check = verify_raw_capsule(capsule_dir)
+        capsule_check = verify_published_capsule(
+            capsule_dir,
+            run_store=run_store,
+            evidence_store=evidence_store,
+            run_id=run_id,
+        )
         if not capsule_check.valid:
             raise RuntimeError(f"raw Capsule verification failed: {capsule_check.errors}")
         if run_store.get_run(run_id).capsule_state != CapsuleState.READY:
@@ -287,6 +297,23 @@ def main() -> int:
     return 0
 
 
+def verify_published_capsule(
+    capsule_dir: Path,
+    *,
+    run_store: RunStore,
+    evidence_store: EvidenceStore,
+    run_id: str,
+) -> CapsuleVerifyResult:
+    """Verify a smoke Capsule against its live server-side Evidence authority."""
+
+    return verify_raw_capsule(
+        capsule_dir,
+        store=run_store,
+        evidence_root=evidence_store.root,
+        run_id=run_id,
+    )
+
+
 def _test_postgres_dsn() -> str | None:
     """Return only an explicitly resettable, dedicated PostgreSQL smoke DSN."""
 
@@ -316,7 +343,7 @@ def _wait_for_evidence(
     worker: RuntimeReconcileWorker,
     store: RunStore,
     run_id: str,
-):
+) -> RunRecord:
     current = store.get_run(run_id)
     task_errors: list[str] = []
     for _ in range(60):

@@ -2,6 +2,7 @@ import gc
 import hashlib
 import json
 import os
+import runpy
 import shutil
 import tempfile
 import threading
@@ -73,6 +74,43 @@ class RawCapsuleTests(unittest.TestCase):
         seal = self.store.get_evidence_seal(run_id)
         self.assertEqual(provenance["source_evidence_seal_digest"], seal.digest)
         self.assertEqual(provenance["source_evidence_seal_ref"], seal.marker_ref)
+
+    def test_smoke_capsule_verifiers_require_live_sealed_authority(self) -> None:
+        run_id = self._collected_run()
+        result = self._service().build_raw_capsule(run_id)
+        repository_root = Path(__file__).resolve().parents[1]
+        verifiers = (
+            runpy.run_path(repository_root / "scripts" / "smoke_sim_capsule.py")[
+                "verify_published_capsule"
+            ],
+            runpy.run_path(repository_root / "scripts" / "smoke_sim_phase3c.py")[
+                "verify_published_capsule"
+            ],
+        )
+
+        for verifier in verifiers:
+            with self.subTest(verifier=verifier.__module__, marker="valid"):
+                verified = verifier(
+                    result.capsule_dir,
+                    run_store=self.store,
+                    evidence_store=self.evidence_store,
+                    run_id=run_id,
+                )
+                self.assertTrue(verified.valid, verified.errors)
+
+        marker = self.evidence_store.root / "seals" / run_id / "seal.json"
+        marker.chmod(0o600)
+        marker.write_text('{"attacker":"replacement"}\n', encoding="utf-8")
+        for verifier in verifiers:
+            with self.subTest(verifier=verifier.__module__, marker="replaced"):
+                verified = verifier(
+                    result.capsule_dir,
+                    run_store=self.store,
+                    evidence_store=self.evidence_store,
+                    run_id=run_id,
+                )
+                self.assertFalse(verified.valid)
+                self.assertTrue(any("seal" in error for error in verified.errors), verified.errors)
 
     def test_build_rejects_evidence_that_has_not_been_sealed(self) -> None:
         run_id = self._collected_run(seal=False)

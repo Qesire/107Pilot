@@ -14,7 +14,11 @@ from pilot107.core.resources import ResourcePlan
 from pilot107.core.run_service import RunService, RunSubmitRequest
 from pilot107.core.run_store import RunStore
 from pilot107.core.states import CapsuleState, CollectionState, RunState
-from pilot107.worker.capsule import RawCapsuleService, verify_raw_capsule
+from pilot107.worker.capsule import (
+    CapsuleVerifyResult,
+    RawCapsuleService,
+    verify_raw_capsule,
+)
 from pilot107.worker.evidence import DockerSlurmEvidenceCollector, EvidenceStore
 from pilot107.worker.runtime_worker import RuntimeReconcileWorker
 
@@ -97,7 +101,12 @@ def main() -> int:
         evidence_store=evidence_store,
         capsule_root=runtime_dir / "capsules",
     ).build_raw_capsule(run.run_id)
-    verify = verify_raw_capsule(capsule.capsule_dir)
+    verify = verify_published_capsule(
+        capsule.capsule_dir,
+        run_store=store,
+        evidence_store=evidence_store,
+        run_id=run.run_id,
+    )
     stored = store.get_run(run.run_id)
     if not verify.valid or stored.capsule_state != CapsuleState.READY:
         print(f"unexpected capsule result: verify={verify}; stored={stored}", file=sys.stderr)
@@ -125,6 +134,23 @@ def main() -> int:
     )
     print(f"capsule_dir={capsule.capsule_dir}")
     return 0
+
+
+def verify_published_capsule(
+    capsule_dir: Path,
+    *,
+    run_store: RunStore,
+    evidence_store: EvidenceStore,
+    run_id: str,
+) -> CapsuleVerifyResult:
+    """Verify a smoke Capsule against its live server-side Evidence authority."""
+
+    return verify_raw_capsule(
+        capsule_dir,
+        store=run_store,
+        evidence_root=evidence_store.root,
+        run_id=run_id,
+    )
 
 
 if __name__ == "__main__":
