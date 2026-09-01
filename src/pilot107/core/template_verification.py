@@ -14,11 +14,7 @@ from pilot107.core.template_market import (
     TemplateMarketStore,
     TemplateVerificationRecord,
 )
-from pilot107.worker.capsule import (
-    CapsuleError,
-    capsule_authority_from_store,
-    verify_raw_capsule,
-)
+from pilot107.worker.capsule import verify_raw_capsule
 
 _ENVIRONMENTS = frozenset({"docker", "real107_cpu", "real107_gpu"})
 _REQUIRED_EVIDENCE = frozenset(
@@ -38,6 +34,7 @@ class TemplateVerificationService:
         run_store: RunStore,
         environment: str,
         capsule_root: Path,
+        evidence_root: Path,
     ) -> None:
         if environment not in _ENVIRONMENTS:
             raise ValueError(f"unsupported template verification environment: {environment}")
@@ -45,6 +42,7 @@ class TemplateVerificationService:
         self.run_store = run_store
         self.environment = environment
         self.capsule_root = capsule_root
+        self.evidence_root = evidence_root
 
     def verify_from_run(
         self,
@@ -92,22 +90,23 @@ class TemplateVerificationService:
                 code="TEMPLATE.VERIFICATION_CAPSULE_INCOMPLETE",
             )
         capsule_dir = (self.capsule_root / "runs" / run.run_id / "raw").absolute()
-        try:
-            capsule_authority = capsule_authority_from_store(self.run_store, run_id)
-        except CapsuleError as exc:
-            raise TemplateMarketError(
-                "verification Capsule authority is unavailable",
-                code="TEMPLATE.VERIFICATION_CAPSULE_INCOMPLETE",
-            ) from exc
-        capsule_check = verify_raw_capsule(capsule_dir, authority=capsule_authority)
+        capsule_check = verify_raw_capsule(
+            capsule_dir,
+            store=self.run_store,
+            evidence_root=self.evidence_root,
+            run_id=run_id,
+        )
         if not capsule_check.valid:
             raise TemplateMarketError(
                 "verification Capsule failed integrity validation",
                 code="TEMPLATE.VERIFICATION_CAPSULE_INCOMPLETE",
             )
-        capsule_manifest_sha256 = hashlib.sha256(
-            (capsule_dir / "manifest.json").read_bytes()
-        ).hexdigest()
+        capsule_manifest_sha256 = capsule_check.manifest_sha256
+        if capsule_manifest_sha256 is None:
+            raise TemplateMarketError(
+                "verification Capsule snapshot is incomplete",
+                code="TEMPLATE.VERIFICATION_CAPSULE_INCOMPLETE",
+            )
         evidence = self.run_store.list_evidence_objects(run_id)
         evidence_by_path = {item.logical_path: item for item in evidence}
         required_paths = set(_REQUIRED_EVIDENCE)

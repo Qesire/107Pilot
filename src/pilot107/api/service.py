@@ -544,6 +544,7 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             run_store=store,
             environment=config.template_verification_environment,
             capsule_root=config.capsule_root,
+            evidence_root=config.evidence_root,
         )
     )
     # --- A-1: Slurm REST snapshot auto-collect (startup + background refresh) ---

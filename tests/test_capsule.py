@@ -1,6 +1,8 @@
+import gc
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 import threading
 import unittest
@@ -8,6 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 from unittest.mock import patch
 
+import pilot107.worker.capsule as capsule_module
 from pilot107.adapters.slurm import JobSnapshot, SubmissionStrategy, SubmitReceipt
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.run_store import RunStore
@@ -15,7 +18,6 @@ from pilot107.core.states import CapsuleState, CollectionState, RunState
 from pilot107.worker.capsule import (
     CapsuleError,
     RawCapsuleService,
-    capsule_authority_from_store,
     verify_raw_capsule,
 )
 from pilot107.worker.evidence import EvidenceStore
@@ -48,10 +50,7 @@ class RawCapsuleTests(unittest.TestCase):
         )
 
         result = service.build_raw_capsule(run_id)
-        verify = verify_raw_capsule(
-            result.capsule_dir,
-            authority=capsule_authority_from_store(self.store, run_id),
-        )
+        verify = self._verify(result.capsule_dir, run_id)
         read = service.get_raw_capsule(run_id)
 
         self.assertTrue(verify.valid, verify.errors)
@@ -99,10 +98,7 @@ class RawCapsuleTests(unittest.TestCase):
         copied_script.chmod(0o600)
         copied_script.write_text("changed\n", encoding="utf-8")
 
-        verify = verify_raw_capsule(
-            result.capsule_dir,
-            authority=capsule_authority_from_store(self.store, run_id),
-        )
+        verify = self._verify(result.capsule_dir, run_id)
 
         self.assertFalse(verify.valid)
         self.assertTrue(any("mismatch" in error for error in verify.errors))
@@ -112,6 +108,7 @@ class RawCapsuleTests(unittest.TestCase):
     def test_verify_rejects_regular_file_missing_from_manifest_and_checksums(self) -> None:
         run_id = self._collected_run()
         result = self._service().build_raw_capsule(run_id)
+        self._make_capsule_mutable(result.capsule_dir)
         (result.capsule_dir / "attacker-extra.txt").write_text("unsigned\n", encoding="utf-8")
 
         verify = verify_raw_capsule(result.capsule_dir)
@@ -123,6 +120,7 @@ class RawCapsuleTests(unittest.TestCase):
         run_id = self._collected_run()
         service = self._service()
         result = service.build_raw_capsule(run_id)
+        self._make_capsule_mutable(result.capsule_dir)
         manifest_path = result.capsule_dir / "manifest.json"
         manifest_path.chmod(0o600)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -143,9 +141,151 @@ class RawCapsuleTests(unittest.TestCase):
         with self.assertRaises(CapsuleError):
             service.get_raw_capsule(run_id)
 
+    def test_direct_verifier_rejects_missing_or_replaced_evidence_seal_marker(self) -> None:
+        for attack in ("missing", "replaced"):
+            with self.subTest(attack=attack):
+                run_id = self._collected_run(run_id=f"run_marker_{attack}")
+                service = self._service()
+                result = service.build_raw_capsule(run_id)
+                marker = self.evidence_store.root / "seals" / run_id / "seal.json"
+                marker.parent.chmod(0o700)
+                marker.chmod(0o600)
+                if attack == "missing":
+                    marker.unlink()
+                else:
+                    marker.write_bytes(b'{"schema":"attacker-replacement"}\n')
+
+                verify = self._verify(result.capsule_dir, run_id)
+
+                self.assertFalse(verify.valid)
+                with self.assertRaises(CapsuleError):
+                    service.get_raw_capsule(run_id)
+
+    def test_directory_swap_after_scandir_never_reads_external_tree(self) -> None:
+        run_id = self._collected_run()
+        result = self._service().build_raw_capsule(run_id)
+        submission = result.capsule_dir / "submission"
+        original_submission = result.capsule_dir / ".submission-original"
+        external = Path(self._tmp.name) / "external-submission"
+        shutil.copytree(submission, external)
+        result.capsule_dir.chmod(0o700)
+        real_scandir = os.scandir
+        real_open = os.open
+        swapped = False
+        external_reads: list[str] = []
+        scanned_targets: list[str] = []
+
+        def hooked_scandir(target):  # type: ignore[no-untyped-def]
+            nonlocal swapped
+            if isinstance(target, int):
+                target_name = os.readlink(f"/proc/self/fd/{target}")
+            else:
+                target_name = os.fspath(target)
+            scanned_targets.append(target_name)
+            if not swapped and target_name.endswith("/submission"):
+                submission.rename(original_submission)
+                submission.symlink_to(external, target_is_directory=True)
+                swapped = True
+            return real_scandir(target)
+
+        def tracking_open(path, flags, mode=0o777, *, dir_fd=None):  # type: ignore[no-untyped-def]
+            descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+            target = os.readlink(f"/proc/self/fd/{descriptor}")
+            if target.startswith(str(external)):
+                external_reads.append(target)
+            return descriptor
+
+        with (
+            patch.object(capsule_module.os, "scandir", hooked_scandir),
+            patch.object(capsule_module.os, "open", tracking_open),
+        ):
+            verify = self._verify(result.capsule_dir, run_id)
+
+        self.assertTrue(swapped, scanned_targets)
+        self.assertEqual(external_reads, [])
+        self.assertTrue(verify.valid, verify.errors)
+
+    def test_file_swap_between_scandir_and_open_fails_closed(self) -> None:
+        run_id = self._collected_run()
+        result = self._service().build_raw_capsule(run_id)
+        target = result.capsule_dir / "submission" / "user_script.original.sh"
+        original = result.capsule_dir / "submission" / ".script-original"
+        external = Path(self._tmp.name) / "external-user-script.sh"
+        shutil.copyfile(target, external)
+        target.parent.chmod(0o700)
+        real_open = os.open
+        swapped = False
+        requested_paths: list[Path] = []
+
+        def swap_before_open(path, flags, mode=0o777, *, dir_fd=None):  # type: ignore[no-untyped-def]
+            nonlocal swapped
+            requested = (
+                Path(os.readlink(f"/proc/self/fd/{dir_fd}")) / os.fspath(path)
+                if dir_fd is not None and not os.path.isabs(path)
+                else Path(path)
+            )
+            requested_paths.append(requested)
+            if not swapped and requested == target:
+                target.rename(original)
+                external.rename(target)
+                swapped = True
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with patch.object(capsule_module.os, "open", swap_before_open):
+            verify = self._verify(result.capsule_dir, run_id)
+
+        self.assertTrue(swapped, requested_paths)
+        self.assertFalse(verify.valid)
+
+    def test_published_capsule_tree_is_read_only(self) -> None:
+        run_id = self._collected_run()
+        result = self._service().build_raw_capsule(run_id)
+
+        for path in result.capsule_dir.rglob("*"):
+            expected = 0o555 if path.is_dir() else 0o444
+            self.assertEqual(path.stat().st_mode & 0o777, expected)
+        self.assertEqual(result.capsule_dir.stat().st_mode & 0o777, 0o555)
+        with self.assertRaises(PermissionError):
+            (result.capsule_dir / "manifest.json").write_text("tamper", encoding="utf-8")
+
+    def test_fd_relative_verifier_closes_every_descriptor(self) -> None:
+        run_id = self._collected_run()
+        result = self._service().build_raw_capsule(run_id)
+        gc.collect()
+        before = len(os.listdir("/proc/self/fd"))
+
+        for _ in range(25):
+            verify = self._verify(result.capsule_dir, run_id)
+            self.assertTrue(verify.valid, verify.errors)
+
+        gc.collect()
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+    def test_failed_build_cleans_read_only_private_temp(self) -> None:
+        run_id = self._collected_run()
+        marker = self.evidence_store.root / "seals" / run_id / "seal.json"
+        original_seal_tree = capsule_module._seal_capsule_tree
+
+        def seal_then_replace_marker(path: Path) -> None:
+            original_seal_tree(path)
+            marker.parent.chmod(0o700)
+            marker.chmod(0o600)
+            marker.write_bytes(b'{"schema":"changed-during-build"}\n')
+
+        with (
+            patch.object(capsule_module, "_seal_capsule_tree", seal_then_replace_marker),
+            self.assertRaises(CapsuleError),
+        ):
+            self._service().build_raw_capsule(run_id)
+
+        run_root = self.capsule_root / "runs" / run_id
+        self.assertFalse((run_root / "raw").exists())
+        self.assertEqual(list(run_root.glob(".raw-*.tmp")), [])
+
     def test_verify_rejects_resigned_capsule_missing_required_bookkeeping(self) -> None:
         run_id = self._collected_run()
         result = self._service().build_raw_capsule(run_id)
+        self._make_capsule_mutable(result.capsule_dir)
         policy = result.capsule_dir / "collection_policy.json"
         policy.chmod(0o600)
         policy.unlink()
@@ -161,6 +301,9 @@ class RawCapsuleTests(unittest.TestCase):
         service = self._service()
         result = service.build_raw_capsule(run_id)
         escaped = Path(self._tmp.name) / "escaped-raw"
+        self._make_capsule_mutable(result.capsule_dir)
+        result.capsule_dir.parent.chmod(0o700)
+        Path(self._tmp.name).chmod(0o700)
         result.capsule_dir.rename(escaped)
         result.capsule_dir.symlink_to(escaped, target_is_directory=True)
 
@@ -172,6 +315,7 @@ class RawCapsuleTests(unittest.TestCase):
             with self.subTest(attack=attack):
                 run_id = self._collected_run(run_id=f"run_{attack}")
                 result = self._service().build_raw_capsule(run_id)
+                self._make_capsule_mutable(result.capsule_dir)
                 member = result.capsule_dir / f"attacker-{attack}"
                 if attack == "symlink":
                     member.symlink_to(result.capsule_dir / "manifest.json")
@@ -374,6 +518,19 @@ class RawCapsuleTests(unittest.TestCase):
             evidence_store=self.evidence_store,
             capsule_root=self.capsule_root,
         )
+
+    def _verify(self, capsule_dir: Path, run_id: str):  # type: ignore[no-untyped-def]
+        return verify_raw_capsule(
+            capsule_dir,
+            store=self.store,
+            evidence_root=self.evidence_store.root,
+            run_id=run_id,
+        )
+
+    def _make_capsule_mutable(self, capsule_dir: Path) -> None:
+        for path in capsule_dir.rglob("*"):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        capsule_dir.chmod(0o700)
 
     def _resign_capsule(self, capsule_dir: Path) -> None:
         checksums = capsule_dir / "checksums.txt"

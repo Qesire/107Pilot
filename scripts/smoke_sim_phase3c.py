@@ -147,6 +147,7 @@ def main() -> int:
                 run_store=run_store,
                 environment="docker",
                 capsule_root=runtime_root / "capsules",
+                evidence_root=evidence_store.root,
             ),
             auth_required=True,
         )

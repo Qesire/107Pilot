@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pilot107.agent.tasks import AgentTaskGateReceipt
 from pilot107.core.evidence_binding import EvidenceBinder, EvidenceBindingError
 from pilot107.core.run_store import (
     CapsuleBuildFenceConflict,
@@ -50,6 +49,8 @@ class CapsuleVerifyResult:
     checked_files: int
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    manifest: dict[str, Any] | None = field(default=None, repr=False)
+    manifest_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,14 +125,7 @@ class RawCapsuleService:
         ):
             raise CapsuleError("run evidence is not sealed")
 
-        evidence_receipt = self._verify_sealed_evidence(run_id)
-        authority = _capsule_authority(
-            self.store,
-            run_id,
-            evidence_digest=evidence_receipt.evidence_digest,
-            seal_digest=evidence_receipt.seal_digest or "",
-            seal_ref=evidence_receipt.seal_marker_ref or "",
-        )
+        authority = self._resolve_sealed_authority(run_id)
         effective_operation_key = operation_key or hashlib.sha256(
             f"raw-capsule\0{run_id}\0{authority.seal_digest}".encode()
         ).hexdigest()
@@ -211,20 +205,18 @@ class RawCapsuleService:
         run = self.store.get_run(run_id)
         if run.capsule_state != CapsuleState.READY:
             raise CapsuleError(f"raw Capsule is not ready: {run.capsule_state}")
-        receipt = self._verify_sealed_evidence(run_id)
-        authority = _capsule_authority(
-            self.store,
-            run_id,
-            evidence_digest=receipt.evidence_digest,
-            seal_digest=receipt.seal_digest or "",
-            seal_ref=receipt.seal_marker_ref or "",
-        )
         capsule_dir = _capsule_dir(self.capsule_root, run_id)
-        manifest_path = capsule_dir / "manifest.json"
-        verify = verify_raw_capsule(capsule_dir, authority=authority)
+        verify = verify_raw_capsule(
+            capsule_dir,
+            store=self.store,
+            evidence_root=self.evidence_store.root,
+            run_id=run_id,
+        )
         if not verify.valid:
             raise CapsuleError(f"raw Capsule verification failed: {verify.errors}")
-        manifest = _read_json_object(manifest_path, "raw Capsule manifest")
+        manifest = verify.manifest
+        if manifest is None or verify.manifest_sha256 is None:
+            raise CapsuleError("raw Capsule verified snapshot is incomplete")
         capsule_id = str(manifest.get("capsule_id") or "")
         if not capsule_id:
             raise CapsuleError("raw Capsule manifest has no capsule_id")
@@ -236,7 +228,7 @@ class RawCapsuleService:
         return RawCapsuleReadResult(
             run_id=run_id,
             capsule_id=capsule_id,
-            manifest_sha256=_sha256(manifest_path),
+            manifest_sha256=verify.manifest_sha256,
             files_copied=files_copied,
             manifest=manifest,
             valid=verify.valid,
@@ -341,7 +333,13 @@ class RawCapsuleService:
 
             checksums = _build_checksums(temp_dir)
             (temp_dir / "checksums.txt").write_text(checksums, encoding="utf-8")
-            verify = verify_raw_capsule(temp_dir, authority=authority)
+            _seal_capsule_tree(temp_dir)
+            verify = verify_raw_capsule(
+                temp_dir,
+                store=self.store,
+                evidence_root=self.evidence_store.root,
+                run_id=run_id,
+            )
             if not verify.valid:
                 raise CapsuleError(f"capsule verify failed: {verify.errors}")
             if lease_assert is not None:
@@ -352,48 +350,36 @@ class RawCapsuleService:
                 fencing_token=fencing_token,
             )
             published_here = _publish_directory_once(temp_dir, capsule_dir)
-            published = verify_raw_capsule(capsule_dir, authority=authority)
+            published = verify_raw_capsule(
+                capsule_dir,
+                store=self.store,
+                evidence_root=self.evidence_store.root,
+                run_id=run_id,
+            )
             if not published.valid:
                 raise CapsuleError(f"published Capsule verification failed: {published.errors}")
             if not published_here:
-                shutil.rmtree(temp_dir)
+                _discard_private_temp(temp_dir)
         except Exception:
             if _path_exists_without_following(temp_dir) and not temp_dir.is_symlink():
-                shutil.rmtree(temp_dir)
+                _discard_private_temp(temp_dir)
             raise
 
         return CapsuleBuildResult(
             run_id=run_id,
             capsule_id=capsule_id,
             capsule_dir=capsule_dir,
-            manifest_sha256=_sha256(capsule_dir / "manifest.json"),
+            manifest_sha256=published.manifest_sha256 or "",
             files_copied=len(copied),
             warnings=warnings,
         )
 
-    def _verify_sealed_evidence(self, run_id: str) -> AgentTaskGateReceipt:
-        run = self.store.get_run(run_id)
-        refs = tuple(
-            f"evidence://runs/{run_id}/{item.logical_path}"
-            for item in self.store.list_evidence_objects(run_id)
+    def _resolve_sealed_authority(self, run_id: str) -> CapsuleEvidenceAuthority:
+        return resolve_verified_capsule_authority(
+            store=self.store,
+            evidence_root=self.evidence_store.root,
+            run_id=run_id,
         )
-        try:
-            return EvidenceBinder(
-                store=self.store,
-                evidence_root=self.evidence_store.root,
-            ).verify_terminal_gate(
-                run_id,
-                refs,
-                {
-                    "workspace_revision": run.workspace_revision,
-                    "workspace_digest": run.workspace_digest,
-                    "legacy_boundary": run.workspace_revision is None,
-                    "source_revision": run.source_revision,
-                    "platform_snapshot_ref": run.platform_snapshot_ref,
-                },
-            )
-        except EvidenceBindingError as exc:
-            raise CapsuleError(f"sealed Evidence verification failed: {exc.code}") from exc
 
     def _existing_build_result(
         self,
@@ -405,70 +391,88 @@ class RawCapsuleService:
         expected_capsule_id = "capsule_" + hashlib.sha256(
             f"raw\0{run_id}\0{authority.seal_digest}".encode()
         ).hexdigest()[:32]
-        verify = verify_raw_capsule(capsule_dir, authority=authority)
+        verify = verify_raw_capsule(
+            capsule_dir,
+            store=self.store,
+            evidence_root=self.evidence_store.root,
+            run_id=run_id,
+        )
         if not verify.valid or verify.capsule_id != expected_capsule_id:
             raise CapsuleError("existing raw Capsule is invalid")
-        manifest = _read_json_object(capsule_dir / "manifest.json", "Capsule manifest")
+        manifest = verify.manifest
+        if manifest is None or verify.manifest_sha256 is None:
+            raise CapsuleError("existing raw Capsule verified snapshot is incomplete")
         files = manifest.get("files")
         limitations = manifest.get("limitations")
         return CapsuleBuildResult(
             run_id=run_id,
             capsule_id=expected_capsule_id,
             capsule_dir=capsule_dir,
-            manifest_sha256=_sha256(capsule_dir / "manifest.json"),
+            manifest_sha256=verify.manifest_sha256,
             files_copied=len(files) if isinstance(files, list) else 0,
             warnings=[str(item) for item in limitations] if isinstance(limitations, list) else [],
         )
 
 
-def capsule_authority_from_store(store: RunStore, run_id: str) -> CapsuleEvidenceAuthority:
-    seal = store.get_evidence_seal(run_id)
-    if (
-        seal.state is not EvidenceSealState.SEALED
-        or seal.digest is None
-        or seal.marker_ref is None
-    ):
-        raise CapsuleError("sealed Evidence authority is unavailable")
+def resolve_verified_capsule_authority(
+    *,
+    store: RunStore,
+    evidence_root: Path,
+    run_id: str,
+) -> CapsuleEvidenceAuthority:
+    run = store.get_run(run_id)
     objects = store.list_evidence_objects(run_id)
-    object_set_digests = {
-        item.integrity_object_set_digest
-        for item in objects
-        if item.integrity_object_set_digest is not None
-    }
-    if len(object_set_digests) != 1:
-        raise CapsuleError("sealed Evidence object-set authority is unavailable")
+    refs = tuple(f"evidence://runs/{run_id}/{item.logical_path}" for item in objects)
+    try:
+        receipt = EvidenceBinder(store=store, evidence_root=evidence_root).verify_terminal_gate(
+            run_id,
+            refs,
+            {
+                "workspace_revision": run.workspace_revision,
+                "workspace_digest": run.workspace_digest,
+                "legacy_boundary": run.workspace_revision is None,
+                "source_revision": run.source_revision,
+                "platform_snapshot_ref": run.platform_snapshot_ref,
+            },
+        )
+    except EvidenceBindingError as exc:
+        raise CapsuleError(f"sealed Evidence authority is invalid: {exc.code}") from exc
+    if receipt.seal_digest is None or receipt.seal_marker_ref is None:
+        raise CapsuleError("sealed Evidence authority receipt is incomplete")
     return _capsule_authority(
         store,
         run_id,
-        evidence_digest=next(iter(object_set_digests)),
-        seal_digest=seal.digest,
-        seal_ref=seal.marker_ref,
+        evidence_digest=receipt.evidence_digest,
+        seal_digest=receipt.seal_digest,
+        seal_ref=receipt.seal_marker_ref,
     )
 
 
 def verify_raw_capsule(
     capsule_dir: Path,
     *,
-    authority: CapsuleEvidenceAuthority | None = None,
+    store: RunStore | None = None,
+    evidence_root: Path | None = None,
+    run_id: str | None = None,
 ) -> CapsuleVerifyResult:
     errors: list[str] = []
     warnings: list[str] = []
     capsule_id: str | None = None
     checked_files = 0
     try:
-        files, directories = _scan_capsule_tree(capsule_dir)
+        snapshot = _snapshot_capsule_tree(capsule_dir)
     except CapsuleError as exc:
         errors.append(str(exc))
         return CapsuleVerifyResult(False, None, checked_files, warnings, errors)
-    if authority is None:
+    if store is None or evidence_root is None or run_id is None:
         errors.append("sealed Evidence authority is required")
-    manifest_path = files.get("manifest.json")
-    checksums_path = files.get("checksums.txt")
-    if manifest_path is None:
+    manifest_file = snapshot.files.get("manifest.json")
+    checksums_file = snapshot.files.get("checksums.txt")
+    if manifest_file is None:
         errors.append("manifest.json missing")
         return CapsuleVerifyResult(False, None, checked_files, warnings, errors)
     try:
-        manifest = _read_json_object(manifest_path, "manifest.json")
+        manifest = _decode_json_object(manifest_file.content, "manifest.json")
     except CapsuleError as exc:
         errors.append(str(exc))
         return CapsuleVerifyResult(False, None, checked_files, warnings, errors)
@@ -498,22 +502,17 @@ def verify_raw_capsule(
             errors.append(f"duplicate manifest file: {logical_path}")
             continue
         payload_paths.add(logical_path)
-        path = files.get(logical_path)
-        if path is None:
+        file_snapshot = snapshot.files.get(logical_path)
+        if file_snapshot is None:
             errors.append(f"manifest file missing: {logical_path}")
             continue
-        try:
-            digest, size = _regular_file_digest(path)
-        except CapsuleError as exc:
-            errors.append(str(exc))
-            continue
-        if str(entry.get("sha256") or "") != digest:
+        if str(entry.get("sha256") or "") != file_snapshot.sha256:
             errors.append(f"manifest sha256 mismatch: {logical_path}")
-        if entry.get("size_bytes") != size:
+        if entry.get("size_bytes") != file_snapshot.size_bytes:
             errors.append(f"manifest size mismatch: {logical_path}")
 
     expected_files = set(_BOOKKEEPING_FILES) | payload_paths
-    actual_files = set(files)
+    actual_files = set(snapshot.files)
     for missing in sorted(expected_files - actual_files):
         errors.append(f"required Capsule file missing: {missing}")
     for extra in sorted(actual_files - expected_files):
@@ -524,17 +523,17 @@ def verify_raw_capsule(
         for parent in Path(logical_path).parents
         if parent != Path(".")
     }
-    for extra in sorted(directories - expected_directories):
+    for extra in sorted(snapshot.directories - expected_directories):
         errors.append(f"unexpected Capsule directory: {extra}")
-    for missing in sorted(expected_directories - directories):
+    for missing in sorted(expected_directories - snapshot.directories):
         errors.append(f"required Capsule directory missing: {missing}")
 
-    if checksums_path is None:
+    if checksums_file is None:
         errors.append("checksums.txt missing")
     else:
         try:
-            checksum_text = _read_regular_bytes(checksums_path).decode("utf-8")
-        except (CapsuleError, UnicodeDecodeError) as exc:
+            checksum_text = checksums_file.content.decode("utf-8")
+        except UnicodeDecodeError as exc:
             errors.append(f"checksums.txt is unreadable: {exc}")
             checksum_text = ""
         declared: set[str] = set()
@@ -550,17 +549,12 @@ def verify_raw_capsule(
                 errors.append(f"duplicate checksum file: {logical_path}")
                 continue
             declared.add(logical_path)
-            path = files.get(logical_path)
-            if path is None:
+            file_snapshot = snapshot.files.get(logical_path)
+            if file_snapshot is None:
                 errors.append(f"checksum file missing: {logical_path}")
                 continue
             checked_files += 1
-            try:
-                digest, _ = _regular_file_digest(path)
-            except CapsuleError as exc:
-                errors.append(str(exc))
-                continue
-            if digest != expected_sha:
+            if file_snapshot.sha256 != expected_sha:
                 errors.append(f"checksum mismatch: {logical_path}")
         expected_checksum_files = actual_files - {"checksums.txt"}
         for missing in sorted(expected_checksum_files - declared):
@@ -568,10 +562,20 @@ def verify_raw_capsule(
         for extra in sorted(declared - expected_checksum_files):
             errors.append(f"unexpected checksum declaration: {extra}")
         if not errors:
-            canonical = _checksums_for_files(files)
+            canonical = _checksums_for_files(snapshot.files)
             if checksum_text != canonical:
                 errors.append("checksums.txt is not canonical")
 
+    authority: CapsuleEvidenceAuthority | None = None
+    if store is not None and evidence_root is not None and run_id is not None:
+        try:
+            authority = resolve_verified_capsule_authority(
+                store=store,
+                evidence_root=evidence_root,
+                run_id=run_id,
+            )
+        except CapsuleError as exc:
+            errors.append(str(exc))
     if authority is not None:
         expected_entries = [_authority_manifest_entry(item) for item in authority.files]
         if manifest.get("run_id") != authority.run_id:
@@ -590,10 +594,13 @@ def verify_raw_capsule(
         ).hexdigest()[:32]
         if capsule_id != expected_capsule_id:
             errors.append("capsule_id authority mismatch")
-        provenance_path = files.get("provenance.json")
-        if provenance_path is not None:
+        provenance_file = snapshot.files.get("provenance.json")
+        if provenance_file is not None:
             try:
-                provenance = _read_json_object(provenance_path, "provenance.json")
+                provenance = _decode_json_object(
+                    provenance_file.content,
+                    "provenance.json",
+                )
             except CapsuleError as exc:
                 errors.append(str(exc))
             else:
@@ -614,16 +621,29 @@ def verify_raw_capsule(
         checked_files=checked_files,
         warnings=warnings,
         errors=errors,
+        manifest=manifest,
+        manifest_sha256=manifest_file.sha256,
     )
+
+
+@dataclass(frozen=True)
+class _CapsuleFileSnapshot:
+    content: bytes
+    sha256: str
+    size_bytes: int
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True)
+class _CapsuleTreeSnapshot:
+    files: dict[str, _CapsuleFileSnapshot]
+    directories: set[str]
 
 
 def _safe_join(root: Path, logical_path: str) -> Path:
     _validate_logical_path(logical_path)
     return root.absolute() / logical_path
-
-
-def _sha256(path: Path) -> str:
-    return _regular_file_digest(path)[0]
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -635,13 +655,12 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _build_checksums(capsule_dir: Path) -> str:
-    files, _ = _scan_capsule_tree(capsule_dir)
-    return _checksums_for_files(files)
+    return _checksums_for_files(_snapshot_capsule_tree(capsule_dir).files)
 
 
-def _checksums_for_files(files: dict[str, Path]) -> str:
+def _checksums_for_files(files: dict[str, _CapsuleFileSnapshot]) -> str:
     lines = [
-        f"{_sha256(files[logical_path])}  {logical_path}"
+        f"{files[logical_path].sha256}  {logical_path}"
         for logical_path in sorted(files)
         if logical_path != "checksums.txt"
     ]
@@ -734,80 +753,199 @@ def _validate_logical_path(logical_path: str) -> None:
         raise CapsuleError(f"unsafe capsule path: {logical_path!r}")
 
 
-def _scan_capsule_tree(capsule_dir: Path) -> tuple[dict[str, Path], set[str]]:
-    root = capsule_dir.absolute()
-    _assert_no_symlink_path(root, require_final_directory=True)
-    files: dict[str, Path] = {}
+def _snapshot_capsule_tree(capsule_dir: Path) -> _CapsuleTreeSnapshot:
+    files: dict[str, _CapsuleFileSnapshot] = {}
     directories: set[str] = set()
+    with _open_directory_path(capsule_dir) as root_fd:
 
-    def visit(directory: Path, prefix: Path) -> None:
-        try:
-            entries = list(os.scandir(directory))
-        except OSError as exc:
-            raise CapsuleError("Capsule directory is unreadable") from exc
-        for entry in entries:
-            logical = (prefix / entry.name).as_posix()
+        def visit(directory_fd: int, prefix: Path) -> None:
             try:
-                metadata = entry.stat(follow_symlinks=False)
+                with os.scandir(directory_fd) as scanner:
+                    entries = list(scanner)
             except OSError as exc:
-                raise CapsuleError(f"Capsule member is unreadable: {logical}") from exc
-            if stat.S_ISLNK(metadata.st_mode):
-                raise CapsuleError(f"Capsule symlink is forbidden: {logical}")
-            path = Path(entry.path)
-            if stat.S_ISDIR(metadata.st_mode):
-                directories.add(logical)
-                visit(path, prefix / entry.name)
-                continue
-            if not stat.S_ISREG(metadata.st_mode):
-                raise CapsuleError(f"Capsule special file is forbidden: {logical}")
-            if metadata.st_nlink != 1:
-                raise CapsuleError(f"Capsule hardlink is forbidden: {logical}")
-            files[logical] = path
+                raise CapsuleError("Capsule directory is unreadable") from exc
+            for entry in entries:
+                logical = (prefix / entry.name).as_posix()
+                descriptor: int | None = None
+                try:
+                    descriptor = os.open(
+                        entry.name,
+                        os.O_RDONLY
+                        | os.O_NONBLOCK
+                        | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
+                        dir_fd=directory_fd,
+                    )
+                    metadata = os.fstat(descriptor)
+                    if metadata.st_ino != entry.inode():
+                        raise CapsuleError(f"Capsule member changed during scan: {logical}")
+                    if stat.S_ISDIR(metadata.st_mode):
+                        directories.add(logical)
+                        visit(descriptor, prefix / entry.name)
+                    elif stat.S_ISREG(metadata.st_mode):
+                        if metadata.st_nlink != 1:
+                            raise CapsuleError(f"Capsule hardlink is forbidden: {logical}")
+                        files[logical] = _snapshot_regular_file(
+                            descriptor,
+                            logical_path=logical,
+                            before=metadata,
+                        )
+                    else:
+                        raise CapsuleError(f"Capsule special file is forbidden: {logical}")
+                except CapsuleError:
+                    raise
+                except OSError as exc:
+                    raise CapsuleError(
+                        f"Capsule member is unreadable or is a symlink: {logical}"
+                    ) from exc
+                finally:
+                    if descriptor is not None:
+                        os.close(descriptor)
 
-    visit(root, Path())
-    return files, directories
+        visit(root_fd, Path())
+    return _CapsuleTreeSnapshot(files=files, directories=directories)
 
 
-def _assert_no_symlink_path(path: Path, *, require_final_directory: bool) -> None:
+def _seal_capsule_tree(capsule_dir: Path) -> None:
+    with _open_directory_path(capsule_dir) as root_fd:
+
+        def seal_directory(directory_fd: int) -> None:
+            try:
+                with os.scandir(directory_fd) as scanner:
+                    entries = list(scanner)
+            except OSError as exc:
+                raise CapsuleError("Capsule directory is unreadable during sealing") from exc
+            for entry in entries:
+                descriptor: int | None = None
+                try:
+                    descriptor = os.open(
+                        entry.name,
+                        os.O_RDONLY
+                        | os.O_NONBLOCK
+                        | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
+                        dir_fd=directory_fd,
+                    )
+                    metadata = os.fstat(descriptor)
+                    if metadata.st_ino != entry.inode():
+                        raise CapsuleError("Capsule member changed during sealing")
+                    if stat.S_ISDIR(metadata.st_mode):
+                        seal_directory(descriptor)
+                        os.fchmod(descriptor, 0o555)
+                    elif stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                        os.fchmod(descriptor, 0o444)
+                    else:
+                        raise CapsuleError("Capsule tree contains an unsafe member")
+                except CapsuleError:
+                    raise
+                except OSError as exc:
+                    raise CapsuleError("Capsule tree sealing failed") from exc
+                finally:
+                    if descriptor is not None:
+                        os.close(descriptor)
+            os.fsync(directory_fd)
+
+        seal_directory(root_fd)
+        os.fchmod(root_fd, 0o555)
+        os.fsync(root_fd)
+
+
+def _discard_private_temp(temp_dir: Path) -> None:
+    if re.fullmatch(r"\.raw-[0-9a-f]{32}\.tmp", temp_dir.name) is None:
+        raise CapsuleError("refusing to remove an unrecognized Capsule temp directory")
+    with _open_directory_path(temp_dir) as root_fd:
+
+        def make_writable(directory_fd: int) -> None:
+            os.fchmod(directory_fd, 0o700)
+            with os.scandir(directory_fd) as scanner:
+                entries = list(scanner)
+            for entry in entries:
+                descriptor: int | None = None
+                try:
+                    descriptor = os.open(
+                        entry.name,
+                        os.O_RDONLY
+                        | os.O_NONBLOCK
+                        | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
+                        dir_fd=directory_fd,
+                    )
+                    metadata = os.fstat(descriptor)
+                    if metadata.st_ino != entry.inode():
+                        raise CapsuleError("Capsule temp changed during cleanup")
+                    if stat.S_ISDIR(metadata.st_mode):
+                        make_writable(descriptor)
+                except OSError as exc:
+                    raise CapsuleError("Capsule temp cleanup failed closed") from exc
+                finally:
+                    if descriptor is not None:
+                        os.close(descriptor)
+
+        make_writable(root_fd)
+    shutil.rmtree(temp_dir)
+
+
+@contextmanager
+def _open_directory_path(path: Path) -> Iterator[int]:
     absolute = path.absolute()
-    current = Path(absolute.anchor)
-    for component in absolute.parts[1:]:
-        current /= component
-        try:
-            metadata = current.lstat()
-        except FileNotFoundError as exc:
-            raise CapsuleError(f"Capsule path is missing: {current}") from exc
-        except OSError as exc:
-            raise CapsuleError(f"Capsule path is unreadable: {current}") from exc
-        if stat.S_ISLNK(metadata.st_mode):
-            raise CapsuleError(f"Capsule path symlink is forbidden: {current}")
-    if require_final_directory and not stat.S_ISDIR(absolute.lstat().st_mode):
-        raise CapsuleError("Capsule root is not a directory")
-
-
-def _read_regular_bytes(path: Path) -> bytes:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
     descriptor: int | None = None
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        descriptor = os.open(absolute.anchor, flags)
+        for component in absolute.parts[1:]:
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
         metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
-            raise CapsuleError(f"Capsule member is not an independent regular file: {path}")
-        chunks: list[bytes] = []
-        while chunk := os.read(descriptor, 1024 * 1024):
-            chunks.append(chunk)
-        return b"".join(chunks)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise CapsuleError("Capsule root is not a directory")
+        yield descriptor
     except CapsuleError:
         raise
     except OSError as exc:
-        raise CapsuleError(f"Capsule member is unreadable: {path}") from exc
+        raise CapsuleError("Capsule path is missing, unreadable, or contains a symlink") from exc
     finally:
         if descriptor is not None:
             os.close(descriptor)
 
 
-def _regular_file_digest(path: Path) -> tuple[str, int]:
-    content = _read_regular_bytes(path)
-    return hashlib.sha256(content).hexdigest(), len(content)
+def _snapshot_regular_file(
+    descriptor: int,
+    *,
+    logical_path: str,
+    before: os.stat_result,
+) -> _CapsuleFileSnapshot:
+    chunks: list[bytes] = []
+    try:
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+    except OSError as exc:
+        raise CapsuleError(f"Capsule member is unreadable: {logical_path}") from exc
+    after = os.fstat(descriptor)
+    stable_before = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    stable_after = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    content = b"".join(chunks)
+    if stable_before != stable_after or len(content) != after.st_size:
+        raise CapsuleError(f"Capsule member changed while reading: {logical_path}")
+    return _CapsuleFileSnapshot(
+        content=content,
+        sha256=hashlib.sha256(content).hexdigest(),
+        size_bytes=len(content),
+        device=after.st_dev,
+        inode=after.st_ino,
+    )
 
 
 def _copy_regular_file(source: Path, destination: Path) -> None:
@@ -886,10 +1024,10 @@ def _path_exists_without_following(path: Path) -> bool:
     return True
 
 
-def _read_json_object(path: Path, label: str) -> dict[str, Any]:
+def _decode_json_object(content: bytes, label: str) -> dict[str, Any]:
     try:
-        value = json.loads(_read_regular_bytes(path).decode("utf-8"))
-    except (CapsuleError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        value = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise CapsuleError(f"{label} is unreadable") from exc
     if not isinstance(value, dict):
         raise CapsuleError(f"{label} is invalid")

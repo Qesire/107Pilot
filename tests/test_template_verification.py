@@ -50,6 +50,7 @@ class TemplateVerificationTests(unittest.TestCase):
             run_store=self.run_store,
             environment="docker",
             capsule_root=self.capsule_root,
+            evidence_root=self.evidence_store.root,
         )
         self.api = Pilot107HttpApi(
             store=self.run_store,
@@ -194,6 +195,7 @@ class TemplateVerificationTests(unittest.TestCase):
             run_store=self.run_store,
             environment="real107_gpu",
             capsule_root=self.capsule_root,
+            evidence_root=self.evidence_store.root,
         )
         with self.assertRaises(TemplateMarketError) as mismatch:
             gpu_service.verify_from_run(
@@ -241,6 +243,11 @@ class TemplateVerificationTests(unittest.TestCase):
         )
         raw = self.capsule_root / "runs" / run_id / "raw"
         escaped = Path(self._temporary.name) / "escaped-capsule"
+        for path in raw.rglob("*"):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        raw.chmod(0o700)
+        raw.parent.chmod(0o700)
+        Path(self._temporary.name).chmod(0o700)
         raw.rename(escaped)
         raw.symlink_to(escaped, target_is_directory=True)
 
@@ -256,6 +263,40 @@ class TemplateVerificationTests(unittest.TestCase):
             raised.exception.code,
             "TEMPLATE.VERIFICATION_CAPSULE_INCOMPLETE",
         )
+
+    def test_verification_rejects_missing_or_replaced_evidence_seal_marker(self) -> None:
+        release = self._release()
+        adoption = self.template_store.adopt_release(
+            release.release_id,
+            adopter="bob",
+            request_key="bob-marker-adoption",
+        )
+        for attack in ("missing", "replaced"):
+            with self.subTest(attack=attack):
+                run_id = self._terminal_run(
+                    contract_id=str(adoption.target_contract_id),
+                    run_id=f"run_{attack}_marker",
+                )
+                marker = self.evidence_store.root / "seals" / run_id / "seal.json"
+                marker.parent.chmod(0o700)
+                marker.chmod(0o600)
+                if attack == "missing":
+                    marker.unlink()
+                else:
+                    marker.write_bytes(b'{"schema":"attacker-replacement"}\n')
+
+                with self.assertRaises(TemplateMarketError) as raised:
+                    self.verification_service.verify_from_run(
+                        release_id=release.release_id,
+                        run_id=run_id,
+                        actor="bob",
+                        request_key=f"{attack}-marker",
+                    )
+
+                self.assertEqual(
+                    raised.exception.code,
+                    "TEMPLATE.VERIFICATION_CAPSULE_INCOMPLETE",
+                )
 
     def test_api_rejects_client_asserted_verification_facts(self) -> None:
         release = self._release()
