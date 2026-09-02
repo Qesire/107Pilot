@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildValidationEnvelope,
+  builderSessionLocation,
   buildFormalContract,
   boundProjectSessionId,
   canGenerateFormalCandidate,
@@ -13,8 +14,15 @@ import {
   originLabel,
   projectAgentProfileBinding,
   riskLabel,
+  validationResourceDefaults,
 } from "./AgentProjectPanel";
-import type { AgentTask, FormalRunCandidate, WorkspaceChangeSet } from "./types";
+import type {
+  AgentTask,
+  CapabilityProfile,
+  EntitlementSnapshot,
+  FormalRunCandidate,
+  WorkspaceChangeSet,
+} from "./types";
 
 function changeSet(state: WorkspaceChangeSet["state"]): WorkspaceChangeSet {
   return {
@@ -78,6 +86,14 @@ function task(overrides: Partial<AgentTask> = {}): AgentTask {
 }
 
 describe("Agent Project review presentation", () => {
+  it("keeps an experiment Builder session inside the engineering entry", () => {
+    expect(builderSessionLocation(
+      new URLSearchParams("mode=builder&project=project-old"),
+      "project-1",
+      "session-builder",
+    )).toBe("/agent?mode=builder&project=project-1&session=session-builder");
+  });
+
   it("mounts task lifecycle only for the session bound to the selected Project", () => {
     expect(boundProjectSessionId(
       new URLSearchParams("project=project-1&session=session-1"),
@@ -142,6 +158,67 @@ describe("Agent Project review presentation", () => {
     expect(envelope.approved_by).toBe("alice");
     expect(envelope.expires_at).toBe("2026-08-19T01:00:00.000Z");
     expect(envelope.max_submissions).toBe(1);
+  });
+
+  it("derives validation defaults from fresh authoritative Slurm entitlement", () => {
+    const capabilities: CapabilityProfile = {
+      profile_id: "cpu-only-8c16g-vm-demo",
+      source_authority: "vm-demo",
+      captured_at: "2026-08-30T00:00:00Z",
+      freshness_seconds: 300,
+      default_partition: "CPU-RC",
+      default_qos: "qos_cpu_rc",
+      partitions: [{ name: "CPU-RC", allow_qos: ["qos_cpu_rc"] }],
+      qos: [{ name: "qos_cpu_rc" }],
+      dynamic_facts: [],
+      limitations: [],
+    };
+    const entitlement: EntitlementSnapshot = {
+      snapshot_id: "entitlement-1",
+      captured_at: "2026-08-30T00:01:00Z",
+      freshness: "fresh",
+      data_quality: "authoritative",
+      default_account: "competition",
+      snapshot: {
+        associations: [{
+          account: "competition",
+          partition: null,
+          qos: ["qos_cpu_rc"],
+          default_qos: "qos_cpu_rc",
+        }],
+      },
+    };
+
+    expect(validationResourceDefaults(capabilities, entitlement)).toEqual({
+      partition: "CPU-RC",
+      qos: "qos_cpu_rc",
+    });
+  });
+
+  it("falls back to capability defaults when Slurm entitlement is stale", () => {
+    const capabilities = {
+      default_partition: "CPU-RC",
+      default_qos: "qos_cpu_rc",
+      partitions: [{ name: "CPU-RC", allow_qos: ["qos_cpu_rc"] }],
+      qos: [{ name: "qos_cpu_rc" }],
+    } as CapabilityProfile;
+    const entitlement = {
+      freshness: "stale",
+      data_quality: "authoritative",
+      snapshot: {
+        associations: [{
+          account: "legacy",
+          partition: "debug",
+          qos: ["normal"],
+          default_qos: "normal",
+        }],
+      },
+    } as EntitlementSnapshot;
+
+    expect(validationResourceDefaults(capabilities, entitlement)).toEqual({
+      partition: "CPU-RC",
+      qos: "qos_cpu_rc",
+    });
   });
 
   it("rejects invalid or fractional validation resource inputs", () => {

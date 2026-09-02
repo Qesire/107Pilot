@@ -325,6 +325,32 @@ describe("provider retry policy", () => {
     expect(sleeps).toEqual([]);
   });
 
+  it("maps a provider authentication message without an HTTP status to authentication failure", async () => {
+    const runtime = createFauxModelRuntime();
+    runtime.faux.setResponses([
+      fauxAssistantMessage([], {
+        stopReason: "error",
+        errorMessage: "No API key for provider: campus-default",
+        timestamp: 1,
+      }),
+      fauxAssistantMessage([fauxText("must not retry")], { timestamp: 2 }),
+    ]);
+
+    const events = await executeCollect(executor(runtime), interactiveRequest());
+
+    expect(terminal(events)).toMatchObject({
+      type: "turn_failed",
+      payload: {
+        error: {
+          code: "provider_auth",
+          retryable: false,
+        },
+      },
+    });
+    expect(runtime.faux.state.callCount).toBe(1);
+    expect(runtime.faux.getPendingResponseCount()).toBe(1);
+  });
+
   it("does not infer an HTTP status from arbitrary numbers inside provider text", async () => {
     const runtime = createFauxModelRuntime();
     runtime.faux.setResponses([
@@ -639,7 +665,7 @@ describe("abort, timeout, and checkpoint restore", () => {
       type: "turn_completed",
       payload: { result: "resumed" },
     });
-    expect(finalPrompt).toContain("Continue the interrupted Turn");
+    expect(finalPrompt).toContain("从已清理的 checkpoint 继续被中断的 Turn");
     expect(finalPrompt).not.toContain('"message":"hello"');
     expect(JSON.stringify(resumedEvents)).not.toContain("secret thinking");
     expect(assertTerminalInvariant(resumedEvents)).toBe(resumedEvents.at(-1));

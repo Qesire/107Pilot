@@ -94,6 +94,14 @@ _A2_PROJECT_TOOLS = {
     "builder_context_get",
     "builder_build_submit",
 }
+_PROJECT_WORKSPACE_TOOLS = {
+    "project_get",
+    "workspace_list",
+    "workspace_read",
+    "workspace_patch",
+    "workspace_diff",
+    "sandbox_exec",
+}
 
 
 @dataclass(frozen=True)
@@ -299,6 +307,8 @@ def parse_tool_invocation(value: object) -> ToolInvocation:
         profile_id = _as_string(invocation["profile_id"], "profile_id")
         valid_tools = (
             _A2_PROJECT_TOOLS
+            if profile_id == "experiment_builder"
+            else _PROJECT_WORKSPACE_TOOLS
             if is_project_agent_profile(profile_id)
             else _A1_READ_TOOLS
             if profile_id in {"hpc-readonly-v1", "platform_coach"}

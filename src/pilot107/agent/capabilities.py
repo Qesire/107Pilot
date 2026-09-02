@@ -43,6 +43,16 @@ _A2_TOOLS = frozenset(
         "builder_build_submit",
     }
 )
+_PROJECT_WORKSPACE_TOOLS = frozenset(
+    {
+        "project_get",
+        "workspace_list",
+        "workspace_read",
+        "workspace_patch",
+        "workspace_diff",
+        "sandbox_exec",
+    }
+)
 _A2_OPERATIONS = frozenset({"read", "write", "validate"})
 MAX_AGENT_CAPABILITY_LIFETIME_SECONDS = 660
 _CLOCK_SKEW_SECONDS = 5
@@ -232,9 +242,14 @@ def _validate_claims(claims: AgentCapabilityClaims, *, now: int, signing: bool) 
         for scoped_id in (claims.project_id, claims.workspace_id):
             if scoped_id is None or _IDENTIFIER.fullmatch(scoped_id) is None:
                 raise ValueError("invalid builder capability binding")
+        allowed_tools = (
+            _A2_TOOLS
+            if claims.profile_id == "experiment_builder"
+            else _PROJECT_WORKSPACE_TOOLS
+        )
         if (
             not claims.tools
-            or not claims.tools.issubset(_A2_TOOLS)
+            or not claims.tools.issubset(allowed_tools)
             or not claims.operations
             or not claims.operations.issubset(_A2_OPERATIONS)
             or not 0 <= claims.max_commands <= 64

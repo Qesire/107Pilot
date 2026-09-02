@@ -42,6 +42,16 @@ _A2_PROJECT_TOOLS = frozenset(
         "validation_schedule",
     }
 )
+_PROJECT_WORKSPACE_TOOLS = frozenset(
+    {
+        "project_get",
+        "workspace_list",
+        "workspace_read",
+        "workspace_patch",
+        "workspace_diff",
+        "sandbox_exec",
+    }
+)
 _BUILDER_WORKFLOW_TOOLS = frozenset(
     {"builder_context_get", "builder_build_submit"}
 )
@@ -363,10 +373,12 @@ class AgentTurnWorker:
                     _BUILDER_WORKFLOW_TOOLS
                     if phase_aware
                     else _A2_PROJECT_TOOLS
+                    if profile_id == "experiment_builder"
+                    else _PROJECT_WORKSPACE_TOOLS
                     if project_profile
                     else _a1_tools_for_context_refs(context_refs)
                 ),
-                max_invocations=32,
+                max_invocations=128,
                 max_bytes=1024 * 1024,
                 expires_at=now
                 + min(self.lease_seconds, MAX_AGENT_CAPABILITY_LIFETIME_SECONDS),
@@ -377,7 +389,7 @@ class AgentTurnWorker:
                     if project_profile
                     else frozenset()
                 ),
-                max_commands=(32 if phase_aware else 8) if project_profile else 0,
+                max_commands=64 if project_profile else 0,
             )
         )
 

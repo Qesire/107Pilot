@@ -159,6 +159,8 @@ class RunServiceTests(unittest.TestCase):
 
         events = self.store.list_events(self._only_run_id())
         self.assertEqual(events[-1].event_type, "run.submit_failed")
+        self.assertIn("SlurmSubmissionRejected", events[-1].payload["failure_reason"])
+        self.assertLessEqual(len(events[-1].payload["failure_reason"]), 512)
         self.assertEqual(self.store.get_run(self._only_run_id()).state, RunState.SUBMIT_FAILED)
 
     def test_cancel_updates_state(self) -> None:

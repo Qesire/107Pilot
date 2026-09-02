@@ -26,19 +26,24 @@ import { prepareTask, type PreparedTask } from "./tasks.js";
 const RETRY_DELAYS_MS = [100, 400] as const;
 const MAX_PROVIDER_CALLS = 3;
 const PI_STEP_LIMITS = {
-  interactive_readonly: 4,
-  experiment_builder: 20,
-  run_diagnosis_repair: 12,
-  market_application: 12,
-  template_publication: 12,
+  interactive_readonly: 64,
+  experiment_builder: 64,
+  run_diagnosis_repair: 64,
+  market_application: 64,
+  template_publication: 64,
 } as const satisfies Partial<Record<ExecutableTaskKind, number>>;
 const REPAIR_PROMPT =
-  "The previous response did not satisfy the required output contract. " +
-  "Call emit_result exactly once with arguments that match its schema. " +
-  "Do not repeat or quote any prior input.";
+  "上一条响应不符合所需的输出契约。" +
+  "请恰好调用一次 emit_result，并使参数严格匹配其 schema。" +
+  "不要重复或引用先前输入。";
+const BUILDER_SUBMISSION_REPAIR_PROMPT =
+  "上一条响应只给出了自然语言，尚未完成实验构建闭环。" +
+  "检查当前对话中是否已有成功的 builder_context_get 结果：已有则不得重复读取，没有才调用一次。" +
+  "随后必须调用 builder_build_submit，提交完整 Blueprint、原子补丁、全新 request_key 和中文 approval_summary_zh。" +
+  "不要再次复述计划；若收到 repair_required，请严格使用 receipt.next_submission 修复并继续提交，直到返回 scheduled。";
 const RESUME_PROMPT =
-  "Continue the interrupted Turn from the sanitized checkpoint. " +
-  "Do not repeat text already present in the checkpoint.";
+  "从已清理的 checkpoint 继续被中断的 Turn。" +
+  "不要重复 checkpoint 中已经存在的文本。";
 
 export type RuntimeResolver = (profileId: string) => ModelRuntime | undefined;
 export type Sleep = (milliseconds: number, signal: AbortSignal) => Promise<void>;
@@ -470,7 +475,48 @@ async function runAttempt(options: {
       }
     }
 
+    if (
+      options.phaseAwareBuilder &&
+      options.request.task_kind === "experiment_builder" &&
+      !hasSuccessfulValidationHandoff(
+        agent.state.messages.slice(options.restored.length),
+      ) &&
+      !options.budget.repairUsed &&
+      options.budget.providerCalls < MAX_PROVIDER_CALLS
+    ) {
+      options.budget.repairUsed = true;
+      providerStatus = undefined;
+      await agent.prompt(BUILDER_SUBMISSION_REPAIR_PROMPT);
+      promptError = errorAfterPrompt(
+        agent,
+        listenerError,
+        providerStatus,
+        abortBinding.reason,
+      );
+      if (promptError !== undefined) {
+        return { kind: "failure", error: promptError, state: agent.state };
+      }
+      if (options.budget.stepLimitExceeded) {
+        return {
+          kind: "failure",
+          error: toolStepBudgetError(),
+          state: agent.state,
+        };
+      }
+    }
+
     const attemptMessages = agent.state.messages.slice(options.restored.length);
+    if (
+      options.phaseAwareBuilder &&
+      options.request.task_kind === "experiment_builder" &&
+      !hasSuccessfulValidationHandoff(attemptMessages)
+    ) {
+      return {
+        kind: "failure",
+        error: outputContractError(),
+        state: agent.state,
+      };
+    }
     const result = task.constrained
       ? task.getStructuredResult()
       : collectAssistantText(attemptMessages);
@@ -556,6 +602,14 @@ function hasSuccessfulValidationHandoff(messages: readonly AgentMessage[]): bool
               && isScheduledBuilderReceipt(content.text),
           )
         )
+        || (
+          message.toolName === "builder_context_get"
+          && message.content.some(
+            (content) =>
+              content.type === "text"
+              && isScheduledBuilderContextReceipt(content.text),
+          )
+        )
       ),
   );
 }
@@ -567,6 +621,18 @@ function isScheduledBuilderReceipt(value: string): boolean {
       && parsed !== null
       && "status" in parsed
       && parsed.status === "scheduled";
+  } catch {
+    return false;
+  }
+}
+
+function isScheduledBuilderContextReceipt(value: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "object"
+      && parsed !== null
+      && "phase" in parsed
+      && parsed.phase === "validation_scheduled";
   } catch {
     return false;
   }
@@ -677,6 +743,13 @@ function errorFromStoppedMessage(
       }),
     );
   }
+  if (providerAuthenticationFromMessage(detail)) {
+    return new AgentdTurnError(
+      "provider_auth",
+      false,
+      "The model provider rejected authentication.",
+    );
+  }
   const transportCode = /\b(E[A-Z]+|UND_ERR_[A-Z_]+)\b/.exec(detail)?.[1];
   if (transportCode !== undefined) {
     return mapProviderError(
@@ -759,6 +832,20 @@ function providerStatusFromMessage(message: string): number | undefined {
       message,
     )?.[1];
   return fixedProvider === undefined ? undefined : Number(fixedProvider);
+}
+
+function providerAuthenticationFromMessage(message: string): boolean {
+  return (
+    /\b(?:authentication|authorization)\b.{0,80}\b(?:error|failed|invalid|missing|required|rejected|unauthorized)\b/i.test(
+      message,
+    ) ||
+    /\bapi[-_ ]?key\b.{0,80}\b(?:incorrect|invalid|missing|not\s+(?:passed|provided)|required|rejected)\b/i.test(
+      message,
+    ) ||
+    /\b(?:incorrect|invalid|missing|no|required)\b.{0,80}\bapi[-_ ]?key\b/i.test(
+      message,
+    )
+  );
 }
 
 function createUsageAccumulator(runtime: ModelRuntime): TurnUsageAccumulator {

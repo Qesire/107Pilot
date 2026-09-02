@@ -345,8 +345,17 @@ def test_repair_turn_receives_one_project_scoped_capability(tmp_path: Path) -> N
         "workspace:workspace-repair",
         "run:run-failed",
     )
-    assert "workspace_patch" in claims.tools
-    assert "project_blueprint_save" in claims.tools
+    assert claims.tools == frozenset(
+        {
+            "project_get",
+            "workspace_list",
+            "workspace_read",
+            "workspace_patch",
+            "workspace_diff",
+            "sandbox_exec",
+        }
+    )
+    assert claims.operations == frozenset({"read", "write", "validate"})
 
 
 def test_enabled_builder_turn_receives_only_phase_aware_facade_capability(
@@ -401,8 +410,8 @@ def test_enabled_builder_turn_receives_only_phase_aware_facade_capability(
     assert claims.tools == frozenset(
         {"builder_context_get", "builder_build_submit"}
     )
-    assert claims.max_invocations == 32
-    assert claims.max_commands == 32
+    assert claims.max_invocations == 128
+    assert claims.max_commands == 64
 
 
 def test_transport_failure_interrupts_with_last_checkpoint_and_retries(

@@ -1,0 +1,23 @@
+NAME                                      IMAGE                              COMMAND                  SERVICE                    CREATED       STATUS                   PORTS
+pilot107-sim-login-node-sim-1             pilot107/slurm-sim:25.11-real107   "tini -- pilot107-sl…"   login-node-sim             4 weeks ago   Up 2 hours               
+pilot107-sim-mariadb-1                    pilot107/slurm-sim:25.11-real107   "tini -- pilot107-sl…"   mariadb                    4 weeks ago   Up 2 hours (healthy)     
+pilot107-sim-pilot107-api-1               pilot107/api:phase4dev             "python3 -m pilot107…"   pilot107-api               3 weeks ago   Up 2 hours (healthy)     0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp
+pilot107-sim-pilot107-command-gateway-1   pilot107/slurm-sim:phase4dev       "tini -- pilot107-sl…"   pilot107-command-gateway   3 weeks ago   Up 2 hours (unhealthy)   
+pilot107-sim-pilot107-reverse-proxy-1     pilot107/web:phase4dev             "python3 -m pilot107…"   pilot107-reverse-proxy     3 weeks ago   Up 2 hours (healthy)     0.0.0.0:8443->8443/tcp, [::]:8443->8443/tcp, 0.0.0.0:8088->8080/tcp, [::]:8088->8080/tcp
+pilot107-sim-pilot107-web-1               pilot107/web:phase4dev             "python3 -m pilot107…"   pilot107-web               3 weeks ago   Up 2 hours (healthy)     0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp
+pilot107-sim-pilot107-worker-1            pilot107/worker:phase4dev          "python3 -m pilot107…"   pilot107-worker            3 weeks ago   Up 2 hours (healthy)     
+pilot107-sim-slurmctld-1                  pilot107/slurm-sim:25.11-real107   "tini -- pilot107-sl…"   slurmctld                  4 weeks ago   Up 9 hours               
+pilot107-sim-slurmdbd-1                   pilot107/slurm-sim:25.11-real107   "tini -- pilot107-sl…"   slurmdbd                   4 weeks ago   Up 2 hours               
+pilot107-sim-slurmrestd-1                 pilot107/slurm-sim:25.11-real107   "tini -- pilot107-sl…"   slurmrestd                 4 weeks ago   Up 2 hours               0.0.0.0:6820->6820/tcp, [::]:6820->6820/tcp
+pilot107-sim-worker-1-1                   pilot107/slurm-sim:25.11-real107   "tini -- pilot107-sl…"   worker-1                   4 weeks ago   Up 9 hours               
+pilot107-sim-worker-2-1                   pilot107/slurm-sim:25.11-real107   "tini -- pilot107-sl…"   worker-2                   4 weeks ago   Up 9 hours               
+PARTITION    AVAIL  TIMELIMIT  NODES  STATE NODELIST
+CPU-6530        up   infinite      0    n/a 
+CPU-8358P       up   infinite      2   idle anode[16-17]
+GPU-RTX5090     up   infinite      0    n/a 
+GPU-A100        up   infinite      2   idle anode[16-17]
+P107-RTX5090    up   infinite      0    n/a 
+P107-A100       up   infinite      2   idle anode[16-17]
+Students*       up   infinite      2   idle anode[16-17]
+debug           up    1:00:00      2   idle anode[16-17]
+Slurmctld(primary) at slurmctld is UP

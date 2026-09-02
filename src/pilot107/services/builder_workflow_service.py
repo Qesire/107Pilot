@@ -44,6 +44,8 @@ type EnvelopeResolver = Callable[[str, str], AgentResourceEnvelope]
 
 _MAX_MANIFEST_FILES = 500
 _MAX_DIAGNOSTIC_BYTES = 16 * 1024
+_MAX_REPAIR_SOURCE_FILES = 16
+_MAX_REPAIR_SOURCE_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,7 @@ class _BuildRequest:
     session_id: str
     turn_id: str
     request_key: str
+    approval_summary_zh: str
     expected_project_version: int
     expected_workspace_snapshot_digest: str
     base_change_set_id: str | None
@@ -138,6 +141,43 @@ class BuilderWorkflowService:
             workspace_id=workspace_id,
         )
         phase = "drafting" if latest is None else latest.phase.value
+        repair_sources: dict[str, object] = {"items": [], "truncated": False}
+        repair_change_set_id = (
+            None
+            if latest is None
+            else latest.change_set_id
+            if latest.state is BuilderSubmissionState.SANDBOX_FAILED
+            else latest.base_change_set_id
+            if (
+                latest.state is BuilderSubmissionState.RUNNING
+                and latest.change_set_id is None
+                and latest.sandbox_result_id is None
+                and latest.task_id is None
+                and latest.receipt is None
+            )
+            else None
+        )
+        if repair_change_set_id is not None:
+            try:
+                failed_change_set = self.store.get_change_set(
+                    repair_change_set_id,
+                    owner=owner,
+                )
+                repair_sources = _repair_sources(
+                    Path(view.workspace.local_root),
+                    failed_change_set,
+                )
+            except KeyError:
+                # Older durable records may retain only the phase/receipt after
+                # their ChangeSet has been compacted.  Preserve the phase
+                # status; a repair can still be rejected later without
+                # manufacturing source content.
+                repair_sources = {"items": [], "truncated": False}
+            except (OSError, UnicodeError):
+                raise _error(
+                    "Builder repair sources are unavailable",
+                    "AGENT.BUILDER.BINDING_INVALID",
+                ) from None
         return AgentReadResult(
             result={
                 "phase": phase,
@@ -156,6 +196,7 @@ class BuilderWorkflowService:
                 "manifest": manifest,
                 "resource_envelope": _envelope_payload(envelope),
                 "last_submission": _submission_context(latest),
+                "repair_sources": repair_sources,
             },
             evidence_refs=(
                 f"project:{project_id}",
@@ -220,10 +261,20 @@ class BuilderWorkflowService:
                     "Initial Builder submission cannot name a base ChangeSet",
                     "AGENT.BUILDER.NO_PROGRESS",
                 )
-            if latest is not None and (
-                latest.state is not BuilderSubmissionState.SANDBOX_FAILED
-                or latest.turn_id != request.turn_id
-                or request.base_change_set_id != latest.change_set_id
+            continuing_repair = latest is not None and (
+                latest.state is BuilderSubmissionState.SANDBOX_FAILED
+                and request.base_change_set_id == latest.change_set_id
+            )
+            recovering_unfinished_draft = latest is not None and (
+                latest.state is BuilderSubmissionState.RUNNING
+                and latest.change_set_id is None
+                and latest.sandbox_result_id is None
+                and latest.task_id is None
+                and latest.receipt is None
+                and request.base_change_set_id == latest.base_change_set_id
+            )
+            if latest is not None and not (
+                continuing_repair or recovering_unfinished_draft
             ):
                 raise _error(
                     "Builder submission does not continue the latest phase",
@@ -338,16 +389,35 @@ class BuilderWorkflowService:
             ).encode()
         ).hexdigest()
         if sandbox_result.status != "succeeded":
+            repair_sources = _repair_sources(
+                Path(view.workspace.local_root),
+                change_set,
+            )
             receipt: dict[str, object] = {
                 "submission_id": record.submission_id,
                 "status": "repair_required",
                 "phase": BuilderPhase.SANDBOX_FAILED.value,
                 "next_action": "builder_build_submit",
+                "approval_summary_zh": request.approval_summary_zh,
                 "change_set_id": change_set.change_set_id,
                 "change_set_digest": change_set.digest,
                 "diff_sha256": diff_sha256,
                 "sandbox_result_id": sandbox_result.result_id,
                 "diagnostics": _sandbox_diagnostics(sandbox_result),
+                "next_submission": {
+                    "expected_project_version": view.project.version,
+                    "expected_workspace_snapshot_digest": (
+                        request.expected_workspace_snapshot_digest
+                    ),
+                    "base_change_set_id": change_set.change_set_id,
+                    "expected_source_digests": {
+                        item.path: item.after_sha256
+                        for item in change_set.files
+                        if item.after_sha256 is not None
+                    },
+                    "repair_sources": repair_sources,
+                    "request_key_policy": "new_for_changed_content",
+                },
             }
             failed = self.store.replace_builder_submission(
                 replace(
@@ -377,12 +447,14 @@ class BuilderWorkflowService:
             "status": "scheduled",
             "phase": BuilderPhase.VALIDATION_SCHEDULED.value,
             "next_action": None,
+            "approval_summary_zh": request.approval_summary_zh,
             "change_set_id": change_set.change_set_id,
             "change_set_digest": change_set.digest,
             "diff_sha256": diff_sha256,
             "sandbox_result_id": sandbox_result.result_id,
             "task_id": task.task_id,
             "task_state": task.state.value,
+            "next_submission": None,
         }
         scheduled = self.store.replace_builder_submission(
             replace(
@@ -415,6 +487,7 @@ class BuilderWorkflowService:
             session_id=request.session_id,
             project_id=request.project_id,
             workspace_id=request.workspace_id,
+            turn_id=request.turn_id,
         )
         if request.expected_workspace_snapshot_digest != view.workspace.snapshot.digest:
             raise _error(
@@ -453,10 +526,19 @@ class BuilderWorkflowService:
         session_id: str,
         project_id: str,
         workspace_id: str,
+        turn_id: str | None = None,
     ) -> None:
         try:
             session = self.agent_task_service.session_store.get_session(
                 session_id, owner=owner
+            )
+            turn = (
+                None
+                if turn_id is None
+                else self.agent_task_service.session_store.get_turn(
+                    turn_id,
+                    owner=owner,
+                )
             )
         except KeyError:
             raise _error(
@@ -467,6 +549,7 @@ class BuilderWorkflowService:
             session.profile_id != "experiment_builder"
             or session.source.get("project_id") != project_id
             or session.source.get("workspace_id") != workspace_id
+            or (turn is not None and turn.session_id != session_id)
         ):
             raise _error(
                 "Builder Session binding is invalid",
@@ -500,6 +583,7 @@ def _parse_build_request(arguments: Mapping[str, object]) -> _BuildRequest:
         "session_id",
         "turn_id",
         "request_key",
+        "approval_summary_zh",
         "expected_project_version",
         "expected_workspace_snapshot_digest",
         "base_change_set_id",
@@ -564,12 +648,16 @@ def _parse_build_request(arguments: Mapping[str, object]) -> _BuildRequest:
     session_id = _required_string(arguments, "session_id")
     turn_id = _required_string(arguments, "turn_id")
     request_key = _required_string(arguments, "request_key")
+    approval_summary_zh = _required_string(arguments, "approval_summary_zh")
+    if len(approval_summary_zh) > 4_000:
+        raise ValueError("Builder approval summary is too long")
     normalized = {
         "project_id": project_id,
         "workspace_id": workspace_id,
         "session_id": session_id,
         "turn_id": turn_id,
         "request_key": request_key,
+        "approval_summary_zh": approval_summary_zh,
         "expected_project_version": expected_version,
         "expected_workspace_snapshot_digest": snapshot_digest,
         "base_change_set_id": base_change_set_id,
@@ -589,6 +677,7 @@ def _parse_build_request(arguments: Mapping[str, object]) -> _BuildRequest:
         session_id=session_id,
         turn_id=turn_id,
         request_key=request_key,
+        approval_summary_zh=approval_summary_zh,
         expected_project_version=expected_version,
         expected_workspace_snapshot_digest=snapshot_digest,
         base_change_set_id=base_change_set_id,
@@ -604,8 +693,10 @@ def _validations(
     sandbox = [item for item in blueprint.validations if item.execution == "sandbox"]
     slurm = [item for item in blueprint.validations if item.execution == "slurm"]
     if len(sandbox) != 1 or len(slurm) != 1 or len(blueprint.validations) != 2:
-        raise ValueError(
-            "Builder Blueprint must declare one Sandbox and one Slurm validation"
+        raise _error(
+            "Builder Blueprint must declare exactly one sandbox validation "
+            "and one Slurm validation",
+            "AGENT.BUILDER.VALIDATIONS_INVALID",
         )
     return sandbox[0], slurm[0]
 
@@ -703,6 +794,41 @@ def _bounded_output(value: str) -> str:
     if len(encoded) <= _MAX_DIAGNOSTIC_BYTES:
         return value
     return encoded[:_MAX_DIAGNOSTIC_BYTES].decode("utf-8", errors="replace")
+
+
+def _repair_sources(
+    workspace_root: Path,
+    change_set: WorkspaceChangeSet,
+) -> dict[str, object]:
+    root = workspace_root.resolve(strict=True)
+    items: list[dict[str, object]] = []
+    remaining = _MAX_REPAIR_SOURCE_BYTES
+    truncated = False
+    candidates = [item for item in change_set.files if item.after_sha256 is not None]
+    for index, item in enumerate(candidates):
+        if index >= _MAX_REPAIR_SOURCE_FILES or remaining <= 0:
+            truncated = True
+            break
+        relative = PurePosixPath(item.path)
+        target = root.joinpath(*relative.parts).resolve(strict=True)
+        if not target.is_relative_to(root) or not target.is_file():
+            raise OSError("Builder repair source is unavailable")
+        data = target.read_bytes()
+        bounded = data[:remaining]
+        item_truncated = len(bounded) < len(data)
+        items.append(
+            {
+                "path": item.path,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "content": bounded.decode("utf-8"),
+                "truncated": item_truncated,
+            }
+        )
+        remaining -= len(bounded)
+        if item_truncated:
+            truncated = True
+            break
+    return {"items": items, "truncated": truncated}
 
 
 def _record_result(record: BuilderSubmissionRecord) -> AgentReadResult:

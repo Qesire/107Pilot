@@ -1,0 +1,61 @@
+
+> pilot107-ui@0.1.0 test:ui
+> npm run build && playwright test
+
+
+> pilot107-ui@0.1.0 build
+> vite build --config apps/web/vite.config.mts
+
+vite v6.4.3 building for production...
+transforming...
+node_modules/@daybrush/utils/dist/utils.esm.js (158:30): A comment
+
+"/*#__PURE__*/"
+
+in "node_modules/@daybrush/utils/dist/utils.esm.js" contains an annotation that Rollup cannot interpret due to the position of the comment. The comment will be removed to avoid issues.
+✓ 2428 modules transformed.
+rendering chunks...
+computing gzip size...
+../../src/pilot107/web/static/index.html                    0.59 kB │ gzip:   0.40 kB
+../../src/pilot107/web/static/assets/styles.css           104.62 kB │ gzip:  19.46 kB
+../../src/pilot107/web/static/assets/chunk-Dze4SSin.js     34.22 kB │ gzip:  10.97 kB
+../../src/pilot107/web/static/assets/chunk-CQcISqUI.js    438.46 kB │ gzip: 144.61 kB
+../../src/pilot107/web/static/assets/app.js             1,875.52 kB │ gzip: 597.14 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 6.71s
+
+Running 23 tests using 2 workers
+
+(node:994573) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:994574) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › tests/ui/files.spec.js:92:1 › defaults to one column pane rooted at home (943ms)
+  ✓   2 [chromium] › tests/ui/visual.spec.js:12:1 › workspace renders live run and platform read models (1.2s)
+  ✓   4 [chromium] › tests/ui/visual.spec.js:23:1 › run filters are URL-controlled and narrow the server query (642ms)
+  ✓   3 [chromium] › tests/ui/files.spec.js:100:1 › panes navigate independently (1.2s)
+  ✓   5 [chromium] › tests/ui/visual.spec.js:34:1 › run deep link survives direct navigation and wraps long workdir (898ms)
+  ✓   6 [chromium] › tests/ui/files.spec.js:116:1 › splitting adds a pane and the layout survives a reload (1.3s)
+  ✓   7 [chromium] › tests/ui/visual.spec.js:46:1 › successful run exposes shareable logs, results, and verified capsule (1.3s)
+  ✓   8 [chromium] › tests/ui/files.spec.js:128:1 › closing a pane removes it but keeps at least one (1.1s)
+  ✓   9 [chromium] › tests/ui/visual.spec.js:65:1 › run detail makes an omitted workdir explicit (827ms)
+  ✓  10 [chromium] › tests/ui/files.spec.js:139:1 › grid view toggles to a list view per pane (974ms)
+  ✓  11 [chromium] › tests/ui/visual.spec.js:72:1 › switching user updates URL and invalidates scoped queries (729ms)
+  ✓  13 [chromium] › tests/ui/visual.spec.js:82:1 › an untrusted URL user is normalized before it reaches API or shell output (753ms)
+  ✓  12 [chromium] › tests/ui/files.spec.js:150:1 › ctrl-click builds a multi-selection with an action bar (1.0s)
+  ✓  14 [chromium] › tests/ui/visual.spec.js:90:1 › stale and degraded dynamic facts remain explicit (621ms)
+  ✓  16 [chromium] › tests/ui/visual.spec.js:98:1 › forbidden capability scope renders an authorization state (560ms)
+  ✓  15 [chromium] › tests/ui/files.spec.js:161:1 › marquee drag over empty grid area selects the tiles it covers (1.2s)
+  ✓  17 [chromium] › tests/ui/visual.spec.js:106:1 › mobile layout exposes primary destinations without horizontal overflow (729ms)
+  ✓  18 [chromium] › tests/ui/files.spec.js:189:1 › dragging a file onto another pane's directory moves it (1.2s)
+  ✓  19 [chromium] › tests/ui/visual.spec.js:117:1 › studio requires server validation before creating a canonical contract (1.2s)
+  ✓  20 [chromium] › tests/ui/visual.spec.js:130:1 › dirty source is not silently overwritten by a basic form update (705ms)
+  ✓  21 [chromium] › tests/ui/visual.spec.js:140:1 › market release adoption opens the server-created canonical contract (1.9s)
+  ✓  22 [chromium] › tests/ui/visual.spec.js:153:1 › persisted contract requires object-level confirmation before submit (1.1s)
+  ✓  23 [chromium] › tests/ui/visual.spec.js:165:1 › Agent separates durable read-only conversation from controlled repair (1.6s)
+
+  23 passed (15.9s)

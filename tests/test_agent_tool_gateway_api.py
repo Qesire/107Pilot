@@ -10,7 +10,11 @@ from pilot107.agent.capabilities import AgentCapabilityClaims, AgentCapabilitySi
 from pilot107.agent.protocol import TOOL_INVOCATION_PROTOCOL_VERSION
 from pilot107.agent.store import SQLiteAgentSessionStore
 from pilot107.agent.tasks import AgentResourceEnvelope
-from pilot107.agent.tool_gateway import AgentReadResult, AgentToolGateway
+from pilot107.agent.tool_gateway import (
+    AgentReadResult,
+    AgentToolGateway,
+    AgentToolGatewayError,
+)
 from pilot107.api.asgi_app import build_asgi_app
 from pilot107.api.http_app import build_api
 from pilot107.api.service import build_api_service, config_from_env
@@ -118,6 +122,72 @@ def test_private_route_parses_one_invocation_and_returns_one_result(tmp_path: Pa
     assert response.payload["result"] == {"run_id": "run-1", "state": "pending"}
     assert response.payload["evidence_refs"] == ["run:run-1"]
     assert reads == ["alice"]
+
+
+def test_private_route_returns_a_closed_tool_result_for_actionable_gateway_error(
+    tmp_path: Path,
+) -> None:
+    api, token, payload, _ = _configured_api(tmp_path)
+
+    def reject_changed_request_key(_owner, _arguments):
+        raise AgentToolGatewayError(
+            "private implementation detail",
+            code="AGENT.BUILDER.IDEMPOTENCY_CONFLICT",
+        )
+
+    assert api.agent_tool_routes is not None
+    api.agent_tool_routes.gateway.handlers["run_get"] = reject_changed_request_key
+
+    response = api.handle_post(
+        "/internal/v1/agent-tools/invoke",
+        body=json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+
+    assert response.status == 409
+    assert response.payload == {
+        "schema_version": "pilot107.agent-tool-result/v1",
+        "invocation_id": payload["invocation_id"],
+        "result": None,
+        "error": {
+            "code": "AGENT.BUILDER.IDEMPOTENCY_CONFLICT",
+            "message": "Builder request key conflicts with different content",
+            "retryable": False,
+        },
+        "evidence_refs": [],
+        "bytes_returned": 0,
+    }
+    assert "private implementation detail" not in json.dumps(response.payload)
+
+
+def test_private_route_explains_invalid_builder_validations(tmp_path: Path) -> None:
+    api, token, payload, _ = _configured_api(tmp_path)
+
+    def reject_invalid_validations(_owner, _arguments):
+        raise AgentToolGatewayError(
+            "private implementation detail",
+            code="AGENT.BUILDER.VALIDATIONS_INVALID",
+        )
+
+    assert api.agent_tool_routes is not None
+    api.agent_tool_routes.gateway.handlers["run_get"] = reject_invalid_validations
+
+    response = api.handle_post(
+        "/internal/v1/agent-tools/invoke",
+        body=json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+
+    assert response.status == 400
+    assert response.payload["error"] == {
+        "code": "AGENT.BUILDER.VALIDATIONS_INVALID",
+        "message": (
+            "Builder Blueprint must declare exactly one sandbox validation "
+            "and one Slurm validation"
+        ),
+        "retryable": False,
+    }
+    assert "private implementation detail" not in json.dumps(response.payload)
 
 
 def test_private_route_caps_body_and_stays_out_of_openapi(tmp_path: Path) -> None:

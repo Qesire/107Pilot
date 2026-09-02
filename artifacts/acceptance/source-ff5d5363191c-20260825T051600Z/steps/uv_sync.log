@@ -1,0 +1,4 @@
+Resolved 68 packages in 0.87ms
+Uninstalled 2 packages in 6ms
+ - psycopg==3.3.4
+ - psycopg-binary==3.3.4

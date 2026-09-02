@@ -118,6 +118,43 @@ def test_blank_project_is_idempotent_and_owner_scoped(tmp_path: Path) -> None:
         service.get_project(first.project.project_id, owner="bob")
 
 
+def test_workspace_patch_returns_the_bound_chinese_approval_summary(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path)
+    created = service.create_project(
+        owner="alice",
+        origin="blank",
+        goal="build an experiment",
+        request_key="blank-summary",
+    )
+    handler = service.build_tool_handlers()["workspace_patch"]
+    arguments = {
+        "project_id": created.project.project_id,
+        "workspace_id": created.workspace.workspace_id,
+        "approval_summary_zh": "创建 main.py，供用户审阅后再发布。",
+        "patches": [
+            {
+                "path": "main.py",
+                "expected_source_digest": None,
+                "operation": "create",
+                "content": "print('hello')\n",
+            }
+        ],
+    }
+
+    result = handler("alice", arguments)
+
+    assert result.result["approval_summary_zh"] == "创建 main.py，供用户审阅后再发布。"
+    assert str(result.result["change_set_id"]).startswith("changeset-")
+    with pytest.raises(AgentToolGatewayError) as missing:
+        handler(
+            "alice",
+            {key: value for key, value in arguments.items() if key != "approval_summary_zh"},
+        )
+    assert missing.value.code == "AGENT.TOOL.INVALID"
+
+
 def test_blueprint_patch_diff_and_sandbox_form_reviewable_view(tmp_path: Path) -> None:
     service = _service(tmp_path)
     created = service.create_project(

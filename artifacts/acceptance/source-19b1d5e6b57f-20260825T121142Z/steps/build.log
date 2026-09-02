@@ -1,0 +1,25 @@
+
+> pilot107-ui@0.1.0 build
+> vite build --config apps/web/vite.config.mts
+
+vite v6.4.3 building for production...
+transforming...
+node_modules/@daybrush/utils/dist/utils.esm.js (158:30): A comment
+
+"/*#__PURE__*/"
+
+in "node_modules/@daybrush/utils/dist/utils.esm.js" contains an annotation that Rollup cannot interpret due to the position of the comment. The comment will be removed to avoid issues.
+✓ 2431 modules transformed.
+rendering chunks...
+computing gzip size...
+../../src/pilot107/web/static/index.html                    0.59 kB │ gzip:   0.40 kB
+../../src/pilot107/web/static/assets/styles.css           110.33 kB │ gzip:  20.41 kB
+../../src/pilot107/web/static/assets/chunk-Dze4SSin.js     34.22 kB │ gzip:  10.97 kB
+../../src/pilot107/web/static/assets/chunk-CQcISqUI.js    438.46 kB │ gzip: 144.61 kB
+../../src/pilot107/web/static/assets/app.js             1,892.93 kB │ gzip: 602.36 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 5.08s

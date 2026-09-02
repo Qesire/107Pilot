@@ -1,0 +1,6 @@
+{
+  "case_id": "LIVE-00",
+  "url": "http://127.0.0.1:13000/projects?user=alice",
+  "outcome": "PASS",
+  "user": "alice"
+}

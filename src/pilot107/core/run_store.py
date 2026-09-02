@@ -1025,6 +1025,7 @@ class RunStore:
         event_type: str,
         lease_owner: str,
         fencing_token: int,
+        failure_reason: str | None = None,
     ) -> RunRecord:
         if state not in {RunState.SUBMIT_FAILED, RunState.SUBMISSION_UNCERTAIN}:
             raise ValueError("submission failure state is invalid")
@@ -1057,6 +1058,8 @@ class RunStore:
                     "state": state.value,
                     "lease_owner": lease_owner,
                     "fencing_token": fencing_token,
+                    **({"failure_reason": _bounded_event_reason(failure_reason)}
+                       if failure_reason else {}),
                 },
             )
         return self.get_run(run_id)
@@ -1113,7 +1116,14 @@ class RunStore:
             self._refresh_collection_state(conn, run_id)
         return self.get_run(run_id)
 
-    def update_state(self, run_id: str, state: RunState, *, event_type: str) -> RunRecord:
+    def update_state(
+        self,
+        run_id: str,
+        state: RunState,
+        *,
+        event_type: str,
+        failure_reason: str | None = None,
+    ) -> RunRecord:
         now = utc_now_iso()
         with self.connect() as conn:
             conn.execute(
@@ -1124,7 +1134,11 @@ class RunStore:
                 conn,
                 run_id=run_id,
                 event_type=event_type,
-                payload={"state": state.value},
+                payload={
+                    "state": state.value,
+                    **({"failure_reason": _bounded_event_reason(failure_reason)}
+                       if failure_reason else {}),
+                },
             )
         return self.get_run(run_id)
 

@@ -1,0 +1,4 @@
+
+> pilot107-ui@0.1.0 typecheck
+> tsc --project apps/web/tsconfig.json --noEmit
+

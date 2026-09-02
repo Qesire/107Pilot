@@ -1,0 +1,327 @@
+{
+  "capacity": {
+    "active_watches": 100,
+    "concurrent_turns": 10,
+    "idle_sessions": 100,
+    "max_bytes_per_tool_result": 65536,
+    "max_bytes_per_turn": 1048576,
+    "max_commands_per_turn": 32
+  },
+  "case_results": {
+    "artifact_aware_array_recovery": "PASS",
+    "blank_project_gold_path": "PASS",
+    "capacity_active_watches": "PASS",
+    "capacity_concurrent_turns": "PASS",
+    "capacity_idle_sessions": "PASS",
+    "connection_command_and_byte_budgets": "PASS",
+    "failed_run_code_repair": "PASS",
+    "large_file_metadata_only": "PASS",
+    "long_pending_turn_release": "PASS",
+    "market_application_and_publication": "PASS",
+    "model_unavailable_deterministic_fallback": "PASS",
+    "publish_conflict": "PASS",
+    "resource_missingness_and_summary": "PASS",
+    "runtime_log_replay_and_terminal_drain": "PASS",
+    "two_owner_isolation": "PASS",
+    "worker_agentd_browser_restart": "PASS"
+  },
+  "cases": [
+    "blank_project_gold_path",
+    "failed_run_code_repair",
+    "long_pending_turn_release",
+    "runtime_log_replay_and_terminal_drain",
+    "resource_missingness_and_summary",
+    "publish_conflict",
+    "worker_agentd_browser_restart",
+    "two_owner_isolation",
+    "market_application_and_publication",
+    "model_unavailable_deterministic_fallback",
+    "large_file_metadata_only",
+    "artifact_aware_array_recovery",
+    "capacity_idle_sessions",
+    "capacity_concurrent_turns",
+    "capacity_active_watches",
+    "connection_command_and_byte_budgets"
+  ],
+  "ended_at": "2026-08-25T03:16:48+00:00",
+  "environment": "D1",
+  "generated_at": "2026-08-25T03:16:48+00:00",
+  "images": [
+    {
+      "image_id": "sha256:a9b100ea0ee775be122e42f14d6ac3bece3e7d1065cf92b76c2aaf7ae39db246",
+      "reference": "pilot107/api:lifecycle-a54425d31f19",
+      "variable": "PILOT107_API_IMAGE"
+    },
+    {
+      "image_id": "sha256:a9b100ea0ee775be122e42f14d6ac3bece3e7d1065cf92b76c2aaf7ae39db246",
+      "reference": "pilot107/worker:lifecycle-a54425d31f19",
+      "variable": "PILOT107_WORKER_IMAGE"
+    },
+    {
+      "image_id": "sha256:a9b100ea0ee775be122e42f14d6ac3bece3e7d1065cf92b76c2aaf7ae39db246",
+      "reference": "pilot107/web:lifecycle-a54425d31f19",
+      "variable": "PILOT107_WEB_IMAGE"
+    },
+    {
+      "image_id": "sha256:22b77dbe7f3dbddc14404562bdaeec3193268cd8cf431a8d676cf714f93536d3",
+      "reference": "pilot107/agentd:lifecycle-a54425d31f19",
+      "variable": "PILOT107_AGENTD_IMAGE"
+    }
+  ],
+  "mode": "acceptance",
+  "process_exit_code": 0,
+  "profile": "runtime",
+  "release_revision": "a54425d31f19114610d088953fdeda67938a4bd8",
+  "schema": "pilot107.agent-lifecycle-acceptance/v1",
+  "stack_policy": {
+    "backend": "docker-slurm-25.11.2-simulator",
+    "clean_after": true,
+    "clean_before": true
+  },
+  "started_at": "2026-08-25T03:12:39+00:00",
+  "status": "PASS",
+  "steps": [
+    {
+      "cases": [],
+      "command": [
+        "docker",
+        "compose",
+        "--env-file",
+        "simulator/compose/.env.example",
+        "-f",
+        "simulator/compose/compose.yml",
+        "--profile",
+        "apps",
+        "down",
+        "--volumes",
+        "--remove-orphans"
+      ],
+      "ended_at": "2026-08-25T03:12:41+00:00",
+      "log_path": "runtime-steps/clean_stack_before.log",
+      "log_sha256": "ed9443f82633ab3ee46759e4ffa290bda74640da8d54f6d83b4c18140789e5fa",
+      "name": "clean_stack_before",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:12:39+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [],
+      "command": [
+        "bash",
+        "scripts/build-app-images.sh"
+      ],
+      "ended_at": "2026-08-25T03:12:44+00:00",
+      "log_path": "runtime-steps/build_app_images.log",
+      "log_sha256": "d83ccb1626e1d578a6a8a14ba19466914402f92c00e29cbea5cd6aa69004ce87",
+      "name": "build_app_images",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:12:41+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [],
+      "command": [
+        "bash",
+        "scripts/check-app-images.sh"
+      ],
+      "ended_at": "2026-08-25T03:12:46+00:00",
+      "log_path": "runtime-steps/check_app_images.log",
+      "log_sha256": "ee71c36e4f1693e2c92414318b139137fce54383a03010ebdeb4870c552de7a7",
+      "name": "check_app_images",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:12:44+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [],
+      "command": [
+        "bash",
+        "scripts/start-sim-core.sh"
+      ],
+      "ended_at": "2026-08-25T03:13:19+00:00",
+      "log_path": "runtime-steps/bootstrap_sim_core.log",
+      "log_sha256": "d35650f531981ce6831193d0d7d5f2940b3e578fc218f13bf7a022b3e6a54ade",
+      "name": "bootstrap_sim_core",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:12:46+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "worker_agentd_browser_restart",
+        "two_owner_isolation",
+        "capacity_idle_sessions",
+        "capacity_concurrent_turns",
+        "connection_command_and_byte_budgets"
+      ],
+      "command": [
+        "bash",
+        "scripts/fault-pilot-agent-a1.sh"
+      ],
+      "ended_at": "2026-08-25T03:14:39+00:00",
+      "log_path": "runtime-steps/agent_restart_owner_capacity.log",
+      "log_sha256": "786c0b94bb1f8413d5bcc5d0af3dd84c336cb5e50d21cf2f7783086a20ccc2ac",
+      "name": "agent_restart_owner_capacity",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:13:19+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "long_pending_turn_release"
+      ],
+      "command": [
+        "bash",
+        "scripts/smoke-pilot-agent-a3-live.sh"
+      ],
+      "ended_at": "2026-08-25T03:14:47+00:00",
+      "log_path": "runtime-steps/long_pending_turn_release.log",
+      "log_sha256": "c1dbf1ebd1ea4860d6c147709a2ee64b96d9e9815abaccc69fbe4abb8183b5fd",
+      "name": "long_pending_turn_release",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:14:39+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "blank_project_gold_path",
+        "publish_conflict",
+        "runtime_log_replay_and_terminal_drain"
+      ],
+      "command": [
+        "bash",
+        "scripts/smoke-pilot-agent-a4-live.sh"
+      ],
+      "ended_at": "2026-08-25T03:15:03+00:00",
+      "log_path": "runtime-steps/formal_run_publication_watch.log",
+      "log_sha256": "d20e96589915a40da0c5a35214196abf86653b35eb1d0b4157bda39491dfe674",
+      "name": "formal_run_publication_watch",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:14:47+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "resource_missingness_and_summary"
+      ],
+      "command": [
+        "bash",
+        "scripts/smoke-observability-live.sh"
+      ],
+      "ended_at": "2026-08-25T03:15:20+00:00",
+      "log_path": "runtime-steps/resource_observation.log",
+      "log_sha256": "9309e7ec970c0dbd042471d9b9085714984b9f7eba824f7340e9eaaa904471ca",
+      "name": "resource_observation",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:15:03+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "failed_run_code_repair"
+      ],
+      "command": [
+        "bash",
+        "scripts/smoke-pilot-agent-repair-live.sh"
+      ],
+      "ended_at": "2026-08-25T03:15:38+00:00",
+      "log_path": "runtime-steps/failed_run_repair.log",
+      "log_sha256": "d090f5b77abc40243b8202d248e72727c63a27a36430afa31382e6fe3d5e05b9",
+      "name": "failed_run_repair",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:15:20+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "market_application_and_publication"
+      ],
+      "command": [
+        "bash",
+        "scripts/smoke-pilot-agent-market-live.sh"
+      ],
+      "ended_at": "2026-08-25T03:15:49+00:00",
+      "log_path": "runtime-steps/market_lifecycle.log",
+      "log_sha256": "400acf5afc203878877209343dc9a2f8b6d5a16bf12724a218bc8ef3bcfd66e8",
+      "name": "market_lifecycle",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:15:38+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "artifact_aware_array_recovery"
+      ],
+      "command": [
+        "bash",
+        "scripts/smoke-experiment-pipeline-live.sh"
+      ],
+      "ended_at": "2026-08-25T03:16:07+00:00",
+      "log_path": "runtime-steps/artifact_array_recovery.log",
+      "log_sha256": "cf80459ffe9c603b6a0c939a10a446e7304583242995bc5feb7bc5f7afd7459c",
+      "name": "artifact_array_recovery",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:15:49+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "capacity_active_watches",
+        "runtime_log_replay_and_terminal_drain"
+      ],
+      "command": [
+        "bash",
+        "scripts/smoke-runtime-watch-live.sh"
+      ],
+      "ended_at": "2026-08-25T03:16:10+00:00",
+      "log_path": "runtime-steps/runtime_watch_capacity.log",
+      "log_sha256": "4c0ba2d8e00a09d7d0c9efe0597fcc0d645ddf94093582c7d85fe2cf447d63a3",
+      "name": "runtime_watch_capacity",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:16:07+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "model_unavailable_deterministic_fallback",
+        "large_file_metadata_only"
+      ],
+      "command": [
+        "bash",
+        "scripts/smoke-agent-lifecycle-boundaries-live.sh"
+      ],
+      "ended_at": "2026-08-25T03:16:46+00:00",
+      "log_path": "runtime-steps/model_and_large_file_boundaries.log",
+      "log_sha256": "5940c265b3f7b4cca0809a651a22c0a84fad1129f07065fee9ddf236a1d738c9",
+      "name": "model_and_large_file_boundaries",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:16:10+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [],
+      "command": [
+        "docker",
+        "compose",
+        "--env-file",
+        "simulator/compose/.env.example",
+        "-f",
+        "simulator/compose/compose.yml",
+        "--profile",
+        "apps",
+        "down",
+        "--volumes",
+        "--remove-orphans"
+      ],
+      "ended_at": "2026-08-25T03:16:47+00:00",
+      "log_path": "runtime-steps/clean_stack_after.log",
+      "log_sha256": "697145ae7496cbbff91b50d120a498d6969298f50d51329699f66f292f6892c6",
+      "name": "clean_stack_after",
+      "returncode": 0,
+      "started_at": "2026-08-25T03:16:46+00:00",
+      "status": "PASS"
+    }
+  ],
+  "tracked_worktree_clean": true,
+  "untracked_files_status": "?? .slim/hif4_reformatted.docx\n?? .slim/hif4_v2.docx\n?? .slim/hif4_v3.docx\n?? 300\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-report.json\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/agent_restart_owner_capacity.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/artifact_array_recovery.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/bootstrap_sim_core.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/build_app_images.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/check_app_images.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/clean_stack_after.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/clean_stack_before.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/failed_run_repair.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/formal_run_publication_watch.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/long_pending_turn_release.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/market_lifecycle.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/model_and_large_file_boundaries.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/resource_observation.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/runtime_watch_capacity.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/agent_restart_owner_capacity.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/build_app_images.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/check_app_images.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/clean_stack_before.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/formal_run_publication_watch.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/long_pending_turn_release.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-report.json\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/agentd_build.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/agentd_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/agentd_unit.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/compose_config.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/python_lint.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/python_types.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/python_unit.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/schema_contracts.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/sim_core.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/web_browser.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/web_build.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/web_static_drift.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/web_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/web_unit.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/agent_restart_owner_capacity.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/artifact_array_recovery.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/bootstrap_sim_core.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/build_app_images.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/check_app_images.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/clean_stack_after.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/clean_stack_before.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/failed_run_repair.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/formal_run_publication_watch.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/long_pending_turn_release.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/market_lifecycle.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/model_and_large_file_boundaries.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/resource_observation.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/runtime_watch_capacity.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/r1-report.json\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/s1-report.json\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-report.json\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/agentd_build.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/agentd_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/agentd_unit.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/compose_config.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/python_lint.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/python_types.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/python_unit.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/schema_contracts.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/sim_core.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_browser.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_build.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_static_drift.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_unit.log\n?? artifacts/qa/task14/screenshots/agent-projects.png\n?? artifacts/qa/task14/screenshots/approval-after.png\n?? artifacts/qa/task14/screenshots/approval-before.png\n?? artifacts/qa/task14/screenshots/initial.png\n?? artifacts/qa/task14/screenshots/project-created-live.png\n?? artifacts/qa/task14/screenshots/project-created.png\n?? artifacts/qa/task14/screenshots/project-mode-empty.png\n?? artifacts/qa/task14/screenshots/reconnect.png\n"
+}

@@ -84,6 +84,20 @@ def test_cpu_rc_propagates_phase_aware_builder_to_all_agent_services() -> None:
         )
 
 
+def test_local_dev_overlay_pins_live_source_mounts_and_phase_aware_builder() -> None:
+    services = _services("compose.local-dev.yml")
+
+    for service_name in ("pilot107-api", "pilot107-worker", "pilot107-web"):
+        service = services[service_name]
+        assert "../../src:/opt/pilot107/src:ro" in service["volumes"]
+        assert _environment(service)["PILOT107_PHASE_AWARE_BUILDER"] == "1"
+    agentd = services["pilot-agentd"]
+    assert "../../services/pilot-agentd/dist:/opt/pilot-agentd/dist:ro" in (
+        agentd["volumes"]
+    )
+    assert _environment(agentd)["PILOT107_PHASE_AWARE_BUILDER"] == "1"
+
+
 @pytest.mark.parametrize("compose_name", ["compose.yml", "compose.competition-app-node.yml"])
 def test_api_runtime_configures_the_required_outer_bwrap_boundary(
     compose_name: str,

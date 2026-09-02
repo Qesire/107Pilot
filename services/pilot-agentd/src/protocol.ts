@@ -455,6 +455,15 @@ export const A2_PROJECT_TOOL_NAMES = [
   "validation_schedule",
 ] as const;
 
+export const PROJECT_WORKSPACE_TOOL_NAMES = [
+  "project_get",
+  "workspace_list",
+  "workspace_read",
+  "workspace_patch",
+  "workspace_diff",
+  "sandbox_exec",
+] as const;
+
 export const BUILDER_WORKFLOW_TOOL_NAMES = [
   "builder_context_get",
   "builder_build_submit",
@@ -785,14 +794,14 @@ export function parseToolInvocation(value: unknown): ToolInvocation {
   if (!Value.Check(ToolInvocationSchema, value)) {
     throw new TypeError(validationMessage("tool invocation", ToolInvocationSchema, value));
   }
-  const allowed = [
-    "experiment_builder",
-    "run_diagnosis_repair",
-    "market_application",
-    "template_publication",
-  ]
-    .includes(value.profile_id)
+  const allowed = value.profile_id === "experiment_builder"
     ? [...A2_PROJECT_TOOL_NAMES, ...BUILDER_WORKFLOW_TOOL_NAMES]
+    : [
+      "run_diagnosis_repair",
+      "market_application",
+      "template_publication",
+    ].includes(value.profile_id)
+    ? PROJECT_WORKSPACE_TOOL_NAMES
     : A1_READ_TOOL_NAMES;
   if (!(allowed as readonly string[]).includes(value.tool_name)) {
     throw new TypeError("tool invocation profile/tool pairing is invalid");

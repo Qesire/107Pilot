@@ -1,0 +1,9 @@
+
+> pilot107-ui@0.1.0 test:ui
+> npm run build && playwright test
+
+
+> pilot107-ui@0.1.0 build
+> vite build --config apps/web/vite.config.mts
+
+sh: 1: vite: not found

@@ -1,0 +1,3 @@
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/proxy-hmac.local
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/agent-capability-hmac.local
+base, competition, slurm-host, and app-node compose configs ok

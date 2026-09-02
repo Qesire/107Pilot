@@ -930,8 +930,17 @@ class ProjectAgentService:
         )
 
     def _tool_workspace_patch(self, owner: str, arguments: Mapping[str, object]) -> AgentReadResult:
-        _closed(arguments, {"project_id", "workspace_id", "patches"})
+        _closed(
+            arguments,
+            {"project_id", "workspace_id", "approval_summary_zh", "patches"},
+        )
         project_id, workspace_id = _scope(arguments)
+        approval_summary_zh = _required_string(arguments, "approval_summary_zh")
+        if len(approval_summary_zh) > 4_000:
+            raise _tool_error(
+                "approval_summary_zh is invalid",
+                "AGENT.TOOL.INVALID",
+            )
         raw_patches = arguments.get("patches")
         if not isinstance(raw_patches, list) or not 1 <= len(raw_patches) <= 256:
             raise _tool_error("workspace patches are invalid", "AGENT.TOOL.INVALID")
@@ -958,7 +967,10 @@ class ProjectAgentService:
             patches=tuple(patches),
         )
         return AgentReadResult(
-            result=change_set_payload(change_set),
+            result={
+                **change_set_payload(change_set),
+                "approval_summary_zh": approval_summary_zh,
+            },
             evidence_refs=(f"changeset:{change_set.change_set_id}",),
         )
 

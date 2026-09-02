@@ -1,0 +1,67 @@
+........................................................................ [  5%]
+............................s............s.............................. [ 10%]
+...........................................................s............ [ 15%]
+........................................................................ [ 20%]
+..........................................s....................s........ [ 25%]
+....F.......................................................... [ 29%]
+........................................................................ [ 34%]
+........................................................................ [ 39%]
+.................................................sssssssssssss.... [ 44%]
+........................................................................ [ 49%]
+.................................................................. [ 54%]
+........................................................................ [ 59%]
+.........sss............................................................ [ 64%]
+............................................................sss......... [ 69%]
+............................................................ [ 73%]
+........................................................................ [ 78%]
+........................................................................ [ 83%]
+........................................................................ [ 88%]
+..................................................................... [ 93%]
+........................................................................ [ 98%]
+.....................                                                    [100%]
+=================================== FAILURES ===================================
+_ AgentAdviceTests.test_profile_resolves_null_partition_memory_and_time_limit __
+
+self = <test_advice.AgentAdviceTests testMethod=test_profile_resolves_null_partition_memory_and_time_limit>
+
+    def test_profile_resolves_null_partition_memory_and_time_limit(self) -> None:
+        profile = load_capability_profile(CPU_RC_PROFILE_PATH)
+        service = self._profiled_service(profile=profile)
+    
+        # INVALID_PARTITION -> default_partition="CPU-RC".
+        run_part = self._ready_run_profiled(
+            run_id="run_part_resolve",
+            patch={"resources.partition": None},
+            service=service,
+        )
+        action_part = service.advise(run_part.run_id).record.payload["actions"][0]
+        self.assertEqual(action_part["policy_status"], "allowed_preview")
+        self.assertEqual(action_part["proposed_patch"]["resources.partition"], "CPU-RC")
+    
+        # OOM -> max_memory_gb=15 -> "15G" on the current VM demo profile.
+        run_oom = self._ready_run_profiled(
+            run_id="run_oom_resolve",
+            patch={"resources.memory": None},
+            service=service,
+        )
+        action_oom = service.advise(run_oom.run_id).record.payload["actions"][0]
+        self.assertEqual(action_oom["policy_status"], "allowed_preview")
+>       self.assertEqual(action_oom["proposed_patch"]["resources.memory"], "15G")
+E       AssertionError: '10G' != '15G'
+E       - 10G
+E       ?  ^
+E       + 15G
+E       ?  ^
+
+tests/test_advice.py:258: AssertionError
+=============================== warnings summary ===============================
+tests/test_command_gateway.py::CommandGatewayTests::test_extract_valid_archive_reports_member_count
+tests/test_file_ops_executor.py::LocalFileOpsExecutorTests::test_extract_valid_archive
+tests/test_file_uploads.py::FileUploadServiceTests::test_auto_extract_writes_and_extracts
+  /usr/lib/python3.12/tarfile.py:2301: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_advice.py::AgentAdviceTests::test_profile_resolves_null_partition_memory_and_time_limit
+1 failed, 1400 passed, 24 skipped, 3 warnings, 36 subtests passed in 112.41s (0:01:52)

@@ -3857,7 +3857,11 @@ def _finalize_response(
     response_headers = dict(response.headers or {})
     response_headers["X-Request-ID"] = request_id
     payload = response.payload
-    if response.status >= 400 and "error" in payload:
+    if (
+        response.status >= 400
+        and "error" in payload
+        and payload.get("schema_version") != "pilot107.agent-tool-result/v1"
+    ):
         error = payload.get("error")
         if isinstance(error, dict):
             payload = {**payload, "error": {**error, "request_id": request_id}}

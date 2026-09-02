@@ -1,0 +1,5 @@
+
+> pilot107-ui@0.1.0 test
+> vitest run --config apps/web/vite.config.mts --run
+
+sh: 1: vitest: not found

@@ -1,0 +1,15 @@
+ Container pilot107-sim-mariadb-1 Running 
+ Container pilot107-sim-slurmdbd-1 Running 
+ Container pilot107-sim-slurmctld-1 Running 
+ Container pilot107-sim-worker-2-1 Running 
+ Container pilot107-sim-login-node-sim-1 Running 
+ Container pilot107-sim-worker-1-1 Running 
+ Container pilot107-sim-mariadb-1 Waiting 
+ Container pilot107-sim-mariadb-1 Healthy 
+ Container pilot107-sim-slurmctld-1 Restarting 
+ Container pilot107-sim-worker-1-1 Restarting 
+ Container pilot107-sim-worker-2-1 Restarting 
+ Container pilot107-sim-worker-2-1 Started 
+ Container pilot107-sim-worker-1-1 Started 
+ Container pilot107-sim-slurmctld-1 Started 
+{"blank_project_gold_path": true, "browser_store_reconnect_recovered": true, "cancelled_run": {"job_id": "6", "run_id": "run_formal_ef9a8536198f925a0bcdecc8", "state": "CANCELLED"}, "failed_run": {"exit_code": "42:0", "job_id": "5", "run_id": "run_formal_8515a86370c492e8ea33ca49", "state": "FAILED"}, "publish_conflict": true, "result_explanations": 3, "runtime_watch_incremental_logs": true, "schema": "pilot107.agent-a4-live-smoke/v1", "scientific_validity_not_inferred": true, "success_run": {"job_id": "4", "run_id": "run_formal_0555147b16b4320862a4de30", "state": "SUCCEEDED"}, "terminal_evidence_bound": true, "worker_restart_recovered": true}

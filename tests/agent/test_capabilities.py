@@ -143,6 +143,37 @@ def test_phase_aware_builder_capability_requires_write_and_validate_operations()
     )
 
 
+@pytest.mark.parametrize(
+    "profile_id",
+    ["run_diagnosis_repair", "market_application", "template_publication"],
+)
+def test_non_builder_project_profiles_reject_builder_only_capabilities(
+    profile_id: str,
+) -> None:
+    AgentCapabilityClaims, AgentCapabilityError, AgentCapabilitySigner = _api()
+    now = 1_786_662_000
+    signer = AgentCapabilitySigner(b"s" * 32, clock=lambda: now)
+    claims = AgentCapabilityClaims(
+        owner="alice",
+        session_id="session-project",
+        turn_id="turn-project",
+        state_version=3,
+        fencing_token=7,
+        profile_id=profile_id,
+        tools=frozenset({"project_blueprint_save"}),
+        max_invocations=128,
+        max_bytes=262_144,
+        expires_at=now + 60,
+        project_id="project-bound",
+        workspace_id="workspace-bound",
+        operations=frozenset({"write"}),
+        max_commands=0,
+    )
+
+    with pytest.raises(AgentCapabilityError):
+        signer.sign(claims)
+
+
 def test_capability_rejects_signature_tampering_and_malformed_tokens() -> None:
     _, AgentCapabilityError, AgentCapabilitySigner = _api()
     now = 1_786_662_000

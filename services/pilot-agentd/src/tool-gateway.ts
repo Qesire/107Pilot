@@ -89,29 +89,37 @@ export class ToolGatewayClient {
       clearTimeout(timer);
       signal.removeEventListener("abort", abortFromTurn);
     }
-    if (!response.ok) {
-      throw new ToolGatewayClientError("The Agent tool gateway rejected the request.");
-    }
     if (response.headers.get("content-type")?.toLowerCase() !== (
       "application/json; charset=utf-8"
     )) {
-      throw new ToolGatewayClientError("The Agent tool gateway returned invalid content.");
+      throw response.ok
+        ? new ToolGatewayClientError("The Agent tool gateway returned invalid content.")
+        : new ToolGatewayClientError("The Agent tool gateway rejected the request.");
     }
     const body = await readBoundedBody(response, MAX_RESPONSE_BYTES);
     let value: unknown;
     try {
       value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
     } catch {
-      throw new ToolGatewayClientError("The Agent tool gateway returned invalid content.");
+      throw response.ok
+        ? new ToolGatewayClientError("The Agent tool gateway returned invalid content.")
+        : new ToolGatewayClientError("The Agent tool gateway rejected the request.");
     }
     let result: ToolResult;
     try {
       result = parseToolResult(value);
     } catch {
-      throw new ToolGatewayClientError("The Agent tool gateway returned invalid content.");
+      throw response.ok
+        ? new ToolGatewayClientError("The Agent tool gateway returned invalid content.")
+        : new ToolGatewayClientError("The Agent tool gateway rejected the request.");
     }
     if (result.invocation_id !== invocation.invocation_id) {
-      throw new ToolGatewayClientError("The Agent tool gateway returned a mismatched result.");
+      throw response.ok
+        ? new ToolGatewayClientError("The Agent tool gateway returned a mismatched result.")
+        : new ToolGatewayClientError("The Agent tool gateway rejected the request.");
+    }
+    if (!response.ok && result.error === null) {
+      throw new ToolGatewayClientError("The Agent tool gateway rejected the request.");
     }
     return result;
   }

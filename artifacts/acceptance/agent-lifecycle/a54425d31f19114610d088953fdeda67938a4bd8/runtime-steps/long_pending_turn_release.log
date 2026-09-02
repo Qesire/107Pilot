@@ -1,0 +1,9 @@
+ Container pilot107-sim-mariadb-1 Running 
+ Container pilot107-sim-slurmdbd-1 Running 
+ Container pilot107-sim-slurmctld-1 Running 
+ Container pilot107-sim-worker-2-1 Running 
+ Container pilot107-sim-worker-1-1 Running 
+ Container pilot107-sim-login-node-sim-1 Running 
+ Container pilot107-sim-mariadb-1 Waiting 
+ Container pilot107-sim-mariadb-1 Healthy 
+{"bounded_resources": {"cpus": 1, "gpus": 0, "memory_mib": 128}, "browser_reconnect_recovered": true, "cancel_resume_turn_count": 1, "cancel_run_state": "CANCELLED", "cancel_task_state": "cancelled", "evidence_refs": ["run:run_agent_16757b984b76575aae07eb2665676b15a0a38fa4"], "primary_job_id": "1", "primary_resume_turn_count": 1, "primary_run_count": 1, "primary_run_id": "run_agent_16757b984b76575aae07eb2665676b15a0a38fa4", "primary_task_id": "task-764c6a610750c1c5db8603200545ae0256aa40ae8262062b45590f01857067c0", "schema": "pilot107.agent-a3-live-smoke/v1", "states_observed": ["RUNNING", "SUCCEEDED"], "turn_released_while_active": true, "worker_restart_recovered": true}

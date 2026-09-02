@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import asdict
 
-from pilot107.agent.protocol import parse_tool_invocation
+from pilot107.agent.protocol import TOOL_RESULT_PROTOCOL_VERSION, parse_tool_invocation
 from pilot107.agent.tool_gateway import AgentToolGateway, AgentToolGatewayError
 from pilot107.api.http_types import ApiResponse
 from pilot107.api.metrics import ControlPlaneMetrics
@@ -62,7 +62,7 @@ class AgentToolRoutes:
             result = self.gateway.invoke(token, invocation)
         except AgentToolGatewayError as exc:
             self._observe_error(invocation.profile_id, invocation.tool_name, exc.code)
-            return _gateway_error(exc)
+            return _gateway_error(exc, invocation_id=invocation.invocation_id)
         except Exception:
             self._observe_error(invocation.profile_id, invocation.tool_name, None)
             return _error(500, "AGENT.TOOL.INTERNAL", "Agent tool invocation failed")
@@ -103,7 +103,11 @@ class AgentToolRoutes:
         )
 
 
-def _gateway_error(exc: AgentToolGatewayError) -> ApiResponse:
+def _gateway_error(
+    exc: AgentToolGatewayError,
+    *,
+    invocation_id: str,
+) -> ApiResponse:
     code = exc.code
     if code in {"AGENT.CAPABILITY.INVALID", "AGENT.CAPABILITY.EXPIRED"}:
         status = 401
@@ -119,8 +123,16 @@ def _gateway_error(exc: AgentToolGatewayError) -> ApiResponse:
         "AGENT.TOOL.FENCED",
         "AGENT.TOOL.IDEMPOTENCY_CONFLICT",
         "AGENT.TOOL.INVOCATION_IN_PROGRESS",
+        "AGENT.BUILDER.IDEMPOTENCY_CONFLICT",
+        "AGENT.BUILDER.NO_PROGRESS",
+        "AGENT.BUILDER.SNAPSHOT_INVALID",
     }:
         status = 409
+    elif code in {
+        "AGENT.BUILDER.BINDING_INVALID",
+        "AGENT.TOOL.RESOURCE_ENVELOPE_EXCEEDED",
+    }:
+        status = 403
     elif code in {
         "AGENT.TOOL.INVOCATION_BUDGET_EXCEEDED",
         "AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
@@ -131,13 +143,29 @@ def _gateway_error(exc: AgentToolGatewayError) -> ApiResponse:
         status = 408
     elif code in {"AGENT.TOOL.INVALID", "AGENT.TOOL.INVALID_RESULT"}:
         status = 400
-    elif code == "AGENT.TOOL.UNAVAILABLE":
+    elif code == "AGENT.BUILDER.VALIDATIONS_INVALID":
+        status = 400
+    elif code in {"AGENT.TOOL.UNAVAILABLE", "AGENT.BUILDER.ENVELOPE_UNAVAILABLE"}:
         status = 503
     else:
         status = 502
         code = "AGENT.TOOL.READ_FAILED"
     message = _public_message(code)
-    return _error(status, code, message, retryable=exc.retryable)
+    return ApiResponse(
+        status=status,
+        payload={
+            "schema_version": TOOL_RESULT_PROTOCOL_VERSION,
+            "invocation_id": invocation_id,
+            "result": None,
+            "error": {
+                "code": code,
+                "message": message,
+                "retryable": exc.retryable,
+            },
+            "evidence_refs": [],
+            "bytes_returned": 0,
+        },
+    )
 
 
 def _public_message(code: str) -> str:
@@ -158,6 +186,24 @@ def _public_message(code: str) -> str:
         "AGENT.TOOL.INVALID": "Agent tool invocation is invalid",
         "AGENT.TOOL.INVALID_RESULT": "Agent tool result is invalid",
         "AGENT.TOOL.UNAVAILABLE": "Agent tool is unavailable",
+        "AGENT.BUILDER.IDEMPOTENCY_CONFLICT": (
+            "Builder request key conflicts with different content"
+        ),
+        "AGENT.BUILDER.NO_PROGRESS": (
+            "Builder submission does not advance the latest workflow phase"
+        ),
+        "AGENT.BUILDER.SNAPSHOT_INVALID": "Builder Workspace snapshot is stale",
+        "AGENT.BUILDER.BINDING_INVALID": "Builder Project binding is invalid",
+        "AGENT.BUILDER.ENVELOPE_UNAVAILABLE": (
+            "Builder resource envelope is unavailable"
+        ),
+        "AGENT.BUILDER.VALIDATIONS_INVALID": (
+            "Builder Blueprint must declare exactly one sandbox validation "
+            "and one Slurm validation"
+        ),
+        "AGENT.TOOL.RESOURCE_ENVELOPE_EXCEEDED": (
+            "Builder resources exceed the approved envelope"
+        ),
         "AGENT.TOOL.READ_FAILED": "Agent read tool failed",
     }
     return messages[code]

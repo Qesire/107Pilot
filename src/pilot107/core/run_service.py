@@ -515,13 +515,23 @@ class RunService:
         submitted_after = time.time()
         try:
             receipt = self.backend.submit(intent)
-        except SlurmTransportError:
+        except SlurmTransportError as exc:
             if self.idempotency_reconcile_enabled and self.reconcile_backend is not None:
                 return self._apply_reconcile_result(run_id, run, intent, submitted_after)
-            self.store.update_state(run_id, RunState.SUBMIT_FAILED, event_type="run.submit_failed")
+            self.store.update_state(
+                run_id,
+                RunState.SUBMIT_FAILED,
+                event_type="run.submit_failed",
+                failure_reason=_submission_failure_reason(exc),
+            )
             raise
-        except SlurmBackendError:
-            self.store.update_state(run_id, RunState.SUBMIT_FAILED, event_type="run.submit_failed")
+        except SlurmBackendError as exc:
+            self.store.update_state(
+                run_id,
+                RunState.SUBMIT_FAILED,
+                event_type="run.submit_failed",
+                failure_reason=_submission_failure_reason(exc),
+            )
             raise
         return self.store.apply_submit_receipt(run_id, receipt)
 
@@ -652,6 +662,7 @@ class RunService:
                 run_id=run_id,
                 state=RunState.SUBMIT_FAILED,
                 event_type="run.submit_failed",
+                failure_reason=_submission_failure_reason(exc),
             )
             raise SubmissionInProgressError(str(exc)) from exc
         submitted_after = time.time()
@@ -664,12 +675,13 @@ class RunService:
                 intent,
                 submitted_after,
             )
-        except SlurmBackendError:
+        except SlurmBackendError as exc:
             self._fail_fenced_submission(
                 message,
                 run_id=run_id,
                 state=RunState.SUBMIT_FAILED,
                 event_type="run.submit_failed",
+                failure_reason=_submission_failure_reason(exc),
             )
             raise
         # Round-11 P1-2: refuse to persist the receipt if the lease expired
@@ -678,12 +690,13 @@ class RunService:
         # re-claim path take over with a fresh token.
         try:
             self._assert_lease_valid_for_receipt(message)
-        except SubmissionLeaseExpiredError:
+        except SubmissionLeaseExpiredError as exc:
             self._fail_fenced_submission(
                 message,
                 run_id=run_id,
                 state=RunState.SUBMIT_FAILED,
                 event_type="run.submit_failed",
+                failure_reason=_submission_failure_reason(exc),
             )
             raise
         try:
@@ -765,6 +778,7 @@ class RunService:
                 run_id=run.run_id,
                 state=RunState.SUBMIT_FAILED,
                 event_type="run.submit_failed",
+                failure_reason="SlurmTransportError: submission transport failed without reconciliation",
             )
             raise SlurmTransportError("submission transport failed without reconciliation")
         result = reconcile_submission(
@@ -836,6 +850,7 @@ class RunService:
         run_id: str,
         state: RunState,
         event_type: str,
+        failure_reason: str | None = None,
         acknowledge: bool = True,
     ) -> None:
         assert message.lease_owner is not None
@@ -846,6 +861,7 @@ class RunService:
                 event_type=event_type,
                 lease_owner=message.lease_owner,
                 fencing_token=message.fencing_token,
+                failure_reason=failure_reason,
             )
         except RunStoreFenceConflict as exc:
             raise SubmissionInProgressError(str(exc)) from exc
@@ -1460,9 +1476,12 @@ class RunService:
             # is surfaced as SUBMIT_FAILED (no infinite retry loop).
             try:
                 receipt = self.backend.submit(intent)
-            except SlurmTransportError:
+            except SlurmTransportError as exc:
                 self.store.update_state(
-                    run_id, RunState.SUBMIT_FAILED, event_type="run.submit_failed"
+                    run_id,
+                    RunState.SUBMIT_FAILED,
+                    event_type="run.submit_failed",
+                    failure_reason=_submission_failure_reason(exc),
                 )
                 raise
             return self.store.apply_submit_receipt(run_id, receipt)
@@ -1478,6 +1497,13 @@ class RunService:
             payload={"candidate_job_ids": list(result.matches)},
         )
         raise SubmissionUncertainError(job_ids=list(result.matches))
+
+
+def _submission_failure_reason(error: BaseException) -> str:
+    """Return a bounded, operator-useful reason without carrying raw payloads."""
+    detail = " ".join(str(error).split())
+    reason = type(error).__name__ if not detail else f"{type(error).__name__}: {detail}"
+    return reason[:512]
 
 
 def _resource_plan_to_dict(

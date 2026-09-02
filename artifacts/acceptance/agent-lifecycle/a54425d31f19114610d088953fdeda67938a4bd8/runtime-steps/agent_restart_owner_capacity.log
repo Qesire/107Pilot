@@ -1,0 +1,88 @@
+..........                                                               [100%]
+10 passed in 3.16s
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/proxy-hmac.local
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/agent-capability-hmac.local
+ Network pilot107-a1-fault-947722_sim Creating 
+ Network pilot107-a1-fault-947722_sim Created 
+ Volume pilot107-a1-fault-947722_mariadb-data Creating 
+ Volume pilot107-a1-fault-947722_mariadb-data Created 
+ Volume pilot107-a1-fault-947722_public Creating 
+ Volume pilot107-a1-fault-947722_public Created 
+ Volume pilot107-a1-fault-947722_slurm-log Creating 
+ Volume pilot107-a1-fault-947722_slurm-log Created 
+ Volume pilot107-a1-fault-947722_pilot107-data Creating 
+ Volume pilot107-a1-fault-947722_pilot107-data Created 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Creating 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Created 
+ Container pilot107-a1-fault-947722-pilot107-api-1 Creating 
+ Container pilot107-a1-fault-947722-pilot107-worker-1 Creating 
+ Container pilot107-a1-fault-947722-pilot107-api-1 Created 
+ Container pilot107-a1-fault-947722-pilot107-worker-1 Created 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Starting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Started 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Waiting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Waiting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Healthy 
+ Container pilot107-a1-fault-947722-pilot107-worker-1 Starting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Healthy 
+ Container pilot107-a1-fault-947722-pilot107-api-1 Starting 
+ Container pilot107-a1-fault-947722-pilot107-worker-1 Started 
+ Container pilot107-a1-fault-947722-pilot107-api-1 Started 
+{"session": {"created_at": "2026-08-25T03:13:45.077812+00:00", "model_profile_id": "faux-default", "outcome": null, "owner": "alice", "profile_id": "hpc-readonly-v1", "request_key": "a1-d1-smoke-session", "resource_usage": {}, "session_id": "session-a5227e1f-d3c0-4b8a-8a1c-687e5e92c682", "source": {"run_id": "run-a1-smoke"}, "state": "idle", "state_version": 1, "updated_at": "2026-08-25T03:13:45.077812+00:00"}, "status": "submitted", "submitted_at": 1787627625.0904703, "turn": {"cancel_requested": false, "created_at": "2026-08-25T03:13:45.083488+00:00", "error": null, "event_sequence": 0, "finished_at": null, "message": "Inspect the failed Run, stderr, and evidence.", "owner": "alice", "request_key": "a1-d1-smoke-turn", "session_id": "session-a5227e1f-d3c0-4b8a-8a1c-687e5e92c682", "started_at": null, "state": "queued", "state_version": 1, "turn_id": "turn-2c430c46-525d-42d6-be13-c70c9737feb1"}}
+pilot Agent A1 Agentd baseline: cpu=3.68% memory=43.17MiB / 31.02GiB rss_before_kib=86100 rss_after_kib=86396 rss_delta_kib=296
+A1 smoke stack retained: project=pilot107-a1-fault-947722 api_port=47722
+5c5a9e8a4c49b7a288fe7c4ec900d7277d2b33a62d65034990c076e7f7952ae3
+5c5a9e8a4c49b7a288fe7c4ec900d7277d2b33a62d65034990c076e7f7952ae3
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/proxy-hmac.local
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/agent-capability-hmac.local
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Running 
+ Container pilot107-a1-fault-947722-pilot107-api-1 Running 
+ Container pilot107-a1-fault-947722-pilot107-worker-1 Running 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Waiting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Waiting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Healthy 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Healthy 
+{"browser_replay": true, "contiguous": true, "events": 16, "idempotency": true, "one_turn": true, "owner_isolation": true, "queue_and_turn_seconds": 23.631941, "session_id": "session-a5227e1f-d3c0-4b8a-8a1c-687e5e92c682", "stale_fence_rejected": true, "status": "ok", "tool_bytes": 942, "tool_invocations": 3, "tools": ["run_get", "run_log_read", "evidence_read"], "turn_id": "turn-2c430c46-525d-42d6-be13-c70c9737feb1"}
+pilot Agent A1 Agentd baseline: cpu=0.01% memory=32.29MiB / 31.02GiB rss_before_kib=79492 rss_after_kib=79492 rss_delta_kib=0
+A1 smoke stack retained: project=pilot107-a1-fault-947722 api_port=47722
+6db513ace2f5f63874cd7ac8abcc7071e2799962563e9a2f1981bc377a828635
+6db513ace2f5f63874cd7ac8abcc7071e2799962563e9a2f1981bc377a828635
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/proxy-hmac.local
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/agent-capability-hmac.local
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Running 
+ Container pilot107-a1-fault-947722-pilot107-api-1 Running 
+ Container pilot107-a1-fault-947722-pilot107-worker-1 Running 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Waiting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Waiting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Healthy 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Healthy 
+{"browser_replay": true, "contiguous": true, "events": 16, "idempotency": true, "one_turn": true, "owner_isolation": true, "queue_and_turn_seconds": 26.801757, "session_id": "session-a5227e1f-d3c0-4b8a-8a1c-687e5e92c682", "stale_fence_rejected": true, "status": "ok", "tool_bytes": 942, "tool_invocations": 3, "tools": ["run_get", "run_log_read", "evidence_read"], "turn_id": "turn-2c430c46-525d-42d6-be13-c70c9737feb1"}
+pilot Agent A1 Agentd baseline: cpu=0.00% memory=32.29MiB / 31.02GiB rss_before_kib=79492 rss_after_kib=79492 rss_delta_kib=0
+A1 smoke stack retained: project=pilot107-a1-fault-947722 api_port=47722
+581f38e6639fa6098d5aefa7fbf145c69d1d5d2ca9bdc67136ee7febc1cd08cb
+581f38e6639fa6098d5aefa7fbf145c69d1d5d2ca9bdc67136ee7febc1cd08cb
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/proxy-hmac.local
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/agent-capability-hmac.local
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Running 
+ Container pilot107-a1-fault-947722-pilot107-worker-1 Running 
+ Container pilot107-a1-fault-947722-pilot107-api-1 Running 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Waiting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Waiting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Healthy 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Healthy 
+{"browser_replay": true, "contiguous": true, "events": 16, "idempotency": true, "one_turn": true, "owner_isolation": true, "queue_and_turn_seconds": 39.305822, "session_id": "session-a5227e1f-d3c0-4b8a-8a1c-687e5e92c682", "stale_fence_rejected": true, "status": "ok", "tool_bytes": 942, "tool_invocations": 3, "tools": ["run_get", "run_log_read", "evidence_read"], "turn_id": "turn-2c430c46-525d-42d6-be13-c70c9737feb1"}
+pilot Agent A1 Agentd baseline: cpu=0.00% memory=37.51MiB / 31.02GiB rss_before_kib=82704 rss_after_kib=82704 rss_delta_kib=0
+A1 smoke stack retained: project=pilot107-a1-fault-947722 api_port=47722
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/proxy-hmac.local
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/agent-capability-hmac.local
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Running 
+ Container pilot107-a1-fault-947722-pilot107-worker-1 Running 
+ Container pilot107-a1-fault-947722-pilot107-api-1 Running 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Waiting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Waiting 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Healthy 
+ Container pilot107-a1-fault-947722-pilot-agentd-1 Healthy 
+{"browser_replay": true, "contiguous": true, "events": 16, "idempotency": true, "one_turn": true, "owner_isolation": true, "queue_and_turn_seconds": 41.964402, "session_id": "session-a5227e1f-d3c0-4b8a-8a1c-687e5e92c682", "stale_fence_rejected": true, "status": "ok", "tool_bytes": 942, "tool_invocations": 3, "tools": ["run_get", "run_log_read", "evidence_read"], "turn_id": "turn-2c430c46-525d-42d6-be13-c70c9737feb1"}
+pilot Agent A1 Agentd baseline: cpu=0.00% memory=37.26MiB / 31.02GiB rss_before_kib=82704 rss_after_kib=82704 rss_delta_kib=0
+A1 smoke stack retained: project=pilot107-a1-fault-947722 api_port=47722
+pilot Agent A1 deterministic fault and restart matrix passed

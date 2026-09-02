@@ -1,0 +1,2 @@
+NAME      IMAGE     COMMAND   SERVICE   CREATED   STATUS    PORTS
+service "login-node-sim" is not running

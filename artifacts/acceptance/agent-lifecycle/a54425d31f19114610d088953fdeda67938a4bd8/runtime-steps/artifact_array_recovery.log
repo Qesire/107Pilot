@@ -1,0 +1,9 @@
+ Container pilot107-sim-mariadb-1 Running 
+ Container pilot107-sim-slurmdbd-1 Running 
+ Container pilot107-sim-slurmctld-1 Running 
+ Container pilot107-sim-worker-1-1 Running 
+ Container pilot107-sim-worker-2-1 Running 
+ Container pilot107-sim-login-node-sim-1 Running 
+ Container pilot107-sim-mariadb-1 Waiting 
+ Container pilot107-sim-mariadb-1 Healthy 
+task15 D1 PASS workflow=wf-task15-d1 recovery=8-11 merge=SUCCEEDED cancel=cancelled

@@ -1,0 +1,15 @@
+ Container pilot107-sim-mariadb-1 Running 
+ Container pilot107-sim-slurmdbd-1 Running 
+ Container pilot107-sim-slurmctld-1 Running 
+ Container pilot107-sim-worker-1-1 Running 
+ Container pilot107-sim-worker-2-1 Running 
+ Container pilot107-sim-login-node-sim-1 Running 
+ Container pilot107-sim-mariadb-1 Waiting 
+ Container pilot107-sim-mariadb-1 Healthy 
+ Container pilot107-sim-worker-1-1 Restarting 
+ Container pilot107-sim-worker-2-1 Restarting 
+ Container pilot107-sim-slurmctld-1 Restarting 
+ Container pilot107-sim-worker-1-1 Started 
+ Container pilot107-sim-worker-2-1 Started 
+ Container pilot107-sim-slurmctld-1 Started 
+{"bob_curated_contract_id": "contract_adopted_40fbf4819bc125c05478f91171fcfc8e", "bob_reference_contract_id": "contract_runpub_65b6864e8f2c33eb3bc5666d6a8c792f", "default_private": true, "equivalent_verification_id": "verification_6634bb50497f62efd877b3cc8a800a21", "release_v1_id": "release_9a6b933df4a04ca7adf9fec5d43c4b56", "release_v2_id": "release_bdd078be138f40798c341c981f84980c", "share_manifest_digest": "67395397ea59ab365a6c0198a623f8b6e519b5766ef1302150a33861fc07ade4", "source_run_id": "run_d8fc415092a64f289e2e5fc4929822b8", "status": "ok", "withdrawal_enforced": true}

@@ -1,0 +1,121 @@
+{
+  "profile": "source",
+  "release_revision": "532be6d9450c9b999b552c4f31c40f90069d5457",
+  "started_at": "2026-08-25T05:28:23Z",
+  "ended_at": "2026-08-25T05:31:07Z",
+  "seal_mode": false,
+  "overall_status": "PASS",
+  "process_exit_code": 0,
+  "any_fail": false,
+  "untracked_files_status": "?? .slim/hif4_reformatted.docx\n?? .slim/hif4_v2.docx\n?? .slim/hif4_v3.docx\n?? 300\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-report.json\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/agent_restart_owner_capacity.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/artifact_array_recovery.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/bootstrap_sim_core.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/build_app_images.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/check_app_images.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/clean_stack_after.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/clean_stack_before.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/failed_run_repair.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/formal_run_publication_watch.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/long_pending_turn_release.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/market_lifecycle.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/model_and_large_file_boundaries.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/resource_observation.log\n?? artifacts/acceptance/agent-lifecycle/31ab72e554a5bc71dd6a3caf8d97ce50f99fa942/runtime-steps/runtime_watch_capacity.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/r1-report.json\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-report.json\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/agent_restart_owner_capacity.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/artifact_array_recovery.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/bootstrap_sim_core.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/build_app_images.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/check_app_images.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/clean_stack_after.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/clean_stack_before.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/failed_run_repair.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/formal_run_publication_watch.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/long_pending_turn_release.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/market_lifecycle.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/model_and_large_file_boundaries.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/resource_observation.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/runtime-steps/runtime_watch_capacity.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/s1-report.json\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-report.json\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/agentd_build.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/agentd_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/agentd_unit.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/compose_config.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/python_lint.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/python_types.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/python_unit.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/schema_contracts.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/sim_core_check.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/sim_core_cleanup.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/sim_core_start.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/web_browser.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/web_build.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/web_static_drift.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/web_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/405781516dba6b91c6dd73ab882d39a16ee11c09/source-steps/web_unit.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/agent_restart_owner_capacity.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/build_app_images.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/check_app_images.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/clean_stack_before.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/formal_run_publication_watch.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/runtime-steps/long_pending_turn_release.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-report.json\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/agentd_build.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/agentd_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/agentd_unit.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/compose_config.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/python_lint.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/python_types.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/python_unit.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/schema_contracts.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/sim_core.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/web_browser.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/web_build.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/web_static_drift.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/web_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/7bc8f63e92db2c84f29de522dbc7a8e20f94dd3b/source-steps/web_unit.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-report.json\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/agent_restart_owner_capacity.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/artifact_array_recovery.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/bootstrap_sim_core.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/build_app_images.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/check_app_images.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/clean_stack_after.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/clean_stack_before.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/failed_run_repair.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/formal_run_publication_watch.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/long_pending_turn_release.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/market_lifecycle.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/model_and_large_file_boundaries.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/resource_observation.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/runtime-steps/runtime_watch_capacity.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-report.json\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/agentd_build.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/agentd_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/agentd_unit.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/compose_config.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/python_lint.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/python_types.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/python_unit.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/schema_contracts.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/sim_core.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/web_browser.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/web_build.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/web_static_drift.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/web_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/a54425d31f19114610d088953fdeda67938a4bd8/source-steps/web_unit.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/r1-report.json\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/s1-report.json\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-report.json\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/agentd_build.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/agentd_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/agentd_unit.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/compose_config.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/python_lint.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/python_types.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/python_unit.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/schema_contracts.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/sim_core.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_browser.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_build.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_static_drift.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_unit.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/source-acceptance-report.json\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/build.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/build.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/compose_config.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/compose_config.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/mypy.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/mypy.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/npm_ci.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/npm_ci.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/playwright.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/playwright.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/pytest.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/pytest.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/ruff.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/ruff.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/static_drift.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/static_drift.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/sync_drift.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/sync_drift.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/typecheck.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/typecheck.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/uv_sync.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/uv_sync.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/vitest.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052141Z/steps/vitest.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/source-acceptance-report.json\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/build.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/build.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/compose_config.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/compose_config.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/mypy.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/mypy.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/npm_ci.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/npm_ci.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/playwright.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/playwright.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/pytest.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/pytest.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/ruff.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/ruff.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/static_drift.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/static_drift.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/sync_drift.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/sync_drift.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/typecheck.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/typecheck.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/uv_sync.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/uv_sync.status\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/vitest.log\n?? artifacts/acceptance/source-34b32ac07cad-20260825T052414Z/steps/vitest.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/source-acceptance-report.json\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/build.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/build.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/compose_config.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/compose_config.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/mypy.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/mypy.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/npm_ci.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/npm_ci.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/playwright.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/playwright.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/pytest.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/pytest.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/ruff.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/ruff.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/static_drift.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/static_drift.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/sync_drift.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/sync_drift.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/typecheck.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/typecheck.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/uv_sync.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/uv_sync.status\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/vitest.log\n?? artifacts/acceptance/source-ff5d5363191c-20260825T051600Z/steps/vitest.status\n?? artifacts/qa/task14/screenshots/agent-projects.png\n?? artifacts/qa/task14/screenshots/approval-after.png\n?? artifacts/qa/task14/screenshots/approval-before.png\n?? artifacts/qa/task14/screenshots/initial.png\n?? artifacts/qa/task14/screenshots/project-created-live.png\n?? artifacts/qa/task14/screenshots/project-created.png\n?? artifacts/qa/task14/screenshots/project-mode-empty.png\n?? artifacts/qa/task14/screenshots/reconnect.png",
+  "steps": [
+    {
+      "name": "uv_sync",
+      "status": "PASS",
+      "start": "2026-08-25T05:28:23Z",
+      "end": "2026-08-25T05:28:23Z",
+      "rc": null,
+      "log_path": "steps/uv_sync.log",
+      "log_sha256": "3e4bd8fb324f64e65ef42cbf00869892fe88281f6b4992efea40eaed215b9a49"
+    },
+    {
+      "name": "npm_ci",
+      "status": "PASS",
+      "start": "2026-08-25T05:28:23Z",
+      "end": "2026-08-25T05:28:26Z",
+      "rc": null,
+      "log_path": "steps/npm_ci.log",
+      "log_sha256": "8015867567c32b0ca3dc0d4f6a0cc3977be3ff72c4bbb3c310286e5998d0e314"
+    },
+    {
+      "name": "ruff",
+      "status": "PASS",
+      "start": "2026-08-25T05:28:26Z",
+      "end": "2026-08-25T05:28:26Z",
+      "rc": null,
+      "log_path": "steps/ruff.log",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "name": "mypy",
+      "status": "PASS",
+      "start": "2026-08-25T05:28:26Z",
+      "end": "2026-08-25T05:28:26Z",
+      "rc": null,
+      "log_path": "steps/mypy.log",
+      "log_sha256": "f5d9f37444f3063f27cf4a26a7ec61cd3fc393ec38e414ea697cc1da45923db1"
+    },
+    {
+      "name": "pytest",
+      "status": "PASS",
+      "start": "2026-08-25T05:28:26Z",
+      "end": "2026-08-25T05:30:26Z",
+      "rc": null,
+      "log_path": "steps/pytest.log",
+      "log_sha256": "c0f69fc9172c7068407149db416c46d3d788115bac98ff198ea1fc6499827896"
+    },
+    {
+      "name": "typecheck",
+      "status": "PASS",
+      "start": "2026-08-25T05:30:26Z",
+      "end": "2026-08-25T05:30:31Z",
+      "rc": null,
+      "log_path": "steps/typecheck.log",
+      "log_sha256": "85104a574d4725c649c40191b47fb730cf3c93b9134231b6b5634787721519c6"
+    },
+    {
+      "name": "vitest",
+      "status": "PASS",
+      "start": "2026-08-25T05:30:31Z",
+      "end": "2026-08-25T05:30:34Z",
+      "rc": null,
+      "log_path": "steps/vitest.log",
+      "log_sha256": "c963b321dbc0fc65ce62a833138db092c90650bd04b09420ff162a60d543e4fb"
+    },
+    {
+      "name": "playwright",
+      "status": "PASS",
+      "start": "2026-08-25T05:30:34Z",
+      "end": "2026-08-25T05:30:59Z",
+      "rc": null,
+      "log_path": "steps/playwright.log",
+      "log_sha256": "c3348ab9628d89061fb69b2200286be37fefd8ce8752475886f5708ad80a4596"
+    },
+    {
+      "name": "build",
+      "status": "PASS",
+      "start": "2026-08-25T05:30:59Z",
+      "end": "2026-08-25T05:31:07Z",
+      "rc": null,
+      "log_path": "steps/build.log",
+      "log_sha256": "0ad2346021d761b383850288b967dda4c5c489eb1474e09e6c852eb191a4f45c"
+    },
+    {
+      "name": "static_drift",
+      "status": "PASS",
+      "start": "2026-08-25T05:31:07Z",
+      "end": "2026-08-25T05:31:07Z",
+      "rc": null,
+      "log_path": "steps/static_drift.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "compose_config",
+      "status": "PASS",
+      "start": "2026-08-25T05:31:07Z",
+      "end": "2026-08-25T05:31:07Z",
+      "rc": null,
+      "log_path": "steps/compose_config.log",
+      "log_sha256": "3ce010159db39f28c28948e67d0170994e3c552a14c57057387216f54bf51b8d"
+    },
+    {
+      "name": "sync_drift",
+      "status": "PASS",
+      "start": "2026-08-25T05:31:07Z",
+      "end": "2026-08-25T05:31:07Z",
+      "rc": null,
+      "log_path": "steps/sync_drift.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

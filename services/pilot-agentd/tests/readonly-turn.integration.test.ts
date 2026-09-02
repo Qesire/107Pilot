@@ -170,10 +170,10 @@ describe("durable readonly Turn", () => {
     expect(serialized).not.toContain(invocations[0]?.invocation_id ?? "missing");
   });
 
-  it("fails a read-only tool loop after exactly four Pi steps", async () => {
+  it("keeps only a high emergency ceiling for a pathological read-only loop", async () => {
     const runtime = createFauxModelRuntime();
     runtime.faux.setResponses(
-      Array.from({ length: 6 }, (_, index) =>
+      Array.from({ length: 65 }, (_, index) =>
         fauxAssistantMessage(
           [
             fauxToolCall(
@@ -208,9 +208,9 @@ describe("durable readonly Turn", () => {
       new AbortController().signal,
     );
 
-    expect(runtime.faux.state.callCount).toBe(4);
-    expect(runtime.faux.getPendingResponseCount()).toBe(2);
-    expect(events.filter((event) => event.type === "tool_call_completed")).toHaveLength(4);
+    expect(runtime.faux.state.callCount).toBe(64);
+    expect(runtime.faux.getPendingResponseCount()).toBe(1);
+    expect(events.filter((event) => event.type === "tool_call_completed")).toHaveLength(64);
     expect(events.filter((event) => event.type === "checkpoint")).toHaveLength(1);
     expect(terminal(events)).toMatchObject({
       type: "turn_failed",
@@ -393,6 +393,105 @@ describe("durable readonly Turn", () => {
     });
   });
 
+  it("accepts a natural-language status when context already reports validation scheduled", async () => {
+    const runtime = createFauxModelRuntime();
+    runtime.faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("builder_context_get", {}, { id: "call-context" })],
+        { stopReason: "toolUse", timestamp: 1 },
+      ),
+      fauxAssistantMessage([fauxText("验证任务已排队，等待 Slurm 运行结果。")], { timestamp: 2 }),
+    ]);
+    const called: string[] = [];
+    const gateway = {
+      invoke: async (_request, _callId, name: string) => {
+        called.push(name);
+        return {
+          schema_version: "pilot107.agent-tool-result/v1" as const,
+          invocation_id: `inv-${called.length}`,
+          result: { phase: "validation_scheduled", task_id: "task-existing" },
+          error: null,
+          evidence_refs: [],
+          bytes_returned: 64,
+        };
+      },
+    };
+    const target = new TurnExecutor(() => runtime, async () => undefined, gateway, true);
+    const events: AgentTurnEvent[] = [];
+
+    await target.execute(
+      builderTurnRequest(),
+      (event) => events.push(event),
+      new AbortController().signal,
+    );
+
+    expect(called).toEqual(["builder_context_get"]);
+    expect(runtime.faux.state.callCount).toBe(2);
+    expect(terminal(events)).toMatchObject({
+      type: "turn_completed",
+      payload: { terminal_phase: "validation_scheduled" },
+    });
+  });
+
+  it("repairs a phase-aware Builder that narrates but forgets the structured submission", async () => {
+    const runtime = createFauxModelRuntime();
+    runtime.faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("builder_context_get", {}, { id: "call-context" })],
+        { stopReason: "toolUse", timestamp: 1 },
+      ),
+      fauxAssistantMessage(
+        [fauxText("我会创建科学计算脚本并等待审批。")],
+        { timestamp: 2 },
+      ),
+      fauxAssistantMessage(
+        [fauxToolCall("builder_build_submit", builderSubmission("build-repaired"), {
+          id: "call-submit-repaired",
+        })],
+        { stopReason: "toolUse", timestamp: 3 },
+      ),
+    ]);
+    const called: string[] = [];
+    const gateway = {
+      invoke: async (_request, _callId, name: string) => {
+        called.push(name);
+        return {
+          schema_version: "pilot107.agent-tool-result/v1" as const,
+          invocation_id: `inv-${called.length}`,
+          result: name === "builder_build_submit"
+            ? { status: "scheduled", phase: "validation_scheduled", task_id: "task-repaired" }
+            : { phase: "drafting", next_action: "builder_build_submit" },
+          error: null,
+          evidence_refs: [],
+          bytes_returned: 64,
+        };
+      },
+    };
+    const target = new TurnExecutor(
+      () => runtime,
+      async () => undefined,
+      gateway,
+      true,
+    );
+    const events: AgentTurnEvent[] = [];
+
+    await target.execute(
+      builderTurnRequest(),
+      (event) => events.push(event),
+      new AbortController().signal,
+    );
+
+    expect(called).toEqual(["builder_context_get", "builder_build_submit"]);
+    expect(runtime.faux.state.callCount).toBe(3);
+    expect(terminal(events)).toMatchObject({
+      type: "turn_completed",
+      payload: {
+        terminal_phase: "validation_scheduled",
+        build_submissions: 1,
+      },
+    });
+  });
+
   it("keeps one repair receipt nonterminal and completes in three Pi steps", async () => {
     const runtime = createFauxModelRuntime();
     runtime.faux.setResponses([
@@ -470,10 +569,10 @@ describe("durable readonly Turn", () => {
     });
   });
 
-  it("stops a pathological phase-aware Builder loop at twenty Pi steps", async () => {
+  it("allows a phase-aware Builder to recover beyond the old twenty-step budget", async () => {
     const runtime = createFauxModelRuntime();
-    runtime.faux.setResponses(
-      Array.from({ length: 21 }, (_, index) =>
+    runtime.faux.setResponses([
+      ...Array.from({ length: 20 }, (_, index) =>
         fauxAssistantMessage(
           [fauxToolCall("builder_context_get", {}, {
             id: `call-context-${index + 1}`,
@@ -481,12 +580,20 @@ describe("durable readonly Turn", () => {
           { stopReason: "toolUse", timestamp: index + 1 },
         ),
       ),
-    );
+      fauxAssistantMessage(
+        [fauxToolCall("builder_build_submit", builderSubmission("build-21"), {
+          id: "call-submit-21",
+        })],
+        { stopReason: "toolUse", timestamp: 21 },
+      ),
+    ]);
     const gateway = {
-      invoke: async () => ({
+      invoke: async (_request, _callId, name: string) => ({
         schema_version: "pilot107.agent-tool-result/v1" as const,
         invocation_id: "inv-context",
-        result: { phase: "drafting", next_action: "builder_build_submit" },
+        result: name === "builder_build_submit"
+          ? { status: "scheduled", phase: "validation_scheduled", task_id: "task-21" }
+          : { phase: "drafting", next_action: "builder_build_submit" },
         error: null,
         evidence_refs: [],
         bytes_returned: 64,
@@ -506,12 +613,12 @@ describe("durable readonly Turn", () => {
       new AbortController().signal,
     );
 
-    expect(runtime.faux.state.callCount).toBe(20);
-    expect(runtime.faux.getPendingResponseCount()).toBe(1);
+    expect(runtime.faux.state.callCount).toBe(21);
+    expect(runtime.faux.getPendingResponseCount()).toBe(0);
     expect(terminal(events)).toMatchObject({
-      type: "turn_failed",
+      type: "turn_completed",
       payload: {
-        error: { code: "tool_step_budget_exhausted", retryable: false },
+        terminal_phase: "validation_scheduled",
       },
     });
   });
@@ -532,6 +639,7 @@ function builderTurnRequest() {
 function builderSubmission(requestKey: string) {
   return {
     request_key: requestKey,
+    approval_summary_zh: "创建实验文件，并在沙箱通过后提交一次受限验证。",
     expected_project_version: 1,
     expected_workspace_snapshot_digest: "a".repeat(64),
     base_change_set_id: null,

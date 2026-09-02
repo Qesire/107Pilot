@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   agentEventText,
+  agentSessionPermissionCopy,
   agentTaskKindLabel,
   groupAgentEvents,
   mergeAgentEvents,
+  readonlyConversationSessions,
 } from "./AgentSessionPanel";
-import type { AgentTurnEvent } from "./types";
+import type { AgentSession, AgentTurnEvent } from "./types";
 
 function event(overrides: Partial<AgentTurnEvent>): AgentTurnEvent {
   return {
@@ -20,6 +22,23 @@ function event(overrides: Partial<AgentTurnEvent>): AgentTurnEvent {
   };
 }
 
+function session(profileId: AgentSession["profile_id"], id: string): AgentSession {
+  return {
+    session_id: id,
+    owner: "alice",
+    request_key: `request-${id}`,
+    profile_id: profileId,
+    model_profile_id: "campus-default",
+    source: {},
+    state: "idle",
+    state_version: 1,
+    resource_usage: {},
+    outcome: null,
+    created_at: "2026-08-19T00:00:00Z",
+    updated_at: "2026-08-19T00:00:00Z",
+  };
+}
+
 describe("durable Agent event replay", () => {
   it("deduplicates by global event id and keeps equal per-Turn sequences", () => {
     const current = [event({ event_id: 4, turn_id: "turn-1", sequence: 1 })];
@@ -31,6 +50,14 @@ describe("durable Agent event replay", () => {
 
     expect(mergeAgentEvents(current, incoming).map((item) => item.event_id)).toEqual([4, 5, 6]);
     expect(mergeAgentEvents(current, incoming)[0]?.payload).toEqual({ delta: "hello" });
+  });
+
+  it("never carries persisted events across a session switch", () => {
+    const current = [event({ event_id: 4, session_id: "session-old" })];
+    const incoming = [event({ event_id: 7, session_id: "session-new" })];
+
+    expect(mergeAgentEvents(current, incoming, "session-new").map((item) => item.event_id))
+      .toEqual([7]);
   });
 
   it("extracts readable text without rendering event metadata as a message", () => {
@@ -114,5 +141,34 @@ describe("durable Agent event replay", () => {
     expect(agentTaskKindLabel("interactive_readonly")).toBe("平台只读 Turn");
     expect(agentTaskKindLabel("experiment_builder")).toBe("实验构建 Turn");
     expect(agentTaskKindLabel("run_diagnosis_repair")).toBe("诊断修复 Turn");
+  });
+
+  it("surfaces the Chinese approval summary while raw tool details stay folded", () => {
+    expect(agentEventText(event({
+      event_type: "tool_call_completed",
+      payload: {
+        tool_name: "builder_build_submit",
+        result: {
+          result: {
+            approval_summary_zh: "将新增热传导脚本与结果清单，等待用户批准后执行验证。",
+          },
+        },
+      },
+    }))).toBe("将新增热传导脚本与结果清单，等待用户批准后执行验证。");
+  });
+
+  it("keeps Builder sessions out of the read-only conversation entry", () => {
+    const sessions = [
+      session("hpc-readonly-v1", "readonly"),
+      session("platform_coach", "coach"),
+      session("experiment_builder", "builder"),
+      session("run_diagnosis_repair", "repair"),
+    ];
+
+    expect(readonlyConversationSessions(sessions).map((item) => item.session_id))
+      .toEqual(["readonly", "coach"]);
+    expect(agentSessionPermissionCopy("experiment_builder")).toMatchObject({
+      composerLabel: "继续实验构建 Agent",
+    });
   });
 });

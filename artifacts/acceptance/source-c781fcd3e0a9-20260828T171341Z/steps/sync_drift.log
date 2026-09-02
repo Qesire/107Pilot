@@ -1,0 +1,3 @@
+source acceptance modified tracked files during sync — lockfile may be out of date
+ src/pilot107/web/static/assets/app.js | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)

@@ -309,6 +309,27 @@ describe("Tool Gateway envelopes", () => {
       }).tool_name,
     ).toBe("workspace_read");
   });
+
+  it("rejects Builder-only tools from repair, market, and publication profiles", () => {
+    for (const profile_id of [
+      "run_diagnosis_repair",
+      "market_application",
+      "template_publication",
+    ] as const) {
+      expect(() => parseToolInvocation({
+        ...toolInvocation(),
+        profile_id,
+        tool_name: "project_blueprint_save",
+        arguments: {},
+      })).toThrow(/profile\/tool pairing/i);
+      expect(parseToolInvocation({
+        ...toolInvocation(),
+        profile_id,
+        tool_name: "workspace_patch",
+        arguments: {},
+      }).tool_name).toBe("workspace_patch");
+    }
+  });
 });
 
 describe("AgentCheckpoint", () => {

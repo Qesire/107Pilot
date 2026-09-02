@@ -1,0 +1,36 @@
+
+> pilot107-ui@0.1.0 test
+> vitest run --config apps/web/vite.config.mts --run
+
+
+ RUN  v3.2.7 /home/knowingthesea/107pilot/apps/web
+
+ ✓ src/run-status.test.ts (18 tests) 3ms
+ ✓ src/schema-validation.test.ts (1 test) 3ms
+ ✓ src/market-state.test.ts (2 tests) 7ms
+ ✓ src/files/layout.test.ts (10 tests) 7ms
+ ✓ src/resource-summary.test.ts (15 tests) 5ms
+ ✓ src/run-filters.test.ts (2 tests) 4ms
+ ✓ src/evidence-state.test.ts (4 tests) 4ms
+ ✓ src/files/selection.test.ts (24 tests) 16ms
+ ✓ src/api.test.ts (20 tests) 14ms
+ ✓ src/contract-state.test.ts (13 tests) 24ms
+ ✓ src/EnvBoundaryBanner.test.tsx (2 tests) 7ms
+ ✓ src/url.test.ts (3 tests) 4ms
+ ✓ src/RunPicker.test.ts (6 tests) 4ms
+ ✓ src/files/PathBar.test.tsx (1 test) 9ms
+ ✓ src/files/FileSearchPanel.test.tsx (5 tests) 14ms
+ ✓ src/RuntimeWatchPanel.test.tsx (1 test) 3ms
+ ✓ src/AgentTaskPanel.test.tsx (4 tests) 35ms
+ ✓ src/RunResourcePanel.test.tsx (2 tests) 19ms
+ ✓ src/AgentSessionPanel.test.tsx (6 tests) 5ms
+ ✓ src/AgentProjectPanel.test.tsx (9 tests) 16ms
+ ✓ src/AgentPage.test.ts (29 tests) 12ms
+ ✓ src/RunEvidencePanel.test.ts (4 tests) 5ms
+ ✓ src/StudioPage.test.ts (5 tests) 9ms
+
+ Test Files  23 passed (23)
+      Tests  186 passed (186)
+   Start at  18:54:40
+   Duration  899ms (transform 2.18s, setup 0ms, collect 7.09s, tests 227ms, environment 5ms, prepare 2.82s)
+

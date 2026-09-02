@@ -1,0 +1,75 @@
+{
+  "schema_version": "pilot107.vm-demo-deployment-summary/v1",
+  "captured_at": "2026-08-25T07:14:00Z",
+  "public_url": "https://114.214.241.31:8443/",
+  "release_revision": "2322506af112e570896b7b1d3b2d6e9473b65942",
+  "bundle": "107pilot-cpu-rc-2322506af112-20260825T070152Z",
+  "bundle_sha256": "c1332f8b4f6ec64e76da67971f90648cffcffc2fc17141dbc4d59199e061659d",
+  "source_acceptance_report": "artifacts/acceptance/source-2322506af112-20260825T065923Z/source-acceptance-report.json",
+  "systemd": {
+    "unit": "pilot107-cpu-rc.service",
+    "enabled": true,
+    "active": true,
+    "working_directory": "/root/107pilot-cpu-rc-2322506af112-20260825T070152Z"
+  },
+  "runtime": {
+    "services_running": 11,
+    "slurm_node": "anode16",
+    "slurm_cpus": 6,
+    "slurm_memory_mib": 10240,
+    "public_root_http": 200,
+    "health_http": 200,
+    "health_status": "ok",
+    "image_binding": "pass"
+  },
+  "model": {
+    "configured_id": "qwen3.8-reasoner",
+    "max_attempts": 3,
+    "credential_present": true,
+    "parameter_size_verified": false,
+    "parameter_size_note": "The gateway model catalog exposes the model ID but no parameter-size metadata."
+  },
+  "agent_task": {
+    "session_id": "session-11593d24-301f-45cb-9831-ff158ce786d5",
+    "turn_id": "turn-bc94cfa6-f876-4940-9844-82e8aeb2ebb5",
+    "task_id": "task-581dab2d5b53e49b58bd45ec08e6a82fe077d6a163d1c5015bb80b5cb327ed8e",
+    "linked_run_id": "run_agent_6e430e5c5983a1d0704516cfe5a850fcd1e38bd8",
+    "scheduler_backend": "docker-compose-command",
+    "slurm_job_id": "23",
+    "run_state": "SUCCEEDED",
+    "evidence_object_count": 19,
+    "capsule_id": "capsule_213787c26b3a4a11b79a5bf331691330",
+    "capsule_state": "ready",
+    "followup_turn_id": "turn-47c584c5-6c07-44bb-addc-c219497b45b2"
+  },
+  "three_state_smoke": {
+    "success": "run_b58e5628a4f14ac38442adf6ef0ad4a3:24",
+    "failure": "run_c0dec4c6b1fe49ad9a02269352d8dba1:25",
+    "cancelled": "run_0e66c4ac6950437aa5f39a318d2a665f:26",
+    "capsules": [
+      "capsule_d266a85819f34e4d8fbfd8dd365c5f70",
+      "capsule_5cba88c670254ca887dfdf0b87512018",
+      "capsule_cf5085a88e56447e8c9c04f3ecf4244a"
+    ]
+  },
+  "restart_recovery": {
+    "status": "pass",
+    "pre_restart_run": "run_fae5ebf9abc34980bbd146023a69bff5",
+    "post_restart_run": "run_99698eabb1dd4d128166d4ef501ce8c6"
+  },
+  "browser_qa": {
+    "manual_path_entry": "pass",
+    "file_search": "pass",
+    "agent_project_page": "pass",
+    "screenshots": [
+      "artifacts/qa/vm-final-files.png",
+      "artifacts/qa/vm-final-agent.png"
+    ]
+  },
+  "environment_boundary": {
+    "vm_local_slurm_object": true,
+    "campus_107_cluster": false,
+    "multi_user_production": false,
+    "certificate": "self-signed"
+  }
+}

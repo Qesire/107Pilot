@@ -1,0 +1,364 @@
+
+> pilot107-ui@0.1.0 test:ui
+> npm run build && playwright test
+
+
+> pilot107-ui@0.1.0 build
+> vite build --config apps/web/vite.config.mts
+
+vite v6.4.3 building for production...
+transforming...
+node_modules/@daybrush/utils/dist/utils.esm.js (158:30): A comment
+
+"/*#__PURE__*/"
+
+in "node_modules/@daybrush/utils/dist/utils.esm.js" contains an annotation that Rollup cannot interpret due to the position of the comment. The comment will be removed to avoid issues.
+✓ 2428 modules transformed.
+rendering chunks...
+computing gzip size...
+../../src/pilot107/web/static/index.html                    0.59 kB │ gzip:   0.40 kB
+../../src/pilot107/web/static/assets/styles.css           104.62 kB │ gzip:  19.46 kB
+../../src/pilot107/web/static/assets/chunk-Dze4SSin.js     34.22 kB │ gzip:  10.97 kB
+../../src/pilot107/web/static/assets/chunk-CQcISqUI.js    438.46 kB │ gzip: 144.61 kB
+../../src/pilot107/web/static/assets/app.js             1,875.52 kB │ gzip: 597.14 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 5.18s
+
+Running 23 tests using 2 workers
+
+(node:777666) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:777665) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   2 [chromium] › tests/ui/visual.spec.js:12:1 › workspace renders live run and platform read models (733ms)
+  ✓   3 [chromium] › tests/ui/visual.spec.js:23:1 › run filters are URL-controlled and narrow the server query (405ms)
+  ✓   4 [chromium] › tests/ui/visual.spec.js:34:1 › run deep link survives direct navigation and wraps long workdir (1.4s)
+  ✓   5 [chromium] › tests/ui/visual.spec.js:46:1 › successful run exposes shareable logs, results, and verified capsule (1.5s)
+  ✓   6 [chromium] › tests/ui/visual.spec.js:65:1 › run detail makes an omitted workdir explicit (410ms)
+  ✓   7 [chromium] › tests/ui/visual.spec.js:72:1 › switching user updates URL and invalidates scoped queries (422ms)
+  ✓   8 [chromium] › tests/ui/visual.spec.js:82:1 › an untrusted URL user is normalized before it reaches API or shell output (412ms)
+  ✓   9 [chromium] › tests/ui/visual.spec.js:90:1 › stale and degraded dynamic facts remain explicit (328ms)
+  ✘   1 [chromium] › tests/ui/files.spec.js:96:1 › defaults to two independent panes rooted at home (5.8s)
+  ✓  10 [chromium] › tests/ui/visual.spec.js:98:1 › forbidden capability scope renders an authorization state (339ms)
+(node:778292) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  11 [chromium] › tests/ui/visual.spec.js:106:1 › mobile layout exposes primary destinations without horizontal overflow (467ms)
+  ✓  13 [chromium] › tests/ui/visual.spec.js:117:1 › studio requires server validation before creating a canonical contract (805ms)
+  ✓  14 [chromium] › tests/ui/visual.spec.js:130:1 › dirty source is not silently overwritten by a basic form update (509ms)
+  ✘  15 [chromium] › tests/ui/visual.spec.js:140:1 › market release adoption opens the server-created canonical contract (5.3s)
+(node:778726) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  16 [chromium] › tests/ui/visual.spec.js:150:1 › persisted contract requires object-level confirmation before submit (1.1s)
+  ✓  17 [chromium] › tests/ui/visual.spec.js:162:1 › Agent separates durable read-only conversation from controlled repair (1.4s)
+  ✘  12 [chromium] › tests/ui/files.spec.js:105:1 › panes navigate independently (30.1s)
+(node:780653) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  18 [chromium] › tests/ui/files.spec.js:118:1 › splitting adds a pane and the layout survives a reload (5.8s)
+(node:780908) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  19 [chromium] › tests/ui/files.spec.js:130:1 › closing a pane removes it but keeps at least one (30.1s)
+(node:781511) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  20 [chromium] › tests/ui/files.spec.js:140:1 › grid view toggles to a list view per pane (5.7s)
+(node:781819) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  21 [chromium] › tests/ui/files.spec.js:150:1 › ctrl-click builds a multi-selection with an action bar (30.1s)
+(node:782392) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  22 [chromium] › tests/ui/files.spec.js:160:1 › marquee drag over empty grid area selects the tiles it covers (715ms)
+(node:782542) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  23 [chromium] › tests/ui/files.spec.js:187:1 › dragging a file onto another pane's directory moves it (5.7s)
+
+
+  1) [chromium] › tests/ui/files.spec.js:96:1 › defaults to two independent panes rooted at home ───
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  locator('.file-pane')
+    Expected: 2
+    Received: 1
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toHaveCount" with timeout 5000ms
+      - waiting for locator('.file-pane')
+        14 × locator resolved to 1 element
+           - unexpected value "1"
+
+
+       97 |   await page.goto("/files?user=alice");
+       98 |
+    >  99 |   await expect(page.locator(".file-pane")).toHaveCount(2);
+          |                                            ^
+      100 |   // Both panes list the home directory contents.
+      101 |   await expect(page.locator(".file-tile", { hasText: "readme.md" })).toHaveCount(2);
+      102 |   await expect(page.locator(".file-tile", { hasText: "docs" }).first()).toBeVisible();
+        at /home/knowingthesea/107pilot/tests/ui/files.spec.js:99:44
+
+    Error Context: artifacts/playwright-output/files-defaults-to-two-independent-panes-rooted-at-home-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/playwright-output/files-defaults-to-two-independent-panes-rooted-at-home-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/playwright-output/files-defaults-to-two-independent-panes-rooted-at-home-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) [chromium] › tests/ui/files.spec.js:105:1 › panes navigate independently ──────────────────────
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.dblclick: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for locator('.file-pane').first().locator('.file-tile').filter({ hasText: 'docs' })
+
+
+      108 |   const panes = page.locator(".file-pane");
+      109 |   // Open "docs" in the first pane only.
+    > 110 |   await panes.nth(0).locator(".file-tile", { hasText: "docs" }).dblclick();
+          |                                                                 ^
+      111 |
+      112 |   // First pane now shows the docs contents; second pane is still at home.
+      113 |   await expect(panes.nth(0).locator(".file-tile", { hasText: "note.txt" })).toBeVisible();
+        at /home/knowingthesea/107pilot/tests/ui/files.spec.js:110:65
+
+    Error Context: artifacts/playwright-output/files-panes-navigate-independently-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/playwright-output/files-panes-navigate-independently-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/playwright-output/files-panes-navigate-independently-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) [chromium] › tests/ui/files.spec.js:118:1 › splitting adds a pane and the layout survives a reload 
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  locator('.file-pane')
+    Expected: 2
+    Received: 1
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toHaveCount" with timeout 5000ms
+      - waiting for locator('.file-pane')
+        14 × locator resolved to 1 element
+           - unexpected value "1"
+
+
+      118 | test("splitting adds a pane and the layout survives a reload", async ({ page }) => {
+      119 |   await page.goto("/files?user=alice");
+    > 120 |   await expect(page.locator(".file-pane")).toHaveCount(2);
+          |                                            ^
+      121 |
+      122 |   // Split the first pane horizontally.
+      123 |   await page.locator(".file-pane").nth(0).getByTitle("横向拆分").click();
+        at /home/knowingthesea/107pilot/tests/ui/files.spec.js:120:44
+
+    Error Context: artifacts/playwright-output/files-splitting-adds-a-pane-and-the-layout-survives-a-reload-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/playwright-output/files-splitting-adds-a-pane-and-the-layout-survives-a-reload-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/playwright-output/files-splitting-adds-a-pane-and-the-layout-survives-a-reload-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4) [chromium] › tests/ui/files.spec.js:130:1 › closing a pane removes it but keeps at least one ──
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for locator('.file-pane').nth(1).getByTitle('关闭窗格')
+
+
+      130 | test("closing a pane removes it but keeps at least one", async ({ page }) => {
+      131 |   await page.goto("/files?user=alice");
+    > 132 |   await page.locator(".file-pane").nth(1).getByTitle("关闭窗格").click();
+          |                                                              ^
+      133 |   await expect(page.locator(".file-pane")).toHaveCount(1);
+      134 |
+      135 |   // The last pane cannot be closed.
+        at /home/knowingthesea/107pilot/tests/ui/files.spec.js:132:62
+
+    Error Context: artifacts/playwright-output/files-closing-a-pane-removes-it-but-keeps-at-least-one-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/playwright-output/files-closing-a-pane-removes-it-but-keeps-at-least-one-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/playwright-output/files-closing-a-pane-removes-it-but-keeps-at-least-one-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  5) [chromium] › tests/ui/files.spec.js:140:1 › grid view toggles to a list view per pane ─────────
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: locator('.file-pane').first().locator('.filegrid')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for locator('.file-pane').first().locator('.filegrid')
+
+
+      142 |   const firstPane = page.locator(".file-pane").nth(0);
+      143 |
+    > 144 |   await expect(firstPane.locator(".filegrid")).toBeVisible();
+          |                                                ^
+      145 |   await firstPane.getByTitle("列表视图").click();
+      146 |   await expect(firstPane.locator(".filepane-table")).toBeVisible();
+      147 |   await expect(firstPane.locator(".filegrid")).toHaveCount(0);
+        at /home/knowingthesea/107pilot/tests/ui/files.spec.js:144:48
+
+    Error Context: artifacts/playwright-output/files-grid-view-toggles-to-a-list-view-per-pane-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/playwright-output/files-grid-view-toggles-to-a-list-view-per-pane-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/playwright-output/files-grid-view-toggles-to-a-list-view-per-pane-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  6) [chromium] › tests/ui/files.spec.js:150:1 › ctrl-click builds a multi-selection with an action bar 
+
+    Test timeout of 30000ms exceeded.
+
+    Error: locator.click: Test timeout of 30000ms exceeded.
+    Call log:
+      - waiting for locator('.file-pane').first().locator('.file-tile').filter({ hasText: 'readme.md' })
+
+
+      152 |   const firstPane = page.locator(".file-pane").nth(0);
+      153 |
+    > 154 |   await firstPane.locator(".file-tile", { hasText: "readme.md" }).click();
+          |                                                                   ^
+      155 |   await firstPane.locator(".file-tile", { hasText: "run.py" }).click({ modifiers: ["Control"] });
+      156 |
+      157 |   await expect(firstPane.locator(".filepane-selectionbar")).toContainText("2 项已选");
+        at /home/knowingthesea/107pilot/tests/ui/files.spec.js:154:67
+
+    Error Context: artifacts/playwright-output/files-ctrl-click-builds-a-multi-selection-with-an-action-bar-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/playwright-output/files-ctrl-click-builds-a-multi-selection-with-an-action-bar-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/playwright-output/files-ctrl-click-builds-a-multi-selection-with-an-action-bar-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  7) [chromium] › tests/ui/files.spec.js:160:1 › marquee drag over empty grid area selects the tiles it covers 
+
+    Error: locator.evaluate: TypeError: Cannot read properties of null (reading 'getBoundingClientRect')
+        at eval (eval at evaluate (:303:30), <anonymous>:3:47)
+        at UtilityScript.evaluate (<anonymous>:305:16)
+        at UtilityScript.<anonymous> (<anonymous>:1:44)
+        at eval (eval at evaluate (:303:30), <anonymous>:3:47)
+        at UtilityScript.evaluate (<anonymous>:305:16)
+        at UtilityScript.<anonymous> (<anonymous>:1:44)
+        at /home/knowingthesea/107pilot/tests/ui/files.spec.js:167:31
+
+    Error Context: artifacts/playwright-output/files-marquee-drag-over-em-0fb6f-selects-the-tiles-it-covers-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/playwright-output/files-marquee-drag-over-em-0fb6f-selects-the-tiles-it-covers-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/playwright-output/files-marquee-drag-over-em-0fb6f-selects-the-tiles-it-covers-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  8) [chromium] › tests/ui/files.spec.js:187:1 › dragging a file onto another pane's directory moves it 
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  locator('.file-tile')
+    Expected: 8
+    Received: 0
+    Timeout:  5000ms
+
+    Call log:
+      - Expect "toHaveCount" with timeout 5000ms
+      - waiting for locator('.file-tile')
+        14 × locator resolved to 0 elements
+           - unexpected value "0"
+
+
+      188 |   await page.goto("/files?user=alice");
+      189 |   // Wait for both panes to be fully rendered (4 tiles each) before dragging.
+    > 190 |   await expect(page.locator(".file-tile")).toHaveCount(8);
+          |                                            ^
+      191 |   const panes = page.locator(".file-pane");
+      192 |
+      193 |   const source = panes.nth(0).locator(".file-tile", { hasText: "readme.md" });
+        at /home/knowingthesea/107pilot/tests/ui/files.spec.js:190:44
+
+    Error Context: artifacts/playwright-output/files-dragging-a-file-onto-another-pane-s-directory-moves-it-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/playwright-output/files-dragging-a-file-onto-another-pane-s-directory-moves-it-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/playwright-output/files-dragging-a-file-onto-another-pane-s-directory-moves-it-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  9) [chromium] › tests/ui/visual.spec.js:140:1 › market release adoption opens the server-created canonical contract 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('heading', { name: '从审核过的 release 开始' })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('heading', { name: '从审核过的 release 开始' })
+
+
+      140 | test("market release adoption opens the server-created canonical contract", async ({ page }) => {
+      141 |   await page.goto("/market?user=alice");
+    > 142 |   await expect(page.getByRole("heading", { name: "从审核过的 release 开始" })).toBeVisible();
+          |                                                                         ^
+      143 |   await page.getByRole("button", { name: "查看 release" }).click();
+      144 |   await expect(page).toHaveURL(/\/templates\/template_visual/);
+      145 |   await expect(page.getByText("Canonical Contract payload", { exact: true })).toBeVisible();
+        at /home/knowingthesea/107pilot/tests/ui/visual.spec.js:142:73
+
+    Error Context: artifacts/playwright-output/visual-market-release-adop-b9797--created-canonical-contract-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    artifacts/playwright-output/visual-market-release-adop-b9797--created-canonical-contract-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace artifacts/playwright-output/visual-market-release-adop-b9797--created-canonical-contract-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  9 failed
+    [chromium] › tests/ui/files.spec.js:96:1 › defaults to two independent panes rooted at home ────
+    [chromium] › tests/ui/files.spec.js:105:1 › panes navigate independently ───────────────────────
+    [chromium] › tests/ui/files.spec.js:118:1 › splitting adds a pane and the layout survives a reload 
+    [chromium] › tests/ui/files.spec.js:130:1 › closing a pane removes it but keeps at least one ───
+    [chromium] › tests/ui/files.spec.js:140:1 › grid view toggles to a list view per pane ──────────
+    [chromium] › tests/ui/files.spec.js:150:1 › ctrl-click builds a multi-selection with an action bar 
+    [chromium] › tests/ui/files.spec.js:160:1 › marquee drag over empty grid area selects the tiles it covers 
+    [chromium] › tests/ui/files.spec.js:187:1 › dragging a file onto another pane's directory moves it 
+    [chromium] › tests/ui/visual.spec.js:140:1 › market release adoption opens the server-created canonical contract 
+  14 passed (2.0m)

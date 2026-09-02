@@ -82,6 +82,22 @@ def test_patch_persists_deterministic_change_set_and_diff(editing) -> None:
     )
 
 
+@pytest.mark.parametrize("relative", ["run_heat.sbatch", "run_heat.slurm"])
+def test_patch_accepts_slurm_script_extensions(editing, relative: str) -> None:
+    _, workspace, editor = editing
+
+    change_set = editor.apply_patch(
+        workspace.workspace_id,
+        "alice",
+        relative,
+        None,
+        WorkspacePatch(operation="create", content="#!/bin/bash\ntrue\n"),
+    )
+
+    assert change_set.files[0].path == relative
+    assert Path(workspace.local_root, relative).read_text() == "#!/bin/bash\ntrue\n"
+
+
 @pytest.mark.parametrize("relative", ["../escape.py", "/tmp/escape.py", "a/../../b.py"])
 def test_patch_rejects_path_traversal(editing, relative: str) -> None:
     _, workspace, editor = editing

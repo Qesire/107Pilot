@@ -1,0 +1,15 @@
+ Container pilot107-sim-mariadb-1 Running 
+ Container pilot107-sim-slurmdbd-1 Running 
+ Container pilot107-sim-slurmctld-1 Running 
+ Container pilot107-sim-worker-1-1 Running 
+ Container pilot107-sim-login-node-sim-1 Running 
+ Container pilot107-sim-worker-2-1 Running 
+ Container pilot107-sim-mariadb-1 Waiting 
+ Container pilot107-sim-mariadb-1 Healthy 
+ Container pilot107-sim-slurmctld-1 Restarting 
+ Container pilot107-sim-worker-2-1 Restarting 
+ Container pilot107-sim-worker-1-1 Restarting 
+ Container pilot107-sim-worker-2-1 Started 
+ Container pilot107-sim-worker-1-1 Started 
+ Container pilot107-sim-slurmctld-1 Started 
+{"evaluation_outcome": "verified_success", "failed_run_code_repair": true, "formal_run": {"job_id": "10", "resource_plan": {"cpus_per_task": 1, "gpu_type": null, "gpus_per_node": null, "gpus_total": 0, "memory_unit": "M", "memory_value": 128, "nodes": 1, "ntasks": 1, "partition": "Students", "qos": "qos_stu_default", "time_limit": "00:02:00"}, "run_id": "run_formal_10cd1eca4d643eb14c86c7f5", "state": "SUCCEEDED"}, "project_origin": "failed_run", "publication_state": "published", "remediation_state": "succeeded", "restart_idempotent": true, "reviewable_files": ["train.py"], "runtime_watch_state": "stopped", "sandbox_succeeded": true, "schema": "pilot107.agent-repair-live-smoke/v1", "scientific_validity_inferred_from_scheduler": false, "source_run": {"exit_code": "42:0", "job_id": "8", "run_id": "run_77adc70eda0842dba51382c0f3c5011e", "state": "FAILED"}, "source_unchanged_before_approval": true, "validation_run_id": "run_d7876c922f6243729fa7631025ac3ce1"}

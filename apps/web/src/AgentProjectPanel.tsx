@@ -1,17 +1,22 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileDiff, FlaskConical, FolderGit2, Plus, ShieldCheck } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiRequestError } from "./api";
+import { AgentConversation } from "./AgentSessionPanel";
 import { QueryBoundary, StatusBadge, formatTimestamp } from "./components";
 import {
   useAgentChangeSetDiff,
   useAgentProject,
   useAgentProjects,
   useAgentSessionTasks,
+  useCapabilities,
+  useLatestEntitlement,
 } from "./query";
 import type {
   AgentProjectOrigin,
   AgentTask,
+  CapabilityProfile,
+  EntitlementSnapshot,
   FormalRunApproval,
   FormalRunCandidate,
   JsonObject,
@@ -76,7 +81,7 @@ export function AgentProjectPanel({ user, location, navigate }: AgentProjectPane
         </div>
         <div className="agent-readonly-note">
           <ShieldCheck aria-hidden="true" size={17} />
-          <p><strong>隔离编辑</strong>模型只修改应用侧 Workspace；集群真源、发布和 Slurm 提交均不在本阶段授权内。</p>
+          <p><strong>实验构建权限</strong>Agent 仅可读取当前工程汇总并提交结构化构建结果；文件改动、Sandbox 与一次 Slurm 验证由应用执行并审计。正式发布和实验提交需另行审批。</p>
         </div>
         <form
           className="agent-new-session"
@@ -195,8 +200,13 @@ function ProjectReview({
   navigate: (path: string) => void;
 }) {
   const queryClient = useQueryClient();
-  const [partition, setPartition] = useState("debug");
-  const [qos, setQos] = useState("normal");
+  const capabilities = useCapabilities(user);
+  const entitlement = useLatestEntitlement(user);
+  const [partition, setPartition] = useState("");
+  const [qos, setQos] = useState("");
+  const resourceDefaultsProject = useRef<string | null>(null);
+  const partitionEdited = useRef(false);
+  const qosEdited = useRef(false);
   const [cpus, setCpus] = useState(4);
   const [memoryMib, setMemoryMib] = useState(1024);
   const [gpus, setGpus] = useState(0);
@@ -209,6 +219,23 @@ function ProjectReview({
   const [formalCommand, setFormalCommand] = useState("python main.py");
   const [formalApproval, setFormalApproval] = useState<FormalRunApproval | null>(null);
   const [formalConfirmed, setFormalConfirmed] = useState(false);
+  useEffect(() => {
+    resourceDefaultsProject.current = null;
+    partitionEdited.current = false;
+    qosEdited.current = false;
+    setPartition("");
+    setQos("");
+  }, [view.project.project_id]);
+  useEffect(() => {
+    if (
+      !capabilities.data
+      || resourceDefaultsProject.current === view.project.project_id
+    ) return;
+    const defaults = validationResourceDefaults(capabilities.data, entitlement.data);
+    if (!partitionEdited.current) setPartition(defaults.partition);
+    if (!qosEdited.current) setQos(defaults.qos);
+    resourceDefaultsProject.current = view.project.project_id;
+  }, [capabilities.data, entitlement.data, view.project.project_id]);
   const validationInputValid = isValidationEnvelopeInputValid({
     cpus,
     memoryMib,
@@ -278,11 +305,11 @@ function ProjectReview({
       });
       return session;
     },
-    onSuccess: (session) => navigate(withSearch("/agent", location.search, {
-      mode: "conversation",
-      project: view.project.project_id,
-      session: session.session_id,
-    })),
+    onSuccess: (session) => navigate(builderSessionLocation(
+      location.search,
+      view.project.project_id,
+      session.session_id,
+    )),
   });
   const [selectedChangeSet, setSelectedChangeSet] = useState<string | null>(
     view.change_sets[0]?.change_set_id ?? null,
@@ -538,8 +565,8 @@ function ProjectReview({
           <p className="muted">额度绑定当前 snapshot，一小时后过期；不会授权正式实验提交或发布。</p>
         </div>
         <div className="agent-validation-grid">
-          <label>Partition<input value={partition} onChange={(event) => { setPartition(event.target.value); invalidateFormalApproval(); }} /></label>
-          <label>QoS<input value={qos} onChange={(event) => { setQos(event.target.value); invalidateFormalApproval(); }} /></label>
+          <label>Partition<input value={partition} onChange={(event) => { partitionEdited.current = true; setPartition(event.target.value); invalidateFormalApproval(); }} /></label>
+          <label>QoS<input value={qos} onChange={(event) => { qosEdited.current = true; setQos(event.target.value); invalidateFormalApproval(); }} /></label>
           <label>CPU<input type="number" min={1} value={cpus} onChange={(event) => { setCpus(Number(event.target.value)); invalidateFormalApproval(); }} /></label>
           <label>内存 MiB<input type="number" min={1} value={memoryMib} onChange={(event) => { setMemoryMib(Number(event.target.value)); invalidateFormalApproval(); }} /></label>
           <label>GPU<input type="number" min={0} value={gpus} onChange={(event) => { setGpus(Number(event.target.value)); invalidateFormalApproval(); }} /></label>
@@ -553,6 +580,8 @@ function ProjectReview({
             startValidation.isPending
             || !partition.trim()
             || !qos.trim()
+            || !capabilities.data
+            || !isValidationResourceSelectionValid(capabilities.data, partition, qos)
             || !validationInputValid
             || (view.project.origin === "failed_run" && (!remediationSessionId || !sourceRunId))
           }
@@ -563,6 +592,12 @@ function ProjectReview({
         </button>
         {startValidation.error ? <ProjectMutationError error={startValidation.error} /> : null}
       </section>
+      {taskSessionId ? (
+        <section aria-label="构建 Agent 输出">
+          <h3>构建 Agent 输出</h3>
+          <AgentConversation key={taskSessionId} user={user} sessionId={taskSessionId} />
+        </section>
+      ) : null}
       {taskSessionId ? <AgentTaskPanel user={user} sessionId={taskSessionId} /> : null}
       <section>
         <h3>Blueprint</h3>
@@ -643,6 +678,18 @@ export function boundProjectSessionId(
   const projectId = search.get("project");
   const sessionId = search.get("session");
   return projectId === selectedProjectId && sessionId ? sessionId : null;
+}
+
+export function builderSessionLocation(
+  search: URLSearchParams,
+  projectId: string,
+  sessionId: string,
+): string {
+  return withSearch("/agent", search, {
+    mode: "builder",
+    project: projectId,
+    session: sessionId,
+  });
 }
 
 export function projectAgentProfileBinding(input: {
@@ -742,6 +789,77 @@ export function buildValidationEnvelope(input: {
     expires_at: new Date(input.now.getTime() + 60 * 60 * 1000).toISOString(),
     approved_by: input.owner,
   };
+}
+
+/** Resolve a safe UI default from the latest platform facts.
+ *
+ * Entitlement associations are intentionally read from the nested safe payload
+ * first; the root field is retained for older API responses.  A stale or
+ * non-authoritative entitlement must never introduce a resource value, and all
+ * values are checked against the capability profile before being returned.
+ */
+export function validationResourceDefaults(
+  capabilities: CapabilityProfile | undefined,
+  entitlement: EntitlementSnapshot | undefined,
+): { partition: string; qos: string } {
+  if (!capabilities) return { partition: "", qos: "" };
+
+  const capabilityQos = new Set(capabilities.qos.map((item) => item.name));
+  const partitions = capabilities.partitions;
+  const supports = (partitionName: string, qosName: string): boolean => {
+    const partition = partitions.find((item) => item.name === partitionName);
+    return Boolean(
+      partition
+      && capabilityQos.has(qosName)
+      && (!partition.allow_qos || partition.allow_qos.includes(qosName)),
+    );
+  };
+  const capabilityFallback = (): { partition: string; qos: string } => {
+    const requestedPartition = capabilities.default_partition;
+    const requestedQos = capabilities.default_qos;
+    if (supports(requestedPartition, requestedQos)) {
+      return { partition: requestedPartition, qos: requestedQos };
+    }
+    const first = partitions.find((item) =>
+      item.allow_qos?.some((name) => capabilityQos.has(name))
+      || (!item.allow_qos && capabilityQos.size > 0),
+    );
+    const firstQos = first?.allow_qos?.find((name) => capabilityQos.has(name))
+      ?? (first ? capabilities.qos[0]?.name : undefined);
+    return first && firstQos && supports(first.name, firstQos)
+      ? { partition: first.name, qos: firstQos }
+      : { partition: "", qos: "" };
+  };
+
+  if (entitlement?.freshness === "fresh" && entitlement.data_quality === "authoritative") {
+    const associations = entitlement.snapshot?.associations ?? entitlement.associations ?? [];
+    for (const association of associations) {
+      const requestedQos = association.default_qos
+        ?? association.qos?.find((name) => capabilityQos.has(name));
+      if (!requestedQos || !capabilityQos.has(requestedQos)) continue;
+      if (association.partition && supports(association.partition, requestedQos)) {
+        return { partition: association.partition, qos: requestedQos };
+      }
+      const inferredPartition = partitions.find((item) => supports(item.name, requestedQos));
+      if (inferredPartition) {
+        return { partition: inferredPartition.name, qos: requestedQos };
+      }
+    }
+  }
+  return capabilityFallback();
+}
+
+export function isValidationResourceSelectionValid(
+  capabilities: CapabilityProfile,
+  partition: string,
+  qos: string,
+): boolean {
+  const selected = capabilities.partitions.find((item) => item.name === partition.trim());
+  return Boolean(
+    selected
+    && capabilities.qos.some((item) => item.name === qos.trim())
+    && (!selected.allow_qos || selected.allow_qos.includes(qos.trim())),
+  );
 }
 
 export function buildFormalContract(input: {

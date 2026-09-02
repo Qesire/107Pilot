@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { nativeRunCommands, runComparisonRows, workflowRunFacts } from "./RunEvidencePanel";
-import type { EvidenceObject, RunSummary } from "./types";
+import { nativeRunCommands, runComparisonRows, runEventFailureReason, workflowRunFacts } from "./RunEvidencePanel";
+import type { EvidenceObject, RunEvent, RunSummary } from "./types";
 
 describe("Run workbench helpers", () => {
   it("generates bounded native commands without executing them", () => {
@@ -69,6 +69,18 @@ describe("Run workbench helpers", () => {
       ["Stage", "array · array"],
       ["Recovery", "attempt 1 · submit 8-11 · reuse 0-7"],
     ]);
+  });
+
+  it("surfaces only the bounded persisted submit failure reason", () => {
+    const event: RunEvent = {
+      event_id: 1,
+      run_id: "run_failed",
+      event_type: "run.submit_failed",
+      payload: { failure_reason: "SlurmSubmissionRejected: Invalid qos" },
+      created_at: "2026-07-16T00:01:00+00:00",
+    };
+    expect(runEventFailureReason(event)).toBe("SlurmSubmissionRejected: Invalid qos");
+    expect(runEventFailureReason({ ...event, event_type: "run.submitting" })).toBeNull();
   });
 });
 

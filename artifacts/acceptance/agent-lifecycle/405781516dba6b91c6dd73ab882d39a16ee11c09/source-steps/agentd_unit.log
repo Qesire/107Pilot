@@ -1,0 +1,13 @@
+
+> @pilot107/pilot-agentd@0.1.0 test
+> vitest run --run
+
+
+ RUN  v4.1.9 /home/knowingthesea/107pilot/services/pilot-agentd
+
+
+ Test Files  16 passed (16)
+      Tests  215 passed (215)
+   Start at  11:22:59
+   Duration  7.75s (transform 1.56s, setup 0ms, import 4.48s, tests 14.78s, environment 1ms)
+

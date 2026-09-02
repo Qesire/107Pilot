@@ -1,0 +1,40 @@
+{
+  "authorization": {
+    "approval_inferred": false,
+    "required_flags": [
+      "--target",
+      "--owner",
+      "--approved-root",
+      "--authorization-id",
+      "--confirm-real-107"
+    ],
+    "simulator_endpoints_allowed": false
+  },
+  "cases": [
+    "success",
+    "exit_42",
+    "cancel",
+    "auth_expired",
+    "evidence",
+    "runtime_watch",
+    "resource_availability",
+    "model_unavailable_deterministic_fallback"
+  ],
+  "ended_at": "2026-08-24T19:02:40+00:00",
+  "environment": "R1",
+  "generated_at": "2026-08-24T19:02:40+00:00",
+  "missing_flags": [
+    "--target",
+    "--owner",
+    "--approved-root",
+    "--authorization-id",
+    "--confirm-real-107"
+  ],
+  "mode": "acceptance",
+  "profile": "r1",
+  "reason": "authorization_missing",
+  "release_revision": "cbaf6191910a6675aa728a465133bbeaf1ee7334",
+  "schema": "pilot107.agent-lifecycle-acceptance/v1",
+  "status": "not_run",
+  "unexpected_arguments": []
+}

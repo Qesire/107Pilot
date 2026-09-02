@@ -1,0 +1,24 @@
+ Container pilot107-sim-mariadb-1 Running 
+ Container pilot107-sim-slurmdbd-1 Running 
+ Container pilot107-sim-slurmctld-1 Running 
+ Container pilot107-sim-worker-2-1 Running 
+ Container pilot107-sim-worker-1-1 Running 
+ Container pilot107-sim-login-node-sim-1 Running 
+ Container pilot107-sim-mariadb-1 Waiting 
+ Container pilot107-sim-mariadb-1 Healthy 
+ Container pilot107-sim-worker-2-1 Restarting 
+ Container pilot107-sim-worker-1-1 Restarting 
+ Container pilot107-sim-slurmctld-1 Restarting 
+ Container pilot107-sim-worker-2-1 Started 
+ Container pilot107-sim-slurmctld-1 Started 
+ Container pilot107-sim-worker-1-1 Started 
+Traceback (most recent call last):
+  File "/home/knowingthesea/107pilot/scripts/smoke_pilot_agent_market_live.py", line 459, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/knowingthesea/107pilot/scripts/smoke_pilot_agent_market_live.py", line 290, in main
+    equivalent = template_publications.start_template_publication(
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/knowingthesea/107pilot/src/pilot107/agent/market_sessions.py", line 1158, in start_template_publication
+    raise TemplatePublicationError(
+pilot107.agent.market_sessions.TemplatePublicationError: sanitized bundle does not pass the publication gate

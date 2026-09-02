@@ -42,5 +42,10 @@ simulator/compose/slurm/jwt_hs256.key
 
 # deepwork state
 .slim/deepwork/
+.slim/*.docx
 .pilot-browser-insecure.sh
 .slurm-sim-fix.tar.gz
+
+# local misc
+/300
+test-results/

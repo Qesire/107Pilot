@@ -5,6 +5,7 @@ import { createProjectTools } from "../src/project-tools.js";
 import {
   A2_PROJECT_TOOL_NAMES,
   BUILDER_WORKFLOW_TOOL_NAMES,
+  PROJECT_WORKSPACE_TOOL_NAMES,
   parseDurableTurnRequest,
   parseToolInvocation,
   type ToolResult,
@@ -99,6 +100,7 @@ describe("A2 Project tools", () => {
     expect(Value.Check(context.parameters, { project_id: "project-2" })).toBe(false);
     const valid = {
       request_key: "build-1",
+      approval_summary_zh: "创建热扩散实验，并在沙箱通过后提交受限验证。",
       expected_project_version: 1,
       expected_workspace_snapshot_digest: "a".repeat(64),
       base_change_set_id: null,
@@ -111,6 +113,15 @@ describe("A2 Project tools", () => {
       }],
     };
     expect(Value.Check(submit.parameters, valid)).toBe(true);
+    expect(Value.Check(submit.parameters, {
+      ...valid,
+      blueprint: {
+        ...HEAT_BLUEPRINT,
+        validations: HEAT_BLUEPRINT.validations.filter(
+          (validation) => validation.execution === "slurm",
+        ),
+      },
+    })).toBe(false);
     expect(Value.Check(submit.parameters, { ...valid, cpus: 4 })).toBe(false);
 
     await context.execute("call-context", {});
@@ -150,6 +161,7 @@ describe("A2 Project tools", () => {
     expect((await context.execute("call-context", {})).terminate).toBe(false);
     expect((await submit.execute("call-submit", {
       request_key: "build-1",
+      approval_summary_zh: "创建热扩散实验，并在沙箱通过后提交受限验证。",
       expected_project_version: 1,
       expected_workspace_snapshot_digest: "a".repeat(64),
       base_change_set_id: null,
@@ -192,6 +204,7 @@ describe("A2 Project tools", () => {
     const patch = tools.find((tool) => tool.name === "workspace_patch");
     if (patch === undefined) throw new Error("missing workspace_patch");
     const valid = {
+      approval_summary_zh: "创建 main.py，供用户审阅。",
       patches: [{
         path: "main.py",
         expected_source_digest: null,
@@ -243,17 +256,17 @@ describe("A2 Project tools", () => {
     })).toBe(false);
   });
 
-  it("gives the repair profile the same closed Project tools", () => {
+  it("gives the repair profile only bounded Workspace editing tools", () => {
     const request = repairRequest();
     expect(request.task_kind).toBe("run_diagnosis_repair");
     expect(request.prompt_profile_id).toBe("run_diagnosis_repair");
     expect(createProjectTools(request, {
       invoke: async () => successResult(),
-    }).map((tool) => tool.name)).toEqual([...A2_PROJECT_TOOL_NAMES]);
+    }).map((tool) => tool.name)).toEqual([...PROJECT_WORKSPACE_TOOL_NAMES]);
   });
 
   it.each(["market_application", "template_publication"] as const)(
-    "gives the %s profile the same closed Project tools",
+    "gives the %s profile only bounded Workspace editing tools",
     (profile) => {
       const request = parseDurableTurnRequest({
         ...durableRequest(),
@@ -263,7 +276,7 @@ describe("A2 Project tools", () => {
       });
       expect(createProjectTools(request, {
         invoke: async () => successResult(),
-      }).map((tool) => tool.name)).toEqual([...A2_PROJECT_TOOL_NAMES]);
+      }).map((tool) => tool.name)).toEqual([...PROJECT_WORKSPACE_TOOL_NAMES]);
     },
   );
 

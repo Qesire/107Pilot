@@ -1,0 +1,877 @@
+.........................F.............................................. [  4%]
+....................................F..s.F.F.........s.................. [  9%]
+........................................................................ [ 14%]
+.......s......................................FF.FFF.................... [ 19%]
+..................................................................s..... [ 24%]
+...............s............................................... [ 28%]
+........................................................................ [ 33%]
+........................................................................ [ 38%]
+............................................................. [ 42%]
+................................sssssssssssss........................... [ 47%]
+........................................................................ [ 51%]
+.................................................................. [ 56%]
+.............................................................F.....sss.. [ 61%]
+........................................................................ [ 66%]
+..................................................sss................... [ 70%]
+......................F..................................... [ 74%]
+........................................................................ [ 79%]
+FFFFF................................................................... [ 84%]
+........................................................................ [ 89%]
+..................................................................... [ 94%]
+.................................F......FF.............................. [ 98%]
+................                                                         [100%]
+=================================== FAILURES ===================================
+_________ test_failed_run_repair_changes_code_in_workspace_not_source __________
+
+tmp_path = PosixPath('/tmp/pytest-of-knowingthesea/pytest-3/test_failed_run_repair_changes0')
+
+    def test_failed_run_repair_changes_code_in_workspace_not_source(tmp_path: Path) -> None:
+        service, _, projects, source, session, proposal, approved = approved_repair(
+            tmp_path
+        )
+        original = dict(source.files)
+    
+        repair = service.start_code_repair_project(
+            session.session_id,
+            proposal_id=proposal.proposal_id,
+            actor="alice",
+            expected_version=approved.version,
+            request_key="repair-project",
+        )
+        digests = {
+            item.path: item.source_sha256 for item in repair.workspace.snapshot.entries
+        }
+        change_set = projects.apply_patch(
+            project_id=repair.project.project_id,
+            workspace_id=repair.workspace.workspace_id,
+            owner="alice",
+            relative_path="train.py",
+            expected_source_digest=digests["train.py"],
+            operation="modify",
+            content="print('repaired')\n",
+        )
+        sandbox = projects.execute_sandbox(
+            project_id=repair.project.project_id,
+            workspace_id=repair.workspace.workspace_id,
+            owner="alice",
+            change_set_id=change_set.change_set_id,
+            argv=("python", "-m", "py_compile", "train.py"),
+            timeout=3,
+        )
+    
+        assert repair.project.origin is ExperimentProjectOrigin.FAILED_RUN
+        assert repair.project.source is not None
+        assert repair.project.source.ref_id == "run_failed"
+        assert source.files == original
+        assert [item.path for item in change_set.files] == ["train.py"]
+>       assert sandbox.status == "succeeded"
+E       AssertionError: assert 'failed' == 'succeeded'
+E         
+E         - succeeded
+E         + failed
+
+tests/agent/test_a5_repair_vertical.py:299: AssertionError
+_________ test_curated_application_creates_isolated_reviewable_project _________
+
+tmp_path = PosixPath('/tmp/pytest-of-knowingthesea/pytest-3/test_curated_application_creat0')
+
+    def test_curated_application_creates_isolated_reviewable_project(tmp_path: Path) -> None:
+        database = tmp_path / "pilot107.db"
+        runs = RunStore(database)
+        contracts = ContractService(
+            catalog=RecipeCatalog(),
+            store=ContractStore(database),
+        )
+        templates = TemplateMarketStore(
+            database,
+            publication_gate=TemplatePublicationGate(contracts),
+            contract_service=contracts,
+        )
+        draft = templates.create_draft(
+            owner="alice",
+            title="Curated project template",
+            description="Creates an isolated application Project",
+            visibility=TemplateVisibility.CAMPUS,
+            payload=_contract_payload("{owner}"),
+            compatibility={"partitions": ["debug"], "gpu": False},
+            publication={
+                "license": "MIT",
+                "attribution": "Reusable example",
+                "dataset_access": "No external dataset",
+                "risk_statement": "Runs in a bounded Slurm allocation",
+            },
+        )
+        review = templates.submit_review(
+            draft.draft_id,
+            owner="alice",
+            expected_version=draft.version,
+        )
+        templates.decide_review(
+            review.review_id,
+            principal=TemplateReviewerPrincipal(
+                actor="reviewer",
+                roles=frozenset({TemplateReviewerRole.REVIEWER}),
+            ),
+            expected_version=review.version,
+            approve=True,
+        )
+        release = templates.publish(
+            review.review_id,
+            owner="alice",
+            release_version="1.0.0",
+            request_key="publish-project-template",
+        )
+        project_store = SQLiteProjectStore(database)
+        projects = ProjectAgentService(
+            store=project_store,
+            workspace_root=tmp_path / "workspaces",
+            sandbox=SandboxExecutor(store=project_store),
+        )
+        service = MarketApplicationService(
+            store=SQLiteMarketSessionStore(database),
+            contract_service=contracts,
+            run_publications=RunPublicationStore(
+                database,
+                run_store=runs,
+                contract_service=contracts,
+            ),
+            template_market=templates,
+            project_service=projects,
+        )
+    
+        started = service.start_template_application(
+            owner="bob",
+            release_id=release.release_id,
+            user_intent="review the curated Contract before use",
+            request_key="bob-curated-project",
+        )
+    
+        assert started.application.project_id is not None
+        assert started.application.workspace_id is not None
+        assert started.application.change_set_id is not None
+        view = projects.get_project(
+            started.application.project_id,
+            owner="bob",
+            workspace_id=started.application.workspace_id,
+        )
+        assert view.project.origin is ExperimentProjectOrigin.TEMPLATE
+        assert view.project.source is not None
+        assert view.project.source.ref_id == release.release_id
+        assert len(view.change_sets) == 1
+>       assert view.change_sets[0].state is WorkspaceChangeSetState.REVIEWABLE
+E       AssertionError: assert <WorkspaceChangeSetState.FAILED: 'failed'> is <WorkspaceChangeSetState.REVIEWABLE: 'reviewable'>
+E        +  where <WorkspaceChangeSetState.FAILED: 'failed'> = WorkspaceChangeSet(change_set_id='changeset-edd2e20e80f086779e41ac55', project_id='project-9012d42b00166f3f31ef95a9', ...26-08-28T17:05:11.052470Z', updated_at='2026-08-28T17:05:11.069352Z', schema_version='pilot107.workspace-changeset/v1').state
+E        +  and   <WorkspaceChangeSetState.REVIEWABLE: 'reviewable'> = WorkspaceChangeSetState.REVIEWABLE
+
+tests/agent/test_market_application_session.py:475: AssertionError
+__________ test_blueprint_patch_diff_and_sandbox_form_reviewable_view __________
+
+tmp_path = PosixPath('/tmp/pytest-of-knowingthesea/pytest-3/test_blueprint_patch_diff_and_0')
+
+    def test_blueprint_patch_diff_and_sandbox_form_reviewable_view(tmp_path: Path) -> None:
+        service = _service(tmp_path)
+        created = service.create_project(
+            owner="alice",
+            origin="blank",
+            goal="build an experiment",
+            request_key="blank-2",
+        )
+        blueprint = ProjectBlueprint(
+            goal="build an experiment",
+            entrypoints=("main.py",),
+            files=(
+                ProjectFile(
+                    path="main.py", purpose="entrypoint", classification="editable"
+                ),
+            ),
+            validations=(
+                ProjectValidation(
+                    validation_id="syntax",
+                    execution="sandbox",
+                    argv=("python", "-m", "py_compile", "main.py"),
+                    expected_outputs=(),
+                ),
+            ),
+            contract_intent=ProjectContractIntent(
+                recipe_version_id=None, resource_hints={}
+            ),
+            expected_outputs=(),
+            dependencies=(),
+            open_questions=(),
+        )
+        service.save_blueprint(
+            created.project.project_id,
+            owner="alice",
+            expected_version=created.project.version,
+            blueprint=blueprint,
+        )
+    
+        change_set = service.apply_patches(
+            project_id=created.project.project_id,
+            workspace_id=created.workspace.workspace_id,
+            owner="alice",
+            patches=(
+                ("main.py", None, "create", "print('ok')\n"),
+                ("config.yaml", None, "create", "seed: 107\n"),
+            ),
+        )
+        result = service.execute_sandbox(
+            project_id=created.project.project_id,
+            workspace_id=created.workspace.workspace_id,
+            owner="alice",
+            change_set_id=change_set.change_set_id,
+            argv=("python", "-m", "py_compile", "main.py"),
+            timeout=3,
+        )
+        view = service.get_project(created.project.project_id, owner="alice")
+    
+>       assert result.status == "succeeded"
+E       AssertionError: assert 'failed' == 'succeeded'
+E         
+E         - succeeded
+E         + failed
+
+tests/agent/test_project_agent_service.py:178: AssertionError
+_ test_existing_origin_produces_reviewable_multifile_copy_without_source_mutation _
+
+tmp_path = PosixPath('/tmp/pytest-of-knowingthesea/pytest-3/test_existing_origin_produces_0')
+
+    def test_existing_origin_produces_reviewable_multifile_copy_without_source_mutation(
+        tmp_path: Path,
+    ) -> None:
+        service, source = _existing_service(tmp_path)
+        original = dict(source.files)
+        created = service.create_project(
+            owner="alice",
+            origin="existing",
+            goal="edit an existing experiment safely",
+            request_key="existing",
+            source_ref="/public/home/alice/exp",
+        )
+        digests = {
+            item.path: item.source_sha256 for item in created.workspace.snapshot.entries
+        }
+    
+        change_set = service.apply_patches(
+            project_id=created.project.project_id,
+            workspace_id=created.workspace.workspace_id,
+            owner="alice",
+            patches=(
+                ("main.py", digests["main.py"], "modify", "print('workspace')\n"),
+                ("config.yaml", digests["config.yaml"], "modify", "seed: 107\n"),
+            ),
+        )
+        service.execute_sandbox(
+            project_id=created.project.project_id,
+            workspace_id=created.workspace.workspace_id,
+            owner="alice",
+            change_set_id=change_set.change_set_id,
+            argv=("python", "-m", "py_compile", "main.py"),
+            timeout=3,
+        )
+        persisted = service.get_project(created.project.project_id, owner="alice")
+    
+        assert source.files == original
+        assert len(persisted.change_sets[0].files) == 2
+>       assert persisted.change_sets[0].state.value == "reviewable"
+E       AssertionError: assert 'failed' == 'reviewable'
+E         
+E         - reviewable
+E         + failed
+
+tests/agent/test_project_agent_service.py:256: AssertionError
+___________________ test_sandbox_runs_argv_only_syntax_check ___________________
+
+sandbox_workspace = (<pilot107.agent.project_store.SQLiteProjectStore object at 0x75de6f251250>, AgentWorkspaceRecord(workspace_id='worksp...entries=(), captured_at='2026-08-19T00:00:00Z'), created_at='2026-08-19T00:00:00Z', updated_at='2026-08-19T00:00:00Z'))
+
+    def test_sandbox_runs_argv_only_syntax_check(sandbox_workspace) -> None:
+        _, workspace = sandbox_workspace
+    
+        result = SandboxExecutor().execute(
+            workspace,
+            argv=("python", "-m", "py_compile", "main.py"),
+            timeout=3,
+        )
+    
+>       assert result.status == "succeeded"
+E       AssertionError: assert 'failed' == 'succeeded'
+E         
+E         - succeeded
+E         + failed
+
+tests/agent/test_workspace_sandbox.py:57: AssertionError
+____________________ test_sandbox_kills_command_at_deadline ____________________
+
+sandbox_workspace = (<pilot107.agent.project_store.SQLiteProjectStore object at 0x75de6f252ae0>, AgentWorkspaceRecord(workspace_id='worksp...entries=(), captured_at='2026-08-19T00:00:00Z'), created_at='2026-08-19T00:00:00Z', updated_at='2026-08-19T00:00:00Z'))
+
+    def test_sandbox_kills_command_at_deadline(sandbox_workspace) -> None:
+        _, workspace = sandbox_workspace
+    
+        result = SandboxExecutor().execute(
+            workspace,
+            argv=("python", "-c", "while True: pass"),
+            timeout=1,
+        )
+    
+>       assert result.status == "timed_out"
+E       AssertionError: assert 'failed' == 'timed_out'
+E         
+E         - timed_out
+E         + failed
+
+tests/agent/test_workspace_sandbox.py:71: AssertionError
+______________________ test_sandbox_stops_output_overflow ______________________
+
+sandbox_workspace = (<pilot107.agent.project_store.SQLiteProjectStore object at 0x75de7098f8c0>, AgentWorkspaceRecord(workspace_id='worksp...entries=(), captured_at='2026-08-19T00:00:00Z'), created_at='2026-08-19T00:00:00Z', updated_at='2026-08-19T00:00:00Z'))
+
+    def test_sandbox_stops_output_overflow(sandbox_workspace) -> None:
+        _, workspace = sandbox_workspace
+    
+        result = SandboxExecutor(max_output_bytes=128).execute(
+            workspace,
+            argv=("python", "-c", "print('x' * 10000)"),
+            timeout=3,
+        )
+    
+        assert result.status == "failed"
+>       assert result.limit_reason == "output_limit"
+E       assert None == 'output_limit'
+E        +  where None = SandboxExecutionResult(result_id='sandbox-dab58c114246a6e4879a3209', argv=('python', '-c', "print('x' * 10000)"), stat...a495991b7852b855', stderr_sha256='31c2cb0dffdeb9049fa2269e24af62df15e4161d4f752a648faf9630259725fe', limit_reason=None).limit_reason
+
+tests/agent/test_workspace_sandbox.py:95: AssertionError
+_________ test_sandbox_clears_cluster_credentials_and_disables_network _________
+
+sandbox_workspace = (<pilot107.agent.project_store.SQLiteProjectStore object at 0x75de6f3cc680>, AgentWorkspaceRecord(workspace_id='worksp...entries=(), captured_at='2026-08-19T00:00:00Z'), created_at='2026-08-19T00:00:00Z', updated_at='2026-08-19T00:00:00Z'))
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x75de6f2349e0>
+
+    def test_sandbox_clears_cluster_credentials_and_disables_network(
+        sandbox_workspace,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _, workspace = sandbox_workspace
+        monkeypatch.setenv("PILOT107_AGENTD_TOKEN", "must-not-enter-sandbox")
+        program = (
+            "import os,socket;"
+            "print(os.getenv('PILOT107_AGENTD_TOKEN','cleared'));"
+            "s=socket.socket();s.settimeout(.1);"
+            "\ntry:s.connect(('127.0.0.1',9));print('network-open')"
+            "\nexcept OSError:print('network-blocked')"
+        )
+    
+        result = SandboxExecutor().execute(
+            workspace,
+            argv=("python", "-c", program),
+            timeout=3,
+        )
+    
+>       assert result.status == "succeeded"
+E       AssertionError: assert 'failed' == 'succeeded'
+E         
+E         - succeeded
+E         + failed
+
+tests/agent/test_workspace_sandbox.py:119: AssertionError
+________________ test_sandbox_result_is_persisted_on_change_set ________________
+
+sandbox_workspace = (<pilot107.agent.project_store.SQLiteProjectStore object at 0x75de6f3cf7a0>, AgentWorkspaceRecord(workspace_id='worksp...entries=(), captured_at='2026-08-19T00:00:00Z'), created_at='2026-08-19T00:00:00Z', updated_at='2026-08-19T00:00:00Z'))
+
+    def test_sandbox_result_is_persisted_on_change_set(sandbox_workspace) -> None:
+        store, workspace = sandbox_workspace
+        before = hashlib.sha256(b"print('ok')\n").hexdigest()
+        change_set = WorkspaceEditor(store=store).apply_patch(
+            workspace.workspace_id,
+            "alice",
+            "main.py",
+            before,
+            WorkspacePatch(operation="modify", content="print('changed')\n"),
+        )
+    
+        SandboxExecutor(store=store).execute(
+            workspace,
+            argv=("python", "-m", "py_compile", "main.py"),
+            timeout=3,
+            change_set_id=change_set.change_set_id,
+        )
+    
+        persisted = store.get_change_set(change_set.change_set_id, owner="alice")
+        assert len(persisted.sandbox_results) == 1
+>       assert persisted.sandbox_results[0].status == "succeeded"
+E       AssertionError: assert 'failed' == 'succeeded'
+E         
+E         - succeeded
+E         + failed
+
+tests/agent/test_workspace_sandbox.py:145: AssertionError
+_ StdlibHttpMetricsTests.test_metrics_are_available_without_identity_and_share_api_registry _
+
+self = <test_http_metrics.StdlibHttpMetricsTests testMethod=test_metrics_are_available_without_identity_and_share_api_registry>
+
+    def test_metrics_are_available_without_identity_and_share_api_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            api = build_api(
+                db_path=root / "pilot107.db",
+                evidence_root=root / "evidence",
+                auth_required=True,
+            )
+            WorkerTelemetryStore(
+                root=root / "worker-metrics",
+                worker_id="stdlib-worker",
+            ).update(
+                increments={"ticks_total": 3},
+                tick_duration_seconds=0.1,
+            )
+>           server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(api))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_http_metrics.py:31: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <socket.socket fd=-1, family=0, type=0, proto=0>
+family = <AddressFamily.AF_INET: 2>, type = <SocketKind.SOCK_STREAM: 1>
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+>       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError
+___ ProductReadModelTests.test_sse_replay_emits_summary_without_raw_payload ____
+
+self = <test_read_models.ProductReadModelTests testMethod=test_sse_replay_emits_summary_without_raw_payload>
+
+    def test_sse_replay_emits_summary_without_raw_payload(self) -> None:
+        run = self.run_store.create_run(
+            run_id="run_sse",
+            owner="alice",
+            workdir="/public/home/alice",
+            script="echo stream",
+        )
+        event = self.run_store.append_event(
+            run_id=run.run_id,
+            event_type="run.stream_test",
+            payload={"state": "FAILED", "raw_response": {"token": "must-not-stream"}},
+        )
+        secret = b"0123456789abcdef0123456789abcdef"
+        self.api.proxy_authenticator = ProxyRequestAuthenticator(secret)
+        target = (
+            f"/api/v1/runs/{run.run_id}/events/stream?once=true&after_event_id={event.event_id - 1}"
+        )
+>       server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.api))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_read_models.py:578: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <socket.socket fd=-1, family=0, type=0, proto=0>
+family = <AddressFamily.AF_INET: 2>, type = <SocketKind.SOCK_STREAM: 1>
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+>       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError
+_ SlurmHeadersAuthTests.test_bearer_auth_sends_authorization_header_over_wire __
+
+self = <test_rest_native_backend.SlurmHeadersAuthTests testMethod=test_bearer_auth_sends_authorization_header_over_wire>
+
+    def test_bearer_auth_sends_authorization_header_over_wire(self) -> None:
+        """BEARER path: real HTTP asserts Authorization: Bearer <token>."""
+>       with FakeSlurmRestServer() as server:
+             ^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_rest_native_backend.py:607: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_rest_native_backend.py:204: in __init__
+    self._server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <socket.socket fd=-1, family=0, type=0, proto=0>
+family = <AddressFamily.AF_INET: 2>, type = <SocketKind.SOCK_STREAM: 1>
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+>       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError
+________ SlurmHeadersAuthTests.test_slurm_headers_get_job_sends_headers ________
+
+self = <test_rest_native_backend.SlurmHeadersAuthTests testMethod=test_slurm_headers_get_job_sends_headers>
+
+    def test_slurm_headers_get_job_sends_headers(self) -> None:
+        """get_job under SLURM_HEADERS also sends both auth headers."""
+>       with FakeSlurmRestServer() as server:
+             ^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_rest_native_backend.py:625: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_rest_native_backend.py:204: in __init__
+    self._server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <socket.socket fd=-1, family=0, type=0, proto=0>
+family = <AddressFamily.AF_INET: 2>, type = <SocketKind.SOCK_STREAM: 1>
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+>       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError
+_ SlurmHeadersAuthTests.test_slurm_headers_missing_username_raises_transport_error _
+
+self = <test_rest_native_backend.SlurmHeadersAuthTests testMethod=test_slurm_headers_missing_username_raises_transport_error>
+
+    def test_slurm_headers_missing_username_raises_transport_error(self) -> None:
+        """SLURM_HEADERS without slurm_username → SlurmTransportError."""
+>       with FakeSlurmRestServer() as server:
+             ^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_rest_native_backend.py:591: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_rest_native_backend.py:204: in __init__
+    self._server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <socket.socket fd=-1, family=0, type=0, proto=0>
+family = <AddressFamily.AF_INET: 2>, type = <SocketKind.SOCK_STREAM: 1>
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+>       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError
+__ SlurmHeadersAuthTests.test_slurm_headers_post_body_contains_script_and_job __
+
+self = <test_rest_native_backend.SlurmHeadersAuthTests testMethod=test_slurm_headers_post_body_contains_script_and_job>
+
+    def test_slurm_headers_post_body_contains_script_and_job(self) -> None:
+        """Verify the real POST body shape for the SLURM_HEADERS path."""
+>       with FakeSlurmRestServer() as server:
+             ^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_rest_native_backend.py:572: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_rest_native_backend.py:204: in __init__
+    self._server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <socket.socket fd=-1, family=0, type=0, proto=0>
+family = <AddressFamily.AF_INET: 2>, type = <SocketKind.SOCK_STREAM: 1>
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+>       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError
+____ SlurmHeadersAuthTests.test_slurm_headers_sends_both_headers_over_wire _____
+
+self = <test_rest_native_backend.SlurmHeadersAuthTests testMethod=test_slurm_headers_sends_both_headers_over_wire>
+
+    def test_slurm_headers_sends_both_headers_over_wire(self) -> None:
+        """SLURM_HEADERS path: real HTTP asserts X-SLURM-USER-NAME + X-SLURM-USER-TOKEN.
+    
+        Per @librarian research, Slurm 23.11 JWT auth requires these two headers
+        (not ``Authorization: Bearer``). The adapter must send both.
+        """
+>       with FakeSlurmRestServer() as server:
+             ^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_rest_native_backend.py:550: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_rest_native_backend.py:204: in __init__
+    self._server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <socket.socket fd=-1, family=0, type=0, proto=0>
+family = <AddressFamily.AF_INET: 2>, type = <SocketKind.SOCK_STREAM: 1>
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+>       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError
+____ WebServerTests.test_origin_probe_post_exercises_bff_csrf_origin_check _____
+
+self = <test_web_server.WebServerTests testMethod=test_origin_probe_post_exercises_bff_csrf_origin_check>
+
+    def test_origin_probe_post_exercises_bff_csrf_origin_check(self) -> None:
+        # Spin up the real API (http_app) and BFF (web.server) stack so a POST
+        # to /api/v1/security/origin-probe traverses do_POST's
+        # _allow_mutating_request() Origin check before reaching the route.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            api = build_api(
+                db_path=root / "pilot107.db",
+                evidence_root=root / "evidence",
+                auth_required=False,
+            )
+>           api_server = ThreadingHTTPServer(("127.0.0.1", 0), make_api_handler(api))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_web_server.py:235: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <socket.socket fd=-1, family=0, type=0, proto=0>
+family = <AddressFamily.AF_INET: 2>, type = <SocketKind.SOCK_STREAM: 1>
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+>       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError
+_________ TusProxyTests.test_create_patch_head_delete_headers_relayed __________
+
+self = <test_web_server.TusProxyTests testMethod=test_create_patch_head_delete_headers_relayed>
+
+    def setUp(self) -> None:
+        self._temporary = tempfile.TemporaryDirectory()
+        root = Path(self._temporary.name)
+        self.cluster_root = root / "cluster" / "alice"
+        self.cluster_root.mkdir(parents=True)
+        executor = LocalFileOpsExecutor(allowed_roots=[str(self.cluster_root)])
+        upload_service = FileUploadService(
+            executor=executor,
+            owner_roots=(str(self.cluster_root),),
+            staging_root=root / "staging",
+        )
+        run_store = RunStore(root / "pilot107.db")
+        api = Pilot107HttpApi(
+            store=run_store,
+            evidence_query=EvidenceQueryService(
+                store=run_store,
+                evidence_store=EvidenceStore(root / "evidence"),
+            ),
+            file_routes=FileRoutes(upload_service=upload_service, executor=executor),
+            auth_required=True,
+        )
+>       self._api_server = ThreadingHTTPServer(("127.0.0.1", 0), make_api_handler(api))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_web_server.py:335: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <socket.socket fd=-1, family=0, type=0, proto=0>
+family = <AddressFamily.AF_INET: 2>, type = <SocketKind.SOCK_STREAM: 1>
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+>       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError
+_______________ TusProxyTests.test_options_capabilities_relayed ________________
+
+self = <test_web_server.TusProxyTests testMethod=test_options_capabilities_relayed>
+
+    def setUp(self) -> None:
+        self._temporary = tempfile.TemporaryDirectory()
+        root = Path(self._temporary.name)
+        self.cluster_root = root / "cluster" / "alice"
+        self.cluster_root.mkdir(parents=True)
+        executor = LocalFileOpsExecutor(allowed_roots=[str(self.cluster_root)])
+        upload_service = FileUploadService(
+            executor=executor,
+            owner_roots=(str(self.cluster_root),),
+            staging_root=root / "staging",
+        )
+        run_store = RunStore(root / "pilot107.db")
+        api = Pilot107HttpApi(
+            store=run_store,
+            evidence_query=EvidenceQueryService(
+                store=run_store,
+                evidence_store=EvidenceStore(root / "evidence"),
+            ),
+            file_routes=FileRoutes(upload_service=upload_service, executor=executor),
+            auth_required=True,
+        )
+>       self._api_server = ThreadingHTTPServer(("127.0.0.1", 0), make_api_handler(api))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_web_server.py:335: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/usr/lib/python3.12/socketserver.py:453: in __init__
+    self.socket = socket.socket(self.address_family,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <socket.socket fd=-1, family=0, type=0, proto=0>
+family = <AddressFamily.AF_INET: 2>, type = <SocketKind.SOCK_STREAM: 1>
+proto = 0, fileno = None
+
+    def __init__(self, family=-1, type=-1, proto=-1, fileno=None):
+        # For user code address family and type values are IntEnum members, but
+        # for the underlying _socket.socket they're just integers. The
+        # constructor of _socket.socket converts the given argument to an
+        # integer automatically.
+        if fileno is None:
+            if family == -1:
+                family = AF_INET
+            if type == -1:
+                type = SOCK_STREAM
+            if proto == -1:
+                proto = 0
+>       _socket.socket.__init__(self, family, type, proto, fileno)
+E       PermissionError: [Errno 1] Operation not permitted
+
+/usr/lib/python3.12/socket.py:233: PermissionError
+=============================== warnings summary ===============================
+tests/test_command_gateway.py::CommandGatewayTests::test_extract_valid_archive_reports_member_count
+tests/test_file_ops_executor.py::LocalFileOpsExecutorTests::test_extract_valid_archive
+tests/test_file_uploads.py::FileUploadServiceTests::test_auto_extract_writes_and_extracts
+  /usr/lib/python3.12/tarfile.py:2301: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/agent/test_a5_repair_vertical.py::test_failed_run_repair_changes_code_in_workspace_not_source
+FAILED tests/agent/test_market_application_session.py::test_curated_application_creates_isolated_reviewable_project
+FAILED tests/agent/test_project_agent_service.py::test_blueprint_patch_diff_and_sandbox_form_reviewable_view
+FAILED tests/agent/test_project_agent_service.py::test_existing_origin_produces_reviewable_multifile_copy_without_source_mutation
+FAILED tests/agent/test_workspace_sandbox.py::test_sandbox_runs_argv_only_syntax_check
+FAILED tests/agent/test_workspace_sandbox.py::test_sandbox_kills_command_at_deadline
+FAILED tests/agent/test_workspace_sandbox.py::test_sandbox_stops_output_overflow
+FAILED tests/agent/test_workspace_sandbox.py::test_sandbox_clears_cluster_credentials_and_disables_network
+FAILED tests/agent/test_workspace_sandbox.py::test_sandbox_result_is_persisted_on_change_set
+FAILED tests/test_http_metrics.py::StdlibHttpMetricsTests::test_metrics_are_available_without_identity_and_share_api_registry
+FAILED tests/test_read_models.py::ProductReadModelTests::test_sse_replay_emits_summary_without_raw_payload
+FAILED tests/test_rest_native_backend.py::SlurmHeadersAuthTests::test_bearer_auth_sends_authorization_header_over_wire
+FAILED tests/test_rest_native_backend.py::SlurmHeadersAuthTests::test_slurm_headers_get_job_sends_headers
+FAILED tests/test_rest_native_backend.py::SlurmHeadersAuthTests::test_slurm_headers_missing_username_raises_transport_error
+FAILED tests/test_rest_native_backend.py::SlurmHeadersAuthTests::test_slurm_headers_post_body_contains_script_and_job
+FAILED tests/test_rest_native_backend.py::SlurmHeadersAuthTests::test_slurm_headers_sends_both_headers_over_wire
+FAILED tests/test_web_server.py::WebServerTests::test_origin_probe_post_exercises_bff_csrf_origin_check
+FAILED tests/test_web_server.py::TusProxyTests::test_create_patch_head_delete_headers_relayed
+FAILED tests/test_web_server.py::TusProxyTests::test_options_capabilities_relayed
+19 failed, 1444 passed, 24 skipped, 3 warnings, 41 subtests passed in 90.00s (0:01:29)

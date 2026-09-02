@@ -144,6 +144,36 @@ describe("campus OpenAI-compatible provider", () => {
     },
   );
 
+  it("preserves the HTTP status for the USTC authentication error envelope", async () => {
+    const gateway = await openGateway([
+      response(
+        401,
+        JSON.stringify({
+          error: {
+            message: "Authentication Error, No api key passed in.",
+            type: "auth_error",
+            param: "None",
+            code: "401",
+          },
+        }),
+      ),
+    ]);
+
+    const events = await runCampusTurn(gateway, { maxAttempts: 1 });
+
+    expect(terminal(events)).toMatchObject({
+      type: "turn_failed",
+      payload: {
+        error: {
+          code: "provider_auth",
+          retryable: false,
+          provider_status: 401,
+        },
+      },
+    });
+    expect(gateway.requests).toHaveLength(1);
+  });
+
   it("uses only the 100ms and 400ms executor backoff before three failed provider calls", async () => {
     const gateway = await openGateway([
       httpFailure(503),

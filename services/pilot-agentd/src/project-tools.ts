@@ -4,6 +4,7 @@ import { Type, type TSchema } from "typebox";
 import {
   A2_PROJECT_TOOL_NAMES,
   BUILDER_WORKFLOW_TOOL_NAMES,
+  PROJECT_WORKSPACE_TOOL_NAMES,
   type DurableAgentTurnRequest,
   type JsonObject,
 } from "./protocol.js";
@@ -30,6 +31,30 @@ const ResourceHints = Type.Object(
   },
   { additionalProperties: false },
 );
+const SandboxValidationSchema = Type.Object(
+  {
+    validation_id: Id,
+    execution: Type.Literal("sandbox"),
+    argv: Type.Array(Type.String({ minLength: 1, maxLength: 4_096 }), {
+      minItems: 1,
+      maxItems: 128,
+    }),
+    expected_outputs: Type.Array(RelativePath, { maxItems: 256 }),
+  },
+  { additionalProperties: false },
+);
+const SlurmValidationSchema = Type.Object(
+  {
+    validation_id: Id,
+    execution: Type.Literal("slurm"),
+    argv: Type.Array(Type.String({ minLength: 1, maxLength: 4_096 }), {
+      minItems: 1,
+      maxItems: 128,
+    }),
+    expected_outputs: Type.Array(RelativePath, { maxItems: 256 }),
+  },
+  { additionalProperties: false },
+);
 const ProjectBlueprintSchema = Type.Object(
   {
     goal: Type.String({ minLength: 1, maxLength: 64_000 }),
@@ -47,18 +72,10 @@ const ProjectBlueprintSchema = Type.Object(
       },
       { additionalProperties: false },
     ), { maxItems: 4_096 }),
-    validations: Type.Array(Type.Object(
-      {
-        validation_id: Id,
-        execution: Type.Union([Type.Literal("sandbox"), Type.Literal("slurm")]),
-        argv: Type.Array(Type.String({ minLength: 1, maxLength: 4_096 }), {
-          minItems: 1,
-          maxItems: 128,
-        }),
-        expected_outputs: Type.Array(RelativePath, { maxItems: 256 }),
-      },
-      { additionalProperties: false },
-    ), { maxItems: 256 }),
+    validations: Type.Array(
+      Type.Union([SandboxValidationSchema, SlurmValidationSchema]),
+      { maxItems: 256 },
+    ),
     contract_intent: Type.Object(
       {
         recipe_version_id: Type.Union([
@@ -103,6 +120,15 @@ const ProjectBlueprintSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const BuilderProjectBlueprintSchema = Type.Intersect([
+  ProjectBlueprintSchema,
+  Type.Object({
+    validations: Type.Tuple([
+      SandboxValidationSchema,
+      SlurmValidationSchema,
+    ]),
+  }),
+]);
 const WorkspacePatch = Type.Object(
   {
     path: RelativePath,
@@ -133,6 +159,7 @@ const ARGUMENT_SCHEMAS = {
   workspace_read: Type.Object({ path: Path }, { additionalProperties: false }),
   workspace_patch: Type.Object(
     {
+      approval_summary_zh: Type.String({ minLength: 1, maxLength: 4_000 }),
       patches: Type.Array(WorkspacePatch, { minItems: 1, maxItems: 256 }),
     },
     { additionalProperties: false },
@@ -170,6 +197,7 @@ const ARGUMENT_SCHEMAS = {
   builder_build_submit: Type.Object(
     {
       request_key: Id,
+      approval_summary_zh: Type.String({ minLength: 1, maxLength: 4_000 }),
       expected_project_version: Type.Integer({
         minimum: 1,
         maximum: Number.MAX_SAFE_INTEGER,
@@ -178,7 +206,7 @@ const ARGUMENT_SCHEMAS = {
         pattern: "^[a-f0-9]{64}$",
       }),
       base_change_set_id: Type.Union([Type.Null(), Id]),
-      blueprint: ProjectBlueprintSchema,
+      blueprint: BuilderProjectBlueprintSchema,
       patches: Type.Array(WorkspacePatch, { minItems: 1, maxItems: 256 }),
     },
     { additionalProperties: false },
@@ -210,10 +238,11 @@ export function createProjectTools(
   gateway: ReadToolGateway,
   options: ProjectToolOptions = {},
 ): AgentTool[] {
-  const names = options.phaseAwareBuilder === true
-      && request.task_kind === "experiment_builder"
-    ? BUILDER_WORKFLOW_TOOL_NAMES
-    : A2_PROJECT_TOOL_NAMES;
+  const names = request.task_kind === "experiment_builder"
+    ? options.phaseAwareBuilder === true
+      ? BUILDER_WORKFLOW_TOOL_NAMES
+      : A2_PROJECT_TOOL_NAMES
+    : PROJECT_WORKSPACE_TOOL_NAMES;
   return names.map((name) => ({
     name,
     label: name,

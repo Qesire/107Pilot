@@ -46,6 +46,7 @@ import type {
   EvidenceObject,
   EvidenceObjectPreview,
   JsonObject,
+  RunEvent,
   RunSummary,
   SuccessfulRunMarketItem,
   SuccessfulRunPublicationInput,
@@ -432,13 +433,23 @@ function TimelineView({ events, lineage, currentRunId, onCompare }: {
           {(events.data?.items ?? []).map((event) => (
             <li key={event.event_id}>
               <span>#{event.event_id}</span>
-              <div><strong>{event.event_type}</strong><small>{formatTimestamp(event.created_at)}</small><pre><code>{JSON.stringify(event.payload, null, 2)}</code></pre></div>
+              <div>
+                <strong>{event.event_type}</strong><small>{formatTimestamp(event.created_at)}</small>
+                {runEventFailureReason(event) ? <p className="limitation" role="alert">提交失败原因：{runEventFailureReason(event)}</p> : null}
+                <pre><code>{JSON.stringify(event.payload, null, 2)}</code></pre>
+              </div>
             </li>
           ))}
         </ol>
       </QueryBoundary>
     </div>
   );
+}
+
+export function runEventFailureReason(event: RunEvent): string | null {
+  if (event.event_type !== "run.submit_failed") return null;
+  const reason = event.payload.failure_reason;
+  return typeof reason === "string" && reason.trim() ? reason : null;
 }
 
 function CompareView({ current, currentObjects, comparison, comparisonEvidence, candidates, compareRunId, onSelect }: {

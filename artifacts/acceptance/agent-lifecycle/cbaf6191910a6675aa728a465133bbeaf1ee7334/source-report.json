@@ -1,0 +1,295 @@
+{
+  "case_results": {
+    "agentd_type_unit_build": "PASS",
+    "compose_config": "PASS",
+    "python_lint": "PASS",
+    "python_types": "PASS",
+    "python_unit": "PASS",
+    "schema_contracts": "PASS",
+    "sim_core": "PASS",
+    "web_browser_workflow": "FAIL",
+    "web_type_unit_build": "PASS"
+  },
+  "cases": [
+    "python_lint",
+    "python_types",
+    "python_unit",
+    "schema_contracts",
+    "agentd_type_unit_build",
+    "web_type_unit_build",
+    "web_browser_workflow",
+    "compose_config",
+    "sim_core"
+  ],
+  "ended_at": "2026-08-25T02:17:46+00:00",
+  "environment": "D0",
+  "generated_at": "2026-08-25T02:17:46+00:00",
+  "mode": "acceptance",
+  "process_exit_code": 1,
+  "profile": "source",
+  "release_revision": "cbaf6191910a6675aa728a465133bbeaf1ee7334",
+  "schema": "pilot107.agent-lifecycle-acceptance/v1",
+  "started_at": "2026-08-25T02:13:17+00:00",
+  "status": "FAIL",
+  "steps": [
+    {
+      "cases": [
+        "python_lint"
+      ],
+      "command": [
+        "uv",
+        "run",
+        "ruff",
+        "check",
+        "src",
+        "tests",
+        "scripts"
+      ],
+      "ended_at": "2026-08-25T02:13:17+00:00",
+      "log_path": "source-steps/python_lint.log",
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+      "name": "python_lint",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:13:17+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "python_types"
+      ],
+      "command": [
+        "uv",
+        "run",
+        "mypy",
+        "src"
+      ],
+      "ended_at": "2026-08-25T02:13:17+00:00",
+      "log_path": "source-steps/python_types.log",
+      "log_sha256": "44c87c1dbb99f09198aa9ef2494752b85e61794ec703cc093bfc70f38a4858ad",
+      "name": "python_types",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:13:17+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "schema_contracts"
+      ],
+      "command": [
+        "uv",
+        "run",
+        "pytest",
+        "tests/agent/test_lifecycle_schemas.py",
+        "tests/test_schema_migrations.py",
+        "tests/test_contract_v2.py",
+        "tests/test_contracts.py",
+        "-q"
+      ],
+      "ended_at": "2026-08-25T02:13:18+00:00",
+      "log_path": "source-steps/schema_contracts.log",
+      "log_sha256": "0e01ce45e7a87550790b35d28144bb7f33889d21ce66f3ee81661f562065917b",
+      "name": "schema_contracts",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:13:17+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "python_unit"
+      ],
+      "command": [
+        "uv",
+        "run",
+        "pytest",
+        "-q"
+      ],
+      "ended_at": "2026-08-25T02:15:17+00:00",
+      "log_path": "source-steps/python_unit.log",
+      "log_sha256": "f2cb5985ffb1ef57c167122ffcb4df2420e371ed66afeb0211b67e9c1a4448dc",
+      "name": "python_unit",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:13:18+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "agentd_type_unit_build"
+      ],
+      "command": [
+        "npm",
+        "--prefix",
+        "services/pilot-agentd",
+        "run",
+        "typecheck"
+      ],
+      "ended_at": "2026-08-25T02:15:20+00:00",
+      "log_path": "source-steps/agentd_typecheck.log",
+      "log_sha256": "a1c2348c5dacc9f2ba0ab20692d3a372909f29c801c0fafcf38d2e309cab016a",
+      "name": "agentd_typecheck",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:15:17+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "agentd_type_unit_build"
+      ],
+      "command": [
+        "npm",
+        "--prefix",
+        "services/pilot-agentd",
+        "test",
+        "--",
+        "--run"
+      ],
+      "ended_at": "2026-08-25T02:15:28+00:00",
+      "log_path": "source-steps/agentd_unit.log",
+      "log_sha256": "c86d8bef59d5e9e207cc106771933206f45507c15df03f53504296e908725080",
+      "name": "agentd_unit",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:15:20+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "agentd_type_unit_build"
+      ],
+      "command": [
+        "npm",
+        "--prefix",
+        "services/pilot-agentd",
+        "run",
+        "build"
+      ],
+      "ended_at": "2026-08-25T02:15:31+00:00",
+      "log_path": "source-steps/agentd_build.log",
+      "log_sha256": "f44484e07cb28841e9bdf5245334846f9147f76ab9aa6a06d0b304162c22f68a",
+      "name": "agentd_build",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:15:28+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "web_type_unit_build"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "ended_at": "2026-08-25T02:15:34+00:00",
+      "log_path": "source-steps/web_typecheck.log",
+      "log_sha256": "85104a574d4725c649c40191b47fb730cf3c93b9134231b6b5634787721519c6",
+      "name": "web_typecheck",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:15:31+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "web_type_unit_build"
+      ],
+      "command": [
+        "npm",
+        "test",
+        "--",
+        "--run"
+      ],
+      "ended_at": "2026-08-25T02:15:35+00:00",
+      "log_path": "source-steps/web_unit.log",
+      "log_sha256": "72f24b24833cfb8894b1565b66dc3da03ff2cd63607fd45d811496128496f4a8",
+      "name": "web_unit",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:15:34+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "web_type_unit_build"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "ended_at": "2026-08-25T02:15:41+00:00",
+      "log_path": "source-steps/web_build.log",
+      "log_sha256": "58249c12b36f70df56641cbd15ce5b4b440dc92bd8cbaf78b820ec0f0dfc72c6",
+      "name": "web_build",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:15:35+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "web_type_unit_build"
+      ],
+      "command": [
+        "git",
+        "diff",
+        "--exit-code",
+        "--",
+        "src/pilot107/web/static"
+      ],
+      "ended_at": "2026-08-25T02:15:41+00:00",
+      "log_path": "source-steps/web_static_drift.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "name": "web_static_drift",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:15:41+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "web_browser_workflow"
+      ],
+      "command": [
+        "npm",
+        "run",
+        "test:ui"
+      ],
+      "ended_at": "2026-08-25T02:17:45+00:00",
+      "log_path": "source-steps/web_browser.log",
+      "log_sha256": "1c7a3566bad84dbe0861679080fa58c34d2ddbab182300f80c593316d1d19abd",
+      "name": "web_browser",
+      "returncode": 1,
+      "started_at": "2026-08-25T02:15:41+00:00",
+      "status": "FAIL"
+    },
+    {
+      "cases": [
+        "compose_config"
+      ],
+      "command": [
+        "sh",
+        "simulator/compose/scripts/check-compose-config.sh"
+      ],
+      "ended_at": "2026-08-25T02:17:46+00:00",
+      "log_path": "source-steps/compose_config.log",
+      "log_sha256": "3ce010159db39f28c28948e67d0170994e3c552a14c57057387216f54bf51b8d",
+      "name": "compose_config",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:17:45+00:00",
+      "status": "PASS"
+    },
+    {
+      "cases": [
+        "sim_core"
+      ],
+      "command": [
+        "bash",
+        "scripts/check-sim-core.sh"
+      ],
+      "ended_at": "2026-08-25T02:17:46+00:00",
+      "log_path": "source-steps/sim_core.log",
+      "log_sha256": "9276e002abf3a79763e54f927c9a27baa8dcbfd436b847eee5e4f400738c8b11",
+      "name": "sim_core",
+      "returncode": 0,
+      "started_at": "2026-08-25T02:17:46+00:00",
+      "status": "PASS"
+    }
+  ],
+  "tracked_worktree_clean": true,
+  "untracked_files_status": "?? .slim/hif4_reformatted.docx\n?? .slim/hif4_v2.docx\n?? .slim/hif4_v3.docx\n?? 300\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/r1-report.json\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/s1-report.json\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-report.json\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/agentd_build.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/agentd_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/agentd_unit.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/compose_config.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/python_lint.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/python_types.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/python_unit.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/schema_contracts.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/sim_core.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_browser.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_build.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_static_drift.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_typecheck.log\n?? artifacts/acceptance/agent-lifecycle/cbaf6191910a6675aa728a465133bbeaf1ee7334/source-steps/web_unit.log\n?? artifacts/qa/task14/screenshots/agent-projects.png\n?? artifacts/qa/task14/screenshots/approval-after.png\n?? artifacts/qa/task14/screenshots/approval-before.png\n?? artifacts/qa/task14/screenshots/initial.png\n?? artifacts/qa/task14/screenshots/project-created-live.png\n?? artifacts/qa/task14/screenshots/project-created.png\n?? artifacts/qa/task14/screenshots/project-mode-empty.png\n?? artifacts/qa/task14/screenshots/reconnect.png\n"
+}

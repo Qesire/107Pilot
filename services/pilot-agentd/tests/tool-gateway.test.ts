@@ -199,6 +199,47 @@ describe("ToolGatewayClient", () => {
     },
   );
 
+  it("returns a strictly validated ToolResult error from a non-2xx response", async () => {
+    const fetchError: typeof fetch = async (_input, init) => {
+      const invocation = JSON.parse(String(init?.body)) as ToolInvocation;
+      return new Response(JSON.stringify({
+        schema_version: "pilot107.agent-tool-result/v1",
+        invocation_id: invocation.invocation_id,
+        result: null,
+        error: {
+          code: "AGENT.BUILDER.IDEMPOTENCY_CONFLICT",
+          message: "Builder request key conflicts with different content",
+          retryable: false,
+        },
+        evidence_refs: [],
+        bytes_returned: 0,
+      }), {
+        status: 409,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
+    };
+    const client = new ToolGatewayClient({
+      url: "http://gateway.invalid/internal/v1/agent-tools/invoke",
+      fetch: fetchError,
+    });
+
+    const result = await client.invoke(
+      durableRequest(),
+      "call-actionable-error",
+      "run_get",
+      { run_id: "run-1" },
+      new AbortController().signal,
+    );
+
+    expect(result).toMatchObject({
+      result: null,
+      error: {
+        code: "AGENT.BUILDER.IDEMPOTENCY_CONFLICT",
+        retryable: false,
+      },
+    });
+  });
+
   it.each([
     {
       name: "wrong content type",

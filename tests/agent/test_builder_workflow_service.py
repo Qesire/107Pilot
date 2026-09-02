@@ -221,6 +221,7 @@ def _valid_build(harness: BuilderHarness, *, request_key: str = "build-1"):
         "session_id": harness.session_id,
         "turn_id": harness.turn.turn_id,
         "request_key": request_key,
+        "approval_summary_zh": "创建热扩散实验代码，并在沙箱通过后提交一次受限 Slurm 验证。",
         "expected_project_version": 1,
         "expected_workspace_snapshot_digest": harness.workspace.snapshot.digest,
         "base_change_set_id": None,
@@ -256,6 +257,7 @@ def _repair_build(
         "session_id": harness.session_id,
         "turn_id": harness.turn.turn_id,
         "request_key": request_key,
+        "approval_summary_zh": "根据沙箱诊断修复 main.py，并重新验证同一实验。",
         "expected_project_version": harness.store.get_project(
             harness.project.project_id, owner="alice"
         ).version,
@@ -408,6 +410,21 @@ def test_context_handler_accepts_only_injected_scope(tmp_path: Path) -> None:
     assert error.value.code == "AGENT.TOOL.INVALID"
 
 
+def test_submit_explains_missing_sandbox_validation(tmp_path: Path) -> None:
+    harness = BuilderHarness(tmp_path)
+    arguments = _valid_build(harness)
+    arguments["blueprint"]["validations"] = [
+        validation
+        for validation in arguments["blueprint"]["validations"]
+        if validation["execution"] == "slurm"
+    ]
+
+    with pytest.raises(AgentToolGatewayError) as error:
+        harness.workflow.submit("alice", arguments)
+
+    assert error.value.code == "AGENT.BUILDER.VALIDATIONS_INVALID"
+
+
 def test_submit_returns_repair_receipt_and_does_not_schedule_on_sandbox_failure(
     tmp_path: Path,
 ) -> None:
@@ -419,12 +436,55 @@ def test_submit_returns_repair_receipt_and_does_not_schedule_on_sandbox_failure(
     assert result.result["status"] == "repair_required"
     assert result.result["phase"] == "sandbox_failed"
     assert result.result["next_action"] == "builder_build_submit"
+    assert result.result["approval_summary_zh"] == (
+        "创建热扩散实验代码，并在沙箱通过后提交一次受限 Slurm 验证。"
+    )
+    assert result.result["next_submission"] == {
+        "expected_project_version": 2,
+        "expected_workspace_snapshot_digest": harness.workspace.snapshot.digest,
+        "base_change_set_id": result.result["change_set_id"],
+        "expected_source_digests": {
+            "main.py": hashlib.sha256(b"print('sandbox')\n").hexdigest(),
+            "scripts/run_experiment.sh": hashlib.sha256(
+                b"#!/bin/bash\npython main.py\n"
+            ).hexdigest(),
+        },
+        "repair_sources": {
+            "items": [
+                {
+                    "path": "main.py",
+                    "sha256": hashlib.sha256(b"print('sandbox')\n").hexdigest(),
+                    "content": "print('sandbox')\n",
+                    "truncated": False,
+                },
+                {
+                    "path": "scripts/run_experiment.sh",
+                    "sha256": hashlib.sha256(
+                        b"#!/bin/bash\npython main.py\n"
+                    ).hexdigest(),
+                    "content": "#!/bin/bash\npython main.py\n",
+                    "truncated": False,
+                },
+            ],
+            "truncated": False,
+        },
+        "request_key_policy": "new_for_changed_content",
+    }
     assert str(result.result["change_set_id"]).startswith("changeset-")
     assert result.result["diagnostics"]["exit_code"] == 1
     assert result.result["diagnostics"]["stderr"] == "compile failed\n"
     assert harness.task_store.list_tasks(
         owner="alice", session_id=harness.session_id
     ) == []
+    context = harness.workflow.context(
+        owner="alice",
+        project_id=harness.project.project_id,
+        workspace_id=harness.workspace.workspace_id,
+        session_id=harness.session_id,
+    )
+    assert context.result["repair_sources"] == result.result["next_submission"][
+        "repair_sources"
+    ]
 
 
 def test_submit_derives_resources_and_schedules_once_after_sandbox_success(
@@ -471,6 +531,86 @@ def test_failed_submission_can_be_repaired_once_then_schedules(tmp_path: Path) -
     assert len(
         harness.task_store.list_tasks(owner="alice", session_id=harness.session_id)
     ) == 1
+
+
+def test_failed_submission_continues_in_a_new_turn_from_authoritative_receipt(
+    tmp_path: Path,
+) -> None:
+    harness = BuilderHarness(tmp_path)
+    harness.sandbox.exit_code = 1
+    failed = harness.workflow.submit("alice", _valid_build(harness))
+    claim = harness.session_store.claim_turn(
+        harness.turn.turn_id,
+        worker_id="builder-turn-worker",
+        lease_seconds=30,
+    )
+    assert claim is not None
+    harness.session_store.complete_turn(
+        harness.turn.turn_id,
+        claim=claim,
+        final_checkpoint=None,
+        resource_usage={},
+        outcome={"status": "completed"},
+    )
+    session = harness.session_store.get_session(harness.session_id, owner="alice")
+    next_turn, _ = harness.session_service.submit_message(
+        session_id=harness.session_id,
+        owner="alice",
+        request_key="builder-repair-turn",
+        message="继续修复上一轮沙箱失败",
+        expected_state_version=session.state_version,
+    )
+    next_submission = failed.result["next_submission"]
+    assert isinstance(next_submission, dict)
+    arguments = _repair_build(
+        harness,
+        failed,
+        request_key="build-repair-next-turn",
+        content="print('repaired in next turn')\n",
+    )
+    arguments.update(
+        {
+            key: next_submission[key]
+            for key in (
+                "expected_project_version",
+                "expected_workspace_snapshot_digest",
+                "base_change_set_id",
+            )
+        }
+    )
+    arguments["turn_id"] = next_turn.turn_id
+    harness.sandbox.exit_code = 0
+
+    repaired = harness.workflow.submit("alice", arguments)
+
+    assert repaired.result["status"] == "scheduled"
+    assert repaired.result["approval_summary_zh"] == (
+        "根据沙箱诊断修复 main.py，并重新验证同一实验。"
+    )
+    [task] = harness.task_store.list_tasks(
+        owner="alice", session_id=harness.session_id
+    )
+    assert task.turn_id == next_turn.turn_id
+
+
+def test_cross_turn_repair_rejects_a_turn_outside_the_bound_session(
+    tmp_path: Path,
+) -> None:
+    harness = BuilderHarness(tmp_path)
+    harness.sandbox.exit_code = 1
+    failed = harness.workflow.submit("alice", _valid_build(harness))
+    arguments = _repair_build(
+        harness,
+        failed,
+        request_key="build-repair-unbound-turn",
+        content="print('unbound')\n",
+    )
+    arguments["turn_id"] = "turn-not-in-session"
+
+    with pytest.raises(AgentToolGatewayError) as error:
+        harness.workflow.submit("alice", arguments)
+
+    assert error.value.code == "AGENT.BUILDER.BINDING_INVALID"
 
 
 def test_repair_rejects_stale_base_identical_content_and_post_schedule_calls(
@@ -572,6 +712,90 @@ def test_replay_recovers_after_task_creation_without_duplicate_work(
     assert len(
         harness.task_store.list_tasks(owner="alice", session_id=harness.session_id)
     ) == 1
+
+
+def test_new_request_recovers_after_patch_error_left_an_unfinished_draft(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = BuilderHarness(tmp_path)
+    original_apply = harness.projects.apply_patches
+
+    def reject_first_patch(**_kwargs):
+        raise ValueError("simulated patch policy error")
+
+    monkeypatch.setattr(harness.projects, "apply_patches", reject_first_patch)
+    with pytest.raises(AgentToolGatewayError) as first_error:
+        harness.workflow.submit("alice", _valid_build(harness))
+    assert first_error.value.code == "AGENT.TOOL.INVALID"
+    abandoned = harness.store.get_latest_builder_submission(
+        owner="alice",
+        session_id=harness.session_id,
+        project_id=harness.project.project_id,
+        workspace_id=harness.workspace.workspace_id,
+    )
+    assert abandoned is not None
+    assert abandoned.state is BuilderSubmissionState.RUNNING
+    assert abandoned.change_set_id is None
+
+    monkeypatch.setattr(harness.projects, "apply_patches", original_apply)
+    recovered_arguments = _valid_build(harness, request_key="build-after-error")
+    recovered_arguments["expected_project_version"] = 2
+
+    recovered = harness.workflow.submit("alice", recovered_arguments)
+
+    assert recovered.result["status"] == "scheduled"
+    assert len(
+        harness.task_store.list_tasks(owner="alice", session_id=harness.session_id)
+    ) == 1
+
+
+def test_new_repair_recovers_after_patch_error_left_an_unfinished_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = BuilderHarness(tmp_path)
+    harness.sandbox.exit_code = 1
+    failed = harness.workflow.submit("alice", _valid_build(harness))
+    original_apply = harness.projects.apply_patches
+
+    def reject_first_repair(**_kwargs):
+        raise ValueError("simulated repair patch policy error")
+
+    monkeypatch.setattr(harness.projects, "apply_patches", reject_first_repair)
+    with pytest.raises(AgentToolGatewayError):
+        harness.workflow.submit(
+            "alice",
+            _repair_build(
+                harness,
+                failed,
+                request_key="repair-with-error",
+                content="print('first repair')\n",
+            ),
+        )
+
+    context = harness.workflow.context(
+        owner="alice",
+        project_id=harness.project.project_id,
+        workspace_id=harness.workspace.workspace_id,
+        session_id=harness.session_id,
+    )
+    assert context.result["repair_sources"]["items"][0]["content"] == (
+        "print('sandbox')\n"
+    )
+
+    monkeypatch.setattr(harness.projects, "apply_patches", original_apply)
+    harness.sandbox.exit_code = 0
+    recovered_arguments = _repair_build(
+        harness,
+        failed,
+        request_key="repair-after-error",
+        content="print('repaired')\n",
+    )
+
+    recovered = harness.workflow.submit("alice", recovered_arguments)
+
+    assert recovered.result["status"] == "scheduled"
 
 
 def test_same_request_key_with_different_content_is_rejected(tmp_path: Path) -> None:

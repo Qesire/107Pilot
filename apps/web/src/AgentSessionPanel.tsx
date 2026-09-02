@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, ApiRequestError } from "./api";
 import { QueryBoundary, StatusBadge, formatTimestamp } from "./components";
 import { useAgentSession, useAgentSessionEvents, useAgentSessions } from "./query";
-import type { AgentSessionState, AgentTurn, AgentTurnEvent } from "./types";
+import type { AgentSession, AgentSessionState, AgentTurn, AgentTurnEvent } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
 
@@ -19,8 +19,11 @@ const defaultModelProfile = "campus-default";
 export function AgentSessionPanel({ user, location, navigate }: AgentSessionPanelProps) {
   const queryClient = useQueryClient();
   const sessions = useAgentSessions(user);
+  const conversationSessions = readonlyConversationSessions(sessions.data?.items ?? []);
   const requestedSession = location.search.get("session");
-  const selectedId = requestedSession ?? sessions.data?.items[0]?.session_id ?? null;
+  const selectedId = conversationSessions.some((session) => session.session_id === requestedSession)
+    ? requestedSession
+    : conversationSessions[0]?.session_id ?? null;
   const [createRequestKey, setCreateRequestKey] = useState<string | null>(null);
   const createSession = useMutation({
     mutationFn: (requestKey: string) => api.createAgentSession(user, {
@@ -45,7 +48,7 @@ export function AgentSessionPanel({ user, location, navigate }: AgentSessionPane
         <div className="panel-heading">
           <div>
             <p className="panel-kicker">Durable conversations</p>
-            <h2 id="conversation-queue-heading">{sessions.data?.items.length ?? 0} 个对话</h2>
+            <h2 id="conversation-queue-heading">{conversationSessions.length} 个对话</h2>
           </div>
           <div className="agent-queue-actions">
             <button
@@ -68,12 +71,12 @@ export function AgentSessionPanel({ user, location, navigate }: AgentSessionPane
         <QueryBoundary
           pending={sessions.isPending}
           error={sessions.error}
-          empty={(sessions.data?.items.length ?? 0) === 0}
+          empty={conversationSessions.length === 0}
           emptyTitle="还没有持久化对话"
           emptyDetail="创建后即可询问平台事实，以及会话明确绑定的 Run、日志和 Evidence。"
         >
           <div className="agent-session-list">
-            {(sessions.data?.items ?? []).map((session) => (
+            {conversationSessions.map((session) => (
               <button
                 key={session.session_id}
                 type="button"
@@ -120,7 +123,7 @@ export function AgentSessionPanel({ user, location, navigate }: AgentSessionPane
   );
 }
 
-function AgentConversation({ user, sessionId }: { user: string; sessionId: string }) {
+export function AgentConversation({ user, sessionId }: { user: string; sessionId: string }) {
   const queryClient = useQueryClient();
   const session = useAgentSession(user, sessionId);
   const [events, setEvents] = useState<AgentTurnEvent[]>([]);
@@ -131,10 +134,21 @@ function AgentConversation({ user, sessionId }: { user: string; sessionId: strin
   const [activeTurn, setActiveTurn] = useState<AgentTurn | null>(null);
 
   useEffect(() => {
+    setEvents([]);
+    setMessage("");
+    setTurnRequestKey(null);
+    setActiveTurn(null);
+  }, [sessionId]);
+
+  useEffect(() => {
     if (eventPage.data?.items.length) {
-      setEvents((current) => mergeAgentEvents(current, eventPage.data?.items ?? []));
+      setEvents((current) => mergeAgentEvents(
+        current,
+        eventPage.data?.items ?? [],
+        sessionId,
+      ));
     }
-  }, [eventPage.data]);
+  }, [eventPage.data, sessionId]);
 
   const terminalTurnIds = useMemo(() => new Set(
     events
@@ -192,6 +206,15 @@ function AgentConversation({ user, sessionId }: { user: string; sessionId: strin
     >
       {session.data ? (
         <div className="agent-conversation">
+          {(() => {
+            const permission = agentSessionPermissionCopy(session.data.profile_id);
+            return (
+              <div className="agent-readonly-note">
+                <ShieldCheck aria-hidden="true" size={17} />
+                <p><strong>{permission.title}</strong>{permission.boundary}</p>
+              </div>
+            );
+          })()}
           <header className="agent-conversation-heading">
             <div>
               <StatusBadge
@@ -217,13 +240,15 @@ function AgentConversation({ user, sessionId }: { user: string; sessionId: strin
 
           {mutationError ? <AgentMutationError error={mutationError} /> : null}
           <div className="agent-composer">
-            <label htmlFor="agent-message">发送给只读 Agent</label>
+            <label htmlFor="agent-message">
+              {agentSessionPermissionCopy(session.data.profile_id).composerLabel}
+            </label>
             <textarea
               id="agent-message"
               value={message}
               rows={3}
               maxLength={64_000}
-              placeholder="询问平台，或会话已绑定的 Run、日志与 Evidence…"
+              placeholder={agentSessionPermissionCopy(session.data.profile_id).placeholder}
               disabled={session.data.state !== "idle" || createTurn.isPending}
               onChange={(event) => {
                 setMessage(event.target.value);
@@ -232,7 +257,9 @@ function AgentConversation({ user, sessionId }: { user: string; sessionId: strin
               }}
             />
             <div>
-              <small>{session.data.state === "idle" ? "上下文和工具调用会进入持久化事件流。" : "当前 Turn 完成后可继续提问。"}</small>
+              <small>{session.data.state === "idle"
+                ? agentSessionPermissionCopy(session.data.profile_id).idleHelp
+                : "当前 Turn 完成后可继续。"}</small>
               {turnIsActive ? (
                 <button
                   className="button danger"
@@ -317,9 +344,13 @@ function AgentMutationError({ error }: { error: Error }) {
 export function mergeAgentEvents(
   current: AgentTurnEvent[],
   incoming: AgentTurnEvent[],
+  sessionId?: string,
 ): AgentTurnEvent[] {
-  const byId = new Map(current.map((item) => [item.event_id, item]));
-  incoming.forEach((item) => {
+  const inSession = (item: AgentTurnEvent) => (
+    sessionId === undefined || item.session_id === sessionId
+  );
+  const byId = new Map(current.filter(inSession).map((item) => [item.event_id, item]));
+  incoming.filter(inSession).forEach((item) => {
     if (!byId.has(item.event_id)) byId.set(item.event_id, item);
   });
   return [...byId.values()].sort((left, right) => left.event_id - right.event_id);
@@ -418,7 +449,76 @@ export function agentEventText(event: AgentTurnEvent): string | null {
     const nestedError = errorMessage(resultError.error);
     if (nestedError) return nestedError;
   }
+  const approvalSummary = approvalSummaryFromValue(event.payload);
+  if (approvalSummary) return approvalSummary;
   return null;
+}
+
+function approvalSummaryFromValue(value: unknown, depth = 0): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value) || depth > 4) return null;
+  const record = value as Record<string, unknown>;
+  const direct = record.approval_summary_zh;
+  if (typeof direct === "string" && direct.trim()) return direct;
+  for (const key of ["arguments", "result"] as const) {
+    const nested = approvalSummaryFromValue(record[key], depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+export function readonlyConversationSessions(
+  sessions: readonly AgentSession[],
+): AgentSession[] {
+  return sessions.filter((session) => (
+    session.profile_id === "hpc-readonly-v1" || session.profile_id === "platform_coach"
+  ));
+}
+
+interface AgentSessionPermissionCopy {
+  readonly title: string;
+  readonly boundary: string;
+  readonly composerLabel: string;
+  readonly placeholder: string;
+  readonly idleHelp: string;
+}
+
+export function agentSessionPermissionCopy(
+  profileId: AgentSession["profile_id"],
+): AgentSessionPermissionCopy {
+  if (profileId === "experiment_builder") {
+    return {
+      title: "实验构建权限",
+      boundary: "仅可读取当前绑定工程汇总并提交结构化构建结果；文件改动、Sandbox 与一次 Slurm 验证由应用执行并审计。",
+      composerLabel: "继续实验构建 Agent",
+      placeholder: "补充实验目标、输入输出或验证约束…",
+      idleHelp: "续轮保持实验构建权限，事件与工具调用会持久化。",
+    };
+  }
+  if (profileId === "run_diagnosis_repair") {
+    return {
+      title: "诊断修复权限",
+      boundary: "仅可读取绑定的失败 Run 与当前工程，并提交受限修复变更；不能访问其他作业。",
+      composerLabel: "继续诊断修复 Agent",
+      placeholder: "补充失败现象、修复约束或验证要求…",
+      idleHelp: "续轮保持当前 Run 与工程绑定，事件与工具调用会持久化。",
+    };
+  }
+  if (profileId === "market_application" || profileId === "template_publication") {
+    return {
+      title: "受限工程权限",
+      boundary: "仅可操作当前绑定 Workspace；发布与正式提交仍需独立审批。",
+      composerLabel: "继续受限 Agent",
+      placeholder: "补充当前受限任务的要求…",
+      idleHelp: "续轮保持原入口权限，事件与工具调用会持久化。",
+    };
+  }
+  return {
+    title: "只读权限",
+    boundary: "可读取平台事实；仅在会话明确绑定后读取 Run、日志与 Evidence。不能提交或取消作业，也不能改写文件。",
+    composerLabel: "发送给只读 Agent",
+    placeholder: "询问平台，或会话已绑定的 Run、日志与 Evidence…",
+    idleHelp: "上下文和工具调用会进入持久化事件流。",
+  };
 }
 
 function toolGroupText(events: readonly AgentTurnEvent[]): string | null {

@@ -169,6 +169,27 @@ def test_workspace_tools_are_invalid_for_a1_but_remain_valid_for_a2() -> None:
 
 
 @pytest.mark.parametrize(
+    "profile_id",
+    ["run_diagnosis_repair", "market_application", "template_publication"],
+)
+def test_non_builder_project_profiles_reject_builder_only_tools(
+    profile_id: str,
+) -> None:
+    builder_only = _tool_invocation()
+    builder_only.update(
+        profile_id=profile_id,
+        tool_name="project_blueprint_save",
+        arguments={},
+    )
+    with pytest.raises(ValueError, match="invalid tool invocation"):
+        agent_protocol.parse_tool_invocation(builder_only)
+
+    workspace = dict(builder_only)
+    workspace["tool_name"] = "workspace_patch"
+    assert agent_protocol.parse_tool_invocation(workspace).tool_name == "workspace_patch"
+
+
+@pytest.mark.parametrize(
     "tool_name", ["builder_context_get", "builder_build_submit"]
 )
 def test_phase_aware_builder_tools_are_valid_only_for_project_profiles(

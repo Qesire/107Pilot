@@ -1,0 +1,144 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 4.28kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 156B done
+#3 DONE 0.0s
+
+#4 [internal] load build context
+#4 DONE 0.0s
+
+#5 [deps-exporter 1/5] FROM docker.io/library/python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
+#5 resolve docker.io/library/python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf 0.0s done
+#5 DONE 0.0s
+
+#4 [internal] load build context
+#4 transferring context: 8.79MB 0.0s done
+#4 DONE 0.1s
+
+#6 [stage-1  2/11] RUN groupadd --gid 10700 pilot107     && useradd --uid 10700 --gid pilot107 --home-dir /var/lib/pilot107 --create-home --shell /usr/sbin/nologin pilot107     && mkdir -p /opt/pilot107/src /var/lib/pilot107     && chown -R pilot107:pilot107 /var/lib/pilot107     && find /opt/pilot107 /var/lib/pilot107 /etc/group /etc/passwd /etc/shadow /etc/subuid /etc/subgid -exec touch -h -d @0 {} + 2>/dev/null || true
+#6 CACHED
+
+#7 [stage-1  3/11] WORKDIR /opt/pilot107
+#7 CACHED
+
+#8 [deps-exporter 3/5] WORKDIR /opt/pilot107
+#8 CACHED
+
+#9 [deps-exporter 2/5] RUN pip install --no-cache-dir uv==0.11.12
+#9 CACHED
+
+#10 [deps-exporter 5/5] RUN uv export --frozen --no-dev --extra postgres --no-emit-project --format requirements-txt -o /tmp/requirements.txt     && touch -d @0 /tmp/requirements.txt
+#10 CACHED
+
+#11 [deps-exporter 4/5] COPY pyproject.toml uv.lock ./
+#11 CACHED
+
+#12 [stage-1  4/11] COPY --from=deps-exporter /tmp/requirements.txt /tmp/requirements.txt
+#12 CACHED
+
+#13 [stage-1  5/11] RUN pip install --no-cache-dir -r /tmp/requirements.txt     && rm /tmp/requirements.txt     && find /usr/local/lib/python3.12 /usr/local/bin -exec touch -h -d @0 {} + 2>/dev/null || true
+#13 CACHED
+
+#14 [stage-1  6/11] RUN apt-get update     && apt-get install -y --no-install-recommends openssh-client git     && rm -rf /var/lib/apt/lists/*
+#14 CACHED
+
+#15 [stage-1  7/11] COPY src ./src
+#15 DONE 0.1s
+
+#16 [stage-1  8/11] COPY data/known_errors ./data/known_errors
+#16 DONE 0.1s
+
+#17 [stage-1  9/11] COPY data/submission_templates ./data/submission_templates
+#17 DONE 0.1s
+
+#18 [stage-1 10/11] COPY config/platform_profiles ./config/platform_profiles
+#18 DONE 0.1s
+
+#19 [stage-1 11/11] RUN find /opt/pilot107 -exec touch -h -d @0 {} + 2>/dev/null || true
+#19 DONE 1.0s
+
+#20 exporting to image
+#20 exporting layers
+#20 exporting layers 0.5s done
+#20 exporting manifest sha256:62612515ebd1d8215acd26414f0e379e0589c066ffa68208b1794517ece3261f
+#20 exporting manifest sha256:62612515ebd1d8215acd26414f0e379e0589c066ffa68208b1794517ece3261f 0.0s done
+#20 exporting config sha256:35945854e999d3e2167629d88dcec303f5a5e27ed9d09f7ec0d75c0abdbc4ad3 0.0s done
+#20 exporting attestation manifest sha256:56f4c198c9111302397a4209b7108f353aa8b89f8dd94663cef6da4f59f0b218 0.0s done
+#20 exporting manifest list sha256:a9b100ea0ee775be122e42f14d6ac3bece3e7d1065cf92b76c2aaf7ae39db246 0.0s done
+#20 naming to docker.io/pilot107/api:lifecycle-a54425d31f19
+#20 naming to docker.io/pilot107/api:lifecycle-a54425d31f19 done
+#20 unpacking to docker.io/pilot107/api:lifecycle-a54425d31f19
+#20 unpacking to docker.io/pilot107/api:lifecycle-a54425d31f19 0.3s done
+#20 naming to docker.io/pilot107/worker:lifecycle-a54425d31f19 done
+#20 unpacking to docker.io/pilot107/worker:lifecycle-a54425d31f19 0.0s done
+#20 naming to docker.io/pilot107/web:lifecycle-a54425d31f19 done
+#20 unpacking to docker.io/pilot107/web:lifecycle-a54425d31f19 0.0s done
+#20 DONE 1.1s
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 914B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/node:22.19.0-bookworm-slim@sha256:cff78eb5aa1cf27dc2b6aeea9d31366415a43e9a9ea0ddec00d780b2b66fad0f
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 156B done
+#3 DONE 0.0s
+
+#4 [build 1/7] FROM docker.io/library/node:22.19.0-bookworm-slim@sha256:cff78eb5aa1cf27dc2b6aeea9d31366415a43e9a9ea0ddec00d780b2b66fad0f
+#4 resolve docker.io/library/node:22.19.0-bookworm-slim@sha256:cff78eb5aa1cf27dc2b6aeea9d31366415a43e9a9ea0ddec00d780b2b66fad0f 0.0s done
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 transferring context: 217.14kB done
+#5 DONE 0.0s
+
+#6 [build 7/7] RUN npm run build && npm prune --omit=dev
+#6 CACHED
+
+#7 [stage-1 3/6] RUN groupadd --gid 10701 pilot-agentd     && useradd --uid 10701 --gid 10701 --no-create-home --shell /usr/sbin/nologin pilot-agentd
+#7 CACHED
+
+#8 [build 4/7] RUN npm ci --ignore-scripts
+#8 CACHED
+
+#9 [stage-1 4/6] COPY --from=build /opt/pilot-agentd/package.json ./
+#9 CACHED
+
+#10 [stage-1 5/6] COPY --from=build /opt/pilot-agentd/node_modules ./node_modules
+#10 CACHED
+
+#11 [build 6/7] COPY services/pilot-agentd/src ./src
+#11 CACHED
+
+#12 [build 2/7] WORKDIR /opt/pilot-agentd
+#12 CACHED
+
+#13 [build 3/7] COPY services/pilot-agentd/package.json services/pilot-agentd/package-lock.json ./
+#13 CACHED
+
+#14 [build 5/7] COPY services/pilot-agentd/tsconfig.json ./
+#14 CACHED
+
+#15 [stage-1 6/6] COPY --from=build /opt/pilot-agentd/dist ./dist
+#15 CACHED
+
+#16 exporting to image
+#16 exporting layers done
+#16 exporting manifest sha256:99534937dbc09dbf311b7349c8338547144809210d4274c36fcc0acc7933fdb4 done
+#16 exporting config sha256:a5dafd01127c32fe21151b821298daba058851024b9941fea035ba16b3738283 done
+#16 exporting attestation manifest sha256:900cbc6db28f24959c3fbb9c1ddf68f9f46113584b73b86664a95bb589821e96 0.0s done
+#16 exporting manifest list sha256:22b77dbe7f3dbddc14404562bdaeec3193268cd8cf431a8d676cf714f93536d3
+#16 exporting manifest list sha256:22b77dbe7f3dbddc14404562bdaeec3193268cd8cf431a8d676cf714f93536d3 0.0s done
+#16 naming to docker.io/pilot107/agentd:lifecycle-a54425d31f19 done
+#16 unpacking to docker.io/pilot107/agentd:lifecycle-a54425d31f19 0.0s done
+#16 DONE 0.1s

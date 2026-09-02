@@ -1,0 +1,22 @@
+ Container pilot107-sim-mariadb-1 Running 
+ Container pilot107-sim-slurmdbd-1 Running 
+ Container pilot107-sim-slurmctld-1 Running 
+ Container pilot107-sim-worker-2-1 Running 
+ Container pilot107-sim-worker-1-1 Running 
+ Container pilot107-sim-login-node-sim-1 Running 
+ Container pilot107-sim-mariadb-1 Waiting 
+ Container pilot107-sim-mariadb-1 Healthy 
+Traceback (most recent call last):
+  File "/home/knowingthesea/107pilot/scripts/smoke_agent_lifecycle_boundaries.py", line 290, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/knowingthesea/107pilot/scripts/smoke_agent_lifecycle_boundaries.py", line 285, in main
+    return live_large_file()
+           ^^^^^^^^^^^^^^^^^
+  File "/home/knowingthesea/107pilot/scripts/smoke_agent_lifecycle_boundaries.py", line 57, in live_large_file
+    _run_checked(
+  File "/home/knowingthesea/107pilot/scripts/smoke_pilot_agent_a4_live.py", line 76, in _run_checked
+    raise RuntimeError(result.stderr.strip() or f"command failed: {argv[0]}")
+RuntimeError: Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: '/public/home/alice/pilot107-task21-large-f2a22c09e3/model.ckpt'

@@ -1,0 +1,4 @@
+src/pilot107/api/service.py:393: error: Incompatible types in assignment (expression has type "SshRelayExecutor", variable has type "FileOpsExecutor | None")  [assignment]
+src/pilot107/api/service.py:409: error: Argument "executor" to "FileUploadService" has incompatible type "FileOpsExecutor | None"; expected "FileOpsExecutor"  [arg-type]
+src/pilot107/api/service.py:416: error: Argument "executor" to "FileRoutes" has incompatible type "FileOpsExecutor | None"; expected "FileOpsExecutor"  [arg-type]
+Found 3 errors in 1 file (checked 146 source files)

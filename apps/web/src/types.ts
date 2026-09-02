@@ -326,15 +326,23 @@ export interface StorageUsage {
 
 export interface EntitlementSnapshot {
   snapshot_id: string;
-  observed_at: string;
+  captured_at?: string;
+  observed_at?: string;
   freshness: string;
   data_quality: string;
   default_account?: string | null;
-  associations?: Array<{
+  associations?: EntitlementAssociation[];
+  snapshot?: {
+    associations?: EntitlementAssociation[];
+    [key: string]: unknown;
+  } | null;
+}
+
+export interface EntitlementAssociation {
     account?: string;
     partition?: string | null;
     qos?: string[];
-  }>;
+    default_qos?: string | null;
 }
 
 export interface HealthReady {

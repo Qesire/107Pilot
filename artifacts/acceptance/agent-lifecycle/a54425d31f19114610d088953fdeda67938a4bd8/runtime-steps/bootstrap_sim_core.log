@@ -1,0 +1,57 @@
+ Network pilot107-sim_sim Creating 
+ Network pilot107-sim_sim Created 
+ Volume pilot107-sim_slurm-log Creating 
+ Volume pilot107-sim_slurm-log Created 
+ Volume pilot107-sim_mariadb-data Creating 
+ Volume pilot107-sim_mariadb-data Created 
+ Volume pilot107-sim_public Creating 
+ Volume pilot107-sim_public Created 
+ Container pilot107-sim-mariadb-1 Creating 
+ Container pilot107-sim-mariadb-1 Created 
+ Container pilot107-sim-slurmdbd-1 Creating 
+ Container pilot107-sim-slurmdbd-1 Created 
+ Container pilot107-sim-slurmctld-1 Creating 
+ Container pilot107-sim-slurmctld-1 Created 
+ Container pilot107-sim-worker-2-1 Creating 
+ Container pilot107-sim-slurmrestd-1 Creating 
+ Container pilot107-sim-worker-1-1 Creating 
+ Container pilot107-sim-login-node-sim-1 Creating 
+ Container pilot107-sim-worker-1-1 Created 
+ Container pilot107-sim-login-node-sim-1 Created 
+ Container pilot107-sim-worker-2-1 Created 
+ Container pilot107-sim-slurmrestd-1 Created 
+ Container pilot107-sim-mariadb-1 Starting 
+ Container pilot107-sim-mariadb-1 Started 
+ Container pilot107-sim-mariadb-1 Waiting 
+ Container pilot107-sim-mariadb-1 Healthy 
+ Container pilot107-sim-slurmdbd-1 Starting 
+ Container pilot107-sim-slurmdbd-1 Started 
+ Container pilot107-sim-slurmctld-1 Starting 
+ Container pilot107-sim-slurmctld-1 Started 
+ Container pilot107-sim-worker-2-1 Starting 
+ Container pilot107-sim-slurmrestd-1 Starting 
+ Container pilot107-sim-login-node-sim-1 Starting 
+ Container pilot107-sim-worker-1-1 Starting 
+ Container pilot107-sim-slurmrestd-1 Started 
+ Container pilot107-sim-login-node-sim-1 Started 
+ Container pilot107-sim-worker-1-1 Started 
+ Container pilot107-sim-worker-2-1 Started 
+sim real107 profile applied
+source profile: /home/knowingthesea/107pilot/config/platform_profiles/simulator-real107-behavior.yaml
+                        normal
+                  qos_cpu-6530
+                 qos_cpu-8358p
+               qos_gpu-rtx5090
+                  qos_gpu-a100
+              qos_p107-rtx5090       4-00:00:00                          cpu=16,gres/gpu=4,mem=64G                cpu=99999,gres/gpu=99999,mem=99999G
+                 qos_p107-a100       4-00:00:00                          cpu=16,gres/gpu=4,mem=64G                cpu=99999,gres/gpu=99999,mem=99999G
+                    qos_stu001
+               qos_stu_default         04:00:00                           cpu=4,gres/gpu=1,mem=16G                cpu=99999,gres/gpu=99999,mem=99999G
+                 qos_stu_small         08:00:00                           cpu=8,gres/gpu=1,mem=32G                cpu=99999,gres/gpu=99999,mem=99999G
+                qos_stu_medium       1-00:00:00                          cpu=16,gres/gpu=1,mem=64G                cpu=99999,gres/gpu=99999,mem=99999G
+           qos_stu_medium_2gpu       1-00:00:00                         cpu=24,gres/gpu=2,mem=128G                cpu=99999,gres/gpu=99999,mem=99999G
+                 qos_stu_large         12:00:00                         cpu=48,gres/gpu=4,mem=240G                cpu=99999,gres/gpu=99999,mem=99999G
+                  qos_stu_long       3-00:00:00                          cpu=16,gres/gpu=1,mem=64G                cpu=99999,gres/gpu=99999,mem=99999G
+              qos_stu_cpu_long       3-00:00:00                                    cpu=32,mem=128G                               cpu=99999,mem=99999G
+alice|students|normal,qos_stu001,qos_stu_cpu_long,qos_stu_default,qos_stu_large,qos_stu_long,qos_stu_medium,qos_stu_medium_2gpu,qos_stu_small|qos_stu_medium_2gpu
+bob|students|normal,qos_stu_default|qos_stu_default

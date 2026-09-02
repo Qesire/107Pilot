@@ -1,0 +1,30 @@
+{
+  "cases": [
+    "deployment",
+    "resource_ceilings",
+    "restart_recovery"
+  ],
+  "ended_at": "2026-08-25T03:28:26+00:00",
+  "environment": "S1",
+  "execution_contract": {
+    "bundle_env": "PILOT107_S1_BUNDLE_DIR",
+    "confirmation_env": "PILOT107_S1_CONFIRMED=1",
+    "public_url_env": "PILOT107_PUBLIC_URL"
+  },
+  "generated_at": "2026-08-25T03:28:26+00:00",
+  "mode": "acceptance",
+  "profile": "s1",
+  "reason": "infrastructure_missing",
+  "release_revision": "405781516dba6b91c6dd73ab882d39a16ee11c09",
+  "requirements_present": {
+    "bundle_dir": false,
+    "confirmed_s1_host": false,
+    "public_url": false
+  },
+  "schema": "pilot107.agent-lifecycle-acceptance/v1",
+  "status": "not_run",
+  "target_resources": {
+    "cpu_cores": 8,
+    "memory_gib": 16
+  }
+}

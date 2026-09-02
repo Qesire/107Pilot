@@ -1,0 +1,38 @@
+ Container pilot107-sim-mariadb-1 Running 
+ Container pilot107-sim-slurmdbd-1 Running 
+ Container pilot107-sim-slurmctld-1 Running 
+ Container pilot107-sim-worker-2-1 Running 
+ Container pilot107-sim-login-node-sim-1 Running 
+ Container pilot107-sim-worker-1-1 Running 
+ Container pilot107-sim-mariadb-1 Waiting 
+ Container pilot107-sim-mariadb-1 Healthy 
+{"content_copied": false, "large_file_metadata_only": true, "remote_path": "/public/home/alice/pilot107-task21-large-0b3cb9ca30/model.ckpt", "remote_size_bytes": 5368709120, "schema": "pilot107.agent-lifecycle-boundaries-live/v1"}
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/proxy-hmac.local
+Local HMAC secret is ready at /home/knowingthesea/107pilot/simulator/compose/secrets/agent-capability-hmac.local
+ Network pilot107-lifecycle-boundaries-1071833_sim Creating 
+ Network pilot107-lifecycle-boundaries-1071833_sim Created 
+ Volume pilot107-lifecycle-boundaries-1071833_mariadb-data Creating 
+ Volume pilot107-lifecycle-boundaries-1071833_mariadb-data Created 
+ Volume pilot107-lifecycle-boundaries-1071833_public Creating 
+ Volume pilot107-lifecycle-boundaries-1071833_public Created 
+ Volume pilot107-lifecycle-boundaries-1071833_pilot107-data Creating 
+ Volume pilot107-lifecycle-boundaries-1071833_pilot107-data Created 
+ Volume pilot107-lifecycle-boundaries-1071833_slurm-log Creating 
+ Volume pilot107-lifecycle-boundaries-1071833_slurm-log Created 
+ Container pilot107-lifecycle-boundaries-1071833-pilot-agentd-1 Creating 
+ Container pilot107-lifecycle-boundaries-1071833-pilot-agentd-1 Created 
+ Container pilot107-lifecycle-boundaries-1071833-pilot107-worker-1 Creating 
+ Container pilot107-lifecycle-boundaries-1071833-pilot107-api-1 Creating 
+ Container pilot107-lifecycle-boundaries-1071833-pilot107-worker-1 Created 
+ Container pilot107-lifecycle-boundaries-1071833-pilot107-api-1 Created 
+ Container pilot107-lifecycle-boundaries-1071833-pilot-agentd-1 Starting 
+ Container pilot107-lifecycle-boundaries-1071833-pilot-agentd-1 Started 
+ Container pilot107-lifecycle-boundaries-1071833-pilot-agentd-1 Waiting 
+ Container pilot107-lifecycle-boundaries-1071833-pilot-agentd-1 Waiting 
+ Container pilot107-lifecycle-boundaries-1071833-pilot-agentd-1 Healthy 
+ Container pilot107-lifecycle-boundaries-1071833-pilot107-api-1 Starting 
+ Container pilot107-lifecycle-boundaries-1071833-pilot-agentd-1 Healthy 
+ Container pilot107-lifecycle-boundaries-1071833-pilot107-worker-1 Starting 
+ Container pilot107-lifecycle-boundaries-1071833-pilot107-worker-1 Started 
+ Container pilot107-lifecycle-boundaries-1071833-pilot107-api-1 Started 
+{"deterministic_suggest_status": "ok", "evidence_read_status": 200, "generative_error_code": null, "generative_project_state": "blocked", "generative_suggest_status": "degraded", "generative_turn_state": "failed", "model_unavailable_deterministic_fallback": true, "run_read_status": 200, "runtime_watch_read_status": 200, "schema": "pilot107.agent-lifecycle-boundaries-live/v1"}
