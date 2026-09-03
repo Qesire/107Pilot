@@ -1,0 +1,49 @@
+name: temp-file-pagination-frontend-patch
+
+on:
+  push:
+    branches: [ux-v2-foundation]
+    paths:
+      - scripts/_temp_patch_file_pagination_frontend.py
+      - .github/workflows/_temp_file_pagination_frontend_patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ux-v2-foundation
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Apply pagination frontend patch
+        run: python scripts/_temp_patch_file_pagination_frontend.py
+      - name: Compile backend tests
+        run: python -m py_compile tests/test_command_gateway.py
+      - name: Typecheck web
+        run: npm run typecheck
+      - name: Web unit tests
+        run: npm test -- --run
+      - name: Build web
+        run: npm run build
+      - name: Commit migration and generated static bundle
+        run: |
+          git config user.name "107Pilot UX bot"
+          git config user.email "107pilot-ux-bot@users.noreply.github.com"
+          git add apps/web/src/types.ts apps/web/src/api.ts apps/web/src/files/useFilePane.ts apps/web/src/files/FilePane.tsx apps/web/src/files/FilePickerDialog.tsx apps/web/src/files/MillerColumns.tsx apps/web/src/files/MoveDialog.tsx tests/test_command_gateway.py src/pilot107/web/static
+          if git diff --cached --quiet; then
+            echo "No patch changes"
+            exit 0
+          fi
+          git commit -m "feat(files): consume paged directory listings"
+          git push origin HEAD:ux-v2-foundation
