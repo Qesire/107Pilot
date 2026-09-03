@@ -43,6 +43,7 @@ from pilot107.adapters.ssh_relay import (
     SshRelayExecutor,
     SubprocessSshRelayClient,
 )
+from pilot107.adapters.workspace_source import PagedWorkspaceSourceReader
 from pilot107.agent.capabilities import AgentCapabilitySigner
 from pilot107.agent.client import AgentdClient
 from pilot107.agent.config import AgentdClientConfig
@@ -764,14 +765,18 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         workspace_source: WorkspaceSourceReader | None = None
         workspace_owner_roots: tuple[str, ...] = ()
         if config.backend == "command-gateway" and config.allowed_roots:
-            workspace_source = HttpCommandGatewayExecutor(
-                base_url=config.command_gateway_url,
-                token=config.command_gateway_token,
-                timeout_seconds=config.command_timeout_seconds,
+            workspace_source = PagedWorkspaceSourceReader(
+                HttpCommandGatewayExecutor(
+                    base_url=config.command_gateway_url,
+                    token=config.command_gateway_token,
+                    timeout_seconds=config.command_timeout_seconds,
+                )
             )
             workspace_owner_roots = config.allowed_roots
         elif config.backend == "real107-ssh" and ssh_relay_client is not None:
-            workspace_source = SshRelayExecutor(ssh_relay_client)
+            workspace_source = PagedWorkspaceSourceReader(
+                SshRelayExecutor(ssh_relay_client)
+            )
             workspace_owner_roots = config.allowed_roots or ssh_relay_client.config.owner_roots
         importer = (
             None

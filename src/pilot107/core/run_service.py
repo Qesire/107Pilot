@@ -778,7 +778,9 @@ class RunService:
                 run_id=run.run_id,
                 state=RunState.SUBMIT_FAILED,
                 event_type="run.submit_failed",
-                failure_reason="SlurmTransportError: submission transport failed without reconciliation",
+                failure_reason=(
+                    "SlurmTransportError: submission transport failed without reconciliation"
+                ),
             )
             raise SlurmTransportError("submission transport failed without reconciliation")
         result = reconcile_submission(

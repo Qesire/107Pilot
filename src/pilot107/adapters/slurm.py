@@ -2,8 +2,8 @@
 
 import base64
 import hashlib
-import hmac
 import heapq
+import hmac
 import json
 import os
 import posixpath
@@ -14,6 +14,7 @@ import tarfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -1085,7 +1086,7 @@ def _directory_apparent_size(root: Path) -> int:
 
 def _directory_revision(target: Path) -> str:
     info = target.stat()
-    raw = f"{info.st_dev}:{info.st_ino}:{info.st_mtime_ns}:{info.st_ctime_ns}".encode("utf-8")
+    raw = f"{info.st_dev}:{info.st_ino}:{info.st_mtime_ns}:{info.st_ctime_ns}".encode()
     return hashlib.sha256(raw).hexdigest()[:24]
 
 
@@ -1251,7 +1252,10 @@ class LocalFileOpsExecutor:
         if cursor:
             state = _decode_local_search_cursor(cursor, self._search_cursor_key)
             if state.get("binding") != binding:
-                if isinstance(state.get("binding"), dict) and state["binding"].get("path") == str(target):
+                if (
+                    isinstance(state.get("binding"), dict)
+                    and state["binding"].get("path") == str(target)
+                ):
                     raise SlurmSubmissionRejected("directory listing cursor is stale")
                 raise SlurmSubmissionRejected("directory listing cursor does not match request")
             raw_after = state.get("after")
@@ -1265,7 +1269,7 @@ class LocalFileOpsExecutor:
                 raise SlurmSubmissionRejected("invalid directory listing cursor")
             after = (raw_after[0], raw_after[1], raw_after[2])
 
-        def candidates():
+        def candidates() -> Iterator[FileEntry]:
             with os.scandir(target) as handle:
                 for item in handle:
                     try:

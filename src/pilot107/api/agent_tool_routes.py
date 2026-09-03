@@ -141,9 +141,11 @@ def _gateway_error(
         status = 429
     elif code == "AGENT.TOOL.DEADLINE_EXPIRED":
         status = 408
-    elif code in {"AGENT.TOOL.INVALID", "AGENT.TOOL.INVALID_RESULT"}:
-        status = 400
-    elif code == "AGENT.BUILDER.VALIDATIONS_INVALID":
+    elif code in {
+        "AGENT.TOOL.INVALID",
+        "AGENT.TOOL.INVALID_RESULT",
+        "AGENT.BUILDER.VALIDATIONS_INVALID",
+    }:
         status = 400
     elif code in {"AGENT.TOOL.UNAVAILABLE", "AGENT.BUILDER.ENVELOPE_UNAVAILABLE"}:
         status = 503

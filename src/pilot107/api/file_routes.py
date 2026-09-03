@@ -108,7 +108,7 @@ class FileRoutes:
             if not 1 <= limit <= 1000:
                 return _error(400, "FILES.INVALID_QUERY", "limit must be within 1..1000")
             try:
-                page = self.executor.list_dir(
+                list_page = self.executor.list_dir(
                     path=path,
                     owner=owner,
                     limit=limit,
@@ -129,14 +129,14 @@ class FileRoutes:
             return ApiResponse(
                 status=200,
                 payload={
-                    "path": page.path,
-                    "entries": [asdict(entry) for entry in page.entries],
+                    "path": list_page.path,
+                    "entries": [asdict(entry) for entry in list_page.entries],
                     "page": {
-                        "limit": page.limit,
-                        "has_more": page.has_more,
-                        "next_cursor": page.next_cursor,
+                        "limit": list_page.limit,
+                        "has_more": list_page.has_more,
+                        "next_cursor": list_page.next_cursor,
                     },
-                    "directory_revision": page.directory_revision,
+                    "directory_revision": list_page.directory_revision,
                 },
             )
 
@@ -176,7 +176,7 @@ class FileRoutes:
                     "mtime_from cannot exceed mtime_to",
                 )
             try:
-                page = self.executor.search_files(
+                search_page = self.executor.search_files(
                     root=root,
                     q=query,
                     kind=kind,
@@ -201,10 +201,10 @@ class FileRoutes:
                 status=200,
                 payload={
                     "root": root,
-                    "items": [asdict(item) for item in page.items],
-                    "incomplete": page.incomplete,
-                    "next_cursor": page.next_cursor,
-                    "warnings": list(page.warnings),
+                    "items": [asdict(item) for item in search_page.items],
+                    "incomplete": search_page.incomplete,
+                    "next_cursor": search_page.next_cursor,
+                    "warnings": list(search_page.warnings),
                 },
             )
 
