@@ -1,0 +1,54 @@
+name: temp-r1-run-workspace-validation
+
+on:
+  push:
+    branches:
+      - r1-run-workspace-readmodel
+    paths:
+      - scripts/_temp_apply_r1_run_workspace_wiring.py
+      - .github/workflows/_temp_r1_run_workspace_validation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: r1-run-workspace-readmodel
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.3"
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply staged HTTP wiring
+        run: python scripts/_temp_apply_r1_run_workspace_wiring.py
+      - name: Install Python dependencies
+        run: uv sync --locked --extra dev --extra api
+      - name: Python static gates
+        run: |
+          uv run ruff check src tests --exclude scripts/_temp_apply_r1_run_workspace_wiring.py
+          uv run mypy src
+      - name: Run workspace targeted tests
+        run: |
+          uv run pytest -q \
+            tests/test_run_workspace_service.py \
+            tests/test_run_workspace_api.py \
+            tests/test_http_api.py
+      - name: Verify materialized diff
+        run: |
+          git diff --check
+          git status --short
+          test -n "$(git status --short src/pilot107/api/http_app.py)"
+      - name: Commit validated wiring
+        run: |
+          git config user.name "107Pilot CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/pilot107/api/http_app.py
+          git commit -m "feat(runs): wire workspace read model into HTTP API"
+          git push origin HEAD:r1-run-workspace-readmodel
