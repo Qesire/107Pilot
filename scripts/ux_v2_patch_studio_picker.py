@@ -43,6 +43,13 @@ elif 'aria-label="浏览工作目录"' not in text:
     raise SystemExit("Workdir field marker not found")
 
 text = text.replace('label={requiredLabel("entry.command", "Command")}', 'label={requiredLabel("entry.command", "运行命令")}')
+
+old = '<TemplateExtraParameters contract={contract} schema={parameterSchema} update={update} />'
+new = '<TemplateExtraParameters user={user} contract={contract} schema={parameterSchema} update={update} />'
+if old in text:
+    text = text.replace(old, new, 1)
+elif '<TemplateExtraParameters user={user}' not in text:
+    raise SystemExit("TemplateExtraParameters call marker not found")
 studio.write_text(text)
 
 main = Path("apps/web/src/main.tsx")
@@ -58,7 +65,7 @@ main.write_text(text)
 spec = Path("tests/ui/visual.spec.js")
 text = spec.read_text().replace('getByLabel("Workdir")', 'getByLabel("工作目录")')
 marker = 'test("dirty source is not silently overwritten by a basic form update", async ({ page }) => {'
-new_test = '''test("studio workdir picker browses backend directories without leaving the contract", async ({ page }) => {
+workdir_test = '''test("studio workdir picker browses backend directories without leaving the contract", async ({ page }) => {
   await page.goto("/studio/new?user=alice");
   await page.getByRole("button", { name: "浏览工作目录" }).click();
   await expect(page.getByRole("dialog", { name: "选择实验工作目录" })).toBeVisible();
@@ -69,10 +76,25 @@ new_test = '''test("studio workdir picker browses backend directories without le
 });
 
 '''
-if new_test.strip() not in text:
+shared_path_test = '''test("recipe shared_path browses existing backend files and writes canonical field", async ({ page }) => {
+  await page.goto("/studio/new?user=alice");
+  await page.getByRole("button", { name: "浏览 runtime.environment.DATA_ROOT" }).click();
+  await expect(page.getByRole("dialog", { name: /选择共享路径/ })).toBeVisible();
+  await page.getByRole("button", { name: /dataset.tar.gz/ }).click();
+  await page.getByRole("button", { name: "选择此文件" }).click();
+  await expect(page.getByLabel(/runtime.environment.DATA_ROOT/)).toHaveValue("/public/home/alice/dataset.tar.gz");
+  await expect(page).toHaveURL(/\\/studio\\/new\\?user=alice/);
+});
+
+'''
+if workdir_test.strip() not in text:
     if marker not in text:
         raise SystemExit("Studio test insertion marker not found")
-    text = text.replace(marker, new_test + marker, 1)
+    text = text.replace(marker, workdir_test + marker, 1)
+if shared_path_test.strip() not in text:
+    if marker not in text:
+        raise SystemExit("shared_path test insertion marker not found")
+    text = text.replace(marker, shared_path_test + marker, 1)
 
 route_start = 'if (url.pathname === "/api/v1/files") {'
 route_end = '    if (url.pathname === "/api/v1/contracts/schema") {'
@@ -95,4 +117,25 @@ if 'name: "project-a"' not in text:
 }
 '''
     text = text[:start] + replacement + text[end:]
+
+recipe_route_marker = '    if (url.pathname === "/api/v1/contracts/schema") {'
+recipe_route = '''    if (url.pathname === "/api/v1/recipes/recipe_python_cpu/versions/1.0.0") {
+      return json(route, {
+        recipe_id: "recipe_python_cpu",
+        version: "1.0.0",
+        parameter_schema: {
+          required: ["runtime.environment.DATA_ROOT"],
+          "runtime.environment.DATA_ROOT": {
+            type: "shared_path",
+            prefix: "/public/home/alice",
+            contract: "选择已存在的共享输入文件或目录。",
+          },
+        },
+      });
+    }
+'''
+if '/api/v1/recipes/recipe_python_cpu/versions/1.0.0' not in text:
+    if recipe_route_marker not in text:
+        raise SystemExit("recipe version route marker not found")
+    text = text.replace(recipe_route_marker, recipe_route + recipe_route_marker, 1)
 spec.write_text(text)
