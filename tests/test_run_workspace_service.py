@@ -29,6 +29,14 @@ class RunWorkspaceServiceTests(unittest.TestCase):
 
     def test_failed_run_projects_diagnosis_evidence_and_provenance(self) -> None:
         contract = self.contract_service.create(owner="alice", payload=_contract_payload())
+        self.run_store.create_run(
+            run_id="run_parent",
+            owner="alice",
+            workdir="/public/home/alice/project",
+            script="#!/bin/bash\npython train.py\n",
+            contract_id=contract.contract_id,
+            job_name="workspace-parent",
+        )
         run = self.run_store.create_run(
             run_id="run_workspace_failed",
             owner="alice",
