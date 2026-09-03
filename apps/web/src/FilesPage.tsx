@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   FolderPlus,
   LayoutGrid,
-  List,
   LoaderCircle,
   Pause,
   Play,
@@ -17,9 +16,10 @@ import {
 } from "lucide-react";
 import * as tus from "tus-js-client";
 import { api } from "./api";
-import { RefreshButton, SectionHeading } from "./components";
+import { SectionHeading } from "./components";
 import { FilesManagerProvider, useFilesManager } from "./files/FilesManagerContext";
 import { FileSearchPanel, fileSearchOpenTarget } from "./files/FileSearchPanel";
+import { FileWorkspaceStatus } from "./files/FileWorkspaceStatus";
 import { PaneManager } from "./files/PaneManager";
 import { usePaneLayout } from "./files/usePaneLayout";
 import type { LocationState } from "./url";
@@ -30,7 +30,6 @@ interface PageProps {
   navigate: (path: string) => void;
 }
 
-// tus resumable-upload tuning (unchanged from the single-pane page).
 const TUS_ENDPOINT_PATH = "/api/v1/files/tus";
 const TUS_CHUNK_SIZE = 8 * 1024 * 1024;
 const TUS_PARALLEL_UPLOADS = 5;
@@ -38,10 +37,12 @@ const PARALLEL_THRESHOLD = 16 * 1024 * 1024;
 const AUTO_DISMISS_DELAY_MS = 2500;
 
 type UploadTaskState = "uploading" | "paused" | "completing" | "done" | "error";
+type ArchivePostAction = "keep" | "extract";
 
 interface UploadTask {
   id: string;
   filename: string;
+  targetPath: string;
   size: number;
   sent: number;
   speed: number;
@@ -62,12 +63,17 @@ function formatSpeed(bytesPerSec: number): string {
 
 function uploadStateLabel(state: UploadTaskState): string {
   switch (state) {
-    case "uploading": return "上传中";
+    case "uploading": return "浏览器传输中";
     case "paused": return "已暂停";
-    case "completing": return "校验写入中";
-    case "done": return "已完成";
+    case "completing": return "等待服务器完成";
+    case "done": return "已交给服务器";
     case "error": return "失败";
   }
+}
+
+function isAutoExtractArchive(filename: string): boolean {
+  const lower = filename.toLowerCase();
+  return lower.endsWith(".tar.gz") || lower.endsWith(".tgz");
 }
 
 export function FilesPage({ user }: PageProps) {
@@ -92,6 +98,7 @@ function FilesShell({
   const queryClient = useQueryClient();
   const manager = useFilesManager();
   const [tasks, setTasks] = useState<UploadTask[]>([]);
+  const [archivePostAction, setArchivePostAction] = useState<ArchivePostAction>("keep");
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounter = useRef(0);
@@ -100,17 +107,26 @@ function FilesShell({
     Map<string, { sent: number; time: number; speed: number; lastUi: number }>
   >(new Map());
 
-  const invalidate = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["files-list", user] });
-  }, [queryClient, user]);
-
   const activeCwd = useCallback(
     () => manager.getActiveController()?.getCwd() ?? homePath,
     [manager, homePath],
   );
 
+  const invalidatePath = useCallback((path: string) => {
+    void queryClient.invalidateQueries({
+      queryKey: ["files-list", user, path],
+      exact: true,
+    });
+  }, [queryClient, user]);
+
+  const refreshBackendState = useCallback((path = activeCwd()) => {
+    invalidatePath(path);
+    void queryClient.invalidateQueries({ queryKey: ["files-usage", user] });
+    void queryClient.invalidateQueries({ queryKey: ["file-uploads", user] });
+  }, [activeCwd, invalidatePath, queryClient, user]);
+
   const updateTask = (id: string, patch: Partial<UploadTask>) => {
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+    setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, ...patch } : task)));
   };
 
   const handleProgress = (taskId: string, bytesSent: number, bytesTotal: number) => {
@@ -133,31 +149,33 @@ function FilesShell({
   const removeTaskRefs = (taskId: string) => {
     uploadRefs.current.delete(taskId);
     progressMeta.current.delete(taskId);
-    setTasks((prev) => prev.filter((t) => t.id !== taskId));
+    setTasks((prev) => prev.filter((task) => task.id !== taskId));
   };
 
-  const finalizeTask = async (taskId: string, upload: tus.Upload) => {
+  const finalizeTask = async (taskId: string, upload: tus.Upload, targetPath: string) => {
     updateTask(taskId, { state: "completing" });
     const uploadId = (upload.url ?? "").replace(/\/+$/, "").split("/").pop() ?? "";
     try {
       await api.uploadComplete(user, uploadId);
       updateTask(taskId, { state: "done" });
-      invalidate();
+      refreshBackendState(targetPath);
       window.setTimeout(() => removeTaskRefs(taskId), AUTO_DISMISS_DELAY_MS);
     } catch (err) {
       updateTask(taskId, {
         state: "error",
-        error: err instanceof Error ? err.message : "校验/写入失败",
+        error: err instanceof Error ? err.message : "服务器校验或写入失败",
       });
+      void queryClient.invalidateQueries({ queryKey: ["file-uploads", user] });
     }
   };
 
   const startUploadTask = async (file: File, targetPath: string) => {
     const taskId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const autoExtract = file.name.endsWith(".tar.gz") || file.name.endsWith(".tgz");
+    const autoExtract = archivePostAction === "extract" && isAutoExtractArchive(file.name);
     const task: UploadTask = {
       id: taskId,
       filename: file.name,
+      targetPath,
       size: file.size,
       sent: 0,
       speed: 0,
@@ -177,9 +195,11 @@ function FilesShell({
       },
       headers: { "X-Pilot107-User": user },
       onProgress: (bytesSent, bytesTotal) => handleProgress(taskId, bytesSent, bytesTotal),
-      onSuccess: () => void finalizeTask(taskId, upload),
-      onError: (err) =>
-        updateTask(taskId, { state: "error", error: err instanceof Error ? err.message : String(err) }),
+      onSuccess: () => void finalizeTask(taskId, upload, targetPath),
+      onError: (err) => {
+        updateTask(taskId, { state: "error", error: err instanceof Error ? err.message : String(err) });
+        void queryClient.invalidateQueries({ queryKey: ["file-uploads", user] });
+      },
     });
     uploadRefs.current.set(taskId, upload);
     setTasks((prev) => [...prev, task]);
@@ -188,7 +208,7 @@ function FilesShell({
       const first = previous[0];
       if (first) upload.resumeFromPreviousUpload(first);
     } catch {
-      // Fresh upload if resume lookup fails.
+      // A failed resume lookup is not fatal; start a fresh tus session.
     }
     upload.start();
   };
@@ -198,12 +218,11 @@ function FilesShell({
       const target = activeCwd();
       for (const file of Array.from(files)) void startUploadTask(file, target);
     },
-    // activeCwd is stable enough; startUploadTask closes over stable refs.
+    // startUploadTask intentionally reads the current archive policy.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeCwd],
+    [activeCwd, archivePostAction],
   );
 
-  // Expose the native picker to the manager (global "上传" button).
   useEffect(() => {
     manager.setUploadTrigger(() => fileInputRef.current?.click());
     return () => manager.setUploadTrigger(null);
@@ -214,34 +233,42 @@ function FilesShell({
     if (!upload) return;
     void upload.abort().then(() => updateTask(taskId, { state: "paused", speed: 0 }));
   };
+
   const resumeTask = (taskId: string) => {
     const upload = uploadRefs.current.get(taskId);
     if (!upload) return;
     updateTask(taskId, { state: "uploading" });
     upload.start();
   };
+
   const cancelTask = (taskId: string) => {
     const upload = uploadRefs.current.get(taskId);
     removeTaskRefs(taskId);
-    if (upload) void upload.abort(true).catch(() => undefined);
+    if (!upload) return;
+    void upload.abort(true)
+      .catch(() => undefined)
+      .finally(() => {
+        void queryClient.invalidateQueries({ queryKey: ["file-uploads", user] });
+      });
   };
 
-  // -- drag & drop upload onto the whole page (targets active pane cwd) --
-  const handleDragEnter = (e: React.DragEvent) => {
-    e.preventDefault();
+  const handleDragEnter = (event: React.DragEvent) => {
+    event.preventDefault();
     dragCounter.current++;
-    if (e.dataTransfer.types.includes("Files")) setDragOver(true);
+    if (event.dataTransfer.types.includes("Files")) setDragOver(true);
   };
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
+
+  const handleDragLeave = (event: React.DragEvent) => {
+    event.preventDefault();
     dragCounter.current--;
     if (dragCounter.current === 0) setDragOver(false);
   };
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
+
+  const handleDrop = (event: React.DragEvent) => {
+    event.preventDefault();
     dragCounter.current = 0;
     setDragOver(false);
-    if (e.dataTransfer.files.length) handleUpload(e.dataTransfer.files);
+    if (event.dataTransfer.files.length) handleUpload(event.dataTransfer.files);
   };
 
   const toggleViewMode = () => {
@@ -260,17 +287,18 @@ function FilesShell({
       className="page files-page files-multibase"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
-      onDragOver={(e) => e.preventDefault()}
+      onDragOver={(event) => event.preventDefault()}
       onDrop={handleDrop}
     >
       <SectionHeading
-        eyebrow="文件系统"
-        title="远程文件管理"
-        detail="多窗格浏览集群文件：框选、跨窗格拖动移动、拖放上传。"
-        action={<RefreshButton onClick={invalidate} pending={false} />}
+        eyebrow="文件 / 科研资产"
+        title="文件工作区"
+        detail="上传、检索和组织实验资产；浏览器负责可恢复传输，服务器负责完整性校验、集群写入与可选解压。"
       />
 
-      {dragOver && (
+      <FileWorkspaceStatus user={user} homePath={homePath} />
+
+      {dragOver ? (
         <div className="files-drop-overlay">
           <div className="files-drop-inner">
             <UploadCloud size={48} aria-hidden="true" />
@@ -278,7 +306,7 @@ function FilesShell({
             <span>{activeCwd()}</span>
           </div>
         </div>
-      )}
+      ) : null}
 
       <div className="files-toolbar files-global-toolbar">
         <div className="files-toolbar-left">
@@ -292,11 +320,11 @@ function FilesShell({
           >
             <FolderPlus size={14} aria-hidden="true" /> 新建目录
           </button>
-          <button type="button" className="button secondary" onClick={() => manager.getActiveController()?.refresh()}>
+          <button type="button" className="button secondary" onClick={() => refreshBackendState()}>
             <RotateCw size={14} aria-hidden="true" /> 刷新
           </button>
           <button type="button" className="button secondary" onClick={toggleViewMode}>
-            <LayoutGrid size={14} aria-hidden="true" /> 视图
+            <LayoutGrid size={14} aria-hidden="true" /> 切换视图
           </button>
           <button type="button" className="button secondary" onClick={addPane}>
             <Plus size={14} aria-hidden="true" /> 拆分窗格
@@ -305,14 +333,29 @@ function FilesShell({
             重置布局
           </button>
         </div>
+
+        <div className="files-toolbar-right">
+          <label className="file-upload-policy">
+            <span>tar.gz / tgz 上传后</span>
+            <select
+              value={archivePostAction}
+              aria-label="压缩包上传后处理"
+              onChange={(event) => setArchivePostAction(event.target.value as ArchivePostAction)}
+            >
+              <option value="keep">仅写入压缩包</option>
+              <option value="extract">写入后自动解压</option>
+            </select>
+          </label>
+        </div>
+
         <input
           ref={fileInputRef}
           type="file"
           multiple
           hidden
-          onChange={(e) => {
-            if (e.target.files?.length) handleUpload(e.target.files);
-            e.target.value = "";
+          onChange={(event) => {
+            if (event.target.files?.length) handleUpload(event.target.files);
+            event.target.value = "";
           }}
         />
       </div>
@@ -326,7 +369,7 @@ function FilesShell({
         }}
       />
 
-      {tasks.length > 0 && (
+      {tasks.length > 0 ? (
         <div className="files-upload-tasks" role="status" aria-live="polite">
           {tasks.map((task) => (
             <UploadTaskCard
@@ -339,7 +382,7 @@ function FilesShell({
             />
           ))}
         </div>
-      )}
+      ) : null}
 
       <PaneManager layoutApi={layoutApi} homePath={homePath} />
     </div>
@@ -373,29 +416,29 @@ function UploadTaskCard({
         ) : (
           <Pause size={16} className="upload-icon-paused" aria-hidden="true" />
         )}
-        <span className="upload-filename" title={task.filename}>{task.filename}</span>
+        <span className="upload-filename" title={`${task.targetPath}/${task.filename}`}>{task.filename}</span>
         <span className="upload-state">{uploadStateLabel(task.state)}</span>
         <span className="upload-card-actions">
-          {task.state === "uploading" && (
+          {task.state === "uploading" ? (
             <button type="button" className="icon-button" title="暂停" onClick={onPause}>
               <Pause size={14} aria-hidden="true" />
             </button>
-          )}
-          {task.state === "paused" && (
+          ) : null}
+          {task.state === "paused" ? (
             <button type="button" className="icon-button" title="继续" onClick={onResume}>
               <Play size={14} aria-hidden="true" />
             </button>
-          )}
-          {(task.state === "uploading" || task.state === "paused" || task.state === "error") && (
+          ) : null}
+          {task.state === "uploading" || task.state === "paused" || task.state === "error" ? (
             <button type="button" className="icon-button danger" title="取消" onClick={onCancel}>
               <X size={14} aria-hidden="true" />
             </button>
-          )}
-          {task.state === "done" && (
+          ) : null}
+          {task.state === "done" ? (
             <button type="button" className="icon-button" title="关闭" onClick={onDismiss}>
               <X size={14} aria-hidden="true" />
             </button>
-          )}
+          ) : null}
         </span>
       </div>
       {task.state === "error" ? (
@@ -408,11 +451,11 @@ function UploadTaskCard({
           <div className="upload-card-footer">
             <span>
               {formatSize(task.sent)} / {formatSize(task.size)}
-              {task.state === "uploading" && task.speed > 0 && (
+              {task.state === "uploading" && task.speed > 0 ? (
                 <span className="upload-speed"> · {formatSpeed(task.speed)}</span>
-              )}
+              ) : null}
             </span>
-            <span>{task.state === "completing" ? "校验写入中…" : `${pct}%`}</span>
+            <span>{task.state === "completing" ? "服务器处理中…" : `${pct}%`}</span>
           </div>
         </>
       )}
