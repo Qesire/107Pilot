@@ -1,0 +1,66 @@
+name: temp-picker-a6-validation
+
+on:
+  push:
+    branches:
+      - ux-v2-picker-a6-validation
+    paths:
+      - scripts/_temp_apply_picker_a6.py
+      - .github/workflows/_temp_picker_a6_validation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ux-v2-picker-a6-validation
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Apply staged A6 picker migration
+        run: python scripts/_temp_apply_picker_a6.py
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Web static gates
+        run: |
+          npm run typecheck
+          npm test -- --run
+          npm run build
+
+      - name: Files workspace regression gate
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test tests/ui/files.spec.js
+
+      - name: Picker workflow and large-directory gate
+        run: npx playwright test tests/ui/visual.spec.js --grep "workdir picker|shared_path|bounded DOM"
+
+      - name: Verify materialized diff
+        run: |
+          test -f apps/web/src/files/useFileDirectoryListing.ts
+          git diff --check
+          git status --short
+
+      - name: Commit validated A6 implementation
+        run: |
+          git config user.name "107Pilot validation bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            apps/web/src/files/useFileDirectoryListing.ts \
+            apps/web/src/files/useFilePane.ts \
+            apps/web/src/files/FilePickerDialog.tsx \
+            apps/web/src/styles/file-picker-v2.css \
+            tests/ui/visual.spec.js \
+            src/pilot107/web/static
+          git commit -m "perf(files): share and virtualize picker browsing core"
+          git push origin HEAD:ux-v2-picker-a6-validation
