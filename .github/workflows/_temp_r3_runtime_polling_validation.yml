@@ -1,0 +1,61 @@
+name: temp-r3-runtime-polling-validation
+
+on:
+  push:
+    branches:
+      - r3-runtime-adaptive-polling
+    paths:
+      - scripts/_temp_apply_r3_runtime_polling.py
+      - .github/workflows/_temp_r3_runtime_polling_validation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: r3-runtime-adaptive-polling
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Apply staged R3 integration
+        run: python scripts/_temp_apply_r3_runtime_polling.py
+      - name: Install web dependencies
+        run: npm ci
+      - name: Type and unit gates
+        run: |
+          npm run typecheck
+          npm test -- --run
+      - name: Build static web bundle
+        run: npm run build
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run targeted Runtime browser gates
+        run: >-
+          npx playwright test tests/ui/visual.spec.js
+          --grep "stopped Runtime Watch|absent Runtime Watch|experiment shell opens a Run|successful run exposes"
+      - name: Verify materialized diff
+        run: |
+          git diff --check
+          git status --short
+          test -n "$(git status --short apps/web/src/query.ts)"
+          test -n "$(git status --short apps/web/src/RuntimeWatchPanel.tsx)"
+          test -n "$(git status --short tests/ui/visual.spec.js)"
+      - name: Commit validated R3 implementation
+        run: |
+          git config user.name "107Pilot CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            apps/web/src/query.ts \
+            apps/web/src/RuntimeWatchPanel.tsx \
+            apps/web/src/runtime-polling.ts \
+            apps/web/src/runtime-polling.test.ts \
+            tests/ui/visual.spec.js \
+            src/pilot107/web/static
+          git commit -m "feat(web): validate adaptive Runtime Watch polling"
+          git push origin HEAD:r3-runtime-adaptive-polling
