@@ -11,6 +11,19 @@ def replace_once(text: str, old: str, new: str) -> str:
     return text.replace(old, new, 1)
 
 
+def replace_once_in_method(text: str, method: str, old: str, new: str) -> str:
+    marker = f"    def {method}(\n"
+    start = text.find(marker)
+    if start < 0:
+        raise RuntimeError(f"method not found: {method}")
+    end = text.find("\n    def ", start + len(marker))
+    if end < 0:
+        end = len(text)
+    section = text[start:end]
+    patched = replace_once(section, old, new)
+    return text[:start] + patched + text[end:]
+
+
 def main() -> None:
     text = PATH.read_text(encoding="utf-8")
 
@@ -55,8 +68,9 @@ def main() -> None:
         "        )\n"
         "        self.run_workspace_routes = RunWorkspaceRoutes(self.run_workspace_service)\n",
     )
-    text = replace_once(
+    text = replace_once_in_method(
         text,
+        "_handle_get",
         "        if repair_ticket_response is not None:\n"
         "            return repair_ticket_response\n"
         "        if self.file_routes is not None:\n",
