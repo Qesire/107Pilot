@@ -131,7 +131,7 @@ test("studio requires server validation before creating a canonical contract", a
 
   await expect(page.getByRole("heading", { name: "新建 Contract" })).toBeVisible();
   await expect(page.getByRole("button", { name: "创建 Contract" })).toBeDisabled();
-  await page.getByLabel("Workdir").fill("/public/home/alice/studio-case");
+  await page.getByLabel("工作目录").fill("/public/home/alice/studio-case");
   await page.getByRole("button", { name: "服务端校验" }).click();
   await expect(page.getByText("服务器 OK", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "创建 Contract" })).toBeEnabled();
@@ -139,11 +139,21 @@ test("studio requires server validation before creating a canonical contract", a
   await expect(page).toHaveURL(/\/studio\/contract_visual_001\?.*panel=script/);
 });
 
+test("studio workdir picker browses backend directories without leaving the contract", async ({ page }) => {
+  await page.goto("/studio/new?user=alice");
+  await page.getByRole("button", { name: "浏览工作目录" }).click();
+  await expect(page.getByRole("dialog", { name: "选择实验工作目录" })).toBeVisible();
+  await page.getByRole("button", { name: /project-a/ }).click();
+  await page.getByRole("button", { name: "选择此目录" }).click();
+  await expect(page.getByLabel("工作目录")).toHaveValue("/public/home/alice/project-a");
+  await expect(page).toHaveURL(/\/studio\/new\?user=alice/);
+});
+
 test("dirty source is not silently overwritten by a basic form update", async ({ page }) => {
   await page.goto("/studio/new?user=alice&tab=source");
   const editor = page.locator(".cm-content");
   await editor.fill("schema_version: pilot107.contract/v2\nrecipe_version_id: changed-in-source\n");
-  await page.getByLabel("Workdir").fill("/public/home/alice/form-change");
+  await page.getByLabel("工作目录").fill("/public/home/alice/form-change");
 
   await expect(page.getByRole("alert")).toContainText("表单与未应用源码发生冲突");
   await expect(page.getByRole("button", { name: "应用源码并覆盖表单" })).toBeVisible();
@@ -252,9 +262,12 @@ if (url.pathname === "/api/v1/files") {
   const path = url.searchParams.get("path") || "/public/home/alice";
   return json(route, {
     path,
-    entries: [
-      { name: "dataset.tar.gz", type: "file", size: 100, mtime: 1788408000 },
-    ],
+    entries: path === "/public/home/alice"
+      ? [
+          { name: "project-a", type: "directory", size: 0, mtime: 1788408000 },
+          { name: "dataset.tar.gz", type: "file", size: 100, mtime: 1788408000 },
+        ]
+      : [],
   });
 }
     if (url.pathname === "/api/v1/contracts/schema") {

@@ -26,6 +26,7 @@ import {
   type SourceFormat,
 } from "./contract-state";
 import { QueryBoundary, SectionHeading, StatusBadge } from "./components";
+import { FilePickerDialog } from "./files/FilePickerDialog";
 import { useContract, useContractSchema, useRecipes, useRecipeVersion } from "./query";
 import { compileClientSchemaValidator } from "./schema-validation";
 import {
@@ -278,7 +279,7 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
                 <p>基础与高级字段共享同一 canonical；滚动查看全部字段。</p>
               </header>
               <div className="studio-form-scroll">
-                <BasicProjection contract={canonical} recipes={recipes.data?.items ?? []} update={update} parameterSchema={parameterSchema} />
+                <BasicProjection user={user} contract={canonical} recipes={recipes.data?.items ?? []} update={update} parameterSchema={parameterSchema} />
                 <AdvancedProjection contract={canonical} update={update} />
               </div>
             </section>
@@ -396,7 +397,7 @@ function RunLaunchPanel({ user, contractId, localDirty, navigate }: { user: stri
   );
 }
 
-function BasicProjection({ contract, recipes, update, parameterSchema }: ProjectionProps & { recipes: Array<{ recipe_id: string; latest_version: string; title: string }>; parameterSchema?: unknown }) {
+function BasicProjection({ user, contract, recipes, update, parameterSchema }: ProjectionProps & { user: string; recipes: Array<{ recipe_id: string; latest_version: string; title: string }>; parameterSchema?: unknown }) {
   const currentRecipe = readContractValue(contract, ["recipe_version_id"], "");
   const recipeOptions = recipes.map((recipe) => ({ value: `${recipe.recipe_id}@${recipe.latest_version}`, label: `${recipe.title} · ${recipe.latest_version}` }));
   if (currentRecipe && !recipeOptions.some((option) => option.value === currentRecipe)) {
@@ -407,6 +408,7 @@ function BasicProjection({ contract, recipes, update, parameterSchema }: Project
   const typedOutputs = expected.filter((item) => typeof item !== "string");
   const commandValue = readContractValue(contract, ["entry", "command"], "");
   const workdirValue = readContractValue(contract, ["project", "workdir"], "");
+  const [workdirPickerOpen, setWorkdirPickerOpen] = useState(false);
   const schemaFields = parseParameterSchema(parameterSchema);
   const fieldOf = (path: string) => schemaFields.find((field) => field.path === path);
   const requiredLabel = (path: string, base: string) => (fieldOf(path)?.required ? `${base}（必填）` : base);
@@ -419,8 +421,12 @@ function BasicProjection({ contract, recipes, update, parameterSchema }: Project
       <fieldset className="field-group"><legend>任务</legend><div className="form-grid two">
         <SelectField label="Recipe version" value={currentRecipe} onChange={(value) => update(["recipe_version_id"], value)} options={recipeOptions} />
         <TextField label="项目名（可选）" value={readContractValue(contract, ["project", "name"], "")} onChange={(value) => update(["project", "name"], value)} />
-        <TextField className="span-2" label={requiredLabel("project.workdir", "Workdir")} value={workdirValue} onChange={(value) => update(["project", "workdir"], value)} customizable={isPlaceholderValue(workdirValue)} placeholder={fieldOf("project.workdir")?.prefix ?? undefined} />
-        <TextField className="span-2" label={requiredLabel("entry.command", "Command")} multiline value={commandValue} onChange={(value) => update(["entry", "command"], value)} customizable={isPlaceholderValue(commandValue)} />
+        <div className="path-field-browser span-2">
+          <TextField label={requiredLabel("project.workdir", "工作目录")} value={workdirValue} onChange={(value) => update(["project", "workdir"], value)} customizable={isPlaceholderValue(workdirValue)} placeholder={fieldOf("project.workdir")?.prefix ?? undefined} />
+          <button type="button" className="button secondary" aria-label="浏览工作目录" onClick={() => setWorkdirPickerOpen(true)}>浏览…</button>
+        </div>
+        {workdirPickerOpen ? <FilePickerDialog user={user} homePath={`/public/home/${user}`} initialPath={workdirValue} title="选择实验工作目录" onSelect={(path) => { update(["project", "workdir"], path); setWorkdirPickerOpen(false); }} onClose={() => setWorkdirPickerOpen(false)} /> : null}
+        <TextField className="span-2" label={requiredLabel("entry.command", "运行命令")} multiline value={commandValue} onChange={(value) => update(["entry", "command"], value)} customizable={isPlaceholderValue(commandValue)} />
       </div></fieldset>
       <fieldset className="field-group"><legend>资源</legend><div className="form-grid three">
         {partitionField && partitionField.allowed.length > 0 ? (
