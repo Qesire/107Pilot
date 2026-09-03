@@ -14,7 +14,6 @@ from pilot107.core.contracts import ContractStore
 from pilot107.core.run_store import DiagnosisRecord, EvidenceObjectRecord, RunRecord, RunStore
 from pilot107.core.states import CollectionState, RunState
 
-
 _FAILED_RUN_STATES = frozenset(
     {
         RunState.FAILED,
