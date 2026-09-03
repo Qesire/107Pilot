@@ -32,6 +32,8 @@ export interface PaneActions {
   /** Begin a native HTML5 drag on an entry (move payload shared via the
    * FilesManager so the drop may land in a different pane/view). */
   onDragStartEntry: (entry: FileEntry, e: React.DragEvent) => void;
+  /** Drop an internal file payload directly into a known directory entry. */
+  onDropIntoDirectory: (entry: FileEntry, e: React.DragEvent) => void;
   /** Drag gesture finished — clears the shared drag payload/highlight. */
   onDragEndEntry: () => void;
 }
