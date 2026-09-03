@@ -5,6 +5,7 @@ on:
     branches: [ux-v2-foundation]
     paths:
       - scripts/_temp_apply_paged_files_source.py
+      - scripts/_temp_fix_paged_files_source.py
       - .github/workflows/_temp_apply_paged_files_source.yml
 
 permissions:
@@ -27,7 +28,9 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Apply source migration
-        run: python scripts/_temp_apply_paged_files_source.py
+        run: |
+          python scripts/_temp_apply_paged_files_source.py
+          python scripts/_temp_fix_paged_files_source.py
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests
