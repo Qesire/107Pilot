@@ -7,9 +7,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import type { FileEntry } from "../types";
-import { computeMoveTargets } from "./selection";
+import { computeMoveTargets, normalizeDir, parentPath } from "./selection";
 
 export type PaneViewMode = "grid" | "list" | "column";
 
@@ -70,6 +71,7 @@ export function FilesManagerProvider({
   homePath: string;
   children: ReactNode;
 }) {
+  const queryClient = useQueryClient();
   const [activePaneId, setActivePaneId] = useState<string | null>(null);
   const [panePaths, setPanePaths] = useState<Record<string, string>>({});
   const dragPayloadRef = useRef<DragPayload | null>(null);
@@ -120,15 +122,31 @@ export function FilesManagerProvider({
     ? panePaths[activePaneId] ?? controllers.current.get(activePaneId)?.getCwd() ?? homePath
     : homePath;
 
+  const invalidateFilePaths = useCallback((paths: string[]) => {
+    for (const path of new Set(paths.map(normalizeDir))) {
+      void queryClient.invalidateQueries({
+        queryKey: ["files-list", user, path],
+        exact: true,
+      });
+    }
+  }, [queryClient, user]);
+
   const moveEntries = useCallback(
     async (entries: FileEntry[], destDir: string): Promise<number> => {
       const targets = computeMoveTargets(entries, destDir);
       for (const target of targets) {
         await api.fileRename(user, target.from, target.to);
       }
+      if (targets.length > 0) {
+        invalidateFilePaths([
+          destDir,
+          ...targets.map((target) => parentPath(target.from)),
+        ]);
+        void queryClient.invalidateQueries({ queryKey: ["files-usage", user] });
+      }
       return targets.length;
     },
-    [user],
+    [invalidateFilePaths, queryClient, user],
   );
 
   const setDragPayload = useCallback((payload: DragPayload | null) => {
