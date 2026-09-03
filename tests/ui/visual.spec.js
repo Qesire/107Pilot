@@ -227,6 +227,38 @@ test("Agent separates durable read-only conversation from controlled repair", as
   await capture(page, "agent-durable-conversation.png");
 });
 
+
+test("experiment shell opens a Run as one workspace without loading the history list", async ({ page }) => {
+  let listRequests = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/v1/runs") listRequests += 1;
+  });
+
+  await page.goto("/runs/run_alice_failed?user=alice");
+  await expect(page.getByRole("heading", { name: "实验工作区" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运行详情" })).toBeVisible();
+  await expect(page.getByText("contract_alice_002", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("/work/alice/projects/a-very-long-directory-name/failed-case", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: /已加载 .* 个结果/ })).toHaveCount(0);
+  await expect.poll(() => listRequests).toBe(0);
+
+  await page.getByRole("button", { name: "阶段：修复" }).click();
+  await expect(page).toHaveURL(/tab=diagnosis/);
+  await expect(page.getByRole("button", { name: "诊断", exact: true })).toHaveAttribute("aria-current", "page");
+});
+
+test("experiment shell keeps Studio preparation and preflight in the same context", async ({ page }) => {
+  await page.goto("/studio/new?user=alice");
+  await expect(page.getByRole("heading", { name: "实验工作区" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "阶段：准备" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "阶段：配置" })).toHaveAttribute("aria-current", "step");
+  await expect(page.getByRole("button", { name: "阶段：运行前检查" })).toBeDisabled();
+  await page.getByRole("button", { name: "阶段：准备" }).click();
+  await expect(page.getByRole("heading", { name: "实验资产" })).toBeVisible();
+  await expect(page).toHaveURL(/\/studio\/new\?user=alice/);
+});
+
 async function capture(page, filename) {
   await page.screenshot({
     path: path.join(screenshotDir, filename),

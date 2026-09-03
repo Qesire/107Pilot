@@ -25,8 +25,9 @@ import {
   updateContractPath,
   type SourceFormat,
 } from "./contract-state";
-import { QueryBoundary, SectionHeading, StatusBadge } from "./components";
+import { QueryBoundary, StatusBadge } from "./components";
 import { ContractAssetSummary } from "./ContractAssetSummary";
+import { ExperimentShell } from "./ExperimentShell";
 import { FilePickerDialog } from "./files/FilePickerDialog";
 import { useContract, useContractSchema, useRecipes, useRecipeVersion } from "./query";
 import { compileClientSchemaValidator } from "./schema-validation";
@@ -207,15 +208,20 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
   // handled by the explicit studio-hydrating banner below so the message can
   // be specific ("正在加载 Contract…") instead of the generic data-loading UI.
   const studioLoading = schemaQuery.isPending || recipes.isPending;
+  const projectName = readContractValue(canonical, ["project", "name"], "");
 
   return (
-    <>
-      <SectionHeading
-        eyebrow="Contract Studio / canonical state"
-        title={contractId ? "检查与派生 Contract" : "新建 Contract"}
-        detail="表单、源码与 Agent 共享同一 canonical object；左侧编辑表单，中间实时同步源码，右侧让 Agent 建议改动。服务端 validation 始终是最终权威。"
-      />
-
+    <ExperimentShell
+      user={user}
+      location={location}
+      navigate={navigate}
+      context={{
+        kind: "contract",
+        contractId,
+        title: typeof projectName === "string" ? projectName : null,
+        dirty: canonicalDirty,
+      }}
+    >
       <QueryBoundary
         pending={studioLoading}
         error={schemaQuery.error ?? recipes.error ?? existing.error}
@@ -367,7 +373,7 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
         </div>
         ) : null}
       </QueryBoundary>
-    </>
+    </ExperimentShell>
   );
 }
 

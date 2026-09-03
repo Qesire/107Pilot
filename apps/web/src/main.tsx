@@ -13,6 +13,7 @@ import "./styles/workbench-menu-v2.css";
 import "./styles/file-workspace-v2.css";
 import "./styles/task-indicator-v2.css";
 import "./styles/file-picker-v2.css";
+import "./styles/experiment-shell-v2.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {

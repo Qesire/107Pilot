@@ -1,4 +1,4 @@
-import{c as m,r as i,j as l,p as P,a as j}from"./app.js";/**
+import{c as m,r as i,j as l,o as P,a as j}from"./app.js";/**
  * @license lucide-react v0.468.0 - ISC
  *
  * This source code is licensed under the ISC license.
