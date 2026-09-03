@@ -74,17 +74,25 @@ if new_test.strip() not in text:
         raise SystemExit("Studio test insertion marker not found")
     text = text.replace(marker, new_test + marker, 1)
 
-old = '''              entries: [
-                { name: "dataset.tar.gz", type: "file", size: 100, mtime: 1788408000 },
-              ],'''
-new = '''              entries: path === "/public/home/alice"
-                ? [
-                    { name: "project-a", type: "directory", size: 0, mtime: 1788408000 },
-                    { name: "dataset.tar.gz", type: "file", size: 100, mtime: 1788408000 },
-                  ]
-                : [],'''
-if old in text:
-    text = text.replace(old, new, 1)
-elif 'name: "project-a"' not in text:
-    raise SystemExit("file listing fixture marker not found")
+route_start = 'if (url.pathname === "/api/v1/files") {'
+route_end = '    if (url.pathname === "/api/v1/contracts/schema") {'
+if 'name: "project-a"' not in text:
+    start = text.find(route_start)
+    end = text.find(route_end, start)
+    if start < 0 or end < 0:
+        raise SystemExit("file listing route markers not found")
+    replacement = '''if (url.pathname === "/api/v1/files") {
+  const path = url.searchParams.get("path") || "/public/home/alice";
+  return json(route, {
+    path,
+    entries: path === "/public/home/alice"
+      ? [
+          { name: "project-a", type: "directory", size: 0, mtime: 1788408000 },
+          { name: "dataset.tar.gz", type: "file", size: 100, mtime: 1788408000 },
+        ]
+      : [],
+  });
+}
+'''
+    text = text[:start] + replacement + text[end:]
 spec.write_text(text)
