@@ -9,14 +9,15 @@ test.beforeEach(async ({ page }) => {
   await installMockApi(page);
 });
 
-test("workspace renders live run and platform read models", async ({ page }) => {
+test("workspace prioritizes current work and preparation facts", async ({ page }) => {
   await page.goto("/projects?user=alice");
 
-  await expect(page.getByRole("heading", { name: "把下一次提交建立在可验证事实之上" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "当前工作" })).toBeVisible();
   await expect(page.getByRole("button", { name: "查看 run_alice_succeeded" })).toBeVisible();
   await expect(page.getByText("acct_alice", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("可见分区", { exact: true })).toBeVisible();
-  await expect(page.locator(".signal-strip").getByText("2", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 次运行需要处理", { exact: true })).toBeVisible();
   await capture(page, "phase3d-workspace.png");
 });
 
