@@ -1,0 +1,85 @@
+name: temp-file-virtualization-validation
+
+on:
+  push:
+    branches:
+      - ux-v2-virtualization-validation
+    paths:
+      - scripts/_temp_apply_file_virtualization.py
+      - .github/workflows/_temp_file_virtualization_validation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ux-v2-virtualization-validation
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.3"
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Apply staged virtualization migration
+        run: python scripts/_temp_apply_file_virtualization.py
+
+      - name: Install Python dependencies
+        run: uv sync --locked --extra dev --extra api
+      - name: Python static gates
+        run: |
+          uv run ruff check src tests scripts
+          uv run mypy src
+      - name: Python file-contract regression gates
+        run: |
+          uv run pytest -q \
+            tests/test_file_upload_api.py \
+            tests/test_api_service.py \
+            tests/test_file_ops_executor.py \
+            tests/test_command_gateway.py
+
+      - name: Install web dependencies
+        run: npm ci
+      - name: Web static gates
+        run: |
+          npm run typecheck
+          npm test -- --run
+          npm run build
+
+      - name: Files Playwright gate
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test tests/ui/files.spec.js
+
+      - name: Verify materialized source diff
+        run: |
+          git status --short
+          test -f apps/web/src/files/virtualization.ts
+          test -f apps/web/src/files/FileListView.tsx
+          test -f apps/web/src/files/useMarqueeSelection.tsx
+          git diff --check
+
+      - name: Commit validated implementation to validation branch
+        run: |
+          git config user.name "107Pilot validation bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            src/pilot107/api/service.py \
+            tests/test_file_upload_api.py \
+            apps/web/src/files \
+            apps/web/src/styles.css \
+            tests/ui/files.spec.js \
+            src/pilot107/web/static
+          git commit -m "perf(files): virtualize large directory views"
+          git push origin HEAD:ux-v2-virtualization-validation
