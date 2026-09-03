@@ -7,6 +7,7 @@ on:
     paths:
       - scripts/_temp_prepare_file_workspace_a5.py
       - scripts/_temp_apply_file_workspace_a5.py
+      - scripts/_temp_fix_file_workspace_a5_v2.py
       - .github/workflows/_temp_file_workspace_a5_validation.yml
 
 permissions:
@@ -30,6 +31,7 @@ jobs:
         run: |
           python scripts/_temp_prepare_file_workspace_a5.py
           python scripts/_temp_apply_file_workspace_a5.py
+          python scripts/_temp_fix_file_workspace_a5_v2.py
 
       - name: Install web dependencies
         run: npm ci
