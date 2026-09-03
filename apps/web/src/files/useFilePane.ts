@@ -188,8 +188,12 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
   );
 
   useEffect(() => {
+    manager.setPaneSelection(paneId, selectedEntries);
+  }, [manager.setPaneSelection, paneId, selectedEntries]);
+
+  useEffect(() => {
     manager.setPanePath(paneId, cwd);
-  }, [cwd, manager, paneId]);
+  }, [cwd, manager.setPanePath, paneId]);
 
   useEffect(() => {
     const pending = pendingOpenRef.current;
