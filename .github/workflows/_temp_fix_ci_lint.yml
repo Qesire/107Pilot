@@ -25,6 +25,18 @@ jobs:
         with:
           python-version: '3.12'
       - run: uv sync --locked --extra dev --extra api
+      - name: Scope route patch helper
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/_temp_fix_ci_lint.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    if text.count(old) != 1:\n        raise RuntimeError(f"expected one list response use: {old}")\n    text = text.replace(old, new, 1)\n'''
+          new = '''    expected = 2 if old == '\"next_cursor\": page.next_cursor' else 1\n    if text.count(old) != expected:\n        raise RuntimeError(\n            f"expected {expected} list response use(s): {old}; got {text.count(old)}"\n        )\n    text = text.replace(old, new, 1)\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f"patch helper shape changed: {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
       - name: Apply contract closure
         run: python scripts/_temp_fix_ci_lint.py
       - name: Verify Ruff
