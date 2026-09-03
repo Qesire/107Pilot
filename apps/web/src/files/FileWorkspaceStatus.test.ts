@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { UploadSession } from "../types";
-import { uploadProgress, uploadStateLabel } from "./FileWorkspaceStatus";
+import {
+  uploadProgress,
+  uploadStateLabel,
+  type ServerUploadState,
+} from "./FileWorkspaceStatus";
 
-function session(overrides: Partial<UploadSession> = {}): UploadSession {
+type SessionOverrides = Omit<Partial<UploadSession>, "state"> & { state?: ServerUploadState };
+
+function session(overrides: SessionOverrides = {}): UploadSession {
   return {
     upload_id: "upload-1",
     owner: "alice",
@@ -20,7 +26,7 @@ function session(overrides: Partial<UploadSession> = {}): UploadSession {
     extracted_members: null,
     error: null,
     ...overrides,
-  };
+  } as UploadSession;
 }
 
 describe("FileWorkspaceStatus backend mapping", () => {
@@ -29,15 +35,18 @@ describe("FileWorkspaceStatus backend mapping", () => {
     expect(uploadProgress(session({ received_bytes: 500 }))).toBe(100);
   });
 
-  it("treats zero-byte written sessions as complete", () => {
+  it("treats terminal server sessions as complete", () => {
     expect(uploadProgress(session({ total_size: 0, received_bytes: 0, state: "written" }))).toBe(100);
+    expect(uploadProgress(session({ total_size: 0, received_bytes: 0, state: "extracted" }))).toBe(100);
     expect(uploadProgress(session({ total_size: 0, received_bytes: 0, state: "initialized" }))).toBe(0);
   });
 
-  it("keeps backend states explicit in Chinese", () => {
+  it("keeps the actual backend completion stages explicit in Chinese", () => {
     expect(uploadStateLabel("initialized")).toBe("等待上传");
-    expect(uploadStateLabel("completing")).toBe("校验写入中");
+    expect(uploadStateLabel("assembled")).toBe("已接收，正在校验");
+    expect(uploadStateLabel("verified")).toBe("完整性已验证，正在写入");
     expect(uploadStateLabel("written")).toBe("已写入");
+    expect(uploadStateLabel("extracted")).toBe("已写入并解压");
     expect(uploadStateLabel("failed")).toBe("失败");
   });
 });
