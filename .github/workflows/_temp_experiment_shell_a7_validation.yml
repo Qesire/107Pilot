@@ -6,6 +6,7 @@ on:
       - ux-v2-experiment-shell-a7-validation
     paths:
       - scripts/_temp_apply_experiment_shell_a7.py
+      - scripts/_temp_fix_experiment_shell_a7_types.py
       - .github/workflows/_temp_experiment_shell_a7_validation.yml
 
 permissions:
@@ -27,6 +28,9 @@ jobs:
 
       - name: Apply staged A7 experiment-shell migration
         run: python scripts/_temp_apply_experiment_shell_a7.py
+
+      - name: Apply strict TypeScript corrections
+        run: python scripts/_temp_fix_experiment_shell_a7_types.py
 
       - name: Install web dependencies
         run: npm ci
