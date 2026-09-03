@@ -452,7 +452,7 @@ function BasicProjection({ user, contract, recipes, update, parameterSchema }: P
         <TextField label={requiredLabel("resources.memory", "Memory")} value={String(readContractValue(contract, ["resources", "memory"], ""))} onChange={(value) => update(["resources", "memory"], value || null)} />
         <NumberField label="GPU / node" value={readContractValue(contract, ["resources", "gpus_per_node"], 0) ?? 0} min={0} onChange={(value) => update(["resources", "gpus_per_node"], value)} />
       </div></fieldset>
-      <TemplateExtraParameters contract={contract} schema={parameterSchema} update={update} />
+      <TemplateExtraParameters user={user} contract={contract} schema={parameterSchema} update={update} />
       <fieldset className="field-group"><legend>输出</legend><div className="form-grid">
         <TextField label="预期输出（每行一个）" multiline value={stringOutputs.join("\n")} detail={typedOutputs.length ? `${typedOutputs.length} 个 typed output 会被原样保留。` : undefined} onChange={(value) => update(["outputs", "expected"], [...linesToStrings(value), ...typedOutputs])} />
       </div></fieldset>

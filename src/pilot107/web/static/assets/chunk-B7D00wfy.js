@@ -1,0 +1,16 @@
+import{c as i}from"./app.js";/**
+ * @license lucide-react v0.468.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const m=i("File",[["path",{d:"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z",key:"1rqfz7"}],["path",{d:"M14 2v4a2 2 0 0 0 2 2h4",key:"tnqrlb"}]]);/**
+ * @license lucide-react v0.468.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const d=i("Folder",[["path",{d:"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z",key:"1kt360"}]]);/**
+ * @license lucide-react v0.468.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const g=i("X",[["path",{d:"M18 6 6 18",key:"1bl5f8"}],["path",{d:"m6 6 12 12",key:"d8bk6v"}]]);function s(e){const t=e.replace(/\/+$/,"");return t===""?"/":t}function c(e,t){const n=s(e);return n==="/"?`/${t}`:`${n}/${t}`}function u(e){const t=e.replace(/\/+$/,""),n=t.lastIndexOf("/");return n<=0?"/":t.slice(0,n)}function f(e){const t=e.split("/").filter(Boolean),n=[{label:"/",path:"/"}];let r="";for(const o of t)r+=`/${o}`,n.push({label:o,path:r});return n}function l(e,t){const n=s(e),r=s(t);return n===r||n.startsWith(r+"/")?n:r}function h(e){const t=[];for(const n of e.split("/"))if(!(n===""||n===".")){if(n===".."){t.pop();continue}t.push(n)}return`/${t.join("/")}`}function k(e,t,n){if(e.includes("\0"))throw new Error("路径包含无效字符");const r=e.trim();if(!r)throw new Error("请输入路径");const o=r.startsWith("/")?r:`${s(t)}/${r}`,a=h(o);if(l(a,n)!==a)throw new Error("路径超出授权目录");return a}function v(e,t){const n=f(s(e)),r=s(t),o=r==="/"?0:n.findIndex(a=>a.path===r);return o<0?[s(e)]:n.slice(o).map(a=>a.path)}function y(e,t){return e.includes(t)?e.filter(n=>n!==t):[...e,t]}function $(e){return e.map(t=>t.path)}function w(e,t){const n=new Set(t);return e.filter(r=>!n.has(r.path)).map(r=>r.path)}function z(e,t){const n=s(t),r=[];for(const o of e)s(u(o.path))!==n&&r.push({from:o.path,to:c(n,o.name),name:o.name});return r}function x(e){const t=e.toLowerCase();return[".tar",".gz",".tgz",".bz2",".xz",".zip",".rar"].some(n=>t.endsWith(n))}function P(e){return[...e].sort((t,n)=>t.kind==="directory"&&n.kind!=="directory"?-1:t.kind!=="directory"&&n.kind==="directory"?1:t.name.localeCompare(n.name))}export{d as F,g as X,m as a,z as b,l as c,v as d,f as e,$ as f,w as g,x as i,c as j,s as n,u as p,k as r,P as s,y as t};

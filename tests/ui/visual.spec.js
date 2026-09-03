@@ -149,6 +149,16 @@ test("studio workdir picker browses backend directories without leaving the cont
   await expect(page).toHaveURL(/\/studio\/new\?user=alice/);
 });
 
+test("recipe shared_path browses existing backend files and writes canonical field", async ({ page }) => {
+  await page.goto("/studio/new?user=alice");
+  await page.getByRole("button", { name: "浏览 runtime.environment.DATA_ROOT" }).click();
+  await expect(page.getByRole("dialog", { name: /选择共享路径/ })).toBeVisible();
+  await page.getByRole("button", { name: /dataset.tar.gz/ }).click();
+  await page.getByRole("button", { name: "选择此文件" }).click();
+  await expect(page.getByLabel(/runtime.environment.DATA_ROOT/)).toHaveValue("/public/home/alice/dataset.tar.gz");
+  await expect(page).toHaveURL(/\/studio\/new\?user=alice/);
+});
+
 test("dirty source is not silently overwritten by a basic form update", async ({ page }) => {
   await page.goto("/studio/new?user=alice&tab=source");
   const editor = page.locator(".cm-content");
@@ -270,6 +280,20 @@ if (url.pathname === "/api/v1/files") {
       : [],
   });
 }
+    if (url.pathname === "/api/v1/recipes/recipe_python_cpu/versions/1.0.0") {
+      return json(route, {
+        recipe_id: "recipe_python_cpu",
+        version: "1.0.0",
+        parameter_schema: {
+          required: ["runtime.environment.DATA_ROOT"],
+          "runtime.environment.DATA_ROOT": {
+            type: "shared_path",
+            prefix: "/public/home/alice",
+            contract: "选择已存在的共享输入文件或目录。",
+          },
+        },
+      });
+    }
     if (url.pathname === "/api/v1/contracts/schema") {
       return json(route, contractSchemaPayload());
     }
