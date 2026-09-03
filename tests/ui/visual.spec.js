@@ -159,6 +159,19 @@ test("recipe shared_path browses existing backend files and writes canonical fie
   await expect(page).toHaveURL(/\/studio\/new\?user=alice/);
 });
 
+test("studio picker keeps a bounded DOM while paging a large directory", async ({ page }) => {
+  await page.goto("/studio/new?user=alice");
+  await page.getByRole("button", { name: "浏览工作目录" }).click();
+  const dialog = page.getByRole("dialog", { name: "选择实验工作目录" });
+  await dialog.getByRole("button", { name: /picker-large/ }).click();
+  await expect(dialog.getByText(/已加载 500 项；目录仍有更多内容/)).toBeVisible();
+  expect(await dialog.locator(".file-picker-entry").count()).toBeLessThan(80);
+
+  await dialog.getByRole("button", { name: "加载更多目录内容" }).click();
+  await expect(dialog.getByText(/已加载 1000 项；目录仍有更多内容/)).toBeVisible();
+  expect(await dialog.locator(".file-picker-entry").count()).toBeLessThan(80);
+});
+
 test("dirty source is not silently overwritten by a basic form update", async ({ page }) => {
   await page.goto("/studio/new?user=alice&tab=source");
   const editor = page.locator(".cm-content");
@@ -270,16 +283,30 @@ async function installMockApi(page, options = {}) {
     }
     if (url.pathname === "/api/v1/files") {
       const currentPath = url.searchParams.get("path") || "/public/home/alice";
+      const limit = Number(url.searchParams.get("limit") || 500);
+      const offset = Number(url.searchParams.get("cursor") || 0);
+      const allEntries = currentPath === "/public/home/alice"
+        ? [
+            { name: "project-a", type: "directory", size: 0, mtime: 1788408000 },
+            { name: "picker-large", type: "directory", size: 0, mtime: 1788408000 },
+            { name: "dataset.tar.gz", type: "file", size: 100, mtime: 1788408000 },
+          ]
+        : currentPath === "/public/home/alice/picker-large"
+          ? Array.from({ length: 1200 }, (_, index) => ({
+              name: `dir-${String(index).padStart(4, "0")}`,
+              type: "directory",
+              size: 0,
+              mtime: 1788408000 + index,
+            }))
+          : [];
+      const entries = allEntries.slice(offset, offset + limit);
+      const nextOffset = offset + entries.length;
+      const hasMore = nextOffset < allEntries.length;
       return json(route, {
         path: currentPath,
-        entries: currentPath === "/public/home/alice"
-          ? [
-              { name: "project-a", type: "directory", size: 0, mtime: 1788408000 },
-              { name: "dataset.tar.gz", type: "file", size: 100, mtime: 1788408000 },
-            ]
-          : [],
-        page: { limit: Number(url.searchParams.get("limit") || 500), has_more: false, next_cursor: null },
-        directory_revision: "visual-fixture-v1",
+        entries,
+        page: { limit, has_more: hasMore, next_cursor: hasMore ? String(nextOffset) : null },
+        directory_revision: "visual-fixture-v2",
       });
     }
     if (url.pathname === "/api/v1/recipes/recipe_python_cpu/versions/1.0.0") {
