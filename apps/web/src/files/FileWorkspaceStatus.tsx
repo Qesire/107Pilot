@@ -12,31 +12,54 @@ import { api } from "../api";
 import { formatStorageBytes } from "../resource-summary";
 import type { UploadSession, UploadSessionState } from "../types";
 
-const ACTIVE_UPLOAD_STATES = new Set<UploadSessionState>([
+/**
+ * Current backend states are initialized/uploading/assembled/verified/
+ * written/extracted/failed/aborted. Keep the two legacy UI states in this
+ * compatibility union so mixed-version deployments remain readable while the
+ * frontend type contract is migrated.
+ */
+export type ServerUploadState =
+  | UploadSessionState
+  | "assembled"
+  | "verified"
+  | "extracted";
+
+const ACTIVE_UPLOAD_STATES = new Set<ServerUploadState>([
   "initialized",
   "uploading",
+  "assembled",
+  "verified",
   "completing",
 ]);
 
-const FINISHED_UPLOAD_STATES = new Set<UploadSessionState>([
+const FINISHED_UPLOAD_STATES = new Set<ServerUploadState>([
   "completed",
   "written",
+  "extracted",
 ]);
 
-export function uploadStateLabel(state: UploadSessionState): string {
+function serverState(session: UploadSession): ServerUploadState {
+  return session.state as ServerUploadState;
+}
+
+export function uploadStateLabel(state: ServerUploadState): string {
   switch (state) {
     case "initialized": return "等待上传";
     case "uploading": return "上传中";
+    case "assembled": return "已接收，正在校验";
+    case "verified": return "完整性已验证，正在写入";
     case "completing": return "校验写入中";
     case "completed": return "上传完成";
     case "written": return "已写入";
+    case "extracted": return "已写入并解压";
     case "aborted": return "已取消";
     case "failed": return "失败";
   }
 }
 
 export function uploadProgress(session: UploadSession): number {
-  if (session.total_size <= 0) return FINISHED_UPLOAD_STATES.has(session.state) ? 100 : 0;
+  const state = serverState(session);
+  if (session.total_size <= 0) return FINISHED_UPLOAD_STATES.has(state) ? 100 : 0;
   return Math.min(100, Math.max(0, Math.round((session.received_bytes / session.total_size) * 100)));
 }
 
@@ -46,9 +69,10 @@ function usagePercent(used: number, total: number | null): number | null {
 }
 
 function sessionTone(session: UploadSession): "active" | "success" | "danger" | "neutral" {
-  if (ACTIVE_UPLOAD_STATES.has(session.state)) return "active";
-  if (FINISHED_UPLOAD_STATES.has(session.state)) return "success";
-  if (session.state === "failed") return "danger";
+  const state = serverState(session);
+  if (ACTIVE_UPLOAD_STATES.has(state)) return "active";
+  if (FINISHED_UPLOAD_STATES.has(state)) return "success";
+  if (state === "failed") return "danger";
   return "neutral";
 }
 
@@ -66,7 +90,7 @@ export function FileWorkspaceStatus({ user, homePath }: { user: string; homePath
     staleTime: 2_000,
     refetchInterval: (query) => {
       const data = query.state.data as { items: UploadSession[] } | undefined;
-      return data?.items.some((item) => ACTIVE_UPLOAD_STATES.has(item.state)) ? 2_000 : 30_000;
+      return data?.items.some((item) => ACTIVE_UPLOAD_STATES.has(serverState(item))) ? 2_000 : 30_000;
     },
     retry: false,
   });
@@ -80,9 +104,13 @@ export function FileWorkspaceStatus({ user, homePath }: { user: string; homePath
   const sessions = (uploads.data?.items ?? [])
     .filter((session) => !session.is_partial)
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const active = sessions.filter((session) => ACTIVE_UPLOAD_STATES.has(session.state));
-  const failures = sessions.filter((session) => session.state === "failed");
-  const recent = [...active, ...failures, ...sessions.filter((session) => !ACTIVE_UPLOAD_STATES.has(session.state) && session.state !== "failed")]
+  const active = sessions.filter((session) => ACTIVE_UPLOAD_STATES.has(serverState(session)));
+  const failures = sessions.filter((session) => serverState(session) === "failed");
+  const recent = [
+    ...active,
+    ...failures,
+    ...sessions.filter((session) => !ACTIVE_UPLOAD_STATES.has(serverState(session)) && serverState(session) !== "failed"),
+  ]
     .filter((session, index, items) => items.findIndex((candidate) => candidate.upload_id === session.upload_id) === index)
     .slice(0, 4);
   const usedPercent = usage.data ? usagePercent(usage.data.used_bytes, usage.data.total_bytes) : null;
@@ -138,18 +166,19 @@ export function FileWorkspaceStatus({ user, homePath }: { user: string; homePath
           {uploads.isError ? (
             <p className="file-status-error">无法同步上传会话：{uploads.error instanceof Error ? uploads.error.message : "未知错误"}</p>
           ) : recent.length === 0 ? (
-            <p className="file-status-empty"><CheckCircle2 size={14} aria-hidden="true" /> 上传任务会在这里持续显示，即使浏览器上传完成后仍以服务器状态为准。</p>
+            <p className="file-status-empty"><CheckCircle2 size={14} aria-hidden="true" /> 上传任务会在这里持续显示；浏览器传输结束后，仍以服务器校验、写入和解压状态为准。</p>
           ) : (
             <ul className="server-upload-list">
               {recent.map((session) => {
+                const state = serverState(session);
                 const pct = uploadProgress(session);
-                const canAbort = ACTIVE_UPLOAD_STATES.has(session.state);
+                const canAbort = ACTIVE_UPLOAD_STATES.has(state);
                 return (
                   <li key={session.upload_id} className={`server-upload-row tone-${sessionTone(session)}`}>
                     <div className="server-upload-main">
-                      {session.state === "failed" ? <AlertTriangle size={14} aria-hidden="true" /> : null}
+                      {state === "failed" ? <AlertTriangle size={14} aria-hidden="true" /> : null}
                       <span title={`${session.target_path}/${session.filename}`}>{session.filename}</span>
-                      <small>{uploadStateLabel(session.state)} · {pct}%</small>
+                      <small>{uploadStateLabel(state)} · {pct}%</small>
                     </div>
                     <div className="server-upload-progress" aria-label={`${session.filename} ${pct}%`}><span style={{ width: `${pct}%` }} /></div>
                     {canAbort ? (
