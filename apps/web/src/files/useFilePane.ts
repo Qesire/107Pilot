@@ -70,14 +70,13 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
   const queryClient = useQueryClient();
 
   // The command gateway only serves listings at/below the home root, so all
-  // navigation is clamped to it (bug fix: "上级目录" above home used to render
-  // columns that all failed with "path outside allowed roots").
+  // navigation is clamped to it. This security boundary must stay explicit.
   const home = normalizeDir(initialPath);
 
   const [cwd, setCwd] = useState(initialPath);
   const [backStack, setBackStack] = useState<string[]>([]);
   const [forwardStack, setForwardStack] = useState<string[]>([]);
-  const [viewMode, setViewModeState] = useState<PaneViewMode>("column");
+  const [viewMode, setViewModeState] = useState<PaneViewMode>("list");
   const [selected, setSelected] = useState<string[]>([]);
   const [inlineForm, setInlineForm] = useState<InlineFormMode>(null);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
@@ -89,9 +88,20 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
     retry: false,
   });
 
-  const invalidate = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["files-list", manager.user] });
-  }, [queryClient, manager.user]);
+  const invalidatePaths = useCallback((paths: string[]) => {
+    for (const path of new Set(paths.map(normalizeDir))) {
+      void queryClient.invalidateQueries({
+        queryKey: ["files-list", manager.user, path],
+        exact: true,
+      });
+    }
+  }, [manager.user, queryClient]);
+
+  const invalidateUsage = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["files-usage", manager.user] });
+  }, [manager.user, queryClient]);
+
+  const invalidateCurrent = useCallback(() => invalidatePaths([cwd]), [cwd, invalidatePaths]);
 
   const navigateTo = useCallback((path: string) => {
     const target = clampToHome(path, home);
@@ -162,9 +172,10 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
   const setSelection = useCallback((paths: string[]) => setSelected(paths), []);
   const setViewMode = useCallback((mode: PaneViewMode) => setViewModeState(mode), []);
 
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
   const selectedEntries = useMemo(
-    () => entries.filter((entry) => selected.includes(entry.path)),
-    [entries, selected],
+    () => entries.filter((entry) => selectedSet.has(entry.path)),
+    [entries, selectedSet],
   );
 
   useEffect(() => {
@@ -185,7 +196,8 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
       api.fileMkdir(manager.user, `${cwd.replace(/\/+$/, "")}/${name}`),
     onSuccess: () => {
       setInlineForm(null);
-      invalidate();
+      invalidateCurrent();
+      invalidateUsage();
     },
   });
 
@@ -193,7 +205,8 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
     mutationFn: (name: string) => api.fileCreate(manager.user, cwd, name),
     onSuccess: () => {
       setInlineForm(null);
-      invalidate();
+      invalidateCurrent();
+      invalidateUsage();
     },
   });
 
@@ -203,7 +216,8 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
     },
     onSuccess: () => {
       setSelected([]);
-      invalidate();
+      invalidateCurrent();
+      invalidateUsage();
     },
   });
 
@@ -211,17 +225,18 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
     mutationFn: (paths: string[]) => api.fileArchive(manager.user, paths, cwd),
     onSuccess: () => {
       setSelected([]);
-      invalidate();
+      invalidateCurrent();
+      invalidateUsage();
     },
   });
 
   const renameMutation = useMutation({
     mutationFn: ({ path, newName }: { path: string; newName: string }) =>
       api.fileRename(manager.user, path, joinPath(parentPath(path), newName)),
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       setRenamingPath(null);
       setSelected([]);
-      invalidate();
+      invalidatePaths([cwd, parentPath(variables.path)]);
     },
   });
 
@@ -239,27 +254,31 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
       }
       return targets.length;
     },
-    onSuccess: () => {
+    onSuccess: (_count, variables) => {
       setSelected([]);
-      invalidate();
+      invalidatePaths([cwd, variables.destDir, ...variables.paths.map(parentPath)]);
     },
   });
 
   const copyMutation = useMutation({
     mutationFn: ({ paths, destDir }: { paths: string[]; destDir: string }) =>
       api.fileCopy(manager.user, paths, destDir),
-    onSuccess: () => {
-      // Sources stay put, so keep the selection; just refresh listings.
-      invalidate();
+    onSuccess: (_result, variables) => {
+      // Sources stay put, so keep the selection and refresh only the target.
+      invalidatePaths([variables.destDir]);
+      invalidateUsage();
     },
   });
 
   const extractMutation = useMutation({
     mutationFn: (path: string) => api.fileExtract(manager.user, path),
-    onSuccess: () => invalidate(),
+    onSuccess: () => {
+      invalidateCurrent();
+      invalidateUsage();
+    },
   });
 
-  const refresh = useCallback(() => invalidate(), [invalidate]);
+  const refresh = useCallback(() => invalidateCurrent(), [invalidateCurrent]);
 
   // Keep the latest values available to the imperative controller without
   // re-registering on every render.
@@ -272,14 +291,14 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
       getCwd: () => stateRef.current.cwd,
       getSelectedEntries: () => stateRef.current.selectedEntries,
       clearSelection: () => setSelected([]),
-      refresh: () => invalidate(),
+      refresh: () => invalidatePaths([stateRef.current.cwd]),
       getViewMode: () => stateRef.current.viewMode,
       setViewMode: (mode) => setViewModeState(mode),
       openMkdir: () => setInlineForm("mkdir"),
       openPath,
     });
     return () => manager.unregisterPane(paneId);
-    // Registration is stable per pane; invalidate identity changes are harmless.
+    // Registration is stable per pane; callbacks read current values via refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paneId]);
 
