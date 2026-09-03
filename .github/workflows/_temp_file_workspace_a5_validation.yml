@@ -1,0 +1,70 @@
+name: temp-file-workspace-a5-validation
+
+on:
+  push:
+    branches:
+      - ux-v2-file-workspace-a5-validation
+    paths:
+      - scripts/_temp_prepare_file_workspace_a5.py
+      - scripts/_temp_apply_file_workspace_a5.py
+      - .github/workflows/_temp_file_workspace_a5_validation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ux-v2-file-workspace-a5-validation
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Apply staged A5 file workspace migration
+        run: |
+          python scripts/_temp_prepare_file_workspace_a5.py
+          python scripts/_temp_apply_file_workspace_a5.py
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Web static gates
+        run: |
+          npm run typecheck
+          npm test -- --run
+          npm run build
+
+      - name: Files Playwright gate
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test tests/ui/files.spec.js
+
+      - name: Verify materialized diff
+        run: |
+          test -f apps/web/src/files/FileQuickAccess.tsx
+          test -f apps/web/src/files/FileInspector.tsx
+          test -f apps/web/src/files/file-workspace-shell.css
+          git diff --check
+          git status --short
+
+      - name: Commit validated A5 implementation
+        run: |
+          git config user.name "107Pilot validation bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add \
+            apps/web/src/FilesPage.tsx \
+            apps/web/src/files/FilesManagerContext.tsx \
+            apps/web/src/files/useFilePane.ts \
+            apps/web/src/files/FileQuickAccess.tsx \
+            apps/web/src/files/FileInspector.tsx \
+            apps/web/src/files/file-workspace-shell.css \
+            tests/ui/files.spec.js \
+            src/pilot107/web/static
+          git commit -m "feat(files): add workspace quick access and inspector"
+          git push origin HEAD:ux-v2-file-workspace-a5-validation
