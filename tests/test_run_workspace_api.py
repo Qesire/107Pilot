@@ -44,7 +44,7 @@ class RunWorkspaceApiTests(unittest.TestCase):
 
         self.assertEqual(response.status, 200)
         self.assertEqual(response.payload["run"]["run_id"], self.run.run_id)
-        self.assertEqual(response.payload["states"]["execution"], "DRAFT")
+        self.assertEqual(response.payload["states"]["execution"], "VALIDATED")
         self.assertEqual(response.payload["next_action"]["kind"], "watch_queue")
         self.assertEqual(response.payload["evidence_summary"]["object_count"], 0)
 
