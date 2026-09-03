@@ -30,6 +30,14 @@ jobs:
         run: python scripts/_temp_apply_r1_run_workspace_wiring.py
       - name: Install Python dependencies
         run: uv sync --locked --extra dev --extra api
+      - name: Normalize new R1 Python files
+        run: |
+          uv run ruff check --fix \
+            src/pilot107/api/run_workspace_routes.py \
+            src/pilot107/services/run_workspace_service.py
+          uv run ruff format \
+            src/pilot107/api/run_workspace_routes.py \
+            src/pilot107/services/run_workspace_service.py
       - name: Python static gates
         run: |
           uv run ruff check src tests --exclude scripts/_temp_apply_r1_run_workspace_wiring.py
@@ -45,10 +53,13 @@ jobs:
           git diff --check
           git status --short
           test -n "$(git status --short src/pilot107/api/http_app.py)"
-      - name: Commit validated wiring
+      - name: Commit validated R1 implementation
         run: |
           git config user.name "107Pilot CI"
           git config user.email "actions@users.noreply.github.com"
-          git add src/pilot107/api/http_app.py
-          git commit -m "feat(runs): wire workspace read model into HTTP API"
+          git add \
+            src/pilot107/api/http_app.py \
+            src/pilot107/api/run_workspace_routes.py \
+            src/pilot107/services/run_workspace_service.py
+          git commit -m "feat(runs): validate workspace read model integration"
           git push origin HEAD:r1-run-workspace-readmodel
