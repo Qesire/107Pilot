@@ -9,6 +9,7 @@ on:
       - scripts/_temp_fix_file_virtualization_v2.py
       - scripts/_temp_fix_file_virtualization_v3.py
       - scripts/_temp_fix_file_virtualization_v4.py
+      - scripts/_temp_diag_file_marquee_v5.py
       - .github/workflows/_temp_file_virtualization_validation.yml
 
 permissions:
@@ -41,6 +42,7 @@ jobs:
           python scripts/_temp_fix_file_virtualization_v2.py
           python scripts/_temp_fix_file_virtualization_v3.py
           python scripts/_temp_fix_file_virtualization_v4.py
+          python scripts/_temp_diag_file_marquee_v5.py
 
       - name: Install Python dependencies
         run: uv sync --locked --extra dev --extra api
@@ -50,7 +52,8 @@ jobs:
             --exclude scripts/_temp_apply_file_virtualization.py \
             --exclude scripts/_temp_fix_file_virtualization_v2.py \
             --exclude scripts/_temp_fix_file_virtualization_v3.py \
-            --exclude scripts/_temp_fix_file_virtualization_v4.py
+            --exclude scripts/_temp_fix_file_virtualization_v4.py \
+            --exclude scripts/_temp_diag_file_marquee_v5.py
           uv run mypy src
       - name: Python file-contract regression gates
         run: |
