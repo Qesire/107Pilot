@@ -1,0 +1,76 @@
+.global-transfer-indicator {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.global-transfer-indicator:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.global-transfer-indicator svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.global-transfer-indicator strong {
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.global-transfer-indicator.is-active {
+  border-color: color-mix(in srgb, var(--accent-primary) 42%, var(--border-default));
+  background: var(--accent-soft);
+  color: var(--accent-primary);
+}
+
+.global-transfer-indicator.is-active strong {
+  background: var(--accent-primary);
+  color: #fff;
+}
+
+.global-transfer-indicator.has-error {
+  border-color: color-mix(in srgb, var(--state-danger) 42%, var(--border-default));
+  background: var(--danger-soft);
+  color: var(--state-danger);
+}
+
+.global-transfer-indicator.has-error strong {
+  background: var(--state-danger);
+  color: #fff;
+}
+
+@media (max-width: 1120px) {
+  .global-transfer-indicator > span {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .global-transfer-indicator {
+    min-width: 34px;
+    justify-content: center;
+    padding-inline: 8px;
+  }
+}
