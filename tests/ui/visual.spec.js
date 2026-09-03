@@ -80,6 +80,44 @@ test("successful run exposes shareable logs, results, and verified capsule", asy
   await capture(page, "phase3d-run-evidence.png");
 });
 
+test("stopped Runtime Watch reads its selected log once without a polling storm", async ({ page }) => {
+  let summaryRequests = 0;
+  let logRequests = 0;
+  let alertRequests = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/runtime-watch") summaryRequests += 1;
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/runtime-watch/logs") logRequests += 1;
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/runtime-watch/alerts") alertRequests += 1;
+  });
+
+  await page.goto("/runs/run_alice_succeeded?user=alice&tab=logs");
+  await expect(
+    page.getByLabel("Runtime Watch 实时日志").getByText("training complete", { exact: false }),
+  ).toBeVisible();
+  await page.waitForTimeout(5_500);
+
+  expect(summaryRequests).toBe(1);
+  expect(logRequests).toBe(1);
+  expect(alertRequests).toBe(0);
+});
+
+test("absent Runtime Watch does not start log or alert child requests", async ({ page }) => {
+  await installMockApi(page, { runtimeWatchAbsent: true });
+  let logRequests = 0;
+  let alertRequests = 0;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/v1/runs/run_alice_failed/runtime-watch/logs") logRequests += 1;
+    if (url.pathname === "/api/v1/runs/run_alice_failed/runtime-watch/alerts") alertRequests += 1;
+  });
+
+  await page.goto("/runs/run_alice_failed?user=alice&tab=logs");
+  await expect(page.getByText("尚未建立 Runtime Watch", { exact: true })).toBeVisible();
+  expect(logRequests).toBe(0);
+  expect(alertRequests).toBe(0);
+});
+
 test("run detail makes an omitted workdir explicit", async ({ page }) => {
   await installMockApi(page, { omitWorkdir: true });
   await page.goto("/runs/run_alice_failed?user=alice");
@@ -560,6 +598,9 @@ async function installMockApi(page, options = {}) {
       return json(route, { items: [] });
     }
     if (url.pathname === "/api/v1/runs/run_alice_failed/runtime-watch") {
+      if (options.runtimeWatchAbsent) {
+        return json(route, { error: { code: "NOT_FOUND", message: "runtime watch not found" } }, 404);
+      }
       return json(route, runtimeWatchPayload("run_alice_failed"));
     }
     if (url.pathname === "/api/v1/runs/run_alice_failed/runtime-watch/logs") {

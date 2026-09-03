@@ -7,6 +7,7 @@ import {
   useRuntimeWatchAlerts,
   useRuntimeWatchLogs,
 } from "./query";
+import { useDocumentVisibility } from "./runtime-polling";
 import type { RuntimeWatchState } from "./types";
 
 type Tone = "neutral" | "info" | "success" | "warning" | "danger";
@@ -32,10 +33,18 @@ export function runtimeWatchTone(state: RuntimeWatchState): Tone {
 
 export function RuntimeWatchPanel({ user, runId }: { user: string; runId: string }) {
   const [stream, setStream] = useState<"stdout" | "stderr">("stdout");
-  const watch = useRuntimeWatch(user, runId);
-  const logs = useRuntimeWatchLogs(user, runId, stream);
-  const alerts = useRuntimeWatchAlerts(user, runId);
+  const visibility = useDocumentVisibility();
+  const watch = useRuntimeWatch(user, runId, visibility);
   const absent = watch.error instanceof ApiRequestError && watch.error.status === 404;
+  const childRunId = watch.data && !absent ? runId : null;
+  const watchState = watch.data?.state ?? null;
+  const logs = useRuntimeWatchLogs(user, childRunId, stream, watchState, visibility);
+  const alerts = useRuntimeWatchAlerts(
+    user,
+    watch.data?.alert_count ? childRunId : null,
+    watchState,
+    visibility,
+  );
 
   if (absent) {
     return (
