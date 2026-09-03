@@ -146,6 +146,7 @@ test("studio workdir picker browses backend directories without leaving the cont
   await page.getByRole("button", { name: /project-a/ }).click();
   await page.getByRole("button", { name: "选择此目录" }).click();
   await expect(page.getByRole("textbox", { name: "工作目录", exact: true })).toHaveValue("/public/home/alice/project-a");
+  await expect(page.getByRole("region", { name: "实验资产" })).toContainText("/public/home/alice/project-a");
   await expect(page).toHaveURL(/\/studio\/new\?user=alice/);
 });
 
@@ -156,6 +157,7 @@ test("recipe shared_path browses existing backend files and writes canonical fie
   await page.getByRole("button", { name: /dataset.tar.gz/ }).click();
   await page.getByRole("button", { name: "选择此文件" }).click();
   await expect(page.getByRole("textbox", { name: /^runtime\.environment\.DATA_ROOT/ })).toHaveValue("/public/home/alice/dataset.tar.gz");
+  await expect(page.getByRole("region", { name: "实验资产" })).toContainText("/public/home/alice/dataset.tar.gz");
   await expect(page).toHaveURL(/\/studio\/new\?user=alice/);
 });
 
