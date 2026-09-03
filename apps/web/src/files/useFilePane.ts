@@ -1,8 +1,9 @@
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { FileEntry } from "../types";
 import { useFilesManager, type PaneViewMode } from "./FilesManagerContext";
+import { fileDirectoryQueryKey, useFileDirectoryListing } from "./useFileDirectoryListing";
 import {
   clampToHome,
   computeMoveTargets,
@@ -84,23 +85,12 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const pendingOpenRef = useRef<{ cwd: string; selectedPath: string } | null>(null);
 
-  const listing = useInfiniteQuery({
-    queryKey: ["files-list", manager.user, cwd],
-    queryFn: ({ signal, pageParam }) => api.fileList(
-      manager.user,
-      cwd,
-      { limit: 500, cursor: pageParam },
-      signal,
-    ),
-    initialPageParam: null as string | null,
-    getNextPageParam: (lastPage) => lastPage.page.next_cursor ?? undefined,
-    retry: false,
-  });
+  const listing = useFileDirectoryListing(manager.user, cwd);
 
   const invalidatePaths = useCallback((paths: string[]) => {
     for (const path of new Set(paths.map(normalizeDir))) {
       void queryClient.invalidateQueries({
-        queryKey: ["files-list", manager.user, path],
+        queryKey: fileDirectoryQueryKey(manager.user, path),
         exact: true,
       });
     }
@@ -164,10 +154,7 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
     setSelected((prev) => toggleSelection(prev, path));
   }, []);
 
-  const entries = useMemo(
-    () => listing.data?.pages.flatMap((page) => page.entries) ?? [],
-    [listing.data],
-  );
+  const entries = listing.entries;
 
   const selectAll = useCallback(() => {
     setSelected(selectAllPaths(entries));
