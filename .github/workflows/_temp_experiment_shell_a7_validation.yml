@@ -7,6 +7,7 @@ on:
     paths:
       - scripts/_temp_apply_experiment_shell_a7.py
       - scripts/_temp_fix_experiment_shell_a7_types.py
+      - scripts/_temp_fix_experiment_shell_a7_test.py
       - .github/workflows/_temp_experiment_shell_a7_validation.yml
 
 permissions:
@@ -31,6 +32,9 @@ jobs:
 
       - name: Apply strict TypeScript corrections
         run: python scripts/_temp_fix_experiment_shell_a7_types.py
+
+      - name: Align targeted browser gate with current diagnosis contract
+        run: python scripts/_temp_fix_experiment_shell_a7_test.py
 
       - name: Install web dependencies
         run: npm ci
