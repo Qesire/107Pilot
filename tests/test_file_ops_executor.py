@@ -196,8 +196,8 @@ class LocalFileOpsExecutorTests(unittest.TestCase):
         (self.root / "a.txt").write_bytes(b"12345")
         (self.root / "sub").mkdir()
 
-        entries = self.executor.list_dir(path=str(self.root), owner="alice")
-        names = {entry.name: entry.type for entry in entries}
+        page = self.executor.list_dir(path=str(self.root), owner="alice")
+        names = {entry.name: entry.type for entry in page.entries}
         self.assertEqual(names["a.txt"], "file")
         self.assertEqual(names["sub"], "dir")
 
@@ -212,6 +212,62 @@ class LocalFileOpsExecutorTests(unittest.TestCase):
         (self.root / "sub" / "inner.txt").write_bytes(b"z")
         self.executor.remove_path(path=str(self.root / "sub"), owner="alice")
         self.assertFalse((self.root / "sub").exists())
+
+    def test_list_dir_pages_are_stable_and_directory_first(self) -> None:
+        (self.root / "z-dir").mkdir()
+        (self.root / "a-dir").mkdir()
+        for name in ["b.txt", "A.txt", "c.txt"]:
+            (self.root / name).write_text(name, encoding="utf-8")
+
+        first = self.executor.list_dir(
+            path=str(self.root), owner="alice", limit=3
+        )
+        self.assertEqual([entry.name for entry in first.entries], ["a-dir", "z-dir", "A.txt"])
+        self.assertTrue(first.has_more)
+        self.assertIsNotNone(first.next_cursor)
+
+        second = self.executor.list_dir(
+            path=str(self.root), owner="alice", limit=3, cursor=first.next_cursor
+        )
+        self.assertEqual([entry.name for entry in second.entries], ["b.txt", "c.txt"])
+        self.assertFalse(second.has_more)
+        self.assertIsNone(second.next_cursor)
+        self.assertEqual(second.directory_revision, first.directory_revision)
+
+    def test_list_dir_rejects_stale_cursor_after_membership_change(self) -> None:
+        for index in range(3):
+            (self.root / f"{index}.txt").write_text(str(index), encoding="utf-8")
+        first = self.executor.list_dir(
+            path=str(self.root), owner="alice", limit=1
+        )
+        self.assertIsNotNone(first.next_cursor)
+        (self.root / "new.txt").write_text("new", encoding="utf-8")
+        with self.assertRaisesRegex(SlurmSubmissionRejected, "cursor is stale"):
+            self.executor.list_dir(
+                path=str(self.root), owner="alice", limit=1, cursor=first.next_cursor
+            )
+
+    def test_http_list_dir_passes_pagination_and_parses_page(self) -> None:
+        executor = HttpCommandGatewayExecutor(base_url="http://gateway.invalid")
+        response = {
+            "path": "/public/home/alice",
+            "entries": [{"name": "data", "type": "dir", "size": 0, "mtime": 1}],
+            "limit": 20,
+            "has_more": True,
+            "next_cursor": "opaque",
+            "directory_revision": "rev-1",
+        }
+        with mock.patch.object(executor, "_request", return_value=response) as request:
+            page = executor.list_dir(
+                path="/public/home/alice", owner="alice", limit=20, cursor="previous"
+            )
+        self.assertEqual(page.entries[0].name, "data")
+        self.assertTrue(page.has_more)
+        self.assertEqual(page.next_cursor, "opaque")
+        self.assertEqual(page.directory_revision, "rev-1")
+        self.assertEqual(request.call_args.args[0], "/list_dir")
+        self.assertEqual(request.call_args.args[1]["limit"], 20)
+        self.assertEqual(request.call_args.args[1]["cursor"], "previous")
 
     def test_stat_missing_path_raises(self) -> None:
         with self.assertRaisesRegex(SlurmTransportError, "does not exist"):

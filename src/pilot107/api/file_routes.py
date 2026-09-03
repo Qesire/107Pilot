@@ -96,22 +96,47 @@ class FileRoutes:
             return _error(401, "AUTH.MISSING", "identity required for file operations")
         owner = identity.username
 
-        # GET /files?path=
+        # GET /files?path=&limit=&cursor=
         if len(parts) == 1:
             path = _first_param(params, "path")
             if not path:
                 return _error(400, "FILES.INVALID_QUERY", "path is required")
             try:
-                entries = self.executor.list_dir(path=path, owner=owner)
+                limit = _strict_nonnegative_int_param(params, "limit", default=500)
+            except ValueError as exc:
+                return _error(400, "FILES.INVALID_QUERY", str(exc))
+            if not 1 <= limit <= 1000:
+                return _error(400, "FILES.INVALID_QUERY", "limit must be within 1..1000")
+            try:
+                page = self.executor.list_dir(
+                    path=path,
+                    owner=owner,
+                    limit=limit,
+                    cursor=_first_param(params, "cursor"),
+                )
             except SlurmSubmissionRejected as exc:
-                return _error(403, "FILES.PATH_FORBIDDEN", str(exc))
+                message = str(exc)
+                if "cursor is stale" in message:
+                    return _error(409, "FILES.LIST_CURSOR_STALE", message)
+                if "cursor" in message:
+                    return _error(400, "FILES.INVALID_CURSOR", message)
+                return _error(403, "FILES.PATH_FORBIDDEN", message)
             except SlurmTransportError as exc:
-                return _error(502, "FILES.LIST_FAILED", str(exc))
+                message = str(exc)
+                if "not a directory" in message or "does not exist" in message:
+                    return _error(404, "FILES.PATH_NOT_FOUND", message)
+                return _error(502, "FILES.LIST_FAILED", message)
             return ApiResponse(
                 status=200,
                 payload={
-                    "path": path,
-                    "entries": [asdict(entry) for entry in entries],
+                    "path": page.path,
+                    "entries": [asdict(entry) for entry in page.entries],
+                    "page": {
+                        "limit": page.limit,
+                        "has_more": page.has_more,
+                        "next_cursor": page.next_cursor,
+                    },
+                    "directory_revision": page.directory_revision,
                 },
             )
 
