@@ -39,6 +39,18 @@ jobs:
           PY
       - name: Apply contract closure
         run: python scripts/_temp_fix_ci_lint.py
+      - name: Format generated SSH listing helper
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("src/pilot107/adapters/ssh_relay.py")
+          text = path.read_text(encoding="utf-8")
+          old = 'raw_revision = f"{directory.st_dev}:{directory.st_ino}:{directory.st_mtime_ns}:{directory.st_ctime_ns}"'
+          new = '''raw_revision = (\n    f"{directory.st_dev}:{directory.st_ino}:"\n    f"{directory.st_mtime_ns}:{directory.st_ctime_ns}"\n)'''
+          if text.count(old) != 1:
+              raise SystemExit(f"SSH revision helper shape changed: {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
       - name: Verify Ruff
         run: uv run ruff check src tests scripts --exclude scripts/_temp_fix_ci_lint.py
       - name: Verify mypy
