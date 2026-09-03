@@ -8,6 +8,7 @@ function buildFs() {
     [HOME]: [
       { name: "docs", type: "dir", size: 0, mtime: 1700000000 },
       { name: "data", type: "dir", size: 0, mtime: 1700000000 },
+      { name: "large", type: "dir", size: 0, mtime: 1700000000 },
       { name: "readme.md", type: "file", size: 2048, mtime: 1700000100 },
       { name: "run.py", type: "file", size: 512, mtime: 1700000200 },
     ],
@@ -23,6 +24,12 @@ function buildFs() {
     [`${HOME}/demo-search/nested`]: [
       { name: "result-model.txt", type: "file", size: 8192, mtime: 1700000600 },
     ],
+    [`${HOME}/large`]: Array.from({ length: 2000 }, (_, index) => ({
+      name: `sample-${String(index).padStart(4, "0")}.dat`,
+      type: "file",
+      size: 1024 + index,
+      mtime: 1700010000 + index,
+    })),
   };
 }
 
@@ -50,7 +57,18 @@ async function installFilesMock(page) {
     }
     if (url.pathname === "/api/v1/files" && request.method() === "GET") {
       const path = url.searchParams.get("path") || HOME;
-      return json({ path, entries: fs[path] ?? [], page: { limit: Number(url.searchParams.get("limit") || 500), has_more: false, next_cursor: null }, directory_revision: "ui-fixture-v1" });
+      const limit = Number(url.searchParams.get("limit") || 500);
+      const offset = Number(url.searchParams.get("cursor") || 0);
+      const allEntries = fs[path] ?? [];
+      const entries = allEntries.slice(offset, offset + limit);
+      const nextOffset = offset + entries.length;
+      const hasMore = nextOffset < allEntries.length;
+      return json({
+        path,
+        entries,
+        page: { limit, has_more: hasMore, next_cursor: hasMore ? String(nextOffset) : null },
+        directory_revision: "ui-fixture-v1",
+      });
     }
     if (url.pathname === "/api/v1/files/search" && request.method() === "GET") {
       const root = url.searchParams.get("root") || HOME;
@@ -216,6 +234,12 @@ test("marquee drag over empty grid area selects the tiles it covers", async ({ p
   // Scroll that strip into the pane viewport before deriving pointer geometry;
   // this avoids coupling the gesture to the surrounding page height.
   await firstPane.locator(".filepane-body").evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  // Keep the file viewport itself inside the browser viewport before using
+  // page-level mouse coordinates. Virtualization changes document geometry,
+  // so inner scrolling alone is not sufficient for a reliable gesture.
+  await firstPane.locator(".filepane-body").scrollIntoViewIfNeeded();
+  await firstPane.locator(".filepane-body").evaluate((el) => { el.scrollTop = el.scrollHeight; });
+
   const box = await firstPane.evaluate((el) => {
     const rects = [...el.querySelectorAll(".file-tile")].map((t) => t.getBoundingClientRect());
     const grid = el.querySelector(".filegrid").getBoundingClientRect();
@@ -241,9 +265,11 @@ test("dragging a file onto another pane's directory moves it", async ({ page }) 
   await page.locator(".file-pane").getByTitle("横向拆分").click();
   await page.locator(".file-pane").nth(0).getByTitle("网格视图").click();
   await page.locator(".file-pane").nth(1).getByTitle("网格视图").click();
-  // Wait for both panes to be fully rendered (4 tiles each) before dragging.
-  await expect(page.locator(".file-tile")).toHaveCount(8);
+  // Wait for the actual drag source and target in their respective panes.
+  // The fixture may gain unrelated home entries as file-workspace coverage grows.
   const panes = page.locator(".file-pane");
+  await expect(panes.nth(0).locator(".file-tile", { hasText: "readme.md" })).toBeVisible();
+  await expect(panes.nth(1).locator(".file-tile", { hasText: "data" })).toBeVisible();
 
   const source = panes.nth(0).locator(".file-tile", { hasText: "readme.md" });
   const target = panes.nth(1).locator(".file-tile", { hasText: "data" });
@@ -272,4 +298,27 @@ test("dragging a file onto another pane's directory moves it", async ({ page }) 
   // Navigating a pane into data/ reveals the moved file.
   await panes.nth(0).locator(".file-tile", { hasText: "data" }).dblclick();
   await expect(panes.nth(0).locator(".file-tile", { hasText: "readme.md" })).toBeVisible();
+});
+
+
+test("large directories keep rendered DOM bounded across file views", async ({ page }) => {
+  await page.goto("/files?user=alice");
+  const pane = page.locator(".file-pane").first();
+  await pane.getByTitle("手动输入路径").click();
+  await pane.getByLabel("路径").fill(`${HOME}/large`);
+  await pane.getByLabel("路径").press("Enter");
+  await expect(pane).toHaveAttribute("data-pane-cwd", `${HOME}/large`);
+  await expect(pane.locator(".filepane-status")).toContainText("500 项已加载");
+
+  for (const loaded of [1000, 1500, 2000]) {
+    await pane.locator(".filepane-status").getByRole("button", { name: "加载更多" }).click();
+    await expect(pane.locator(".filepane-status")).toContainText(`${loaded} 项已加载`);
+  }
+  expect(await pane.locator(".file-row[data-path]").count()).toBeLessThan(100);
+
+  await pane.getByTitle("网格视图").click();
+  expect(await pane.locator(".file-tile[data-path]").count()).toBeLessThan(150);
+
+  await pane.getByTitle("分栏视图").click();
+  expect(await pane.locator('.miller-column[data-last-column="true"] .miller-row[data-path]').count()).toBeLessThan(100);
 });

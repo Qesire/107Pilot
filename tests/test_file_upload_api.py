@@ -17,6 +17,7 @@ from pathlib import Path
 from pilot107.adapters.slurm import (
     DiskUsage,
     FileEntry,
+    FileListPage,
     FileSearchEntry,
     FileSearchPage,
     FileStat,
@@ -87,7 +88,15 @@ class FakeExecutor:
         self._check(path)
         return hashlib.sha256(bytes(self.files[path])).hexdigest()
 
-    def list_dir(self, *, path, owner, timeout_seconds=30.0):
+    def list_dir(
+        self,
+        *,
+        path,
+        owner,
+        limit=500,
+        cursor=None,
+        timeout_seconds=30.0,
+    ) -> FileListPage:
         self._check(path)
         prefix = path.rstrip("/") + "/"
         names: dict[str, str] = {}
@@ -97,10 +106,22 @@ class FakeExecutor:
         for file_path in self.files:
             if file_path.startswith(prefix):
                 names[file_path[len(prefix):].split("/")[0]] = "file"
-        return [
+        entries = [
             FileEntry(name=name, type=kind, size=0, mtime=0)
             for name, kind in sorted(names.items())
         ]
+        offset = int(cursor or "0")
+        page_entries = entries[offset : offset + limit]
+        next_offset = offset + len(page_entries)
+        has_more = next_offset < len(entries)
+        return FileListPage(
+            path=path,
+            entries=tuple(page_entries),
+            limit=limit,
+            has_more=has_more,
+            next_cursor=str(next_offset) if has_more else None,
+            directory_revision="fake-v1",
+        )
 
     def search_files(self, **kwargs) -> FileSearchPage:
         root = str(kwargs["root"])

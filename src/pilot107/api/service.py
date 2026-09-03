@@ -763,20 +763,19 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             postgres_dsn=postgres_dsn,
         )
         workspace_source: WorkspaceSourceReader | None = None
+        workspace_relay: HttpCommandGatewayExecutor | SshRelayExecutor | None = None
         workspace_owner_roots: tuple[str, ...] = ()
         if config.backend == "command-gateway" and config.allowed_roots:
-            workspace_source = PagedWorkspaceSourceReader(
-                HttpCommandGatewayExecutor(
-                    base_url=config.command_gateway_url,
-                    token=config.command_gateway_token,
-                    timeout_seconds=config.command_timeout_seconds,
-                )
+            workspace_relay = HttpCommandGatewayExecutor(
+                base_url=config.command_gateway_url,
+                token=config.command_gateway_token,
+                timeout_seconds=config.command_timeout_seconds,
             )
+            workspace_source = PagedWorkspaceSourceReader(workspace_relay)
             workspace_owner_roots = config.allowed_roots
         elif config.backend == "real107-ssh" and ssh_relay_client is not None:
-            workspace_source = PagedWorkspaceSourceReader(
-                SshRelayExecutor(ssh_relay_client)
-            )
+            workspace_relay = SshRelayExecutor(ssh_relay_client)
+            workspace_source = PagedWorkspaceSourceReader(workspace_relay)
             workspace_owner_roots = config.allowed_roots or ssh_relay_client.config.owner_roots
         importer = (
             None
@@ -791,11 +790,10 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         publisher = (
             WorkspacePublisher(
                 store=project_store,
-                relay=workspace_source,
+                relay=workspace_relay,
                 owner_roots=workspace_owner_roots,
             )
-            if isinstance(workspace_source, (HttpCommandGatewayExecutor, SshRelayExecutor))
-            and workspace_owner_roots
+            if workspace_relay is not None and workspace_owner_roots
             else None
         )
         agent_session_service = AgentSessionService(
