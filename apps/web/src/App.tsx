@@ -20,6 +20,8 @@ import {
 import { StatusBadge } from "./components";
 import { ConnectionActionBanner, ConnectionBadge } from "./ConnectionStatus";
 import { EnvBoundaryBanner } from "./EnvBoundaryBanner";
+import { GlobalTransferIndicator } from "./GlobalTransferIndicator";
+import { TransferManagerProvider } from "./TransferManager";
 import { useHealth, useWebSession } from "./query";
 import { WorkspacePageV2 } from "./WorkspacePageV2";
 import { globalNavigationPath, useLocationState, withSearch } from "./url";
@@ -181,7 +183,8 @@ export default function App() {
   const mobileMoreActive = mobileMoreNavigation.some((item) => item.path === activePath);
 
   return (
-    <div className="product-shell">
+    <TransferManagerProvider key={user} user={user}>
+      <div className="product-shell">
       <EnvBoundaryBanner />
       <a className="skip-link" href="#main-content">跳到主要内容</a>
       <aside className="app-sidebar">
@@ -248,6 +251,7 @@ export default function App() {
           </div>
           <div className="topbar-actions">
             <ConnectionBadge user={user} />
+            <GlobalTransferIndicator user={user} onOpen={() => go("/files")} />
             <StatusBadge
               label={health.isPending ? "系统检查中" : health.isError ? "系统异常" : "系统正常"}
               tone={health.isPending ? "neutral" : health.isError ? "danger" : "success"}
@@ -310,6 +314,7 @@ export default function App() {
         </main>
       </div>
     </div>
+    </TransferManagerProvider>
   );
 }
 

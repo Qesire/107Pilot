@@ -72,8 +72,12 @@ export function TransferManagerProvider({ user, children }: { user: string; chil
   const progressMeta = useRef(new Map<string, { sent: number; time: number; speed: number; lastUi: number }>());
   const mountedRef = useRef(true);
 
-  useEffect(() => () => {
-    mountedRef.current = false;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      for (const upload of uploadRefs.current.values()) void upload.abort().catch(() => undefined);
+    };
   }, []);
 
   const updateTask = useCallback((id: string, patch: Partial<TransferTask>) => {
@@ -143,6 +147,8 @@ export function TransferManagerProvider({ user, children }: { user: string; chil
     startingRefs.current.add(task.id);
     try {
       const tus = await import("tus-js-client");
+      // The task may have been cancelled while the lazy module was loading.
+      if (!fileRefs.current.has(task.id)) return;
       const upload = new tus.Upload(file, {
         endpoint: `${window.location.origin}${TUS_ENDPOINT_PATH}`,
         chunkSize: TUS_CHUNK_SIZE,
@@ -226,7 +232,7 @@ export function TransferManagerProvider({ user, children }: { user: string; chil
     if (upload) {
       uploadRefs.current.delete(taskId);
     }
-    updateTask(taskId, { state: "queued", error: undefined });
+    updateTask(taskId, { state: "queued", error: "" });
   }, [updateTask]);
 
   const cancel = useCallback((taskId: string) => {
