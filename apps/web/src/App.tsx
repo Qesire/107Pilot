@@ -19,14 +19,9 @@ import {
 } from "lucide-react";
 import { StatusBadge } from "./components";
 import { ConnectionActionBanner, ConnectionBadge } from "./ConnectionStatus";
-import { AgentPage } from "./AgentPage";
 import { EnvBoundaryBanner } from "./EnvBoundaryBanner";
 import { useHealth, useWebSession } from "./query";
-import { ClusterPage, NotFoundPage, RunsPage, TerminalCollaborationPage } from "./pages";
 import { WorkspacePageV2 } from "./WorkspacePageV2";
-import { FilesPage } from "./FilesPage";
-import { MarketItemDetailPage, MarketPage, TemplateDetailPage } from "./MarketPages";
-import { TemplateWorkbenchPage } from "./TemplateWorkbenchPage";
 import { globalNavigationPath, useLocationState, withSearch } from "./url";
 
 interface NavigationItem {
@@ -51,9 +46,16 @@ const toolNavigation: NavigationItem[] = [
 
 const navigation = [...workNavigation, ...toolNavigation];
 
-const StudioPage = lazy(() =>
-  import("./StudioPage").then((module) => ({ default: module.StudioPage })),
-);
+const StudioPage = lazy(() => import("./StudioPage").then((module) => ({ default: module.StudioPage })));
+const FilesPage = lazy(() => import("./FilesPage").then((module) => ({ default: module.FilesPage })));
+const AgentPage = lazy(() => import("./AgentPage").then((module) => ({ default: module.AgentPage })));
+const RunsPage = lazy(() => import("./pages").then((module) => ({ default: module.RunsPage })));
+const ClusterPage = lazy(() => import("./pages").then((module) => ({ default: module.ClusterPage })));
+const TerminalCollaborationPage = lazy(() => import("./pages").then((module) => ({ default: module.TerminalCollaborationPage })));
+const MarketPage = lazy(() => import("./MarketPages").then((module) => ({ default: module.MarketPage })));
+const MarketItemDetailPage = lazy(() => import("./MarketPages").then((module) => ({ default: module.MarketItemDetailPage })));
+const TemplateDetailPage = lazy(() => import("./MarketPages").then((module) => ({ default: module.TemplateDetailPage })));
+const TemplateWorkbenchPage = lazy(() => import("./TemplateWorkbenchPage").then((module) => ({ default: module.TemplateWorkbenchPage })));
 
 type ThemePreference = "system" | "light" | "dark";
 
@@ -103,6 +105,10 @@ function routeLabel(pathname: string): string {
   if (pathname.startsWith("/studio/")) return "实验配置";
   if (pathname.startsWith("/templates/")) return "方案库";
   return "科研工作区";
+}
+
+function RouteFallback({ label }: { label: string }) {
+  return <div className="query-state" role="status"><span>正在加载{label}…</span></div>;
 }
 
 export default function App() {
@@ -279,24 +285,28 @@ export default function App() {
           {session.isSuccess ? <ConnectionActionBanner user={user} /> : null}
           {session.isPending ? <div className="query-state" role="status"><span>正在确认当前身份…</span></div> : null}
           {session.isError ? <div className="query-state error" role="alert"><strong>身份不可用</strong><span>{session.error.message}</span></div> : null}
-          {session.isSuccess ? <>
-            {location.pathname === "/" || location.pathname === "/projects" ? <WorkspacePageV2 user={user} location={location} navigate={navigate} /> : null}
-            {location.pathname === "/runs" || location.pathname.startsWith("/runs/") ? <RunsPage user={user} location={location} navigate={navigate} /> : null}
-            {location.pathname === "/files" ? <FilesPage user={user} location={location} navigate={navigate} /> : null}
-            {location.pathname === "/cluster" ? <ClusterPage user={user} location={location} navigate={navigate} /> : null}
-            {location.pathname === "/market" ? <MarketPage user={user} location={location} navigate={navigate} /> : null}
-            {location.pathname.startsWith("/market/") ? <MarketItemDetailPage user={user} location={location} navigate={navigate} /> : null}
-            {location.pathname === "/templates" || location.pathname === "/templates/new" || location.pathname === "/templates/reviews" || location.pathname.startsWith("/templates/draft/") ? <TemplateWorkbenchPage user={user} location={location} navigate={navigate} /> : null}
-            {location.pathname.startsWith("/templates/") && !location.pathname.startsWith("/templates/draft/") ? <TemplateDetailPage user={user} location={location} navigate={navigate} /> : null}
-            {location.pathname.startsWith("/studio/") ? (
-              <Suspense fallback={<div className="query-state" role="status"><span>正在加载实验配置…</span></div>}>
-                <StudioPage user={user} location={location} navigate={navigate} />
-              </Suspense>
-            ) : null}
-            {location.pathname === "/agent" ? <AgentPage user={user} location={location} navigate={navigate} /> : null}
-            {location.pathname === "/terminal" ? <TerminalCollaborationPage user={user} location={location} navigate={navigate} terminalDeepLink={session.data.terminal_deep_link} /> : null}
-            {!isKnownPath(location.pathname) ? <NotFoundPage user={user} location={location} navigate={navigate} /> : null}
-          </> : null}
+          {session.isSuccess ? (
+            <Suspense fallback={<RouteFallback label={currentLabel} />}>
+              {location.pathname === "/" || location.pathname === "/projects" ? <WorkspacePageV2 user={user} location={location} navigate={navigate} /> : null}
+              {location.pathname === "/runs" || location.pathname.startsWith("/runs/") ? <RunsPage user={user} location={location} navigate={navigate} /> : null}
+              {location.pathname === "/files" ? <FilesPage user={user} location={location} navigate={navigate} /> : null}
+              {location.pathname === "/cluster" ? <ClusterPage user={user} location={location} navigate={navigate} /> : null}
+              {location.pathname === "/market" ? <MarketPage user={user} location={location} navigate={navigate} /> : null}
+              {location.pathname.startsWith("/market/") ? <MarketItemDetailPage user={user} location={location} navigate={navigate} /> : null}
+              {location.pathname === "/templates" || location.pathname === "/templates/new" || location.pathname === "/templates/reviews" || location.pathname.startsWith("/templates/draft/") ? <TemplateWorkbenchPage user={user} location={location} navigate={navigate} /> : null}
+              {location.pathname.startsWith("/templates/") && !location.pathname.startsWith("/templates/draft/") ? <TemplateDetailPage user={user} location={location} navigate={navigate} /> : null}
+              {location.pathname.startsWith("/studio/") ? <StudioPage user={user} location={location} navigate={navigate} /> : null}
+              {location.pathname === "/agent" ? <AgentPage user={user} location={location} navigate={navigate} /> : null}
+              {location.pathname === "/terminal" ? <TerminalCollaborationPage user={user} location={location} navigate={navigate} terminalDeepLink={session.data.terminal_deep_link} /> : null}
+              {!isKnownPath(location.pathname) ? (
+                <section className="query-state" role="status">
+                  <strong>找不到这个页面</strong>
+                  <span>当前地址不属于 107Pilot 已知工作区。</span>
+                  <button className="button secondary" type="button" onClick={() => go("/projects")}>返回工作台</button>
+                </section>
+              ) : null}
+            </Suspense>
+          ) : null}
         </main>
       </div>
     </div>
