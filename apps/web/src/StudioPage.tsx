@@ -26,6 +26,7 @@ import {
   type SourceFormat,
 } from "./contract-state";
 import { QueryBoundary, SectionHeading, StatusBadge } from "./components";
+import { ContractAssetSummary } from "./ContractAssetSummary";
 import { FilePickerDialog } from "./files/FilePickerDialog";
 import { useContract, useContractSchema, useRecipes, useRecipeVersion } from "./query";
 import { compileClientSchemaValidator } from "./schema-validation";
@@ -271,6 +272,8 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
           {validation.isError || creation.isError ? (
             <div className="studio-notice error" role="alert"><AlertTriangle aria-hidden="true" /><div><strong>服务器拒绝请求</strong><p>{(validation.error ?? creation.error)?.message}</p></div></div>
           ) : null}
+
+          <ContractAssetSummary contract={canonical} parameterSchema={parameterSchema} dirty={canonicalDirty} />
 
           <div className="studio-body-3col">
             <section className="studio-col studio-col-form" aria-label="表单投影">
