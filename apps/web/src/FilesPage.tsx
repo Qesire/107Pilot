@@ -14,40 +14,24 @@ import {
   UploadCloud,
   X,
 } from "lucide-react";
-import * as tus from "tus-js-client";
-import { api } from "./api";
 import { SectionHeading } from "./components";
 import { FilesManagerProvider, useFilesManager } from "./files/FilesManagerContext";
 import { FileSearchPanel, fileSearchOpenTarget } from "./files/FileSearchPanel";
 import { FileWorkspaceStatus } from "./files/FileWorkspaceStatus";
 import { PaneManager } from "./files/PaneManager";
 import { usePaneLayout } from "./files/usePaneLayout";
+import {
+  transferTaskStateLabel,
+  useTransferManager,
+  type ArchivePostAction,
+  type TransferTask,
+} from "./TransferManager";
 import type { LocationState } from "./url";
 
 interface PageProps {
   user: string;
   location: LocationState;
   navigate: (path: string) => void;
-}
-
-const TUS_ENDPOINT_PATH = "/api/v1/files/tus";
-const TUS_CHUNK_SIZE = 8 * 1024 * 1024;
-const TUS_PARALLEL_UPLOADS = 5;
-const PARALLEL_THRESHOLD = 16 * 1024 * 1024;
-const AUTO_DISMISS_DELAY_MS = 2500;
-
-type UploadTaskState = "uploading" | "paused" | "completing" | "done" | "error";
-type ArchivePostAction = "keep" | "extract";
-
-interface UploadTask {
-  id: string;
-  filename: string;
-  targetPath: string;
-  size: number;
-  sent: number;
-  speed: number;
-  state: UploadTaskState;
-  error?: string;
 }
 
 function formatSize(bytes: number): string {
@@ -59,21 +43,6 @@ function formatSize(bytes: number): string {
 
 function formatSpeed(bytesPerSec: number): string {
   return `${formatSize(bytesPerSec)}/s`;
-}
-
-function uploadStateLabel(state: UploadTaskState): string {
-  switch (state) {
-    case "uploading": return "浏览器传输中";
-    case "paused": return "已暂停";
-    case "completing": return "等待服务器完成";
-    case "done": return "已交给服务器";
-    case "error": return "失败";
-  }
-}
-
-function isAutoExtractArchive(filename: string): boolean {
-  const lower = filename.toLowerCase();
-  return lower.endsWith(".tar.gz") || lower.endsWith(".tgz");
 }
 
 export function FilesPage({ user }: PageProps) {
@@ -97,160 +66,31 @@ function FilesShell({
 }) {
   const queryClient = useQueryClient();
   const manager = useFilesManager();
-  const [tasks, setTasks] = useState<UploadTask[]>([]);
+  const transfers = useTransferManager();
   const [archivePostAction, setArchivePostAction] = useState<ArchivePostAction>("keep");
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounter = useRef(0);
-  const uploadRefs = useRef<Map<string, tus.Upload>>(new Map());
-  const progressMeta = useRef<
-    Map<string, { sent: number; time: number; speed: number; lastUi: number }>
-  >(new Map());
 
   const activeCwd = useCallback(
     () => manager.getActiveController()?.getCwd() ?? homePath,
     [manager, homePath],
   );
 
-  const invalidatePath = useCallback((path: string) => {
-    void queryClient.invalidateQueries({
-      queryKey: ["files-list", user, path],
-      exact: true,
-    });
-  }, [queryClient, user]);
-
-  const refreshBackendState = useCallback((path = activeCwd()) => {
-    invalidatePath(path);
+  const refreshBackendState = useCallback(() => {
+    manager.getActiveController()?.refresh();
     void queryClient.invalidateQueries({ queryKey: ["files-usage", user] });
     void queryClient.invalidateQueries({ queryKey: ["file-uploads", user] });
-  }, [activeCwd, invalidatePath, queryClient, user]);
+  }, [manager, queryClient, user]);
 
-  const updateTask = (id: string, patch: Partial<UploadTask>) => {
-    setTasks((prev) => prev.map((task) => (task.id === id ? { ...task, ...patch } : task)));
-  };
-
-  const handleProgress = (taskId: string, bytesSent: number, bytesTotal: number) => {
-    const now = Date.now();
-    const meta = progressMeta.current.get(taskId) ?? { sent: 0, time: now, speed: 0, lastUi: 0 };
-    let speed = meta.speed;
-    const dt = now - meta.time;
-    if (dt > 0) {
-      const instant = ((bytesSent - meta.sent) / dt) * 1000;
-      speed = meta.speed === 0 ? instant : meta.speed * 0.7 + instant * 0.3;
-    }
-    const next = { sent: bytesSent, time: now, speed, lastUi: meta.lastUi };
-    progressMeta.current.set(taskId, next);
-    if (now - meta.lastUi >= 200 || bytesSent >= bytesTotal) {
-      next.lastUi = now;
-      updateTask(taskId, { sent: bytesSent, size: bytesTotal, speed });
-    }
-  };
-
-  const removeTaskRefs = (taskId: string) => {
-    uploadRefs.current.delete(taskId);
-    progressMeta.current.delete(taskId);
-    setTasks((prev) => prev.filter((task) => task.id !== taskId));
-  };
-
-  const finalizeTask = async (taskId: string, upload: tus.Upload, targetPath: string) => {
-    updateTask(taskId, { state: "completing" });
-    const uploadId = (upload.url ?? "").replace(/\/+$/, "").split("/").pop() ?? "";
-    try {
-      await api.uploadComplete(user, uploadId);
-      updateTask(taskId, { state: "done" });
-      refreshBackendState(targetPath);
-      window.setTimeout(() => removeTaskRefs(taskId), AUTO_DISMISS_DELAY_MS);
-    } catch (err) {
-      updateTask(taskId, {
-        state: "error",
-        error: err instanceof Error ? err.message : "服务器校验或写入失败",
-      });
-      void queryClient.invalidateQueries({ queryKey: ["file-uploads", user] });
-    }
-  };
-
-  const startUploadTask = async (file: File, targetPath: string) => {
-    const taskId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const autoExtract = archivePostAction === "extract" && isAutoExtractArchive(file.name);
-    const task: UploadTask = {
-      id: taskId,
-      filename: file.name,
-      targetPath,
-      size: file.size,
-      sent: 0,
-      speed: 0,
-      state: "uploading",
-    };
-    const upload = new tus.Upload(file, {
-      endpoint: `${window.location.origin}${TUS_ENDPOINT_PATH}`,
-      chunkSize: TUS_CHUNK_SIZE,
-      parallelUploads: file.size > PARALLEL_THRESHOLD ? TUS_PARALLEL_UPLOADS : 1,
-      retryDelays: [0, 1000, 3000, 5000],
-      storeFingerprintForResuming: true,
-      removeFingerprintOnSuccess: true,
-      metadata: {
-        filename: file.name,
-        target_path: targetPath,
-        auto_extract: autoExtract ? "true" : "false",
-      },
-      headers: { "X-Pilot107-User": user },
-      onProgress: (bytesSent, bytesTotal) => handleProgress(taskId, bytesSent, bytesTotal),
-      onSuccess: () => void finalizeTask(taskId, upload, targetPath),
-      onError: (err) => {
-        updateTask(taskId, { state: "error", error: err instanceof Error ? err.message : String(err) });
-        void queryClient.invalidateQueries({ queryKey: ["file-uploads", user] });
-      },
-    });
-    uploadRefs.current.set(taskId, upload);
-    setTasks((prev) => [...prev, task]);
-    try {
-      const previous = await upload.findPreviousUploads();
-      const first = previous[0];
-      if (first) upload.resumeFromPreviousUpload(first);
-    } catch {
-      // A failed resume lookup is not fatal; start a fresh tus session.
-    }
-    upload.start();
-  };
-
-  const handleUpload = useCallback(
-    (files: FileList) => {
-      const target = activeCwd();
-      for (const file of Array.from(files)) void startUploadTask(file, target);
-    },
-    // startUploadTask intentionally reads the current archive policy.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeCwd, archivePostAction],
-  );
+  const handleUpload = useCallback((files: FileList) => {
+    transfers.enqueueFiles(files, activeCwd(), archivePostAction);
+  }, [activeCwd, archivePostAction, transfers]);
 
   useEffect(() => {
     manager.setUploadTrigger(() => fileInputRef.current?.click());
     return () => manager.setUploadTrigger(null);
   }, [manager]);
-
-  const pauseTask = (taskId: string) => {
-    const upload = uploadRefs.current.get(taskId);
-    if (!upload) return;
-    void upload.abort().then(() => updateTask(taskId, { state: "paused", speed: 0 }));
-  };
-
-  const resumeTask = (taskId: string) => {
-    const upload = uploadRefs.current.get(taskId);
-    if (!upload) return;
-    updateTask(taskId, { state: "uploading" });
-    upload.start();
-  };
-
-  const cancelTask = (taskId: string) => {
-    const upload = uploadRefs.current.get(taskId);
-    removeTaskRefs(taskId);
-    if (!upload) return;
-    void upload.abort(true)
-      .catch(() => undefined)
-      .finally(() => {
-        void queryClient.invalidateQueries({ queryKey: ["file-uploads", user] });
-      });
-  };
 
   const handleDragEnter = (event: React.DragEvent) => {
     event.preventDefault();
@@ -293,7 +133,7 @@ function FilesShell({
       <SectionHeading
         eyebrow="文件 / 科研资产"
         title="文件工作区"
-        detail="上传、检索和组织实验资产；浏览器负责可恢复传输，服务器负责完整性校验、集群写入与可选解压。"
+        detail="上传、检索和组织实验资产；浏览器传输由全局任务管理器持有，服务器负责完整性校验、集群写入与可选解压。"
       />
 
       <FileWorkspaceStatus user={user} homePath={homePath} />
@@ -320,7 +160,7 @@ function FilesShell({
           >
             <FolderPlus size={14} aria-hidden="true" /> 新建目录
           </button>
-          <button type="button" className="button secondary" onClick={() => refreshBackendState()}>
+          <button type="button" className="button secondary" onClick={refreshBackendState}>
             <RotateCw size={14} aria-hidden="true" /> 刷新
           </button>
           <button type="button" className="button secondary" onClick={toggleViewMode}>
@@ -369,16 +209,16 @@ function FilesShell({
         }}
       />
 
-      {tasks.length > 0 ? (
+      {transfers.tasks.length > 0 ? (
         <div className="files-upload-tasks" role="status" aria-live="polite">
-          {tasks.map((task) => (
-            <UploadTaskCard
+          {transfers.tasks.map((task) => (
+            <TransferTaskCard
               key={task.id}
               task={task}
-              onPause={() => pauseTask(task.id)}
-              onResume={() => resumeTask(task.id)}
-              onCancel={() => cancelTask(task.id)}
-              onDismiss={() => removeTaskRefs(task.id)}
+              onPause={() => transfers.pause(task.id)}
+              onResume={() => transfers.resume(task.id)}
+              onCancel={() => transfers.cancel(task.id)}
+              onDismiss={() => transfers.dismiss(task.id)}
             />
           ))}
         </div>
@@ -389,21 +229,21 @@ function FilesShell({
   );
 }
 
-function UploadTaskCard({
+function TransferTaskCard({
   task,
   onPause,
   onResume,
   onCancel,
   onDismiss,
 }: {
-  task: UploadTask;
+  task: TransferTask;
   onPause: () => void;
   onResume: () => void;
   onCancel: () => void;
   onDismiss: () => void;
 }) {
   const pct = task.size > 0 ? Math.min(100, Math.round((task.sent / task.size) * 100)) : 0;
-  const active = task.state === "uploading" || task.state === "completing";
+  const active = task.state === "queued" || task.state === "uploading" || task.state === "completing";
   return (
     <div className={`files-upload-card upload-${task.state}`}>
       <div className="upload-card-header">
@@ -417,7 +257,7 @@ function UploadTaskCard({
           <Pause size={16} className="upload-icon-paused" aria-hidden="true" />
         )}
         <span className="upload-filename" title={`${task.targetPath}/${task.filename}`}>{task.filename}</span>
-        <span className="upload-state">{uploadStateLabel(task.state)}</span>
+        <span className="upload-state">{transferTaskStateLabel(task.state)}</span>
         <span className="upload-card-actions">
           {task.state === "uploading" ? (
             <button type="button" className="icon-button" title="暂停" onClick={onPause}>
@@ -429,7 +269,7 @@ function UploadTaskCard({
               <Play size={14} aria-hidden="true" />
             </button>
           ) : null}
-          {task.state === "uploading" || task.state === "paused" || task.state === "error" ? (
+          {task.state === "queued" || task.state === "uploading" || task.state === "paused" || task.state === "error" ? (
             <button type="button" className="icon-button danger" title="取消" onClick={onCancel}>
               <X size={14} aria-hidden="true" />
             </button>
