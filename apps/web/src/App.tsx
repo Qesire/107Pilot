@@ -22,7 +22,8 @@ import { ConnectionActionBanner, ConnectionBadge } from "./ConnectionStatus";
 import { AgentPage } from "./AgentPage";
 import { EnvBoundaryBanner } from "./EnvBoundaryBanner";
 import { useHealth, useWebSession } from "./query";
-import { ClusterPage, NotFoundPage, RunsPage, TerminalCollaborationPage, WorkspacePage } from "./pages";
+import { ClusterPage, NotFoundPage, RunsPage, TerminalCollaborationPage } from "./pages";
+import { WorkspacePageV2 } from "./WorkspacePageV2";
 import { FilesPage } from "./FilesPage";
 import { MarketItemDetailPage, MarketPage, TemplateDetailPage } from "./MarketPages";
 import { TemplateWorkbenchPage } from "./TemplateWorkbenchPage";
@@ -279,7 +280,7 @@ export default function App() {
           {session.isPending ? <div className="query-state" role="status"><span>正在确认当前身份…</span></div> : null}
           {session.isError ? <div className="query-state error" role="alert"><strong>身份不可用</strong><span>{session.error.message}</span></div> : null}
           {session.isSuccess ? <>
-            {location.pathname === "/" || location.pathname === "/projects" ? <WorkspacePage user={user} location={location} navigate={navigate} /> : null}
+            {location.pathname === "/" || location.pathname === "/projects" ? <WorkspacePageV2 user={user} location={location} navigate={navigate} /> : null}
             {location.pathname === "/runs" || location.pathname.startsWith("/runs/") ? <RunsPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname === "/files" ? <FilesPage user={user} location={location} navigate={navigate} /> : null}
             {location.pathname === "/cluster" ? <ClusterPage user={user} location={location} navigate={navigate} /> : null}
