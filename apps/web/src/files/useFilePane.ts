@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { FileEntry } from "../types";
@@ -11,7 +11,6 @@ import {
   normalizeDir,
   parentPath,
   selectAllPaths,
-  sortEntries,
   toggleSelection,
 } from "./selection";
 
@@ -26,6 +25,9 @@ export interface UseFilePaneResult {
   isPending: boolean;
   isError: boolean;
   isFetching: boolean;
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  fetchNextPage: () => void;
   error: Error | null;
   selected: string[];
   selectedEntries: FileEntry[];
@@ -82,9 +84,16 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const pendingOpenRef = useRef<{ cwd: string; selectedPath: string } | null>(null);
 
-  const listing = useQuery({
+  const listing = useInfiniteQuery({
     queryKey: ["files-list", manager.user, cwd],
-    queryFn: ({ signal }) => api.fileList(manager.user, cwd, signal),
+    queryFn: ({ signal, pageParam }) => api.fileList(
+      manager.user,
+      cwd,
+      { limit: 500, cursor: pageParam },
+      signal,
+    ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.page.next_cursor ?? undefined,
     retry: false,
   });
 
@@ -156,7 +165,7 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
   }, []);
 
   const entries = useMemo(
-    () => sortEntries(listing.data?.entries ?? []),
+    () => listing.data?.pages.flatMap((page) => page.entries) ?? [],
     [listing.data],
   );
 
@@ -310,6 +319,9 @@ export function useFilePane(paneId: string, initialPath: string): UseFilePaneRes
     isPending: listing.isPending,
     isError: listing.isError,
     isFetching: listing.isFetching,
+    hasNextPage: Boolean(listing.hasNextPage),
+    isFetchingNextPage: listing.isFetchingNextPage,
+    fetchNextPage: () => { void listing.fetchNextPage(); },
     error: listing.error as Error | null,
     selected,
     selectedEntries,

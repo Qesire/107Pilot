@@ -1245,6 +1245,8 @@ export interface FileEntry {
 export interface FileListResponse {
   path: string;
   entries: FileEntry[];
+  page: PageInfo;
+  directory_revision: string;
 }
 
 export interface FileSearchEntry {

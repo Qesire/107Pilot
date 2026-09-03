@@ -7,7 +7,7 @@
 // chain shares the react-query cache with the pane listing and refreshes on
 // the same invalidations.
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Selecto from "react-selecto";
 import { ChevronRight } from "lucide-react";
@@ -16,7 +16,7 @@ import type { FileEntry } from "../types";
 import { EntryActionButtons, InlineRenameInput, type PaneActions } from "./entry-widgets";
 import { useFilesManager, type FilesManager } from "./FilesManagerContext";
 import { TileIcon } from "./FileGrid";
-import { columnDirsFor, sortEntries } from "./selection";
+import { columnDirsFor } from "./selection";
 import type { UseFilePaneResult } from "./useFilePane";
 
 function MillerColumn({
@@ -41,13 +41,15 @@ function MillerColumn({
   dropTarget: string | null;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
-  const listing = useQuery({
+  const listing = useInfiniteQuery({
     queryKey: ["files-list", user, dir],
-    queryFn: ({ signal }) => api.fileList(user, dir, signal),
+    queryFn: ({ signal, pageParam }) => api.fileList(user, dir, { limit: 500, cursor: pageParam }, signal),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.page.next_cursor ?? undefined,
     retry: false,
   });
   const entries = useMemo(
-    () => sortEntries(listing.data?.entries ?? []),
+    () => listing.data?.pages.flatMap((page) => page.entries) ?? [],
     [listing.data],
   );
   const selectedSet = useMemo(() => new Set(pane.selected), [pane.selected]);
@@ -117,6 +119,11 @@ function MillerColumn({
             </div>
           );
         })}
+        {listing.hasNextPage ? (
+          <button type="button" className="miller-load-more" disabled={listing.isFetchingNextPage} onClick={() => void listing.fetchNextPage()}>
+            {listing.isFetchingNextPage ? "加载中…" : "加载更多"}
+          </button>
+        ) : null}
       </div>
     </div>
   );

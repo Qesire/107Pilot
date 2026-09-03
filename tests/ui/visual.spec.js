@@ -278,6 +278,8 @@ async function installMockApi(page, options = {}) {
               { name: "dataset.tar.gz", type: "file", size: 100, mtime: 1788408000 },
             ]
           : [],
+        page: { limit: Number(url.searchParams.get("limit") || 500), has_more: false, next_cursor: null },
+        directory_revision: "visual-fixture-v1",
       });
     }
     if (url.pathname === "/api/v1/recipes/recipe_python_cpu/versions/1.0.0") {

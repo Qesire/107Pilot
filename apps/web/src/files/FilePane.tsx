@@ -592,7 +592,12 @@ export function FilePane({
       </div>
 
       <footer className="filepane-status">
-        <span>{pane.entries.length} 项</span>
+        <span>{pane.entries.length} 项已加载{pane.hasNextPage ? " · 还有更多" : ""}</span>
+        {pane.viewMode !== "column" && pane.hasNextPage ? (
+          <button type="button" className="text-link" disabled={pane.isFetchingNextPage} onClick={pane.fetchNextPage}>
+            {pane.isFetchingNextPage ? "加载中…" : "加载更多"}
+          </button>
+        ) : null}
         {singleFile && singleFile.kind === "file" && (
           <button
             type="button"

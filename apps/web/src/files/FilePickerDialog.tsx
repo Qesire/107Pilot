@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { ArrowUp, Check, File, Folder, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
@@ -16,7 +16,7 @@ interface FilePickerDialogProps {
   onClose: () => void;
 }
 
-const MAX_RENDERED_ENTRIES = 300;
+const PICKER_PAGE_SIZE = 500;
 
 export function FilePickerDialog({
   user,
@@ -31,9 +31,13 @@ export function FilePickerDialog({
   const [cwd, setCwd] = useState(() => clampToHome(initialPath || home, home));
   const [filter, setFilter] = useState("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const listing = useQuery({
+  const listing = useInfiniteQuery({
     queryKey: ["files-list", user, cwd],
-    queryFn: ({ signal }) => api.fileList(user, cwd, signal),
+    queryFn: ({ signal, pageParam }) => api.fileList(
+      user, cwd, { limit: PICKER_PAGE_SIZE, cursor: pageParam }, signal
+    ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.page.next_cursor ?? undefined,
     retry: false,
   });
 
@@ -50,16 +54,12 @@ export function FilePickerDialog({
 
   const entries = useMemo(() => {
     const normalizedFilter = filter.trim().toLocaleLowerCase("zh-CN");
-    return (listing.data?.entries ?? [])
+    return (listing.data?.pages.flatMap((page) => page.entries) ?? [])
       .filter((entry) => entry.kind === "directory" || selectionMode !== "directory")
-      .filter((entry) => !normalizedFilter || entry.name.toLocaleLowerCase("zh-CN").includes(normalizedFilter))
-      .sort((a, b) => {
-        if (a.kind !== b.kind) return a.kind === "directory" ? -1 : 1;
-        return a.name.localeCompare(b.name, "zh-CN", { numeric: true });
-      });
+      .filter((entry) => !normalizedFilter || entry.name.toLocaleLowerCase("zh-CN").includes(normalizedFilter));
   }, [filter, listing.data, selectionMode]);
 
-  const visibleEntries = entries.slice(0, MAX_RENDERED_ENTRIES);
+  const loadedCount = listing.data?.pages.reduce((count, page) => count + page.entries.length, 0) ?? 0;
   const navigate = (path: string) => setCwd(clampToHome(path, home));
   const targetPath = selectedPath ?? (selectionMode === "file" ? null : cwd);
   const targetLabel = selectedPath
@@ -95,7 +95,7 @@ export function FilePickerDialog({
             placeholder="筛选当前目录中的文件或文件夹"
             onChange={(event) => setFilter(event.target.value)}
           />
-          {entries.length > MAX_RENDERED_ENTRIES ? <small>当前匹配 {entries.length} 项，仅渲染前 {MAX_RENDERED_ENTRIES} 项</small> : null}
+          {listing.hasNextPage ? <small>{filter ? `筛选已加载的 ${loadedCount} 项；目录仍有更多内容` : `已加载 ${loadedCount} 项；目录仍有更多内容`}</small> : null}
         </div>
         <div className="file-picker-body">
           {listing.isPending ? <div className="file-picker-state">正在读取服务器目录…</div> : null}
@@ -103,7 +103,7 @@ export function FilePickerDialog({
           {!listing.isPending && !listing.isError && entries.length === 0 ? (
             <div className="file-picker-state">{filter ? "当前筛选没有匹配项。" : selectionMode === "directory" ? "当前目录没有子目录。" : "当前目录没有可选择对象。"}</div>
           ) : null}
-          {visibleEntries.length > 0 ? <ul className="file-picker-list">{visibleEntries.map((entry) => {
+          {entries.length > 0 ? <ul className="file-picker-list">{entries.map((entry) => {
             const isDirectory = entry.kind === "directory";
             const selected = !isDirectory && selectedPath === entry.path;
             return (
@@ -124,6 +124,11 @@ export function FilePickerDialog({
               </li>
             );
           })}</ul> : null}
+          {listing.hasNextPage ? (
+            <button type="button" className="button secondary file-picker-load-more" disabled={listing.isFetchingNextPage} onClick={() => void listing.fetchNextPage()}>
+              {listing.isFetchingNextPage ? "正在加载更多…" : "加载更多目录内容"}
+            </button>
+          ) : null}
         </div>
         <footer className="file-picker-footer">
           <div>

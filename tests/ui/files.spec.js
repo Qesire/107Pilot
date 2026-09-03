@@ -50,7 +50,7 @@ async function installFilesMock(page) {
     }
     if (url.pathname === "/api/v1/files" && request.method() === "GET") {
       const path = url.searchParams.get("path") || HOME;
-      return json({ path, entries: fs[path] ?? [] });
+      return json({ path, entries: fs[path] ?? [], page: { limit: Number(url.searchParams.get("limit") || 500), has_more: false, next_cursor: null }, directory_revision: "ui-fixture-v1" });
     }
     if (url.pathname === "/api/v1/files/search" && request.method() === "GET") {
       const root = url.searchParams.get("root") || HOME;
