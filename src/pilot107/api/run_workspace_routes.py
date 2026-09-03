@@ -24,7 +24,11 @@ class RunWorkspaceRoutes:
         if len(parts) != 3 or parts[0] != "runs" or parts[2] != "workspace":
             return None
         if params:
-            return _error(400, "RUN_WORKSPACE.INVALID_QUERY", "workspace does not accept query parameters")
+            return _error(
+                400,
+                "RUN_WORKSPACE.INVALID_QUERY",
+                "workspace does not accept query parameters",
+            )
         owner = identity.username if identity is not None else None
         try:
             payload = self.service.get(parts[1], owner=owner)
