@@ -1273,11 +1273,15 @@ export interface FileContentResponse {
 export type UploadSessionState =
   | "initialized"
   | "uploading"
-  | "completing"
-  | "completed"
+  | "assembled"
+  | "verified"
   | "written"
+  | "extracted"
   | "aborted"
-  | "failed";
+  | "failed"
+  // Compatibility with older control-plane/UI deployments.
+  | "completing"
+  | "completed";
 
 export interface UploadSession {
   upload_id: string;

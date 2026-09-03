@@ -21,6 +21,17 @@ test("workspace prioritizes current work and preparation facts", async ({ page }
   await capture(page, "phase3d-workspace.png");
 });
 
+test("file workspace consumes backend storage and upload session read models", async ({ page }) => {
+  await page.goto("/files?user=alice");
+
+  await expect(page.getByRole("heading", { name: "文件工作区" })).toBeVisible();
+  await expect(page.getByText("个人存储", { exact: true })).toBeVisible();
+  await expect(page.getByText("后台传输", { exact: true })).toBeVisible();
+  await expect(page.getByText("dataset.tar.gz", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(/完整性已验证，正在写入/)).toBeVisible();
+  await expect(page.getByLabel("压缩包上传后处理")).toHaveValue("keep");
+});
+
 test("run filters are URL-controlled and narrow the server query", async ({ page }) => {
   await page.goto("/runs?user=alice");
 
@@ -206,6 +217,46 @@ async function installMockApi(page, options = {}) {
       const requestedUser = request.headers()["x-pilot107-user"] || "alice";
       return json(route, { identity_mode: "demo", user: requestedUser, switchable: true });
     }
+    if (url.pathname === "/api/v1/files/usage") {
+  return json(route, {
+    home: "/public/home/alice",
+    used_bytes: 1073741824,
+    total_bytes: 2147483648,
+    observed_at: "2026-09-03T04:00:00Z",
+  });
+}
+if (url.pathname === "/api/v1/files/uploads") {
+  return json(route, {
+    items: [
+      {
+        upload_id: "upload_visual_001",
+        owner: "alice",
+        target_path: "/public/home/alice",
+        filename: "dataset.tar.gz",
+        total_size: 100,
+        is_partial: false,
+        received_bytes: 100,
+        sha256_expected: null,
+        sha256_actual: "a".repeat(64),
+        state: "verified",
+        auto_extract: false,
+        created_at: "2026-09-03T04:00:00Z",
+        written_path: null,
+        extracted_members: null,
+        error: null,
+      },
+    ],
+  });
+}
+if (url.pathname === "/api/v1/files") {
+  const path = url.searchParams.get("path") || "/public/home/alice";
+  return json(route, {
+    path,
+    entries: [
+      { name: "dataset.tar.gz", type: "file", size: 100, mtime: 1788408000 },
+    ],
+  });
+}
     if (url.pathname === "/api/v1/contracts/schema") {
       return json(route, contractSchemaPayload());
     }
