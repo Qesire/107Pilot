@@ -1,0 +1,43 @@
+name: temp-fix-ci-lint
+
+on:
+  push:
+    branches: [ux-v2-foundation]
+    paths:
+      - scripts/_temp_fix_ci_lint.py
+      - .github/workflows/_temp_fix_ci_lint.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ux-v2-foundation
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.8.3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: uv sync --locked --extra dev --extra api
+      - name: Apply lint cleanup
+        run: python scripts/_temp_fix_ci_lint.py
+      - name: Verify Ruff
+        run: uv run ruff check src tests scripts --exclude scripts/_temp_fix_ci_lint.py
+      - name: Verify mypy
+        run: uv run mypy src
+      - name: Verify file/backend tests
+        run: uv run pytest -q tests/test_file_ops_executor.py tests/test_command_gateway.py tests/test_http_api.py
+      - name: Commit cleanup
+        run: |
+          git config user.name "107Pilot UX bot"
+          git config user.email "107pilot-ux-bot@users.noreply.github.com"
+          git add src/pilot107/adapters/slurm.py src/pilot107/api/agent_tool_routes.py src/pilot107/core/run_service.py
+          git diff --cached --check
+          git commit -m "chore: clear backend lint gate"
+          git push origin HEAD:ux-v2-foundation
