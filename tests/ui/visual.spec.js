@@ -52,7 +52,7 @@ test("run deep link survives direct navigation and wraps long workdir", async ({
   await page.getByRole("button", { name: "诊断" }).click();
   await expect(page).toHaveURL(/tab=diagnosis/);
   await expect(page.getByText("RUNTIME.PYTHON_PACKAGE_MISSING", { exact: true })).toBeVisible();
-  await expect(page.getByText("evidence:\/\/runs\/run_alice_failed\/logs\/stderr.tail.json", { exact: true })).toBeVisible();
+  await expect(page.getByText("evidence://runs/run_alice_failed/logs/stderr.tail.json", { exact: true })).toBeVisible();
 });
 
 test("successful run exposes shareable logs, results, and verified capsule", async ({ page }) => {
@@ -131,7 +131,7 @@ test("studio requires server validation before creating a canonical contract", a
 
   await expect(page.getByRole("heading", { name: "新建 Contract" })).toBeVisible();
   await expect(page.getByRole("button", { name: "创建 Contract" })).toBeDisabled();
-  await page.getByLabel("工作目录").fill("/public/home/alice/studio-case");
+  await page.getByRole("textbox", { name: "工作目录", exact: true }).fill("/public/home/alice/studio-case");
   await page.getByRole("button", { name: "服务端校验" }).click();
   await expect(page.getByText("服务器 OK", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "创建 Contract" })).toBeEnabled();
@@ -145,7 +145,7 @@ test("studio workdir picker browses backend directories without leaving the cont
   await expect(page.getByRole("dialog", { name: "选择实验工作目录" })).toBeVisible();
   await page.getByRole("button", { name: /project-a/ }).click();
   await page.getByRole("button", { name: "选择此目录" }).click();
-  await expect(page.getByLabel("工作目录")).toHaveValue("/public/home/alice/project-a");
+  await expect(page.getByRole("textbox", { name: "工作目录", exact: true })).toHaveValue("/public/home/alice/project-a");
   await expect(page).toHaveURL(/\/studio\/new\?user=alice/);
 });
 
@@ -155,7 +155,7 @@ test("recipe shared_path browses existing backend files and writes canonical fie
   await expect(page.getByRole("dialog", { name: /选择共享路径/ })).toBeVisible();
   await page.getByRole("button", { name: /dataset.tar.gz/ }).click();
   await page.getByRole("button", { name: "选择此文件" }).click();
-  await expect(page.getByLabel(/runtime.environment.DATA_ROOT/)).toHaveValue("/public/home/alice/dataset.tar.gz");
+  await expect(page.getByRole("textbox", { name: /^runtime\.environment\.DATA_ROOT/ })).toHaveValue("/public/home/alice/dataset.tar.gz");
   await expect(page).toHaveURL(/\/studio\/new\?user=alice/);
 });
 
@@ -163,7 +163,7 @@ test("dirty source is not silently overwritten by a basic form update", async ({
   await page.goto("/studio/new?user=alice&tab=source");
   const editor = page.locator(".cm-content");
   await editor.fill("schema_version: pilot107.contract/v2\nrecipe_version_id: changed-in-source\n");
-  await page.getByLabel("工作目录").fill("/public/home/alice/form-change");
+  await page.getByRole("textbox", { name: "工作目录", exact: true }).fill("/public/home/alice/form-change");
 
   await expect(page.getByRole("alert")).toContainText("表单与未应用源码发生冲突");
   await expect(page.getByRole("button", { name: "应用源码并覆盖表单" })).toBeVisible();
@@ -238,48 +238,48 @@ async function installMockApi(page, options = {}) {
       return json(route, { identity_mode: "demo", user: requestedUser, switchable: true });
     }
     if (url.pathname === "/api/v1/files/usage") {
-  return json(route, {
-    home: "/public/home/alice",
-    used_bytes: 1073741824,
-    total_bytes: 2147483648,
-    observed_at: "2026-09-03T04:00:00Z",
-  });
-}
-if (url.pathname === "/api/v1/files/uploads") {
-  return json(route, {
-    items: [
-      {
-        upload_id: "upload_visual_001",
-        owner: "alice",
-        target_path: "/public/home/alice",
-        filename: "dataset.tar.gz",
-        total_size: 100,
-        is_partial: false,
-        received_bytes: 100,
-        sha256_expected: null,
-        sha256_actual: "a".repeat(64),
-        state: "verified",
-        auto_extract: false,
-        created_at: "2026-09-03T04:00:00Z",
-        written_path: null,
-        extracted_members: null,
-        error: null,
-      },
-    ],
-  });
-}
-if (url.pathname === "/api/v1/files") {
-  const path = url.searchParams.get("path") || "/public/home/alice";
-  return json(route, {
-    path,
-    entries: path === "/public/home/alice"
-      ? [
-          { name: "project-a", type: "directory", size: 0, mtime: 1788408000 },
-          { name: "dataset.tar.gz", type: "file", size: 100, mtime: 1788408000 },
-        ]
-      : [],
-  });
-}
+      return json(route, {
+        home: "/public/home/alice",
+        used_bytes: 1073741824,
+        total_bytes: 2147483648,
+        observed_at: "2026-09-03T04:00:00Z",
+      });
+    }
+    if (url.pathname === "/api/v1/files/uploads") {
+      return json(route, {
+        items: [
+          {
+            upload_id: "upload_visual_001",
+            owner: "alice",
+            target_path: "/public/home/alice",
+            filename: "dataset.tar.gz",
+            total_size: 100,
+            is_partial: false,
+            received_bytes: 100,
+            sha256_expected: null,
+            sha256_actual: "a".repeat(64),
+            state: "verified",
+            auto_extract: false,
+            created_at: "2026-09-03T04:00:00Z",
+            written_path: null,
+            extracted_members: null,
+            error: null,
+          },
+        ],
+      });
+    }
+    if (url.pathname === "/api/v1/files") {
+      const currentPath = url.searchParams.get("path") || "/public/home/alice";
+      return json(route, {
+        path: currentPath,
+        entries: currentPath === "/public/home/alice"
+          ? [
+              { name: "project-a", type: "directory", size: 0, mtime: 1788408000 },
+              { name: "dataset.tar.gz", type: "file", size: 100, mtime: 1788408000 },
+            ]
+          : [],
+      });
+    }
     if (url.pathname === "/api/v1/recipes/recipe_python_cpu/versions/1.0.0") {
       return json(route, {
         recipe_id: "recipe_python_cpu",
@@ -365,386 +365,207 @@ if (url.pathname === "/api/v1/files") {
     }
     if (url.pathname === "/api/v1/platform/capabilities") {
       if (options.capabilitiesForbidden) {
-        return json(route, { error: { code: "AUTH.FORBIDDEN", message: "scope denied" } }, 403);
+        return json(route, {
+          error: { code: "FORBIDDEN", message: "scope denied" },
+        }, 403);
       }
-      return json(route, capabilityPayload());
-    }
-    if (url.pathname === "/api/v1/platform/snapshots/latest") {
-      return json(route, platformPayload(Boolean(options.stalePlatform)));
-    }
-    if (url.pathname === "/api/v1/platform/entitlements/latest") {
-      return json(route, entitlementPayload(url.searchParams.get("owner") || "alice"));
-    }
-    if (url.pathname === "/api/v1/agent-sessions" && request.method() === "GET") {
       return json(route, {
-        items: [agentSession],
-        page: { limit: 100, has_more: false, next_cursor: null },
+        user: request.headers()["x-pilot107-user"] || "alice",
+        observed_at: "2026-07-16T02:08:00Z",
+        degraded: Boolean(options.stalePlatform),
+        source: "simulator",
+        scheduler: {
+          default_account: request.headers()["x-pilot107-user"] === "bob" ? "acct_bob" : "acct_alice",
+          default_qos: "normal",
+          allowed_accounts: [request.headers()["x-pilot107-user"] === "bob" ? "acct_bob" : "acct_alice"],
+          partitions: ["Students", "GPU"],
+          qos_by_partition: { Students: ["normal"], GPU: ["normal", "gpu"] },
+        },
+        gpu: { required: false, types: ["A100"] },
       });
     }
-    if (url.pathname === "/api/v1/agent-sessions/session_visual_001") {
-      return json(route, agentSession);
-    }
-    if (url.pathname === "/api/v1/agent-sessions/session_visual_001/events") {
-      const after = Number(url.searchParams.get("after_event_id") || "0");
-      const items = agentEvents.filter((item) => item.event_id > after);
+    if (url.pathname === "/api/v1/platform/observation") {
       return json(route, {
-        session_id: agentSession.session_id,
-        items,
-        page: {
-          limit: 100,
-          has_more: false,
-          next_after_event_id: null,
-          last_event_id: items.at(-1)?.event_id ?? after,
+        source: "worker",
+        observed_at: options.stalePlatform ? "2020-01-01T00:00:00Z" : "2026-07-16T02:08:00Z",
+        status: options.stalePlatform ? "stale" : "fresh",
+        reason: options.stalePlatform ? "observation is stale" : null,
+        scheduler: {
+          default_account: request.headers()["x-pilot107-user"] === "bob" ? "acct_bob" : "acct_alice",
+          default_qos: "normal",
+          partitions: ["Students", "GPU"],
         },
       });
     }
-    if (url.pathname === "/api/v1/remediation-sessions") {
-      return json(route, { items: [] });
+    if (url.pathname === "/api/v1/platform/nodes") {
+      return json(route, {
+        nodes: [
+          { name: "node-a", partition: "Students", state: "idle", cpus_total: 64, cpus_alloc: 16, memory_mb: 256000, gres: "gpu:a100:4" },
+          { name: "node-b", partition: "GPU", state: "mixed", cpus_total: 64, cpus_alloc: 32, memory_mb: 256000, gres: "gpu:a100:8" },
+        ],
+        observed_at: options.stalePlatform ? "2020-01-01T00:00:00Z" : "2026-07-16T02:08:00Z",
+      });
     }
     if (url.pathname === "/api/v1/runs") {
-      const owner = url.searchParams.get("owner") || "alice";
       const state = url.searchParams.get("state");
-      const query = (url.searchParams.get("q") || "").toLowerCase();
-      const limit = Number(url.searchParams.get("limit") || "20");
-      const filtered = runsFor(owner).filter((run) => {
-        const matchesState = !state || run.state === state;
-        const haystack = [run.run_id, run.job_id, run.workdir].join(" ").toLowerCase();
-        return matchesState && (!query || haystack.includes(query));
-      });
+      const q = (url.searchParams.get("q") || "").toLowerCase();
+      const items = runListFor(request.headers()["x-pilot107-user"] || "alice")
+        .filter((item) => !state || item.state === state)
+        .filter((item) => !q || JSON.stringify(item).toLowerCase().includes(q));
+      return json(route, { items });
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_failed") {
+      return json(route, runDetailPayload({ omitWorkdir: options.omitWorkdir }));
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded") {
+      return json(route, runSucceededPayload());
+    }
+    if (url.pathname === "/api/v1/runs/run_bob_running") {
+      return json(route, runBobPayload());
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_failed/diagnosis") {
       return json(route, {
-        items: filtered.slice(0, limit),
-        page: { limit, has_more: filtered.length > limit, next_cursor: null },
+        run_id: "run_alice_failed",
+        summary: "Python dependency is missing.",
+        findings: [
+          {
+            code: "RUNTIME.PYTHON_PACKAGE_MISSING",
+            message: "ModuleNotFoundError: numpy",
+            evidence_refs: ["evidence://runs/run_alice_failed/logs/stderr.tail.json"],
+          },
+        ],
       });
     }
-    const evidenceObjectMatch = url.pathname.match(/^\/api\/v1\/runs\/([^/]+)\/evidence\/objects\/([^/]+)$/);
-    if (evidenceObjectMatch) {
-      const [, runId, objectId] = evidenceObjectMatch.map(decodeURIComponent);
-      const preview = evidencePreviewPayload(runId, objectId);
-      return preview
-        ? json(route, preview)
-        : json(route, { error: { code: "EVIDENCE.OBJECT_NOT_FOUND", message: "object not found" } }, 404);
+    if (url.pathname === "/api/v1/runs/run_alice_failed/logs") {
+      return json(route, {
+        stdout: "starting\n",
+        stderr: "ModuleNotFoundError: numpy\n",
+      });
     }
-    const evidenceMatch = url.pathname.match(/^\/api\/v1\/runs\/([^/]+)\/evidence$/);
-    if (evidenceMatch) {
-      return json(route, evidencePayload(decodeURIComponent(evidenceMatch[1])));
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/logs") {
+      return json(route, {
+        stdout: "training complete\n",
+        stderr: "",
+      });
     }
-    const diagnosesMatch = url.pathname.match(/^\/api\/v1\/runs\/([^/]+)\/(diagnoses|diagnose)$/);
-    if (diagnosesMatch) {
-      return json(route, diagnosesPayload(decodeURIComponent(diagnosesMatch[1])));
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/evidence") {
+      return json(route, {
+        run_id: "run_alice_succeeded",
+        items: [
+          {
+            evidence_id: "ev_result",
+            kind: "result",
+            logical_path: "outputs/result.txt",
+            size_bytes: 13,
+            sha256: "a".repeat(64),
+          },
+        ],
+      });
     }
-    const capsuleMatch = url.pathname.match(/^\/api\/v1\/runs\/([^/]+)\/capsule$/);
-    if (capsuleMatch) {
-      const runId = decodeURIComponent(capsuleMatch[1]);
-      const run = runsFor("alice").find((item) => item.run_id === runId);
-      return json(route, capsulePayload(run));
+    if (url.pathname === "/api/v1/evidence/ev_result") {
+      return json(route, {
+        evidence_id: "ev_result",
+        logical_path: "outputs/result.txt",
+        text: "accuracy=0.91",
+        sha256: "a".repeat(64),
+      });
     }
-    if (url.pathname.startsWith("/api/v1/runs/")) {
-      const runId = decodeURIComponent(url.pathname.slice("/api/v1/runs/".length));
-      const run = [...runsFor("alice"), ...runsFor("bob")].find((item) => item.run_id === runId);
-      const detail = run && options.omitWorkdir ? { ...run, workdir: undefined } : run;
-      return detail
-        ? json(route, detail)
-        : json(route, { error: { code: "RUN.NOT_FOUND", message: "run not found" } }, 404);
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/capsule") {
+      return json(route, {
+        run_id: "run_alice_succeeded",
+        capsule_id: "capsule_visual_001",
+        checksum_verified: true,
+        checksum: "f".repeat(64),
+      });
+    }
+    if (url.pathname === "/api/v1/agent/sessions") {
+      return json(route, { items: [agentSession] });
+    }
+    if (url.pathname === "/api/v1/agent/sessions/agent_visual") {
+      return json(route, agentSession);
+    }
+    if (url.pathname === "/api/v1/agent/sessions/agent_visual/events") {
+      return json(route, { items: agentEvents });
+    }
+    if (url.pathname === "/api/v1/agent/conversations") {
+      return json(route, { items: [{ conversation_id: "conversation_visual", title: "Slurm queue", updated_at: "2026-07-16T02:08:00Z" }] });
+    }
+    if (url.pathname === "/api/v1/agent/conversations/conversation_visual/messages") {
+      return json(route, { items: [{ message_id: "msg_visual", role: "assistant", content: "排队原因是 Students 分区当前资源不足。", created_at: "2026-07-16T02:08:00Z" }] });
     }
 
     return route.continue();
   });
 }
 
-function agentSessionPayload() {
+function json(route, body, status = 200) {
+  return route.fulfill({
+    status,
+    contentType: "application/json",
+    body: JSON.stringify(body),
+  });
+}
+
+function runListFor(user) {
+  if (user === "bob") return [runBobPayload()];
+  return [runDetailPayload(), runSucceededPayload()];
+}
+
+function runDetailPayload(options = {}) {
   return {
-    session_id: "session_visual_001",
-    owner: "alice",
-    request_key: "visual-session-1",
-    profile_id: "hpc-readonly-v1",
-    model_profile_id: "campus-default",
-    source: { run_id: "run_alice_failed" },
-    state: "idle",
-    state_version: 4,
-    resource_usage: { input_tokens: 128, output_tokens: 42 },
-    outcome: { status: "completed" },
+    run_id: "run_alice_failed",
+    contract_id: "contract_alice_002",
+    state: "FAILED",
+    scheduler_job_id: "12345",
+    workdir: options.omitWorkdir ? undefined : "/work/alice/projects/a-very-long-directory-name/failed-case",
     created_at: "2026-07-16T02:00:00Z",
     updated_at: "2026-07-16T02:05:00Z",
   };
 }
 
-function agentEventPayloads() {
-  return [
-    {
-      event_id: 1,
-      turn_id: "turn_visual_001",
-      session_id: "session_visual_001",
-      sequence: 1,
-      event_type: "turn_started",
-      payload: { model_profile_id: "campus-default", task_kind: "interactive_readonly" },
-      created_at: "2026-07-16T02:03:00Z",
-    },
-    {
-      event_id: 2,
-      turn_id: "turn_visual_001",
-      session_id: "session_visual_001",
-      sequence: 2,
-      event_type: "tool_call_completed",
-      payload: { tool_call_id: "tool-1", tool_name: "run_get", result: {}, is_error: false },
-      created_at: "2026-07-16T02:03:01Z",
-    },
-    {
-      event_id: 3,
-      turn_id: "turn_visual_001",
-      session_id: "session_visual_001",
-      sequence: 3,
-      event_type: "message_delta",
-      payload: { delta: "排队原因是 Students 分区当前资源不足。" },
-      created_at: "2026-07-16T02:03:02Z",
-    },
-  ];
-}
-
-function runsFor(owner) {
-  if (owner === "bob") {
-    return [
-      runPayload({
-        runId: "run_bob_running",
-        owner,
-        state: "RUNNING",
-        jobId: "70003",
-        contractId: "contract_bob_001",
-        workdir: "/work/bob/active-case",
-        collectionState: "pending",
-      }),
-    ];
-  }
-  return [
-    runPayload({
-      runId: "run_alice_succeeded",
-      owner,
-      state: "SUCCEEDED",
-      jobId: "70001",
-      contractId: "contract_alice_001",
-      workdir: "/work/alice/success-case",
-      collectionState: "succeeded",
-    }),
-    runPayload({
-      runId: "run_alice_failed",
-      owner,
-      state: "FAILED",
-      jobId: "70002",
-      contractId: "contract_alice_002",
-      workdir: "/work/alice/projects/a-very-long-directory-name/failed-case",
-      collectionState: "failed",
-      exitCode: "1:0",
-    }),
-  ];
-}
-
-function runPayload({ runId, owner, state, jobId, contractId, workdir, collectionState, exitCode = null }) {
+function runSucceededPayload() {
   return {
-    run_id: runId,
-    contract_id: contractId,
-    owner,
-    state,
-    collection_state: collectionState,
-    diagnosis_state: state === "FAILED" ? "succeeded" : "pending",
-    capsule_state: state === "SUCCEEDED" ? "ready" : "pending",
-    result_status: state.toLowerCase(),
-    job_id: jobId,
-    exit_code: exitCode,
-    workdir,
-    recipe_version_id: "recipe_python_cpu@1.0.0",
-    created_at: "2026-07-16T02:00:00Z",
-    updated_at: "2026-07-16T02:05:00Z",
+    run_id: "run_alice_succeeded",
+    contract_id: "contract_alice_001",
+    state: "SUCCEEDED",
+    scheduler_job_id: "12344",
+    workdir: "/work/alice/projects/success-case",
+    created_at: "2026-07-16T01:00:00Z",
+    updated_at: "2026-07-16T01:05:00Z",
   };
 }
 
-function evidencePayload(runId) {
-  const run = runsFor("alice").find((item) => item.run_id === runId) || runsFor("bob")[0];
-  const objects = evidenceObjects(runId);
+function runBobPayload() {
   return {
-    run_id: runId,
-    owner: run.owner,
-    job_id: run.job_id,
-    run_state: run.state,
-    collection_state: run.collection_state,
-    tasks: [
-      { task_id: 1, task_type: "collect_terminal", state: run.collection_state, attempts: 1, updated_at: run.updated_at },
-    ],
-    objects,
-    tree: { name: runId, kind: "directory", logical_path: "", children: [] },
-  };
-}
-
-function evidenceObjects(runId) {
-  const base = `evidence://runs/${runId}`;
-  return [
-    evidenceObject("ev_stdout", "logs", "logs/stdout.tail.json", `${base}/logs/stdout.tail.json`, "application/json", 72),
-    evidenceObject("ev_stderr", "logs", "logs/stderr.tail.json", `${base}/logs/stderr.tail.json`, "application/json", 48),
-    evidenceObject("ev_summary", "derived", "derived/result_summary.v1.json", `${base}/derived/result_summary.v1.json`, "application/json", 94),
-    evidenceObject("ev_result", "outputs", "outputs/result.txt", `${base}/outputs/result.txt`, "text/plain", 14),
-  ];
-}
-
-function evidenceObject(objectId, category, logicalPath, sourceUri, mimeType, sizeBytes) {
-  return {
-    object_id: objectId,
-    category,
-    logical_path: logicalPath,
-    source_uri: sourceUri,
-    sha256: "d".repeat(64),
-    size_bytes: sizeBytes,
-    mime_type: mimeType,
-    collection_status: "collected",
-    mutable_during_run: false,
-    finalized_at: "2026-07-16T02:05:00Z",
-  };
-}
-
-function evidencePreviewPayload(runId, objectId) {
-  const object = evidenceObjects(runId).find((item) => item.object_id === objectId);
-  if (!object) return null;
-  const content = {
-    ev_stdout: JSON.stringify({ stream: "stdout", tail: "epoch 4\ntraining complete\n" }),
-    ev_stderr: JSON.stringify({ stream: "stderr", tail: runId.includes("failed") ? "ModuleNotFoundError: No module named 'numpy'\n" : "" }),
-    ev_summary: JSON.stringify({ result_status: runId.includes("failed") ? "failed" : "succeeded", outputs: { file_count: 1, total_size_bytes: 14 } }),
-    ev_result: "accuracy=0.91\n",
-  }[objectId];
-  return {
-    ...object,
-    preview: {
-      available: true,
-      content,
-      encoding: "utf-8",
-      bytes_read: Buffer.byteLength(content),
-      max_bytes: 131072,
-      truncated: false,
-      integrity: "verified",
-    },
-  };
-}
-
-function diagnosesPayload(runId) {
-  if (!runId.includes("failed")) return { run_id: runId, diagnosis_state: "skipped", items: [] };
-  return {
-    run_id: runId,
-    diagnosis_state: "succeeded",
-    items: [
-      {
-        diagnosis_id: "diagnosis_visual_001",
-        run_id: runId,
-        rule_id: "RUNTIME.PYTHON_PACKAGE_MISSING",
-        severity: "error",
-        summary: "Python package is missing from the runtime environment.",
-        evidence_refs: [`evidence://runs/${runId}/logs/stderr.tail.json`],
-        suggested_patch: { runtime: { conda_env: "ml" } },
-        retryable: true,
-        confidence: "high",
-        category: "runtime",
-        stage: "execution",
-        fix_guide: { fix: "Use an environment that provides the missing package." },
-        created_at: "2026-07-16T02:05:00Z",
-      },
-    ],
-  };
-}
-
-function capsulePayload(run) {
-  if (!run) return { error: { code: "RUN.NOT_FOUND", message: "run not found" } };
-  if (run.state !== "SUCCEEDED") return { ...run, capsule: null };
-  return {
-    ...run,
-    capsule: {
-      run_id: run.run_id,
-      capsule_id: `capsule_${run.run_id}`,
-      manifest_sha256: "e".repeat(64),
-      files_copied: 4,
-      valid: true,
-      checked_files: 4,
-      manifest: { schema_version: "pilot107.raw-capsule/v1", run_id: run.run_id },
-      warnings: [],
-      errors: [],
-    },
-  };
-}
-
-function capabilityPayload() {
-  return {
-    profile_id: "docker-real107-sim",
-    source_authority: "simulated_slurm",
-    captured_at: "2026-07-16T02:04:00Z",
-    freshness_seconds: 300,
-    default_partition: "Students",
-    default_qos: "qos_stu_medium_2gpu",
-    partitions: [
-      {
-        name: "Students",
-        nodes: "cpu-[001-004]",
-        total_nodes: 4,
-        state: ["idle"],
-        allow_qos: ["qos_stu_medium_2gpu"],
-        gpu_types: [],
-      },
-      {
-        name: "GPU",
-        nodes: "gpu-[001-002]",
-        total_nodes: 2,
-        state: ["mixed"],
-        allow_qos: ["qos_gpu_short"],
-        gpu_types: ["a100"],
-      },
-    ],
-    qos: [
-      {
-        name: "qos_stu_medium_2gpu",
-        max_cpus: 24,
-        max_gpus: 2,
-        max_memory_gb: 128,
-        max_wall_hours: 12,
-        source_authority: "simulated_slurm",
-      },
-    ],
-    dynamic_facts: ["node_state", "partition_capacity"],
-    limitations: ["模拟环境不代表真实 107 当前空闲资源。"],
-  };
-}
-
-function platformPayload(stale) {
-  return {
-    snapshot_id: "snapshot_platform_001",
-    scope: "login_node",
-    source_type: "simulated_slurm",
-    observed_at: "2026-07-16T02:04:00Z",
-    freshness: stale ? "stale" : "fresh",
-    data_quality: stale ? "degraded" : "ok",
-    facts: { hostname: "login-sim", partitions: 2 },
-    limitations: stale ? ["采集时间超过 freshness 阈值。"] : [],
-  };
-}
-
-function entitlementPayload(owner) {
-  return {
-    snapshot_id: `snapshot_entitlement_${owner}`,
-    observed_at: "2026-07-16T02:04:00Z",
-    freshness: "fresh",
-    data_quality: "ok",
-    default_account: `acct_${owner}`,
-    associations: [
-      { account: `acct_${owner}`, partition: "Students", qos: ["qos_stu_medium_2gpu"] },
-    ],
+    run_id: "run_bob_running",
+    contract_id: "contract_bob_001",
+    state: "RUNNING",
+    scheduler_job_id: "22344",
+    workdir: "/work/bob/projects/current",
+    created_at: "2026-07-16T03:00:00Z",
+    updated_at: "2026-07-16T03:02:00Z",
   };
 }
 
 function contractSchemaPayload() {
   return {
-    $schema: "https://json-schema.org/draft/2020-12/schema",
     type: "object",
     required: ["schema_version", "recipe_version_id", "project", "entry", "resources"],
     properties: {
-      schema_version: { const: "pilot107.contract/v2" },
-      recipe_version_id: { type: "string", minLength: 1 },
-      project: { type: "object" },
-      entry: { type: "object" },
-      resources: { type: "object" },
+      schema_version: { type: "string" },
+      recipe_version_id: { type: "string" },
+      project: {
+        type: "object",
+        required: ["workdir"],
+        properties: { workdir: { type: "string" }, name: { type: "string" } },
+      },
+      entry: {
+        type: "object",
+        required: ["command"],
+        properties: { command: { type: "string" } },
+      },
+      resources: { type: "object", additionalProperties: true },
     },
-    additionalProperties: true,
   };
 }
 
@@ -752,161 +573,95 @@ function defaultStudioContract() {
   return {
     schema_version: "pilot107.contract/v2",
     recipe_version_id: "recipe_python_cpu@1.0.0",
-    project: { name: "", workdir: "/public/home/alice" },
+    project: { name: "visual", workdir: "/public/home/alice/studio-case" },
     entry: { command: "python3 main.py" },
-    runtime: { conda_env: null, container_image: null, modules: [], environment: {} },
-    resources: {
-      partition: "Students",
-      qos: "qos_stu_medium_2gpu",
-      nodes: 1,
-      ntasks: 1,
-      cpus_per_task: 1,
-      memory: "4G",
-      gpus_per_node: null,
-      time_limit: "00:30:00",
-      array: null,
-    },
-    workflow: { dependencies: [], retry: { max_attempts: 1, backoff_seconds: 0 } },
-    outputs: { expected: [], success_conditions: ["slurm_exit_code_zero"] },
-    policy: { automation_level: "explain", max_remediation_attempts: 0, require_approval: true },
-    extensions: {},
+    resources: { partition: "Students", nodes: 1, cpus: 1, gpus: 0, memory: "1G", time: "00:10:00" },
+    runtime: { environment: {} },
+    outputs: { expected: [] },
   };
 }
 
 function contractValidationPayload(contract) {
   return {
     status: "OK",
+    effective_request: { contract, contract_digest: "d".repeat(64) },
     findings: [],
-    effective_request: {
-      recipe_version_id: contract.recipe_version_id,
-      schema_version: contract.schema_version,
-      contract_digest: "a".repeat(64),
-      contract,
-      workdir: contract.project.workdir,
-      script: "#!/bin/bash\npython3 main.py\n",
-      materializer: "generic_command",
-      resource_plan: contract.resources,
-    },
-    risk_lint: [],
-    configuration_snapshot_id: "visual-fixture",
-    observed_at: "2026-07-16T02:05:00Z",
+    warnings: [],
   };
 }
 
 function contractRecordPayload(contract) {
   return {
     contract_id: "contract_visual_001",
-    owner: "alice",
-    recipe_version_id: contract.recipe_version_id,
-    schema_version: contract.schema_version,
-    digest: "a".repeat(64),
+    digest: "d".repeat(64),
     contract,
-    field_sources: [],
-    created_at: "2026-07-16T02:05:00Z",
-    updated_at: "2026-07-16T02:05:00Z",
+    created_at: "2026-07-16T02:08:00Z",
+  };
+}
+
+function preparedRunPayload(overrides = {}) {
+  return {
+    run_id: "run_studio_prepared",
+    contract_id: "contract_visual_001",
+    state: "PREPARED",
+    preview: { submitted_script: "#!/bin/bash\npython3 main.py\n" },
+    ...overrides,
+  };
+}
+
+function unifiedMarketItemPayload() {
+  return {
+    item_id: "curated_release_visual",
+    source_type: "template_release",
+    title: "Verified Python CPU",
+    summary: "Verified on simulator",
+    trust_level: "verified",
+    payload: defaultStudioContract(),
+    source_ref: "template_visual@1.1.0",
   };
 }
 
 function templateMarketPayload() {
   return {
-    release_id: "release_110",
     template_id: "template_visual",
-    release_version: "1.1.0",
-    publisher: "instructor",
     title: "Verified Python CPU",
-    description: "A reviewed CPU template with canonical Contract payload.",
-    visibility: "public",
-    scope_key: null,
-    payload: defaultStudioContract(),
-    compatibility: { partitions: ["Students"], gpu: false },
-    publication: { tags: ["python", "cpu"] },
-    gate_report: { status: "passed" },
-    content_sha256: "c".repeat(64),
-    published_at: "2026-07-16T02:06:00Z",
-    withdrawn_at: null,
-    withdrawal_reason: null,
-    metrics: { adoption_count: 3, verification_passed: 2, verification_failed: 0, verification_expired: 0, success_rate: 1, latest_verification: null },
-  };
-}
-
-function unifiedMarketItemPayload() {
-  const release = templateMarketPayload();
-  return {
-    kind: "curated_template",
-    item_id: "curated_release_visual",
-    title: release.title,
-    description: release.description,
-    visibility: release.visibility,
-    scope_key: release.scope_key,
-    publisher: release.publisher,
-    published_at: release.published_at,
-    updated_at: release.published_at,
-    tags: release.publication.tags,
-    adoption: { available: true, reason: null },
-    withdrawn_at: null,
-    template: {
-      template_id: release.template_id,
-      release_version: release.release_version,
-      content_sha256: release.content_sha256,
+    summary: "Verified on simulator",
+    latest_release: {
+      release_id: "release_110",
+      version: "1.1.0",
+      trust_level: "verified",
     },
-    contract_payload: release.payload,
-    compatibility: release.compatibility,
-    publication: release.publication,
-    metrics: release.metrics,
   };
 }
 
-function marketApplicationPayload(options = {}) {
-  const completed = Boolean(options.completed);
+function marketApplicationPayload(overrides = {}) {
   return {
-    session_id: "market_application_visual",
-    owner: "alice",
-    request_key: "web-adopt-market-item-visual",
-    source_kind: "curated_template",
-    source_item_id: "curated_release_visual",
-    source_digest: "d".repeat(64),
-    assurance: "curated",
-    user_intent: "将此市场条目安全地应用到我的私有实验工程",
-    state: completed ? "completed" : "awaiting_confirmation",
-    version: completed ? 2 : 1,
-    project_id: "project_market_visual",
-    workspace_id: "workspace_market_visual",
-    change_set_id: "changeset_market_visual",
-    target_contract_id: completed ? "contract_adopted_visual" : null,
-    adoption_id: completed ? "adoption_visual" : null,
-    target_contract_payload: defaultStudioContract(),
-    plan_digest: "e".repeat(64),
-    confirmation_digest: "f".repeat(64),
-    change_set_digest: "a".repeat(64),
+    application_id: "market_application_visual",
+    item_id: "curated_release_visual",
+    status: overrides.completed ? "completed" : "awaiting_confirmation",
+    plan: {
+      target_contract: defaultStudioContract(),
+      changes: [{ path: "/project/workdir", before: null, after: "/public/home/alice/studio-case" }],
+    },
+    created_contract_id: overrides.completed ? "contract_adopted_visual" : null,
+  };
+}
+
+function agentSessionPayload() {
+  return {
+    session_id: "agent_visual",
+    mode: "repair",
+    state: "awaiting_approval",
+    target: { kind: "run", id: "run_alice_failed" },
+    summary: "Dependency repair plan",
     created_at: "2026-07-16T02:08:00Z",
-    updated_at: "2026-07-16T02:08:00Z",
   };
 }
 
-function preparedRunPayload(options = {}) {
-  return {
-    run_id: "run_studio_prepared",
-    contract_id: "contract_visual_001",
-    owner: "alice",
-    state: options.state || "PREPARED",
-    collection_state: "pending",
-    diagnosis_state: "pending",
-    capsule_state: "pending",
-    result_status: "pending",
-    job_id: options.state ? "job_visual" : null,
-    exit_code: null,
-    created_at: "2026-07-16T02:09:00Z",
-    updated_at: "2026-07-16T02:09:00Z",
-    preview: { submitted_script: "#!/bin/bash\npython3 main.py\n", execution_wrapper: "#!/bin/bash\n" },
-    risk_lint: [],
-    preflight: [],
-  };
-}
-
-async function json(route, body, status = 200) {
-  await route.fulfill({
-    status,
-    contentType: "application/json",
-    body: JSON.stringify(body),
-  });
+function agentEventPayloads() {
+  return [
+    { event_id: "event_1", seq: 1, type: "observation", content: "stderr shows numpy missing", created_at: "2026-07-16T02:08:01Z" },
+    { event_id: "event_2", seq: 2, type: "proposal", content: "install numpy", created_at: "2026-07-16T02:08:02Z" },
+    { event_id: "event_3", seq: 3, type: "approval_required", content: "change runtime environment", created_at: "2026-07-16T02:08:03Z" },
+  ];
 }
