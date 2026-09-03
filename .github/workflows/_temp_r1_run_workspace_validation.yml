@@ -53,7 +53,7 @@ jobs:
           git diff --check
           git status --short
           test -n "$(git status --short src/pilot107/api/http_app.py)"
-      # Only the materialized product files are committed; validation assets stay temporary.
+      # Only materialized product files are committed; test fixtures already live on the branch.
       - name: Commit validated R1 implementation
         run: |
           git config user.name "107Pilot CI"
