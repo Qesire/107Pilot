@@ -34,7 +34,10 @@ export interface FilesManager {
   homePath: string;
   activePaneId: string | null;
   activePath: string;
+  activeSelection: FileEntry[];
+  sessionPaths: string[];
   setActivePane: (paneId: string) => void;
+  setPaneSelection: (paneId: string, entries: FileEntry[]) => void;
   registerPane: (controller: PaneController) => void;
   unregisterPane: (paneId: string) => void;
   getController: (paneId: string) => PaneController | undefined;
@@ -74,6 +77,8 @@ export function FilesManagerProvider({
   const queryClient = useQueryClient();
   const [activePaneId, setActivePaneId] = useState<string | null>(null);
   const [panePaths, setPanePaths] = useState<Record<string, string>>({});
+  const [paneSelections, setPaneSelections] = useState<Record<string, FileEntry[]>>({});
+  const [sessionPaths, setSessionPaths] = useState<string[]>([]);
   const dragPayloadRef = useRef<DragPayload | null>(null);
   const controllers = useRef<Map<string, PaneController>>(new Map());
   const uploadTrigger = useRef<(() => void) | null>(null);
@@ -88,6 +93,12 @@ export function FilesManagerProvider({
   const unregisterPane = useCallback((paneId: string) => {
     controllers.current.delete(paneId);
     setPanePaths((current) => {
+      const next = { ...current };
+      delete next[paneId];
+      return next;
+    });
+    setPaneSelections((current) => {
+      if (!(paneId in current)) return current;
       const next = { ...current };
       delete next[paneId];
       return next;
@@ -109,6 +120,24 @@ export function FilesManagerProvider({
     setPanePaths((current) => current[paneId] === path
       ? current
       : { ...current, [paneId]: path });
+    if (path !== homePath) {
+      setSessionPaths((current) => [path, ...current.filter((item) => item !== path)].slice(0, 6));
+    }
+  }, [homePath]);
+
+  const setPaneSelection = useCallback((paneId: string, entries: FileEntry[]) => {
+    setPaneSelections((current) => {
+      const previous = current[paneId] ?? [];
+      const unchanged = previous.length === entries.length && previous.every((entry, index) => {
+        const next = entries[index];
+        return next !== undefined
+          && entry.path === next.path
+          && entry.kind === next.kind
+          && entry.size === next.size
+          && entry.modified === next.modified;
+      });
+      return unchanged ? current : { ...current, [paneId]: entries };
+    });
   }, []);
 
   const openPath = useCallback((path: string, selectedPath?: string) => {
@@ -121,6 +150,7 @@ export function FilesManagerProvider({
   const activePath = activePaneId
     ? panePaths[activePaneId] ?? controllers.current.get(activePaneId)?.getCwd() ?? homePath
     : homePath;
+  const activeSelection = activePaneId ? paneSelections[activePaneId] ?? [] : [];
 
   const invalidateFilePaths = useCallback((paths: string[]) => {
     for (const path of new Set(paths.map(normalizeDir))) {
@@ -169,7 +199,10 @@ export function FilesManagerProvider({
       homePath,
       activePaneId,
       activePath,
+      activeSelection,
+      sessionPaths,
       setActivePane,
+      setPaneSelection,
       registerPane,
       unregisterPane,
       getController,
@@ -187,7 +220,10 @@ export function FilesManagerProvider({
       homePath,
       activePaneId,
       activePath,
+      activeSelection,
+      sessionPaths,
       setActivePane,
+      setPaneSelection,
       registerPane,
       unregisterPane,
       getController,

@@ -241,14 +241,24 @@ test("marquee drag over empty grid area selects the tiles it covers", async ({ p
   await firstPane.locator(".filepane-body").evaluate((el) => { el.scrollTop = el.scrollHeight; });
 
   const box = await firstPane.evaluate((el) => {
-    const rects = [...el.querySelectorAll(".file-tile")].map((t) => t.getBoundingClientRect());
+    const tiles = [...el.querySelectorAll(".file-tile[data-path]")];
+    const rects = tiles.map((tile) => tile.getBoundingClientRect());
     const grid = el.querySelector(".filegrid").getBoundingClientRect();
-    return {
-      sx: Math.round(rects[0].left + 4),
-      sy: Math.round(grid.bottom - 5),
-      tx: Math.round(rects[1].left + rects[1].width / 2),
-      ty: Math.round(rects[0].top + 4),
-    };
+    const sx = Math.round(rects[0].left + 4);
+    const sy = Math.round(grid.bottom - 5);
+    const tx = Math.round(rects[1].left + rects[1].width / 2);
+    const ty = Math.round(rects[0].top + 4);
+    const left = Math.min(sx, tx);
+    const right = Math.max(sx, tx);
+    const top = Math.min(sy, ty);
+    const bottom = Math.max(sy, ty);
+    const expectedPaths = tiles
+      .filter((_tile, index) => {
+        const item = rects[index];
+        return !(item.right < left || item.left > right || item.bottom < top || item.top > bottom);
+      })
+      .map((tile) => tile.getAttribute("data-path"));
+    return { sx, sy, tx, ty, expectedPaths };
   });
 
   await page.mouse.move(box.sx, box.sy);
@@ -257,7 +267,11 @@ test("marquee drag over empty grid area selects the tiles it covers", async ({ p
   await page.mouse.move(box.tx, box.ty, { steps: 6 });
   await page.mouse.up();
 
-  await expect(firstPane.locator(".filepane-selectionbar")).toContainText("2 项已选");
+  expect(box.expectedPaths.length).toBeGreaterThanOrEqual(2);
+  await expect(firstPane.locator(".filepane-selectionbar")).toContainText(`${box.expectedPaths.length} 项已选`);
+  for (const path of box.expectedPaths) {
+    await expect(firstPane.locator(`.file-tile[data-path="${path}"]`)).toHaveClass(/selected/);
+  }
 });
 
 test("dragging a file onto another pane's directory moves it", async ({ page }) => {
@@ -321,4 +335,42 @@ test("large directories keep rendered DOM bounded across file views", async ({ p
 
   await pane.getByTitle("分栏视图").click();
   expect(await pane.locator('.miller-column[data-last-column="true"] .miller-row[data-path]').count()).toBeLessThan(100);
+});
+
+
+test("desktop file workspace exposes quick access and a reactive inspector", async ({ page }) => {
+  await page.goto("/files?user=alice");
+  const pane = page.locator(".file-pane").first();
+
+  await expect(page.getByRole("complementary", { name: "文件快捷访问" })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "文件属性" })).toBeVisible();
+
+  await pane.locator(".file-row", { hasText: "readme.md" }).click();
+  const inspector = page.getByRole("complementary", { name: "文件属性" });
+  await expect(inspector.getByText("readme.md", { exact: true })).toBeVisible();
+  await expect(inspector.getByText("2.0 KiB", { exact: true })).toBeVisible();
+  await expect(inspector).toContainText(`${HOME}/readme.md`);
+});
+
+test("quick access returns the active pane home and retains session locations", async ({ page }) => {
+  await page.goto("/files?user=alice");
+  const pane = page.locator(".file-pane").first();
+  await pane.locator(".file-row", { hasText: "docs" }).dblclick();
+  await expect(pane).toHaveAttribute("data-pane-cwd", `${HOME}/docs`);
+
+  const quick = page.getByRole("complementary", { name: "文件快捷访问" });
+  await expect(quick.getByRole("button", { name: /docs/ })).toBeVisible();
+  await quick.getByRole("button", { name: "主目录" }).click();
+  await expect(pane).toHaveAttribute("data-pane-cwd", HOME);
+  await expect(pane.locator(".file-row", { hasText: "readme.md" })).toBeVisible();
+});
+
+test("file workspace rails collapse below desktop width without horizontal overflow", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/files?user=alice");
+
+  await expect(page.locator(".file-quick-access")).toBeHidden();
+  await expect(page.locator(".file-inspector")).toBeHidden();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+  expect(overflow).toBe(false);
 });

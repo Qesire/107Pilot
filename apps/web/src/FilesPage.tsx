@@ -16,9 +16,12 @@ import {
 } from "lucide-react";
 import { SectionHeading } from "./components";
 import { FilesManagerProvider, useFilesManager } from "./files/FilesManagerContext";
+import { FileInspector } from "./files/FileInspector";
+import { FileQuickAccess } from "./files/FileQuickAccess";
 import { FileSearchPanel, fileSearchOpenTarget } from "./files/FileSearchPanel";
 import { FileWorkspaceStatus } from "./files/FileWorkspaceStatus";
 import { PaneManager } from "./files/PaneManager";
+import "./files/file-workspace-shell.css";
 import { usePaneLayout } from "./files/usePaneLayout";
 import {
   transferTaskStateLabel,
@@ -224,7 +227,13 @@ function FilesShell({
         </div>
       ) : null}
 
-      <PaneManager layoutApi={layoutApi} homePath={homePath} />
+      <div className="file-workspace-shell">
+        <FileQuickAccess />
+        <div className="file-workspace-main">
+          <PaneManager layoutApi={layoutApi} homePath={homePath} />
+        </div>
+        <FileInspector />
+      </div>
     </div>
   );
 }
