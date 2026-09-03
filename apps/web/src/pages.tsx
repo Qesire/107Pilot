@@ -31,7 +31,7 @@ import {
 import { ConnectionPanel } from "./ConnectionStatus";
 import { ExperimentShell } from "./ExperimentShell";
 import { ResourceDashboard } from "./ResourceDashboard";
-import { useCapabilities, useLatestEntitlement, useLatestPlatform, useRun, useRunPages, useRuns } from "./query";
+import { useCapabilities, useLatestEntitlement, useLatestPlatform, useRun, useRunPages, useRuns, useRunWorkspace } from "./query";
 import { RunList } from "./RunList";
 import { RunTable } from "./RunTable";
 import { RunPicker } from "./RunPicker";
@@ -281,22 +281,28 @@ function RunExperimentPage({
   runId,
 }: PageProps & { runId: string }) {
   const selectedRun = useRun(user, runId);
+  const workspace = useRunWorkspace(user, runId);
+  const run = selectedRun.data;
+  const model = workspace.data;
   return (
-    <QueryBoundary pending={selectedRun.isPending} error={selectedRun.error}>
-      {selectedRun.data ? (
+    <QueryBoundary
+      pending={selectedRun.isPending || workspace.isPending}
+      error={selectedRun.error ?? workspace.error}
+    >
+      {run && model ? (
         <ExperimentShell
           user={user}
           location={location}
           navigate={navigate}
-          context={{ kind: "run", run: selectedRun.data }}
+          context={{ kind: "run", run }}
         >
           <section className="experiment-run-workspace" aria-labelledby="run-detail-heading">
             <header className="experiment-run-heading">
               <div>
                 <h2 id="run-detail-heading">运行详情</h2>
-                <p>当前只读取这一运行对象及其证据；实验历史列表不会在详情路由中并行加载。</p>
+                <p>首屏只读取运行对象与聚合工作区模型；日志、结果、诊断、自动归档和证据对象按视图加载。</p>
               </div>
-              {selectedRun.data.capsule_state === "ready" ? (
+              {model.evidence_summary.capsule_available ? (
                 <button
                   className="run-capsule-link"
                   type="button"
@@ -307,26 +313,13 @@ function RunExperimentPage({
               ) : null}
             </header>
 
-            <section className="experiment-run-summary" aria-label="运行事实">
-              <div className="run-detail-status-line">
-                <StatusBadge label={runStateLabel(selectedRun.data.state)} tone={runTone(selectedRun.data.state)} />
-                <span className="run-detail-job-name" title={selectedRun.data.job_name ?? selectedRun.data.run_id}>
-                  <strong>{selectedRun.data.job_name ?? "历史实验运行"}</strong>
-                  <span> · sacct Job <b className="mono">{selectedRun.data.job_id ?? "尚未提交"}</b></span>
-                </span>
-              </div>
-              <dl className="experiment-run-summary-grid">
-                <div><dt>实验配置</dt><dd className="mono">{selectedRun.data.contract_id ?? "服务器 read model 未公开"}</dd></div>
-                <div><dt>ExitCode</dt><dd className="mono">{selectedRun.data.exit_code ?? "—"}</dd></div>
-                <div><dt>证据状态</dt><dd>{selectedRun.data.collection_state}</dd></div>
-                <div><dt>Capsule</dt><dd>{selectedRun.data.capsule_state}</dd></div>
-                <div className="is-wide"><dt>工作目录</dt><dd className="mono wrap-anywhere">{selectedRun.data.workdir ?? "服务器 read model 未公开"}</dd></div>
-                <div><dt>诊断状态</dt><dd>{selectedRun.data.diagnosis_state}</dd></div>
-                <div><dt>结果状态</dt><dd>{selectedRun.data.result_status}</dd></div>
-              </dl>
-            </section>
-
-            <RunEvidencePanel user={user} run={selectedRun.data} location={location} navigate={navigate} />
+            <RunEvidencePanel
+              user={user}
+              run={run}
+              workspace={model}
+              location={location}
+              navigate={navigate}
+            />
           </section>
         </ExperimentShell>
       ) : null}

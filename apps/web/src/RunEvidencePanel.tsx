@@ -41,6 +41,12 @@ import {
 import { RunExplanationPanel } from "./RunExplanationPanel";
 import { RuntimeWatchPanel } from "./RuntimeWatchPanel";
 import { RunResourcePanel } from "./RunResourcePanel";
+import { RunWorkspaceOverview } from "./RunWorkspaceOverview";
+import {
+  runWorkspaceTabRequirements,
+  type EvidenceTab,
+  type RunWorkspace,
+} from "./run-workspace";
 import type {
   DiagnosisRecordPayload,
   EvidenceObject,
@@ -53,8 +59,6 @@ import type {
 } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
-
-type EvidenceTab = "overview" | "timeline" | "compare" | "logs" | "results" | "diagnosis" | "capsule" | "objects";
 
 const tabs: Array<{ id: EvidenceTab; label: string; icon: typeof FileText }> = [
   { id: "overview", label: "摘要", icon: FileText },
@@ -70,19 +74,21 @@ const tabs: Array<{ id: EvidenceTab; label: string; icon: typeof FileText }> = [
 interface RunEvidencePanelProps {
   user: string;
   run: RunSummary;
+  workspace: RunWorkspace;
   location: LocationState;
   navigate: (path: string) => void;
 }
 
-export function RunEvidencePanel({ user, run, location, navigate }: RunEvidencePanelProps) {
+export function RunEvidencePanel({ user, run, workspace, location, navigate }: RunEvidencePanelProps) {
   const requestedTab = location.search.get("tab");
   const tab = tabs.some((item) => item.id === requestedTab)
     ? requestedTab as EvidenceTab
     : "overview";
+  const requirements = runWorkspaceTabRequirements(tab);
   const requestedObjectId = location.search.get("object");
-  const evidence = useRunEvidence(user, run.run_id);
-  const diagnoses = useRunDiagnoses(user, run.run_id);
-  const capsule = useRunCapsule(user, run.run_id);
+  const evidence = useRunEvidence(user, requirements.evidence ? run.run_id : null);
+  const diagnoses = useRunDiagnoses(user, requirements.diagnoses ? run.run_id : null);
+  const capsule = useRunCapsule(user, requirements.capsule ? run.run_id : null);
   const events = useRunEvents(user, tab === "timeline" ? run.run_id : null);
   const lineage = useRunLineage(user, tab === "timeline" || tab === "compare" ? run.run_id : null);
   const compareRunId = location.search.get("compare") ?? run.parent_run_id ?? null;
@@ -109,13 +115,14 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
   // configured, "none" otherwise. Without this, unconfigured-LLM users would
   // silently create sessions with provider="local" (the api.ts default) and
   // the Worker would try to call a gateway that isn't there.
-  const health = useHealth(user);
+  const health = useHealth(user, requirements.health);
   const remediationProvider = defaultProvider({ llmConfigured: llmConfiguredFromHealth(health.data) });
   const diagnose = useMutation({
     mutationFn: () => api.diagnoseRun(user, run.run_id),
     onSuccess: (result) => {
       queryClient.setQueryData(["run-diagnoses", user, run.run_id], result);
       void queryClient.invalidateQueries({ queryKey: ["run", user, run.run_id] });
+      void queryClient.invalidateQueries({ queryKey: ["run-workspace", user, run.run_id] });
     },
   });
   const buildCapsule = useMutation({
@@ -123,6 +130,7 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["run-capsule", user, run.run_id] });
       void queryClient.invalidateQueries({ queryKey: ["run", user, run.run_id] });
+      void queryClient.invalidateQueries({ queryKey: ["run-workspace", user, run.run_id] });
     },
   });
   const startRemediation = useMutation({
@@ -142,6 +150,7 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
     mutationFn: () => api.cancelRun(user, run.run_id),
     onSuccess: (updated) => {
       queryClient.setQueryData(["run", user, run.run_id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["run-workspace", user, run.run_id] });
       void queryClient.invalidateQueries({ queryKey: ["runs", user] });
     },
   });
@@ -155,6 +164,7 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
     mutationFn: () => api.submitRun(user, run.run_id),
     onSuccess: (updated) => {
       queryClient.setQueryData(["run", user, run.run_id], updated);
+      void queryClient.invalidateQueries({ queryKey: ["run-workspace", user, run.run_id] });
       void queryClient.invalidateQueries({ queryKey: ["runs", user] });
     },
   });
@@ -165,6 +175,7 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
       void queryClient.invalidateQueries({ queryKey: ["successful-run-market"] });
       void queryClient.invalidateQueries({ queryKey: ["market-items"] });
       void queryClient.invalidateQueries({ queryKey: ["run", user, run.run_id] });
+      void queryClient.invalidateQueries({ queryKey: ["run-workspace", user, run.run_id] });
       void queryClient.invalidateQueries({ queryKey: ["runs", user] });
     },
   });
@@ -187,8 +198,16 @@ export function RunEvidencePanel({ user, run, location, navigate }: RunEvidenceP
         })}
       </nav>
 
-      <QueryBoundary pending={evidence.isPending} error={evidence.error}>
-        {tab === "overview" ? <Overview user={user} run={run} objects={objects} tasks={evidence.data?.tasks ?? []} remediation={startRemediation} onBeginRemediation={beginRemediation} /> : null}
+      <QueryBoundary
+        pending={requirements.evidence && evidence.isPending}
+        error={requirements.evidence ? evidence.error : null}
+      >
+        {tab === "overview" ? (
+          <RunWorkspaceOverview
+            workspace={workspace}
+            onNavigate={(nextTab) => setView(nextTab)}
+          />
+        ) : null}
         {tab === "timeline" ? (
           <TimelineView
             events={events}

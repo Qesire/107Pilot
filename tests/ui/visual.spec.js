@@ -46,10 +46,14 @@ test("run filters are URL-controlled and narrow the server query", async ({ page
 test("run deep link survives direct navigation and wraps long workdir", async ({ page }) => {
   await page.goto("/runs/run_alice_failed?user=alice");
 
-  await expect(page.getByRole("heading", { name: "Run 详情" })).toBeVisible();
-  await expect(page.getByText("contract_alice_002", { exact: true })).toBeVisible();
-  await expect(page.getByText("/work/alice/projects/a-very-long-directory-name/failed-case", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "诊断" }).click();
+  await expect(page.getByRole("heading", { name: "运行详情" })).toBeVisible();
+  await expect(
+    page.getByTestId("run-workspace-overview").getByText("contract_alice_002", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByTestId("run-workspace-overview").getByText("/work/alice/projects/a-very-long-directory-name/failed-case", { exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("Run Evidence 视图").getByRole("button", { name: "诊断", exact: true }).click();
   await expect(page).toHaveURL(/tab=diagnosis/);
   await expect(page.getByText("RUNTIME.PYTHON_PACKAGE_MISSING", { exact: true })).toBeVisible();
   await expect(page.getByText("evidence://runs/run_alice_failed/logs/stderr.tail.json", { exact: true })).toBeVisible();
@@ -60,10 +64,12 @@ test("successful run exposes shareable logs, results, and verified capsule", asy
 
   await page.getByRole("button", { name: "日志" }).click();
   await expect(page).toHaveURL(/tab=logs/);
-  await expect(page.getByText("training complete", { exact: false })).toBeVisible();
+  await expect(
+    page.getByLabel("Runtime Watch 实时日志").getByText("training complete", { exact: false }),
+  ).toBeVisible();
   await expect(page.locator("body")).not.toContainText("store_path");
 
-  await page.getByRole("button", { name: "结果" }).click();
+  await page.getByLabel("Run Evidence 视图").getByRole("button", { name: "结果", exact: true }).click();
   await expect(page.getByText("outputs/result.txt", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /outputs\/result.txt/ }).click();
   await expect(page).toHaveURL(/object=ev_result/);
@@ -228,11 +234,19 @@ test("Agent separates durable read-only conversation from controlled repair", as
 });
 
 
-test("experiment shell opens a Run as one workspace without loading the history list", async ({ page }) => {
+test("experiment shell opens a Run as one workspace without eager deep reads", async ({ page }) => {
   let listRequests = 0;
+  let workspaceRequests = 0;
+  let evidenceRequests = 0;
+  let diagnosisRequests = 0;
+  let capsuleRequests = 0;
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (url.pathname === "/api/v1/runs") listRequests += 1;
+    if (url.pathname === "/api/v1/runs/run_alice_failed/workspace") workspaceRequests += 1;
+    if (url.pathname === "/api/v1/runs/run_alice_failed/evidence") evidenceRequests += 1;
+    if (url.pathname === "/api/v1/runs/run_alice_failed/diagnoses") diagnosisRequests += 1;
+    if (url.pathname === "/api/v1/runs/run_alice_failed/capsule") capsuleRequests += 1;
   });
 
   await page.goto("/runs/run_alice_failed?user=alice");
@@ -241,7 +255,12 @@ test("experiment shell opens a Run as one workspace without loading the history 
   await expect(page.getByText("contract_alice_002", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("/work/alice/projects/a-very-long-directory-name/failed-case", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: /已加载 .* 个结果/ })).toHaveCount(0);
+  await expect(page.getByTestId("run-workspace-overview")).toBeVisible();
   await expect.poll(() => listRequests).toBe(0);
+  await expect.poll(() => workspaceRequests).toBeGreaterThan(0);
+  await expect.poll(() => evidenceRequests).toBe(0);
+  await expect.poll(() => diagnosisRequests).toBe(0);
+  await expect.poll(() => capsuleRequests).toBe(0);
 
   await page.getByRole("button", { name: "阶段：修复" }).click();
   await expect(page).toHaveURL(/tab=diagnosis/);
@@ -477,6 +496,15 @@ async function installMockApi(page, options = {}) {
         .filter((item) => !q || JSON.stringify(item).toLowerCase().includes(q));
       return json(route, { items });
     }
+    if (url.pathname === "/api/v1/runs/run_alice_failed/workspace") {
+      return json(route, runWorkspacePayload(runDetailPayload({ omitWorkdir: options.omitWorkdir })));
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/workspace") {
+      return json(route, runWorkspacePayload(runSucceededPayload()));
+    }
+    if (url.pathname === "/api/v1/runs/run_bob_running/workspace") {
+      return json(route, runWorkspacePayload(runBobPayload()));
+    }
     if (url.pathname === "/api/v1/runs/run_alice_failed") {
       return json(route, runDetailPayload({ omitWorkdir: options.omitWorkdir }));
     }
@@ -485,6 +513,96 @@ async function installMockApi(page, options = {}) {
     }
     if (url.pathname === "/api/v1/runs/run_bob_running") {
       return json(route, runBobPayload());
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_failed/evidence") {
+      return json(route, runEvidencePayload("run_alice_failed"));
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/evidence") {
+      return json(route, runEvidencePayload("run_alice_succeeded"));
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_failed/diagnoses") {
+      return json(route, {
+        run_id: "run_alice_failed",
+        diagnosis_state: "succeeded",
+        items: [
+          {
+            diagnosis_id: "diag_visual_missing_numpy",
+            run_id: "run_alice_failed",
+            rule_id: "RUNTIME.PYTHON_PACKAGE_MISSING",
+            severity: "error",
+            summary: "Python dependency is missing.",
+            evidence_refs: ["evidence://runs/run_alice_failed/logs/stderr.tail.json"],
+            suggested_patch: {},
+            retryable: true,
+            confidence: "high",
+            category: "optional_dependency",
+            stage: "runtime",
+            fix_guide: { fix: "install numpy" },
+            created_at: "2026-07-16T02:05:00Z",
+          },
+        ],
+      });
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/runtime-watch") {
+      return json(route, runtimeWatchPayload("run_alice_succeeded"));
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/runtime-watch/logs") {
+      const stream = url.searchParams.get("stream") || "stdout";
+      return json(route, {
+        run_id: "run_alice_succeeded",
+        stream,
+        content: stream === "stdout" ? "training complete\n" : "",
+        bytes: stream === "stdout" ? 18 : 0,
+        next_cursor: stream === "stdout" ? "18" : "0",
+      });
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/runtime-watch/alerts") {
+      return json(route, { items: [] });
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_failed/runtime-watch") {
+      return json(route, runtimeWatchPayload("run_alice_failed"));
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_failed/runtime-watch/logs") {
+      const stream = url.searchParams.get("stream") || "stdout";
+      return json(route, {
+        run_id: "run_alice_failed",
+        stream,
+        content: stream === "stderr" ? "ModuleNotFoundError: numpy\n" : "starting\n",
+        bytes: stream === "stderr" ? 27 : 9,
+        next_cursor: stream === "stderr" ? "27" : "9",
+      });
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_failed/runtime-watch/alerts") {
+      return json(route, { items: [] });
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/evidence/objects/ev_result") {
+      return json(route, evidencePreviewPayload("run_alice_succeeded", "ev_result"));
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/evidence/objects/ev_stdout") {
+      return json(route, evidencePreviewPayload("run_alice_succeeded", "ev_stdout"));
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_failed/evidence/objects/ev_stderr") {
+      return json(route, evidencePreviewPayload("run_alice_failed", "ev_stderr"));
+    }
+    if (url.pathname === "/api/v1/runs/run_alice_succeeded/capsule") {
+      return json(route, {
+        ...runSucceededPayload(),
+        collection_state: "succeeded",
+        diagnosis_state: "idle",
+        capsule_state: "ready",
+        result_status: "success",
+        capsule: {
+          run_id: "run_alice_succeeded",
+          capsule_id: "capsule_visual_001",
+          manifest_sha256: "f".repeat(64),
+          files_copied: 3,
+          valid: true,
+          checked_files: 3,
+          manifest: { run_id: "run_alice_succeeded" },
+          warnings: [],
+          errors: [],
+        },
+      });
     }
     if (url.pathname === "/api/v1/runs/run_alice_failed/diagnosis") {
       return json(route, {
@@ -572,6 +690,158 @@ function json(route, body, status = 200) {
 function runListFor(user) {
   if (user === "bob") return [runBobPayload()];
   return [runDetailPayload(), runSucceededPayload()];
+}
+
+function evidenceObject(runId, objectId, category, logicalPath, sourceUri = null) {
+  return {
+    object_id: objectId,
+    category,
+    logical_path: logicalPath,
+    source_uri: sourceUri,
+    sha256: "a".repeat(64),
+    size_bytes: 18,
+    mime_type: "text/plain",
+    collection_status: "collected",
+    mutable_during_run: false,
+    finalized_at: "2026-07-16T02:05:00Z",
+  };
+}
+
+function runEvidencePayload(runId) {
+  const succeeded = runId === "run_alice_succeeded";
+  const objects = succeeded
+    ? [
+        evidenceObject(runId, "ev_stdout", "logs", "logs/stdout.tail.txt", "evidence://runs/run_alice_succeeded/logs/stdout.tail.txt"),
+        evidenceObject(runId, "ev_result", "outputs", "outputs/result.txt", "evidence://runs/run_alice_succeeded/outputs/result.txt"),
+      ]
+    : [
+        evidenceObject(runId, "ev_stderr", "logs", "logs/stderr.tail.json", "evidence://runs/run_alice_failed/logs/stderr.tail.json"),
+      ];
+  return {
+    run_id: runId,
+    owner: "alice",
+    job_id: succeeded ? "12344" : "12345",
+    run_state: succeeded ? "SUCCEEDED" : "FAILED",
+    collection_state: "succeeded",
+    tasks: [],
+    objects,
+    tree: { name: "evidence", kind: "directory", logical_path: "", children: [] },
+  };
+}
+
+function evidencePreviewPayload(runId, objectId) {
+  const result = objectId === "ev_result";
+  const stderr = objectId === "ev_stderr";
+  const base = result
+    ? evidenceObject(runId, objectId, "outputs", "outputs/result.txt", "evidence://runs/run_alice_succeeded/outputs/result.txt")
+    : stderr
+      ? evidenceObject(runId, objectId, "logs", "logs/stderr.tail.json", "evidence://runs/run_alice_failed/logs/stderr.tail.json")
+      : evidenceObject(runId, objectId, "logs", "logs/stdout.tail.txt", "evidence://runs/run_alice_succeeded/logs/stdout.tail.txt");
+  return {
+    ...base,
+    preview: {
+      available: true,
+      content: result ? "accuracy=0.91" : stderr ? "ModuleNotFoundError: numpy\n" : "training complete\n",
+      encoding: "utf-8",
+      bytes_read: 18,
+      max_bytes: 262144,
+      truncated: false,
+      integrity: "verified",
+    },
+  };
+}
+
+function runtimeWatchPayload(runId) {
+  return {
+    watch_id: `watch_${runId}`,
+    run_id: runId,
+    state: "stopped",
+    next_poll_at: null,
+    updated_at: "2026-07-16T02:05:00Z",
+    streams: {
+      stdout: { generation: 0, offset: 18, last_data_at: "2026-07-16T02:04:00Z", last_checked_at: "2026-07-16T02:05:00Z", quiet_polls: 0 },
+      stderr: { generation: 0, offset: runId === "run_alice_failed" ? 27 : 0, last_data_at: null, last_checked_at: "2026-07-16T02:05:00Z", quiet_polls: 0 },
+    },
+    alert_count: 0,
+  };
+}
+
+function runWorkspacePayload(run) {
+  const failed = run.state === "FAILED";
+  const succeeded = run.state === "SUCCEEDED";
+  const running = run.state === "RUNNING";
+  return {
+    run: {
+      run_id: run.run_id,
+      owner: run.run_id.startsWith("run_bob") ? "bob" : "alice",
+      job_name: run.run_id,
+      created_at: run.created_at,
+      updated_at: run.updated_at,
+      exit_code: failed ? "1:0" : succeeded ? "0:0" : null,
+      terminal_state: failed ? "FAILED" : succeeded ? "COMPLETED" : null,
+      attempt: 0,
+    },
+    states: {
+      execution: run.state,
+      collection: running ? "pending" : "succeeded",
+      diagnosis: failed ? "succeeded" : "idle",
+      capsule: succeeded ? "ready" : "none",
+      result: succeeded ? "success" : failed ? "failed" : "unknown",
+    },
+    outcome: {
+      kind: failed ? "failed" : succeeded ? "succeeded" : running ? "running" : "queued",
+      summary: failed
+        ? "作业以非成功状态结束，退出码 1:0。"
+        : succeeded
+          ? "计算已完成；科学结果仍需根据输出与证据评价。"
+          : "作业正在 Slurm 中执行或完成收尾。",
+    },
+    attention: failed
+      ? {
+          severity: "critical",
+          title: "Python 运行环境缺少作业需要的包。",
+          detail: "依据已有诊断 RUNTIME.PYTHON_PACKAGE_MISSING；可继续查看其 Evidence 引用。",
+        }
+      : { severity: running ? "info" : "none", title: null, detail: null },
+    next_action: failed
+      ? {
+          kind: "prepare_repair",
+          label: "查看诊断并准备修复",
+          detail: "已有持久化诊断；先核对 Evidence，再决定是否进入受控修复。",
+        }
+      : succeeded
+        ? {
+            kind: "view_results",
+            label: "查看结果与证据",
+            detail: "计算与证据整理已完成；继续评价实际输出，不自动推断科学结论。",
+          }
+        : {
+            kind: "watch_run",
+            label: "查看实时状态",
+            detail: "查看当前 Slurm 状态和增量日志。",
+          },
+    evidence_summary: {
+      object_count: failed ? 2 : succeeded ? 3 : 0,
+      result_count: succeeded ? 1 : 0,
+      diagnosis_count: failed ? 1 : 0,
+      stdout_available: succeeded,
+      stderr_available: failed,
+      capsule_available: succeeded,
+    },
+    provenance: {
+      contract_id: run.contract_id ?? null,
+      contract_digest: "d".repeat(64),
+      workdir: run.workdir ?? null,
+      job_id: run.scheduler_job_id ?? null,
+      parent_run_id: null,
+      lineage_reason: null,
+      remediation_plan_id: null,
+      workspace_revision: null,
+      workspace_digest: null,
+      source_revision: null,
+      platform_snapshot_ref: null,
+    },
+  };
 }
 
 function runDetailPayload(options = {}) {

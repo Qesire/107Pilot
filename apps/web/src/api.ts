@@ -68,6 +68,7 @@ import type {
   UploadSession,
   WebSession,
 } from "./types";
+import type { RunWorkspace } from "./run-workspace";
 
 export class ApiRequestError extends Error {
   readonly status: number;
@@ -257,6 +258,12 @@ export const api = {
     ),
   run: (user: string, runId: string, signal?: AbortSignal) =>
     getJson<RunSummary>(`/api/v1/runs/${encodeURIComponent(runId)}`, user, signal),
+  runWorkspace: (user: string, runId: string, signal?: AbortSignal) =>
+    getJson<RunWorkspace>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/workspace`,
+      user,
+      signal,
+    ),
   runEvents: (user: string, runId: string, signal?: AbortSignal) =>
     getJson<PagePayload<RunEvent>>(
       `/api/v1/runs/${encodeURIComponent(runId)}/events?limit=100`,
