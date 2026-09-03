@@ -33,6 +33,7 @@ from pilot107.api.observability_routes import ResourceObservationRoutes
 from pilot107.api.project_agent_routes import ProjectAgentRoutes
 from pilot107.api.remediation_routes import RemediationRoutes
 from pilot107.api.repair_ticket_routes import RepairTicketRoutes
+from pilot107.api.run_workspace_routes import RunWorkspaceRoutes
 from pilot107.api.runtime_watch_routes import RuntimeWatchRoutes
 from pilot107.api.security import FixedWindowRateLimiter
 from pilot107.core.advice import (
@@ -140,6 +141,7 @@ from pilot107.services.agent_task_service import AgentTaskService
 from pilot107.services.project_agent_service import ProjectAgentService
 from pilot107.services.remediation_service import RemediationService
 from pilot107.services.repair_ticket_service import RepairTicketService
+from pilot107.services.run_workspace_service import RunWorkspaceService
 from pilot107.worker.capsule import CapsuleError, RawCapsuleService
 from pilot107.worker.evidence import EvidenceStore, generated_execution_wrapper
 
@@ -159,6 +161,7 @@ class Pilot107HttpApi:
         store: RunStore,
         evidence_query: EvidenceQueryService,
         run_service: RunService | None = None,
+        run_workspace_service: RunWorkspaceService | None = None,
         contract_service: ContractService | None = None,
         recipe_catalog: RecipeCatalog | None = None,
         capsule_service: RawCapsuleService | None = None,
@@ -211,6 +214,14 @@ class Pilot107HttpApi:
         )
         self.run_service = run_service
         self.contract_service = contract_service
+        self.run_workspace_service = run_workspace_service or RunWorkspaceService(
+            store=store,
+            contract_store=(
+                contract_store
+                or (contract_service.store if contract_service is not None else None)
+            ),
+        )
+        self.run_workspace_routes = RunWorkspaceRoutes(self.run_workspace_service)
         self.capability_profile = capability_profile or docker_sim_capability_profile()
         self.recipe_catalog = recipe_catalog or RecipeCatalog(
             partition_qos=self.capability_profile.partition_qos(),
@@ -438,6 +449,13 @@ class Pilot107HttpApi:
         )
         if repair_ticket_response is not None:
             return repair_ticket_response
+        run_workspace_response = self.run_workspace_routes.handle_get(
+            parts,
+            params=params,
+            identity=identity,
+        )
+        if run_workspace_response is not None:
+            return run_workspace_response
         if self.file_routes is not None:
             file_response = self.file_routes.handle_get(
                 parts,
