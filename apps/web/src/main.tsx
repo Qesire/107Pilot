@@ -9,6 +9,7 @@ import "./styles/themes.css";
 import "./styles/foundation.css";
 import "./styles/shell-v2.css";
 import "./styles/workbench-v2.css";
+import "./styles/workbench-menu-v2.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {
