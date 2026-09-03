@@ -118,12 +118,15 @@ test.beforeEach(async ({ page }) => {
   await installFilesMock(page);
 });
 
-test("defaults to one column pane rooted at home", async ({ page }) => {
+test("defaults to one list pane rooted at home", async ({ page }) => {
   await page.goto("/files?user=alice");
 
+  const pane = page.locator(".file-pane").first();
   await expect(page.locator(".file-pane")).toHaveCount(1);
-  await expect(page.locator(".miller-column").last()).toContainText("readme.md");
-  await expect(page.locator(".miller-column").last()).toContainText("docs");
+  await expect(pane).toHaveAttribute("data-pane-cwd", HOME);
+  await expect(pane.locator(".filepane-table")).toBeVisible();
+  await expect(pane.locator(".file-row", { hasText: "readme.md" })).toBeVisible();
+  await expect(pane.locator(".file-row", { hasText: "docs" })).toBeVisible();
 });
 
 test("manual path entry and search open a file in the active pane", async ({ page }) => {
@@ -209,15 +212,16 @@ test("marquee drag over empty grid area selects the tiles it covers", async ({ p
   const firstPane = page.locator(".file-pane").nth(0);
   await firstPane.getByTitle("网格视图").click();
 
-  // Geometry-driven marquee: start in the grid's empty bottom strip and sweep
-  // up-right across the first two tiles (data, docs) but not the rest.
-  // Beginning in empty grid space lets Selecto (not native tile drag) own it.
+  // `.filegrid` deliberately keeps an empty bottom strip for marquee starts.
+  // Scroll that strip into the pane viewport before deriving pointer geometry;
+  // this avoids coupling the gesture to the surrounding page height.
+  await firstPane.locator(".filepane-body").evaluate((el) => { el.scrollTop = el.scrollHeight; });
   const box = await firstPane.evaluate((el) => {
     const rects = [...el.querySelectorAll(".file-tile")].map((t) => t.getBoundingClientRect());
     const grid = el.querySelector(".filegrid").getBoundingClientRect();
     return {
       sx: Math.round(rects[0].left + 4),
-      sy: Math.round(Math.min(grid.bottom - 4, window.innerHeight - 4)),
+      sy: Math.round(grid.bottom - 5),
       tx: Math.round(rects[1].left + rects[1].width / 2),
       ty: Math.round(rects[0].top + 4),
     };
