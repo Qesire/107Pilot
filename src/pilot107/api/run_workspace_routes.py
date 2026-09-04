@@ -95,6 +95,12 @@ class RunWorkspaceRoutes:
 def _sqlite_research_routes(
     service: RunWorkspaceService,
 ) -> ResearchWorkspaceRoutes | None:
+    # PostgreSQL domain stores intentionally expose ``db_path`` as a compatibility
+    # path while keeping ``dsn`` as the real authority.  Never mistake that
+    # compatibility path for the active database or Research Workspace bindings
+    # would silently fork into a sidecar SQLite file.
+    if getattr(service.store, "dsn", None) is not None:
+        return None
     db_path = getattr(service.store, "db_path", None)
     if db_path is None:
         return None
