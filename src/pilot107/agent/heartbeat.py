@@ -34,7 +34,7 @@ class PeriodicHeartbeat:
         self._interval_seconds = float(interval_seconds)
         self._name = name
         self._stop = threading.Event()
-        self._failure: BaseException | None = None
+        self._failure: Exception | None = None
         self._thread: threading.Thread | None = None
 
     @property
@@ -80,7 +80,7 @@ class PeriodicHeartbeat:
         while not self._stop.wait(self._interval_seconds):
             try:
                 self._beat()
-            except BaseException as exc:  # noqa: BLE001 - preserve the original authority failure
+            except Exception as exc:
                 self._failure = exc
                 self._stop.set()
                 return
