@@ -3,19 +3,22 @@ import {
   AlertTriangle,
   ArrowRight,
   Bot,
+  CheckCircle2,
   GitCompare,
   ShieldCheck,
   Wrench,
+  XCircle,
 } from "lucide-react";
 import { api } from "./api";
 import { QueryBoundary, StatusBadge, formatTimestamp } from "./components";
 import { ExperimentShell } from "./ExperimentShell";
-import { useRun } from "./query";
+import { useRemediationSession, useRun } from "./query";
 import {
   type RepairWorkspace,
   type RepairWorkspaceDerivedRun,
   useRepairWorkspace,
 } from "./repair-workspace";
+import type { RemediationProposal, RemediationSession } from "./types";
 import type { LocationState } from "./url";
 import { withSearch } from "./url";
 
@@ -28,7 +31,15 @@ interface RepairWorkspacePageProps {
 
 function toneForState(state: string): "neutral" | "info" | "success" | "warning" | "danger" {
   if (["SUCCEEDED", "succeeded", "resolved", "approved"].includes(state)) return "success";
-  if (["FAILED", "SUBMIT_FAILED", "failed", "abandoned", "rejected"].includes(state)) return "danger";
+  if ([
+    "FAILED",
+    "SUBMIT_FAILED",
+    "failed",
+    "abandoned",
+    "rejected",
+    "error",
+    "critical",
+  ].includes(state)) return "danger";
   if (["awaiting_approval", "PENDING", "SUBMITTED", "planning", "ready"].includes(state)) return "warning";
   if (["RUNNING", "COMPLETING", "executing", "evaluating"].includes(state)) return "info";
   return "neutral";
@@ -37,6 +48,30 @@ function toneForState(state: string): "neutral" | "info" | "success" | "warning"
 function latestDerived(workspace: RepairWorkspace): RepairWorkspaceDerivedRun | null {
   if (!workspace.derived_runs.length) return null;
   return workspace.derived_runs[workspace.derived_runs.length - 1] ?? null;
+}
+
+function proposalPatchRows(payload: RemediationProposal["payload"]) {
+  const direct = payload.proposed_patch;
+  const parameters = payload.parameters;
+  const nested = parameters && typeof parameters === "object" && !Array.isArray(parameters)
+    ? (parameters as Record<string, unknown>).patch
+    : null;
+  const patch = direct && typeof direct === "object" && !Array.isArray(direct)
+    ? direct as Record<string, unknown>
+    : nested && typeof nested === "object" && !Array.isArray(nested)
+      ? nested as Record<string, unknown>
+      : null;
+  if (!patch) return [];
+  return Object.entries(patch)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([field, value]) => ({
+      field,
+      value: value === null
+        ? "需要输入"
+        : typeof value === "string"
+          ? value
+          : JSON.stringify(value),
+    }));
 }
 
 export function RepairWorkspacePage({
@@ -48,6 +83,25 @@ export function RepairWorkspacePage({
   const queryClient = useQueryClient();
   const run = useRun(user, runId);
   const repair = useRepairWorkspace(user, runId);
+  const latestSessionId = repair.data?.remediation_sessions[0]?.session_id ?? null;
+  const sessionDetail = useRemediationSession(user, latestSessionId);
+
+  const refreshSession = (updated?: RemediationSession) => {
+    if (updated) {
+      queryClient.setQueryData(
+        ["remediation-session", user, updated.session_id],
+        updated,
+      );
+    }
+    void queryClient.invalidateQueries({ queryKey: ["repair-workspace", user, runId] });
+    void queryClient.invalidateQueries({ queryKey: ["remediation-sessions", user] });
+    if (latestSessionId) {
+      void queryClient.invalidateQueries({
+        queryKey: ["remediation-session", user, latestSessionId],
+      });
+    }
+  };
+
   const startRepair = useMutation({
     mutationFn: () =>
       api.createRemediationSession(
@@ -56,9 +110,35 @@ export function RepairWorkspacePage({
         `repair-workspace:${runId}:${crypto.randomUUID()}`,
         "none",
       ),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["repair-workspace", user, runId] });
+    onSuccess: (session) => refreshSession(session),
+  });
+
+  const approveProposal = useMutation({
+    mutationFn: (proposal: RemediationProposal) => {
+      const detail = sessionDetail.data;
+      if (!detail) throw new Error("修复会话详情尚未加载");
+      return api.approveRemediationAction(
+        user,
+        detail.session_id,
+        proposal.proposal_id,
+        detail.version,
+      );
     },
+    onSuccess: refreshSession,
+  });
+
+  const rejectProposal = useMutation({
+    mutationFn: (proposal: RemediationProposal) => {
+      const detail = sessionDetail.data;
+      if (!detail) throw new Error("修复会话详情尚未加载");
+      return api.rejectRemediationAction(
+        user,
+        detail.session_id,
+        proposal.proposal_id,
+        detail.version,
+      );
+    },
+    onSuccess: refreshSession,
   });
 
   const openRunTab = (tab: string, extra: Record<string, string | null> = {}) => {
@@ -67,6 +147,22 @@ export function RepairWorkspacePage({
       object: null,
       ...extra,
     }));
+  };
+
+  const openFullRepairSession = (sessionId: string) => {
+    navigate(withSearch("/agent", location.search, {
+      mode: "repair",
+      session: sessionId,
+      state: null,
+      project: null,
+    }));
+  };
+
+  const focusRepairSession = () => {
+    document.getElementById("repair-session-heading")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   };
 
   const performNextAction = (workspace: RepairWorkspace) => {
@@ -78,11 +174,7 @@ export function RepairWorkspacePage({
         return;
       case "review_proposal":
       case "continue_repair":
-        if (latestSession) {
-          navigate(
-            `/agent?user=${encodeURIComponent(user)}&session=${encodeURIComponent(latestSession.session_id)}`,
-          );
-        }
+        if (latestSession) focusRepairSession();
         return;
       case "watch_derived_run":
         if (derived) {
@@ -101,6 +193,18 @@ export function RepairWorkspacePage({
         openRunTab("overview");
     }
   };
+
+  const approvalError = approveProposal.error ?? rejectProposal.error;
+  const approvedProposalIds = new Set(
+    (sessionDetail.data?.decisions ?? [])
+      .filter((decision) => decision.decision === "approve")
+      .map((decision) => decision.proposal_id),
+  );
+  const rejectedProposalIds = new Set(
+    (sessionDetail.data?.decisions ?? [])
+      .filter((decision) => decision.decision === "reject")
+      .map((decision) => decision.proposal_id),
+  );
 
   return (
     <QueryBoundary
@@ -128,7 +232,7 @@ export function RepairWorkspacePage({
               </div>
               <p>
                 Diagnosis、Agent 建议、审批、Repair Ticket 与派生 Run 在这里按同一失败链聚合；
-                原始模型上下文、代码正文和 shell 输出不会进入这个聚合接口。
+                原始模型上下文、代码正文和 shell 输出不会进入聚合接口。需要审批时，本页再按需读取权威修复会话详情。
               </p>
               <div className="agent-action-row">
                 <button
@@ -211,7 +315,7 @@ export function RepairWorkspacePage({
               <div className="panel-heading">
                 <div>
                   <p className="panel-kicker">Controlled remediation</p>
-                  <h3 id="repair-session-heading">修复会话与 Agent</h3>
+                  <h3 id="repair-session-heading">修复会话、Agent 与审批</h3>
                 </div>
                 <Bot aria-hidden="true" size={18} />
               </div>
@@ -228,11 +332,9 @@ export function RepairWorkspacePage({
                       <small>{formatTimestamp(session.updated_at)}</small>
                       <button
                         type="button"
-                        onClick={() => navigate(
-                          `/agent?user=${encodeURIComponent(user)}&session=${encodeURIComponent(session.session_id)}`,
-                        )}
+                        onClick={() => openFullRepairSession(session.session_id)}
                       >
-                        打开受控 Agent 会话
+                        打开完整修复会话
                       </button>
                     </article>
                   ))}
@@ -240,6 +342,90 @@ export function RepairWorkspacePage({
               ) : (
                 <p className="limitation">尚未创建修复会话。创建动作只建立 owner-scoped 会话，不会直接修改源工作区。</p>
               )}
+
+              {latestSessionId && sessionDetail.isPending ? (
+                <p className="limitation" role="status">正在读取最新修复会话的权威详情…</p>
+              ) : null}
+              {sessionDetail.error ? (
+                <p className="limitation" role="alert">无法读取修复会话详情：{sessionDetail.error.message}</p>
+              ) : null}
+              {approvalError ? (
+                <p className="limitation" role="alert">审批操作失败：{approvalError.message}</p>
+              ) : null}
+
+              {sessionDetail.data ? (
+                <section className="agent-proposals" id="repair-proposals" aria-labelledby="repair-proposals-heading">
+                  <div className="panel-heading">
+                    <div>
+                      <p className="panel-kicker">Review gate</p>
+                      <h4 id="repair-proposals-heading">当前动作建议</h4>
+                    </div>
+                    <StatusBadge
+                      label={sessionDetail.data.state}
+                      tone={toneForState(sessionDetail.data.state)}
+                    />
+                  </div>
+                  {sessionDetail.data.proposals.length ? sessionDetail.data.proposals.map((proposal) => {
+                    const approved = approvedProposalIds.has(proposal.proposal_id);
+                    const rejected = rejectedProposalIds.has(proposal.proposal_id);
+                    const rows = proposalPatchRows(proposal.payload);
+                    const mutationPending = approveProposal.isPending || rejectProposal.isPending;
+                    return (
+                      <article key={proposal.proposal_id}>
+                        <header>
+                          <div>
+                            <StatusBadge label={proposal.risk} tone={toneForState(proposal.risk)} />
+                            <strong>{proposal.action_type}</strong>
+                          </div>
+                          <small>{proposal.policy_status}</small>
+                        </header>
+                        <p>来源：{proposal.source} · action {proposal.action_id}</p>
+                        {rows.length ? (
+                          <dl className="agent-proposal-diff">
+                            {rows.map((row) => (
+                              <div key={row.field}>
+                                <dt>{row.field}</dt>
+                                <dd className="mono wrap-anywhere">{row.value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        ) : null}
+                        <details>
+                          <summary>完整动作参数</summary>
+                          <pre><code>{JSON.stringify(proposal.payload, null, 2)}</code></pre>
+                        </details>
+                        <div className="agent-action-row">
+                          {approved ? <StatusBadge label="已批准" tone="success" /> : null}
+                          {rejected ? <StatusBadge label="已拒绝" tone="danger" /> : null}
+                          {sessionDetail.data?.state === "awaiting_approval" && !approved && !rejected ? (
+                            <>
+                              <button
+                                className="button secondary"
+                                type="button"
+                                disabled={mutationPending}
+                                onClick={() => rejectProposal.mutate(proposal)}
+                              >
+                                <XCircle aria-hidden="true" size={15} />拒绝
+                              </button>
+                              <button
+                                className="button primary"
+                                type="button"
+                                disabled={mutationPending}
+                                onClick={() => approveProposal.mutate(proposal)}
+                              >
+                                <CheckCircle2 aria-hidden="true" size={15} />批准此动作
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                      </article>
+                    );
+                  }) : (
+                    <p className="limitation">当前修复会话尚未形成可审阅动作。可以留在本页等待状态推进，或打开完整修复会话查看详细审计轨迹。</p>
+                  )}
+                </section>
+              ) : null}
+
               {repair.data.agent.advice.length ? (
                 <dl className="fact-list">
                   {repair.data.agent.advice.map((advice) => (
