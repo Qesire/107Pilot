@@ -23,6 +23,10 @@ from pilot107.agent.operation_ledger import (
     build_agent_operation_ledger,
     operation_intent_for_invocation,
 )
+from pilot107.agent.operation_reconciler import (
+    AgentOperationReconciler,
+    build_agent_operation_reconciler,
+)
 from pilot107.agent.project import is_project_agent_profile
 from pilot107.agent.protocol import TOOL_RESULT_PROTOCOL_VERSION, ToolInvocation, ToolResult
 from pilot107.agent.session import AgentSessionConflict
@@ -56,6 +60,7 @@ class AgentToolGateway:
         handlers: Mapping[str, AgentReadHandler],
         profile_handlers: Mapping[str, Mapping[str, AgentReadHandler]] | None = None,
         operation_ledger: AgentOperationLedger | None = None,
+        operation_reconciler: AgentOperationReconciler | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.store = store
@@ -69,11 +74,17 @@ class AgentToolGateway:
             store,
             clock=self._clock,
         )
+        self.operation_reconciler = operation_reconciler or build_agent_operation_reconciler(
+            store,
+            self.operation_ledger,
+            clock=self._clock,
+        )
 
     def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult:
         claims = self._verify(token)
         self._validate_binding(claims, invocation)
         arguments_digest = hashlib.sha256(_canonical(invocation.arguments)).hexdigest()
+        operation_arguments_digest = _semantic_operation_digest(invocation)
         try:
             reserved, created = self.store.reserve_tool_invocation(
                 invocation_id=invocation.invocation_id,
@@ -137,7 +148,11 @@ class AgentToolGateway:
                 "Agent tool is unavailable", code="AGENT.TOOL.UNAVAILABLE"
             )
 
-        operation_intent = self._operation_intent(invocation, claims, arguments_digest)
+        operation_intent = self._operation_intent(
+            invocation,
+            claims,
+            operation_arguments_digest,
+        )
         if operation_intent is not None:
             replay = self._reserve_or_replay_operation(
                 operation_intent,
@@ -323,6 +338,31 @@ class AgentToolGateway:
             )
         if record.state is AgentOperationState.FAILED:
             self._replay_failed_operation(record, invocation, claims)
+        if self.operation_reconciler is not None and (
+            record.state in {AgentOperationState.UNKNOWN, AgentOperationState.STALE}
+            or (
+                record.state is AgentOperationState.RUNNING
+                and record.origin_turn_id != invocation.turn_id
+            )
+        ):
+            try:
+                reconciled = self.operation_reconciler.reconcile(
+                    record,
+                    invocation=invocation,
+                    expected_fencing_token=claims.fencing_token,
+                )
+            except Exception:
+                # Recovery is fail-closed: a reconciler outage must never cause
+                # the mutation handler to be executed again.
+                reconciled = None
+            if reconciled is not None and reconciled.state is AgentOperationState.COMPLETED:
+                return self._replay_completed_operation(
+                    reconciled,
+                    invocation,
+                    claims,
+                    usage_bytes=usage_bytes,
+                )
+            record = self.operation_ledger.get(intent.operation_key, owner=invocation.owner)
         if record.state is AgentOperationState.RUNNING:
             self._persist_failure(
                 invocation,
@@ -707,6 +747,14 @@ class AgentToolGateway:
         if current.tzinfo is None:
             raise ValueError("Tool Gateway clock must be timezone-aware")
         return current.astimezone(UTC)
+
+
+def _semantic_operation_digest(invocation: ToolInvocation) -> str:
+    # ``turn_id`` is an execution-carrier identity. A durable domain request
+    # that resumes in a later Turn must still compare the same mutation intent.
+    arguments = dict(invocation.arguments)
+    arguments.pop("turn_id", None)
+    return hashlib.sha256(_canonical(arguments)).hexdigest()
 
 
 def _canonical(value: object) -> bytes:
