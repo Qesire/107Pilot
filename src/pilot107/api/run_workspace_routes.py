@@ -6,12 +6,18 @@ from collections.abc import Mapping
 
 from pilot107.api.http_types import ApiResponse
 from pilot107.core.identity import UserIdentity
+from pilot107.services.repair_workspace_service import RepairWorkspaceService
 from pilot107.services.run_workspace_service import RunWorkspaceService
 
 
 class RunWorkspaceRoutes:
-    def __init__(self, service: RunWorkspaceService) -> None:
+    def __init__(
+        self,
+        service: RunWorkspaceService,
+        repair_service: RepairWorkspaceService | None = None,
+    ) -> None:
         self.service = service
+        self.repair_service = repair_service or RepairWorkspaceService(service.store)
 
     def handle_get(
         self,
@@ -38,7 +44,7 @@ class RunWorkspaceRoutes:
         owner = identity.username if identity is not None else None
         try:
             payload = (
-                self.service.get_repair(parts[1], owner=owner)
+                self.repair_service.get(parts[1], owner=owner)
                 if repair
                 else self.service.get(parts[1], owner=owner)
             )
