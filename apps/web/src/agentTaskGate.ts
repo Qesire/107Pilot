@@ -120,6 +120,11 @@ export function agentTaskGateView(task: AgentTask): AgentTaskGateView {
   const evidenceRefs = receipt && Array.isArray(receipt.evidence_refs)
     ? receipt.evidence_refs.filter((value): value is string => typeof value === "string" && Boolean(value))
     : [];
+  const resultEvidenceRefs = task.result?.status === "succeeded"
+    ? task.result.evidence_refs
+    : [];
+  const resultMatchesGate = resultEvidenceRefs.length === evidenceRefs.length
+    && resultEvidenceRefs.every((value, index) => value === evidenceRefs[index]);
   const capsuleSatisfied = completionPolicy !== "evidence_and_capsule_required" || (
     receipt?.capsule_state === "READY"
     && typeof receipt.capsule_ref === "string"
@@ -134,9 +139,11 @@ export function agentTaskGateView(task: AgentTask): AgentTaskGateView {
     && receipt.task_id === task.task_id
     && task.linked_run_id
     && receipt.run_id === task.linked_run_id
+    && receipt.run_terminal_state === "completed"
     && receipt.evidence_state === "finalized"
     && receipt.integrity_state === "verified"
     && evidenceRefs.length > 0
+    && resultMatchesGate
     && capsuleSatisfied
   );
 
