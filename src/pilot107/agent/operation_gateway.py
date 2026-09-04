@@ -16,6 +16,7 @@ from typing import Protocol
 
 from pilot107.agent.operation_ledger import (
     AgentOperationReceiptRecord,
+    AgentOperationState,
     DurableOperationIdentity,
     durable_operation_identity,
 )
@@ -67,6 +68,12 @@ class AgentOperationLedger(Protocol):
     ) -> AgentOperationReceiptRecord: ...
 
 
+_TERMINAL_RECEIPT_STATES = {
+    AgentOperationState.COMPLETED,
+    AgentOperationState.FAILED,
+}
+
+
 class OperationLedgerShadowGateway:
     """Record legacy Gateway outcomes without changing their replay authority."""
 
@@ -86,28 +93,34 @@ class OperationLedgerShadowGateway:
                 owner=invocation.owner,
                 invocation_id=invocation.invocation_id,
             )
+        terminal_before_legacy_call = receipt.state in _TERMINAL_RECEIPT_STATES
 
         try:
             result = self.gateway.invoke(token, invocation)
         except AgentToolGatewayError as exc:
-            # A Gateway rejection has a stable public error code and is safe to
-            # record as terminal failure without inventing a side-effect fact.
-            self.ledger.fail(
-                receipt.operation_key,
-                owner=invocation.owner,
-                invocation_id=invocation.invocation_id,
-                error_code=exc.code,
-            )
+            # A prior terminal receipt remains immutable in shadow mode.  The
+            # legacy Gateway still owns replay until the ledger stores a
+            # reconstructable ToolResult reference.
+            if not terminal_before_legacy_call:
+                self.ledger.fail(
+                    receipt.operation_key,
+                    owner=invocation.owner,
+                    invocation_id=invocation.invocation_id,
+                    error_code=exc.code,
+                )
             raise
         except Exception:
-            # An unexpected exception may have happened after an external side
-            # effect.  The shadow ledger must not call it "failed" and invite a
-            # blind retry; it records UNKNOWN for a later domain reconciler.
-            self.ledger.mark_unknown(
-                receipt.operation_key,
-                owner=invocation.owner,
-            )
+            if not terminal_before_legacy_call:
+                # An unexpected exception may have happened after an external
+                # side effect.  UNKNOWN forbids a blind mutation retry.
+                self.ledger.mark_unknown(
+                    receipt.operation_key,
+                    owner=invocation.owner,
+                )
             raise
+
+        if terminal_before_legacy_call:
+            return result
 
         if result.error is not None:
             self.ledger.fail(
