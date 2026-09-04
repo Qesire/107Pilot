@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-from pilot107.agent.protocol import ToolReceiptRepair
+from pilot107.agent.repair_protocol import ToolReceiptRepair
 
 _MAX_REPAIRS = 256
 _PROJECT_TOOLS = frozenset(
@@ -176,8 +176,6 @@ def _build_repairs(
         turn_id=turn_id,
     )
     if checkpoint is not None and base_sequence is None:
-        # A same-Turn checkpoint that cannot be bound back to this Turn's
-        # durable event stream is not safe to extend with inferred completion.
         return ()
     after_sequence = 0 if base_sequence is None else base_sequence
     invocation_by_id = {str(row["invocation_id"]): row for row in invocations}
@@ -198,7 +196,6 @@ def _build_repairs(
             continue
         if event_type != "tool_call_requested":
             continue
-
         tool_call_id = payload.get("tool_call_id")
         tool_name = payload.get("tool_name")
         arguments = payload.get("arguments")
@@ -213,16 +210,12 @@ def _build_repairs(
             pending_text.clear()
             continue
         if tool_call_id in seen_requested:
-            # Duplicate provider call identity after the same parent checkpoint
-            # is ambiguous. Do not synthesize any later state.
             break
         seen_requested.add(tool_call_id)
 
         invocation_id = _invocation_id(turn_id, tool_call_id)
         row = invocation_by_id.get(invocation_id)
         if row is None or str(row["state"]) != "completed":
-            # Preserve causal order: a later receipt must not leap over an
-            # unresolved earlier requested tool.
             break
         if (
             str(row["turn_id"]) != turn_id
@@ -262,9 +255,6 @@ def _build_repairs(
             result=stored_result,
             bytes_returned=bytes_returned,
         )
-        # This exactly mirrors normal agentd tool details. receipt_ref remains
-        # repair metadata and therefore does not perturb the repaired checkpoint
-        # relative to a checkpoint created on the live path.
         details = {
             "result": public_result,
             "evidence_refs": list(evidence_refs),
@@ -321,8 +311,6 @@ def _base_checkpoint(
         if isinstance(item, Mapping) and isinstance(item.get("tool_call_id"), str)
     }
     if checkpoint_turn_id != turn_id:
-        # A checkpoint inherited from the preceding Turn predates every event
-        # in this Turn and therefore establishes sequence zero.
         return digest, 0, completed_ids
 
     matched_sequence: int | None = None
