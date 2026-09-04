@@ -1,0 +1,343 @@
+/* App shell v2: neutral scientific workspace, compact research context bar. */
+.product-shell {
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  min-height: 100vh;
+  background: var(--bg-canvas);
+}
+
+.app-sidebar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  height: 100vh;
+  min-width: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--border-default);
+  background: var(--bg-subtle);
+  box-shadow: none;
+  padding: 16px 12px;
+}
+
+.brand {
+  min-height: 52px;
+  gap: 10px;
+  border-radius: var(--radius-control);
+  padding: 6px 8px;
+  color: var(--text-primary);
+}
+
+.brand:hover { background: var(--bg-surface); }
+
+.brand-glyph {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--bg-surface);
+  color: var(--accent-primary);
+  box-shadow: none;
+}
+
+.brand strong { color: var(--text-primary); font-size: 15px; }
+.brand small { color: var(--text-tertiary); font-size: 11px; }
+
+.nav-group {
+  display: grid;
+  gap: 4px;
+}
+
+.nav-group + .nav-group { margin-top: 18px; }
+
+.nav-group-label {
+  margin: 0 8px 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+}
+
+.primary-nav {
+  display: block;
+  margin-top: 24px;
+}
+
+.primary-nav a {
+  position: relative;
+  min-height: 40px;
+  gap: 10px;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 550;
+  transition: color var(--duration-normal) ease, background-color var(--duration-normal) ease;
+}
+
+.primary-nav a::before {
+  position: absolute;
+  left: 0;
+  width: 2px;
+  height: 20px;
+  border-radius: 2px;
+  background: transparent;
+  content: "";
+}
+
+.primary-nav a:hover {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  transform: none;
+}
+
+.primary-nav a.active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.primary-nav a.active::before { background: var(--accent-primary); }
+.primary-nav a svg { width: 17px; height: 17px; }
+.primary-nav small { margin-left: auto; color: var(--text-tertiary); font-size: 10px; }
+
+.sidebar-bottom {
+  display: grid;
+  gap: 3px;
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+.sidebar-bottom button {
+  min-height: 38px;
+  border-radius: var(--radius-control);
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.sidebar-bottom p {
+  margin: 8px 8px 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.app-stage { min-width: 0; background: var(--bg-canvas); }
+
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 35;
+  height: var(--topbar-height);
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-canvas);
+  padding: 0 28px;
+  backdrop-filter: none;
+}
+
+.research-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.research-context strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-context span {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.topbar-actions { gap: 8px; }
+
+.theme-switcher,
+.context-action {
+  display: inline-flex;
+  min-width: 36px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  padding: 0 9px;
+  cursor: pointer;
+}
+
+.theme-switcher:hover,
+.context-action:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.theme-switcher svg,
+.context-action svg { width: 16px; height: 16px; }
+.theme-switcher span { font-size: 12px; }
+
+.user-switcher {
+  min-height: 36px;
+  border-color: var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface);
+  box-shadow: none;
+}
+
+.user-switcher select { color: var(--text-primary); font-size: 12px; }
+
+main,
+main.decision-canvas,
+main.workspace-canvas {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  padding: 32px;
+}
+
+main.decision-canvas > :where(:not(.connection-action-banner)) {
+  width: min(var(--decision-canvas-max), 100%);
+  margin-right: auto;
+  margin-left: auto;
+}
+
+main.workspace-canvas { padding-right: 24px; padding-left: 24px; }
+
+.page-transition { animation: v2-page-fade var(--duration-fast) ease both; }
+@keyframes v2-page-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.mobile-more { display: none; }
+
+@media (max-width: 1179px) and (min-width: 761px) {
+  .product-shell { grid-template-columns: var(--sidebar-width-compact) minmax(0, 1fr); }
+  .app-sidebar { padding: 12px 8px; }
+  .brand { justify-content: center; padding: 4px; }
+  .brand > span:last-child,
+  .nav-group-label,
+  .primary-nav a > span,
+  .primary-nav small,
+  .sidebar-bottom span,
+  .sidebar-bottom p { display: none; }
+  .primary-nav a { justify-content: center; padding: 0; }
+  .primary-nav a::before { left: -8px; }
+  .sidebar-bottom button { justify-content: center; }
+  .app-topbar { padding: 0 20px; }
+  main,
+  main.decision-canvas,
+  main.workspace-canvas { padding: 24px; }
+}
+
+@media (max-width: 760px) {
+  .product-shell {
+    display: block;
+    min-height: 100vh;
+    padding-bottom: 72px;
+  }
+
+  .app-sidebar {
+    position: fixed;
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 80;
+    display: block;
+    width: auto;
+    height: 64px;
+    border-top: 1px solid var(--border-default);
+    border-right: 0;
+    background: var(--bg-surface);
+    padding: 5px 7px;
+  }
+
+  .brand,
+  .sidebar-bottom,
+  .nav-group-label { display: none; }
+
+  .primary-nav {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
+    margin: 0;
+  }
+
+  .nav-group { display: contents; }
+  .nav-group + .nav-group { margin: 0; }
+
+  .primary-nav .mobile-primary-hidden { display: none; }
+  .primary-nav a {
+    display: flex;
+    min-height: 54px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 3px;
+    font-size: 10px;
+  }
+  .primary-nav a::before { top: -5px; left: 50%; width: 22px; height: 2px; transform: translateX(-50%); }
+  .primary-nav a > span { display: block; font-size: 10px; }
+  .primary-nav a svg { width: 17px; height: 17px; }
+
+  .mobile-more { position: relative; display: block; }
+  .mobile-more-trigger {
+    display: flex;
+    width: 100%;
+    min-height: 54px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 3px;
+    font-size: 10px;
+  }
+  .mobile-more-trigger.is-active { background: var(--accent-soft); color: var(--text-primary); }
+  .mobile-more-trigger svg { width: 17px; height: 17px; }
+  .mobile-more-menu {
+    position: fixed;
+    right: 10px;
+    bottom: 70px;
+    z-index: 90;
+    display: grid;
+    min-width: 190px;
+    gap: 2px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-float);
+    background: var(--bg-raised);
+    box-shadow: var(--shadow-popover);
+    padding: 6px;
+    backdrop-filter: none;
+  }
+  .mobile-more-menu a {
+    display: flex;
+    min-height: 42px;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 10px;
+    border-radius: var(--radius-control);
+    color: var(--text-secondary);
+    padding: 0 10px;
+    font-size: 13px;
+  }
+  .mobile-more-menu a.active { background: var(--accent-soft); color: var(--text-primary); }
+
+  .app-topbar { height: 52px; padding: 0 14px; }
+  .research-context span { display: none; }
+  .topbar-actions .connection-badge,
+  .topbar-actions > .status-badge { display: none; }
+  .theme-switcher span { display: none; }
+  .theme-switcher { padding: 0; }
+
+  main,
+  main.decision-canvas,
+  main.workspace-canvas { padding: 20px 14px 36px; }
+}

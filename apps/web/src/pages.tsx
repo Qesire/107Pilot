@@ -29,8 +29,9 @@ import {
   StatusBadge,
 } from "./components";
 import { ConnectionPanel } from "./ConnectionStatus";
+import { ExperimentShell } from "./ExperimentShell";
 import { ResourceDashboard } from "./ResourceDashboard";
-import { useCapabilities, useLatestEntitlement, useLatestPlatform, useRun, useRunPages, useRuns } from "./query";
+import { useCapabilities, useLatestEntitlement, useLatestPlatform, useRun, useRunPages, useRuns, useRunWorkspace } from "./query";
 import { RunList } from "./RunList";
 import { RunTable } from "./RunTable";
 import { RunPicker } from "./RunPicker";
@@ -180,33 +181,39 @@ export function WorkspacePage({ user, location, navigate }: PageProps) {
 }
 
 export function RunsPage({ user, location, navigate }: PageProps) {
-  const state = location.search.get("state") ?? "";
-  const search = location.search.get("q") ?? "";
   const selectedRunId = location.pathname.startsWith("/runs/")
     ? decodeURIComponent(location.pathname.slice("/runs/".length))
     : null;
+  if (selectedRunId) {
+    return <RunExperimentPage user={user} location={location} navigate={navigate} runId={selectedRunId} />;
+  }
+  return <RunsIndexPage user={user} location={location} navigate={navigate} />;
+}
+
+function RunsIndexPage({ user, location, navigate }: PageProps) {
+  const state = location.search.get("state") ?? "";
+  const search = location.search.get("q") ?? "";
   const runs = useRunPages(user, state || undefined, search || undefined);
   const items = runs.data?.pages.flatMap((page) => page.items) ?? [];
   const [savedFilters, setSavedFilters] = useState(() => loadRunFilters(user));
   useEffect(() => setSavedFilters(loadRunFilters(user)), [user]);
-  const selectedRun = useRun(user, selectedRunId);
   const updateFilters = (updates: Record<string, string | null>) =>
     navigate(withSearch("/runs", location.search, updates));
 
   return (
     <>
       <SectionHeading
-        eyebrow="Runs / 作业"
-        title="Run 历史与执行状态"
-        detail="筛选条件写入 URL；打开的 Run 可以复制链接交给同一授权范围内的协作者。"
+        eyebrow="实验 / 运行历史"
+        title="实验运行"
+        detail="这里是实验运行历史入口。打开某次运行后，会进入独立的实验工作区，而不是在列表旁展开抽屉。"
       />
-      <section className="filter-bar" aria-label="Run 筛选">
+      <section className="filter-bar" aria-label="运行筛选">
         <label className="search-field">
           <Search aria-hidden="true" size={17} />
-          <span className="sr-only">搜索 Run</span>
+          <span className="sr-only">搜索运行</span>
           <input
             value={search}
-            placeholder="搜索 Run ID、Job ID 或 workdir"
+            placeholder="搜索运行 ID、Job ID 或工作目录"
             onChange={(event) => updateFilters({ q: event.target.value || null })}
           />
         </label>
@@ -239,78 +246,84 @@ export function RunsPage({ user, location, navigate }: PageProps) {
         </div>
       </section>
 
-      <div className={`runs-layout ${selectedRunId ? "has-detail" : ""}`}>
-        <section className="panel runs-panel" aria-labelledby="runs-table-heading">
-          <div className="panel-heading">
-            <div><p className="panel-kicker">Live read model</p><h2 id="runs-table-heading">已加载 {items.length} 个结果</h2></div>
-            {runs.isFetching ? <StatusBadge label="同步中" tone="info" /> : <StatusBadge label="已同步" tone="success" />}
-          </div>
-          <QueryBoundary
-            pending={runs.isPending}
-            error={runs.error}
-            empty={items.length === 0}
-            emptyTitle="没有匹配的 Run"
-            emptyDetail="调整状态或搜索词；筛选不会改变服务器数据。"
-          >
-            <RunList
-              runs={items}
-              selectedRunId={selectedRunId}
-              onSelect={(runId) => navigate(withSearch(`/runs/${runId}`, location.search, { tab: "overview", object: null }))}
-            />
-            {runs.hasNextPage ? (
-              <button className="button secondary pagination-more" type="button" disabled={runs.isFetchingNextPage} onClick={() => void runs.fetchNextPage()}>
-                {runs.isFetchingNextPage ? "正在加载" : "加载更多"}
-              </button>
-            ) : null}
-          </QueryBoundary>
-        </section>
-
-        {selectedRunId ? (
-          <aside className="detail-drawer" aria-labelledby="run-detail-heading">
-            <div className="drawer-heading">
-              <div><p className="panel-kicker">Selected run</p><h2 id="run-detail-heading">Run 详情</h2></div>
-              <button className="icon-button" type="button" aria-label="关闭 Run 详情" title="关闭" onClick={() => navigate(withSearch("/runs", location.search, { tab: null, object: null }))}>×</button>
-            </div>
-            <QueryBoundary pending={selectedRun.isPending} error={selectedRun.error}>
-              {selectedRun.data ? (
-                <div className="run-detail">
-                  <header className="run-detail-summary">
-                    <div className="run-detail-identity">
-                      <div className="run-detail-status-line">
-                        <StatusBadge label={runStateLabel(selectedRun.data.state)} tone={runTone(selectedRun.data.state)} />
-                        <span className="run-detail-job-name" title={selectedRun.data.job_name ?? selectedRun.data.run_id}>
-                          <strong>{selectedRun.data.job_name ?? "历史作业"}</strong>
-                          <span>· sacct Job <b className="mono">{selectedRun.data.job_id ?? "尚未提交"}</b></span>
-                        </span>
-                      </div>
-                      {selectedRun.data.capsule_state === "ready" ? (
-                        <button
-                          className="run-capsule-link"
-                          type="button"
-                          onClick={() => navigate(withSearch(location.pathname, location.search, { tab: "capsule", object: null }))}
-                        >
-                          <Archive aria-hidden="true" size={15} />
-                          查看自动归档
-                        </button>
-                      ) : (
-                        <p className="run-capsule-status">Capsule：{selectedRun.data.capsule_state}</p>
-                      )}
-                      <p className="mono detail-id" title={selectedRun.data.run_id}>{selectedRun.data.run_id}</p>
-                    </div>
-                    <dl className="run-detail-sacct">
-                      <div><dt>sacct 状态</dt><dd>{selectedRun.data.terminal_state ?? "等待回收"}</dd></div>
-                      <div><dt>ExitCode</dt><dd className="mono">{selectedRun.data.exit_code ?? "—"}</dd></div>
-                      <div><dt>证据状态</dt><dd>{selectedRun.data.collection_state}</dd></div>
-                    </dl>
-                  </header>
-                  <RunEvidencePanel user={user} run={selectedRun.data} location={location} navigate={navigate} />
-                </div>
-              ) : null}
-            </QueryBoundary>
-          </aside>
-        ) : null}
-      </div>
+      <section className="panel runs-panel" aria-labelledby="runs-table-heading">
+        <div className="panel-heading">
+          <div><p className="panel-kicker">运行读模型</p><h2 id="runs-table-heading">已加载 {items.length} 个结果</h2></div>
+          {runs.isFetching ? <StatusBadge label="同步中" tone="info" /> : <StatusBadge label="已同步" tone="success" />}
+        </div>
+        <QueryBoundary
+          pending={runs.isPending}
+          error={runs.error}
+          empty={items.length === 0}
+          emptyTitle="没有匹配的运行"
+          emptyDetail="调整状态或搜索词；筛选不会改变服务器数据。"
+        >
+          <RunList
+            runs={items}
+            selectedRunId={null}
+            onSelect={(runId) => navigate(withSearch(`/runs/${runId}`, location.search, { tab: "overview", object: null }))}
+          />
+          {runs.hasNextPage ? (
+            <button className="button secondary pagination-more" type="button" disabled={runs.isFetchingNextPage} onClick={() => void runs.fetchNextPage()}>
+              {runs.isFetchingNextPage ? "正在加载" : "加载更多"}
+            </button>
+          ) : null}
+        </QueryBoundary>
+      </section>
     </>
+  );
+}
+
+function RunExperimentPage({
+  user,
+  location,
+  navigate,
+  runId,
+}: PageProps & { runId: string }) {
+  const selectedRun = useRun(user, runId);
+  const workspace = useRunWorkspace(user, runId);
+  const run = selectedRun.data;
+  const model = workspace.data;
+  return (
+    <QueryBoundary
+      pending={selectedRun.isPending || workspace.isPending}
+      error={selectedRun.error ?? workspace.error}
+    >
+      {run && model ? (
+        <ExperimentShell
+          user={user}
+          location={location}
+          navigate={navigate}
+          context={{ kind: "run", run }}
+        >
+          <section className="experiment-run-workspace" aria-labelledby="run-detail-heading">
+            <header className="experiment-run-heading">
+              <div>
+                <h2 id="run-detail-heading">运行详情</h2>
+                <p>首屏只读取运行对象与聚合工作区模型；日志、结果、诊断、自动归档和证据对象按视图加载。</p>
+              </div>
+              {model.evidence_summary.capsule_available ? (
+                <button
+                  className="run-capsule-link"
+                  type="button"
+                  onClick={() => navigate(withSearch(location.pathname, location.search, { tab: "capsule", object: null }))}
+                >
+                  <Archive aria-hidden="true" size={15} /> 查看自动归档
+                </button>
+              ) : null}
+            </header>
+
+            <RunEvidencePanel
+              user={user}
+              run={run}
+              workspace={model}
+              location={location}
+              navigate={navigate}
+            />
+          </section>
+        </ExperimentShell>
+      ) : null}
+    </QueryBoundary>
   );
 }
 

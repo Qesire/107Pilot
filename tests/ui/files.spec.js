@@ -8,6 +8,7 @@ function buildFs() {
     [HOME]: [
       { name: "docs", type: "dir", size: 0, mtime: 1700000000 },
       { name: "data", type: "dir", size: 0, mtime: 1700000000 },
+      { name: "large", type: "dir", size: 0, mtime: 1700000000 },
       { name: "readme.md", type: "file", size: 2048, mtime: 1700000100 },
       { name: "run.py", type: "file", size: 512, mtime: 1700000200 },
     ],
@@ -23,6 +24,12 @@ function buildFs() {
     [`${HOME}/demo-search/nested`]: [
       { name: "result-model.txt", type: "file", size: 8192, mtime: 1700000600 },
     ],
+    [`${HOME}/large`]: Array.from({ length: 2000 }, (_, index) => ({
+      name: `sample-${String(index).padStart(4, "0")}.dat`,
+      type: "file",
+      size: 1024 + index,
+      mtime: 1700010000 + index,
+    })),
   };
 }
 
@@ -50,7 +57,18 @@ async function installFilesMock(page) {
     }
     if (url.pathname === "/api/v1/files" && request.method() === "GET") {
       const path = url.searchParams.get("path") || HOME;
-      return json({ path, entries: fs[path] ?? [] });
+      const limit = Number(url.searchParams.get("limit") || 500);
+      const offset = Number(url.searchParams.get("cursor") || 0);
+      const allEntries = fs[path] ?? [];
+      const entries = allEntries.slice(offset, offset + limit);
+      const nextOffset = offset + entries.length;
+      const hasMore = nextOffset < allEntries.length;
+      return json({
+        path,
+        entries,
+        page: { limit, has_more: hasMore, next_cursor: hasMore ? String(nextOffset) : null },
+        directory_revision: "ui-fixture-v1",
+      });
     }
     if (url.pathname === "/api/v1/files/search" && request.method() === "GET") {
       const root = url.searchParams.get("root") || HOME;
@@ -118,12 +136,15 @@ test.beforeEach(async ({ page }) => {
   await installFilesMock(page);
 });
 
-test("defaults to one column pane rooted at home", async ({ page }) => {
+test("defaults to one list pane rooted at home", async ({ page }) => {
   await page.goto("/files?user=alice");
 
+  const pane = page.locator(".file-pane").first();
   await expect(page.locator(".file-pane")).toHaveCount(1);
-  await expect(page.locator(".miller-column").last()).toContainText("readme.md");
-  await expect(page.locator(".miller-column").last()).toContainText("docs");
+  await expect(pane).toHaveAttribute("data-pane-cwd", HOME);
+  await expect(pane.locator(".filepane-table")).toBeVisible();
+  await expect(pane.locator(".file-row", { hasText: "readme.md" })).toBeVisible();
+  await expect(pane.locator(".file-row", { hasText: "docs" })).toBeVisible();
 });
 
 test("manual path entry and search open a file in the active pane", async ({ page }) => {
@@ -209,18 +230,35 @@ test("marquee drag over empty grid area selects the tiles it covers", async ({ p
   const firstPane = page.locator(".file-pane").nth(0);
   await firstPane.getByTitle("网格视图").click();
 
-  // Geometry-driven marquee: start in the grid's empty bottom strip and sweep
-  // up-right across the first two tiles (data, docs) but not the rest.
-  // Beginning in empty grid space lets Selecto (not native tile drag) own it.
+  // `.filegrid` deliberately keeps an empty bottom strip for marquee starts.
+  // Scroll that strip into the pane viewport before deriving pointer geometry;
+  // this avoids coupling the gesture to the surrounding page height.
+  await firstPane.locator(".filepane-body").evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  // Keep the file viewport itself inside the browser viewport before using
+  // page-level mouse coordinates. Virtualization changes document geometry,
+  // so inner scrolling alone is not sufficient for a reliable gesture.
+  await firstPane.locator(".filepane-body").scrollIntoViewIfNeeded();
+  await firstPane.locator(".filepane-body").evaluate((el) => { el.scrollTop = el.scrollHeight; });
+
   const box = await firstPane.evaluate((el) => {
-    const rects = [...el.querySelectorAll(".file-tile")].map((t) => t.getBoundingClientRect());
+    const tiles = [...el.querySelectorAll(".file-tile[data-path]")];
+    const rects = tiles.map((tile) => tile.getBoundingClientRect());
     const grid = el.querySelector(".filegrid").getBoundingClientRect();
-    return {
-      sx: Math.round(rects[0].left + 4),
-      sy: Math.round(Math.min(grid.bottom - 4, window.innerHeight - 4)),
-      tx: Math.round(rects[1].left + rects[1].width / 2),
-      ty: Math.round(rects[0].top + 4),
-    };
+    const sx = Math.round(rects[0].left + 4);
+    const sy = Math.round(grid.bottom - 5);
+    const tx = Math.round(rects[1].left + rects[1].width / 2);
+    const ty = Math.round(rects[0].top + 4);
+    const left = Math.min(sx, tx);
+    const right = Math.max(sx, tx);
+    const top = Math.min(sy, ty);
+    const bottom = Math.max(sy, ty);
+    const expectedPaths = tiles
+      .filter((_tile, index) => {
+        const item = rects[index];
+        return !(item.right < left || item.left > right || item.bottom < top || item.top > bottom);
+      })
+      .map((tile) => tile.getAttribute("data-path"));
+    return { sx, sy, tx, ty, expectedPaths };
   });
 
   await page.mouse.move(box.sx, box.sy);
@@ -229,7 +267,11 @@ test("marquee drag over empty grid area selects the tiles it covers", async ({ p
   await page.mouse.move(box.tx, box.ty, { steps: 6 });
   await page.mouse.up();
 
-  await expect(firstPane.locator(".filepane-selectionbar")).toContainText("2 项已选");
+  expect(box.expectedPaths.length).toBeGreaterThanOrEqual(2);
+  await expect(firstPane.locator(".filepane-selectionbar")).toContainText(`${box.expectedPaths.length} 项已选`);
+  for (const path of box.expectedPaths) {
+    await expect(firstPane.locator(`.file-tile[data-path="${path}"]`)).toHaveClass(/selected/);
+  }
 });
 
 test("dragging a file onto another pane's directory moves it", async ({ page }) => {
@@ -237,9 +279,11 @@ test("dragging a file onto another pane's directory moves it", async ({ page }) 
   await page.locator(".file-pane").getByTitle("横向拆分").click();
   await page.locator(".file-pane").nth(0).getByTitle("网格视图").click();
   await page.locator(".file-pane").nth(1).getByTitle("网格视图").click();
-  // Wait for both panes to be fully rendered (4 tiles each) before dragging.
-  await expect(page.locator(".file-tile")).toHaveCount(8);
+  // Wait for the actual drag source and target in their respective panes.
+  // The fixture may gain unrelated home entries as file-workspace coverage grows.
   const panes = page.locator(".file-pane");
+  await expect(panes.nth(0).locator(".file-tile", { hasText: "readme.md" })).toBeVisible();
+  await expect(panes.nth(1).locator(".file-tile", { hasText: "data" })).toBeVisible();
 
   const source = panes.nth(0).locator(".file-tile", { hasText: "readme.md" });
   const target = panes.nth(1).locator(".file-tile", { hasText: "data" });
@@ -268,4 +312,65 @@ test("dragging a file onto another pane's directory moves it", async ({ page }) 
   // Navigating a pane into data/ reveals the moved file.
   await panes.nth(0).locator(".file-tile", { hasText: "data" }).dblclick();
   await expect(panes.nth(0).locator(".file-tile", { hasText: "readme.md" })).toBeVisible();
+});
+
+
+test("large directories keep rendered DOM bounded across file views", async ({ page }) => {
+  await page.goto("/files?user=alice");
+  const pane = page.locator(".file-pane").first();
+  await pane.getByTitle("手动输入路径").click();
+  await pane.getByLabel("路径").fill(`${HOME}/large`);
+  await pane.getByLabel("路径").press("Enter");
+  await expect(pane).toHaveAttribute("data-pane-cwd", `${HOME}/large`);
+  await expect(pane.locator(".filepane-status")).toContainText("500 项已加载");
+
+  for (const loaded of [1000, 1500, 2000]) {
+    await pane.locator(".filepane-status").getByRole("button", { name: "加载更多" }).click();
+    await expect(pane.locator(".filepane-status")).toContainText(`${loaded} 项已加载`);
+  }
+  expect(await pane.locator(".file-row[data-path]").count()).toBeLessThan(100);
+
+  await pane.getByTitle("网格视图").click();
+  expect(await pane.locator(".file-tile[data-path]").count()).toBeLessThan(150);
+
+  await pane.getByTitle("分栏视图").click();
+  expect(await pane.locator('.miller-column[data-last-column="true"] .miller-row[data-path]').count()).toBeLessThan(100);
+});
+
+
+test("desktop file workspace exposes quick access and a reactive inspector", async ({ page }) => {
+  await page.goto("/files?user=alice");
+  const pane = page.locator(".file-pane").first();
+
+  await expect(page.getByRole("complementary", { name: "文件快捷访问" })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "文件属性" })).toBeVisible();
+
+  await pane.locator(".file-row", { hasText: "readme.md" }).click();
+  const inspector = page.getByRole("complementary", { name: "文件属性" });
+  await expect(inspector.getByText("readme.md", { exact: true })).toBeVisible();
+  await expect(inspector.getByText("2.0 KiB", { exact: true })).toBeVisible();
+  await expect(inspector).toContainText(`${HOME}/readme.md`);
+});
+
+test("quick access returns the active pane home and retains session locations", async ({ page }) => {
+  await page.goto("/files?user=alice");
+  const pane = page.locator(".file-pane").first();
+  await pane.locator(".file-row", { hasText: "docs" }).dblclick();
+  await expect(pane).toHaveAttribute("data-pane-cwd", `${HOME}/docs`);
+
+  const quick = page.getByRole("complementary", { name: "文件快捷访问" });
+  await expect(quick.getByRole("button", { name: /docs/ })).toBeVisible();
+  await quick.getByRole("button", { name: "主目录" }).click();
+  await expect(pane).toHaveAttribute("data-pane-cwd", HOME);
+  await expect(pane.locator(".file-row", { hasText: "readme.md" })).toBeVisible();
+});
+
+test("file workspace rails collapse below desktop width without horizontal overflow", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/files?user=alice");
+
+  await expect(page.locator(".file-quick-access")).toBeHidden();
+  await expect(page.locator(".file-inspector")).toBeHidden();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+  expect(overflow).toBe(false);
 });

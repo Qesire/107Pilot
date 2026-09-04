@@ -8,6 +8,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import heapq
 import json
 import os
 import posixpath
@@ -734,29 +735,78 @@ def _list_dir(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:
     target = Path(path)
     if not target.is_dir():
         raise GatewayError(f"not a directory: {path}", status=404)
-    entries: list[dict[str, Any]] = []
-    for entry in sorted(target.iterdir(), key=lambda item: item.name):
-        try:
-            info = entry.lstat()
-        except OSError:
-            continue
-        if entry.is_symlink():
-            kind = "symlink"
-        elif entry.is_dir():
-            kind = "dir"
-        elif entry.is_file():
-            kind = "file"
-        else:
-            kind = "other"
-        entries.append(
-            {
-                "name": entry.name,
-                "type": kind,
-                "size": info.st_size,
-                "mtime": int(info.st_mtime),
-            }
+    limit = _bounded_integer(payload, "limit", default=500, minimum=1, maximum=1000)
+    info = target.stat()
+    revision_raw = f"{info.st_dev}:{info.st_ino}:{info.st_mtime_ns}:{info.st_ctime_ns}".encode("utf-8")
+    revision = hashlib.sha256(revision_raw).hexdigest()[:24]
+    binding = {"kind": "list_dir", "owner": owner, "path": path, "revision": revision}
+    after: tuple[int, str, str] | None = None
+    raw_cursor = payload.get("cursor")
+    if raw_cursor:
+        if not isinstance(raw_cursor, str):
+            raise GatewayError("cursor must be a string")
+        state = _decode_search_cursor(raw_cursor, config._cursor_key)
+        if state.get("binding") != binding:
+            previous = state.get("binding")
+            if isinstance(previous, dict) and previous.get("path") == path:
+                raise GatewayError("directory listing cursor is stale", status=409)
+            raise GatewayError("directory listing cursor does not match request")
+        raw_after = state.get("after")
+        if (
+            not isinstance(raw_after, list)
+            or len(raw_after) != 3
+            or not isinstance(raw_after[0], int)
+            or not isinstance(raw_after[1], str)
+            or not isinstance(raw_after[2], str)
+        ):
+            raise GatewayError("invalid directory listing cursor")
+        after = (raw_after[0], raw_after[1], raw_after[2])
+
+    def sort_key(entry: dict[str, Any]) -> tuple[int, str, str]:
+        name = str(entry["name"])
+        return (0 if entry["type"] == "dir" else 1, name.casefold(), name)
+
+    def candidates():
+        with os.scandir(target) as handle:
+            for item in handle:
+                try:
+                    item_info = item.stat(follow_symlinks=False)
+                    if item.is_symlink():
+                        kind = "symlink"
+                    elif item.is_dir(follow_symlinks=False):
+                        kind = "dir"
+                    elif item.is_file(follow_symlinks=False):
+                        kind = "file"
+                    else:
+                        kind = "other"
+                except OSError:
+                    continue
+                entry = {
+                    "name": item.name,
+                    "type": kind,
+                    "size": item_info.st_size,
+                    "mtime": int(item_info.st_mtime),
+                }
+                if after is None or sort_key(entry) > after:
+                    yield entry
+
+    selected = heapq.nsmallest(limit + 1, candidates(), key=sort_key)
+    has_more = len(selected) > limit
+    entries = selected[:limit]
+    next_cursor = None
+    if has_more and entries:
+        next_cursor = _encode_search_cursor(
+            {"binding": binding, "after": list(sort_key(entries[-1]))},
+            config._cursor_key,
         )
-    return {"path": path, "entries": entries}
+    return {
+        "path": path,
+        "entries": entries,
+        "limit": limit,
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+        "directory_revision": revision,
+    }
 
 
 def _search_files(payload: dict[str, Any], config: GatewayConfig) -> dict[str, Any]:

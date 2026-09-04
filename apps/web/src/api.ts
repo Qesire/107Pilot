@@ -25,6 +25,7 @@ import type {
   HealthReady,
   MarketVisibility,
   PagePayload,
+  PageInfo,
   PlatformConnection,
   PlatformConnections,
   PlatformSnapshot,
@@ -67,6 +68,7 @@ import type {
   UploadSession,
   WebSession,
 } from "./types";
+import type { RunWorkspace } from "./run-workspace";
 
 export class ApiRequestError extends Error {
   readonly status: number;
@@ -256,6 +258,12 @@ export const api = {
     ),
   run: (user: string, runId: string, signal?: AbortSignal) =>
     getJson<RunSummary>(`/api/v1/runs/${encodeURIComponent(runId)}`, user, signal),
+  runWorkspace: (user: string, runId: string, signal?: AbortSignal) =>
+    getJson<RunWorkspace>(
+      `/api/v1/runs/${encodeURIComponent(runId)}/workspace`,
+      user,
+      signal,
+    ),
   runEvents: (user: string, runId: string, signal?: AbortSignal) =>
     getJson<PagePayload<RunEvent>>(
       `/api/v1/runs/${encodeURIComponent(runId)}/events?limit=100`,
@@ -1163,11 +1171,24 @@ export const api = {
   // -------------------------------------------------------------------------
   // Visual Filesystem
   // -------------------------------------------------------------------------
-  fileList: async (user: string, path: string, signal?: AbortSignal) => {
+  fileList: async (
+    user: string,
+    path: string,
+    inputOrSignal: { limit?: number; cursor?: string | null } | AbortSignal = {},
+    signal?: AbortSignal,
+  ) => {
+    const input = inputOrSignal instanceof AbortSignal ? {} : inputOrSignal;
+    const requestSignal = inputOrSignal instanceof AbortSignal ? inputOrSignal : signal;
     const raw = await getJson<{
       path: string;
       entries: Array<{ name: string; type: string; size: number; mtime: number }>;
-    }>(queryPath("/api/v1/files", { path }), user, signal);
+      page: PageInfo;
+      directory_revision: string;
+    }>(queryPath("/api/v1/files", {
+      path,
+      limit: String(input.limit ?? 500),
+      cursor: input.cursor ?? undefined,
+    }), user, requestSignal);
     const base = raw.path.replace(/\/+$/, "");
     return {
       path: raw.path,
@@ -1178,6 +1199,8 @@ export const api = {
         size: e.size,
         modified: e.mtime > 0 ? new Date(e.mtime * 1000).toISOString() : "",
       })),
+      page: raw.page,
+      directory_revision: raw.directory_revision,
     } satisfies FileListResponse;
   },
   fileSearch: (

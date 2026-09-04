@@ -3,12 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#14201d" />
+    <meta name="theme-color" content="#f6f7f9" />
     <meta
       name="description"
-      content="107Pilot 校园计算工作台：查看集群事实、管理 Contract 与跟踪 Slurm 作业。"
+      content="107Pilot 科研计算工作台：准备实验资产、检查计算资源、运行 Slurm 实验并追踪结果与证据。"
     />
-    <title>107Pilot 工作台</title>
+    <title>107Pilot 科研计算工作台</title>
+    <script>
+      (() => {
+        try {
+          const stored = localStorage.getItem("107pilot-theme");
+          const preference = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+          const resolved = preference === "system"
+            ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+            : preference;
+          document.documentElement.dataset.theme = resolved;
+          document.documentElement.dataset.themePreference = preference;
+        } catch {
+          document.documentElement.dataset.theme = "light";
+          document.documentElement.dataset.themePreference = "system";
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

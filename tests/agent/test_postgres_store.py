@@ -33,19 +33,42 @@ def test_factory_selects_sqlite_without_postgres_dsn(tmp_path: Path) -> None:
     assert isinstance(store, SQLiteAgentSessionStore)
 
 
-def test_factory_selects_postgres_when_dsn_is_present(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_factory_selects_postgres_and_installs_checkpoint_durability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sentinel = object()
+    dsn = "postgresql://agent-store-test"
+    calls: list[tuple[str, str]] = []
+
+    def build_store(value: str) -> object:
+        calls.append(("store", value))
+        return sentinel
+
+    def install_checkpoint_pointer(value: str) -> None:
+        calls.append(("checkpoint-durability", value))
+
     monkeypatch.setattr(
         "pilot107.agent.store_factory.PostgresAgentSessionStore",
-        lambda dsn: sentinel,
+        build_store,
+    )
+    monkeypatch.setattr(
+        "pilot107.agent.store_factory.ensure_postgres_checkpoint_pointer",
+        install_checkpoint_pointer,
     )
 
     store = build_agent_session_store(
         sqlite_path=Path("unused.db"),
-        postgres_dsn="postgresql://agent-store-test",
+        postgres_dsn=dsn,
     )
 
     assert store is sentinel
+    # The low-level Store constructor establishes the base Postgres domain
+    # schema. AC3 durability is then installed before the configured Store is
+    # allowed to escape the production factory.
+    assert calls == [
+        ("store", dsn),
+        ("checkpoint-durability", dsn),
+    ]
 
 
 @pytest.mark.skipif(

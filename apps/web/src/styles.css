@@ -2399,3 +2399,32 @@ main { width: min(1420px, 100%); margin: 0 auto; padding: 38px 38px 64px; }
 @media (max-width: 520px) {
   .formal-lineage > div { grid-template-columns: 1fr; gap: 4px; }
 }
+
+
+/* UX-3 bounded file virtualization */
+.virtual-spacer td {
+  padding: 0 !important;
+  border: 0 !important;
+  pointer-events: none;
+}
+.virtual-block-spacer { flex: none; pointer-events: none; }
+.files-table .file-row { height: 40px; }
+.file-tile {
+  height: 108px;
+  min-height: 108px;
+  box-sizing: border-box;
+}
+.miller-row {
+  height: 32px;
+  min-height: 32px;
+  box-sizing: border-box;
+}
+.file-marquee {
+  position: fixed;
+  z-index: 1400;
+  pointer-events: none;
+  border: 1px solid var(--teal);
+  background: color-mix(in srgb, var(--teal) 10%, transparent);
+  border-radius: 3px;
+}
+.virtual-filegrid-tiles { box-sizing: border-box; }

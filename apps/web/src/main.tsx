@@ -4,6 +4,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import "./styles.css";
 import "./design-system.css";
+import "./styles/tokens.css";
+import "./styles/themes.css";
+import "./styles/foundation.css";
+import "./styles/shell-v2.css";
+import "./styles/workbench-v2.css";
+import "./styles/workbench-menu-v2.css";
+import "./styles/file-workspace-v2.css";
+import "./styles/task-indicator-v2.css";
+import "./styles/file-picker-v2.css";
+import "./styles/experiment-shell-v2.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {

@@ -18,11 +18,12 @@ export function useWebSession(requestedUser: string) {
   });
 }
 
-export function useHealth(user: string) {
+export function useHealth(user: string, enabled = true) {
   return useQuery({
     queryKey: ["health", user],
     queryFn: ({ signal }) => api.health(user, signal),
-    refetchInterval: 30_000,
+    enabled,
+    refetchInterval: enabled ? 30_000 : false,
   });
 }
 
@@ -141,6 +142,25 @@ export function useRun(user: string, runId: string | null) {
     queryFn: ({ signal }) => api.run(user, runId ?? "", signal),
     enabled: Boolean(runId),
     refetchInterval: 10_000,
+  });
+}
+
+export function useRunWorkspace(user: string, runId: string | null) {
+  return useQuery({
+    queryKey: ["run-workspace", user, runId],
+    queryFn: ({ signal }) => api.runWorkspace(user, runId ?? "", signal),
+    enabled: Boolean(runId),
+    refetchInterval: (query) => {
+      const workspace = query.state.data;
+      if (!workspace) return 10_000;
+      if (
+        ["SUBMITTING", "SUBMITTED", "PENDING", "RUNNING", "COMPLETING", "UNKNOWN"].includes(
+          workspace.states.execution,
+        )
+      ) return 5_000;
+      if (["pending", "running"].includes(workspace.states.collection)) return 5_000;
+      return false;
+    },
   });
 }
 

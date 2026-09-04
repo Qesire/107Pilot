@@ -2,11 +2,10 @@
 // directory tree starting at the user's home (each level reuses the shared
 // files-list query cache), then confirms a destination directory.
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { api } from "../api";
-import { sortEntries } from "./selection";
 
 function MoveTreeNode({
   user,
@@ -26,17 +25,16 @@ function MoveTreeNode({
   onSelect: (dir: string) => void;
 }) {
   const isExpanded = expanded.has(dir);
-  const listing = useQuery({
+  const listing = useInfiniteQuery({
     queryKey: ["files-list", user, dir],
-    queryFn: ({ signal }) => api.fileList(user, dir, signal),
+    queryFn: ({ signal, pageParam }) => api.fileList(user, dir, { limit: 500, cursor: pageParam }, signal),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.page.next_cursor ?? undefined,
     retry: false,
     enabled: isExpanded,
   });
   const subdirs = useMemo(
-    () =>
-      sortEntries(listing.data?.entries ?? []).filter(
-        (entry) => entry.kind === "directory",
-      ),
+    () => (listing.data?.pages.flatMap((page) => page.entries) ?? []).filter((entry) => entry.kind === "directory"),
     [listing.data],
   );
   const label = dir === "/" ? "/" : (dir.split("/").filter(Boolean).pop() ?? dir);
@@ -84,18 +82,16 @@ function MoveTreeNode({
             加载中…
           </div>
         ) : (
-          subdirs.map((entry) => (
-            <MoveTreeNode
-              key={entry.path}
-              user={user}
-              dir={entry.path}
-              depth={depth + 1}
-              dest={dest}
-              expanded={expanded}
-              onToggle={onToggle}
-              onSelect={onSelect}
-            />
-          ))
+          <>
+            {subdirs.map((entry) => (
+              <MoveTreeNode key={entry.path} user={user} dir={entry.path} depth={depth + 1} dest={dest} expanded={expanded} onToggle={onToggle} onSelect={onSelect} />
+            ))}
+            {listing.hasNextPage ? (
+              <button type="button" className="move-tree-loading" style={{ paddingLeft: `${24 + depth * 16}px` }} disabled={listing.isFetchingNextPage} onClick={() => void listing.fetchNextPage()}>
+                {listing.isFetchingNextPage ? "加载中…" : "加载更多目录"}
+              </button>
+            ) : null}
+          </>
         ))}
     </div>
   );

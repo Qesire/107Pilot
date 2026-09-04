@@ -1,0 +1,38 @@
+.workbench-new-experiment { position: relative; }
+
+.workbench-new-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  display: grid;
+  width: min(320px, calc(100vw - 28px));
+  gap: 3px;
+  padding: 6px;
+  box-shadow: var(--shadow-popover);
+}
+
+.workbench-new-menu button {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 58px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-primary);
+  padding: 8px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workbench-new-menu button:hover { background: var(--bg-subtle); }
+.workbench-new-menu svg { width: 18px; height: 18px; color: var(--accent-primary); }
+.workbench-new-menu strong { display: block; font-size: 13px; font-weight: 600; }
+.workbench-new-menu small { display: block; margin-top: 2px; color: var(--text-tertiary); font-size: 11px; }
+
+@media (max-width: 760px) {
+  .workbench-new-experiment { width: 100%; }
+  .workbench-new-menu { right: auto; left: 0; width: 100%; }
+}

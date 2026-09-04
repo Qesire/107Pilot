@@ -1,0 +1,140 @@
+/* Semantic theme layer for 107Pilot Scientific Workspace. */
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-canvas: #f6f7f9;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f1f3f6;
+  --bg-raised: #ffffff;
+  --bg-inverse: #15181d;
+
+  --text-primary: #20242c;
+  --text-secondary: #616975;
+  --text-tertiary: #858d98;
+  --text-disabled: #a8afb8;
+  --text-inverse: #eef0f3;
+
+  --border-default: #dee2e8;
+  --border-strong: #c7cdd6;
+
+  --accent-primary: #5966a8;
+  --accent-hover: #4b5796;
+  --accent-soft: #eef0f8;
+
+  --state-success: #2f7667;
+  --state-success-soft: #eaf4f1;
+  --state-warning: #966a24;
+  --state-warning-soft: #f7f0e3;
+  --state-danger: #a84f4c;
+  --state-danger-soft: #faeceb;
+  --state-info: #3f6f9f;
+  --state-info-soft: #ebf2f8;
+
+  --agent-fg: #716a91;
+  --agent-bg: #f2f0f7;
+  --agent-border: #ddd9e8;
+
+  --focus-ring: rgba(89, 102, 168, .28);
+  --shadow-focus: 0 1px 2px rgba(32, 36, 44, .06);
+  --shadow-popover: 0 8px 24px rgba(32, 36, 44, .12);
+  --shadow-dialog: 0 12px 32px rgba(32, 36, 44, .16);
+
+  --log-bg: #15181d;
+  --log-fg: #d8dce3;
+  --log-muted: #8f98a5;
+
+  /* Compatibility aliases while legacy pages migrate. */
+  --canvas: var(--bg-canvas);
+  --surface: var(--bg-surface);
+  --surface-soft: var(--bg-subtle);
+  --surface-strong: #e7eaf0;
+  --ink: var(--text-primary);
+  --ink-soft: var(--text-secondary);
+  --ink-faint: var(--text-tertiary);
+  --line: var(--border-default);
+  --line-strong: var(--border-strong);
+  --nav: #f1f3f6;
+  --nav-soft: #e8ebf0;
+  --teal: var(--state-success);
+  --teal-soft: var(--state-success-soft);
+  --blue: var(--state-info);
+  --blue-soft: var(--state-info-soft);
+  --amber: var(--state-warning);
+  --amber-soft: var(--state-warning-soft);
+  --red: var(--state-danger);
+  --red-soft: var(--state-danger-soft);
+  --indigo: var(--accent-primary);
+  --indigo-soft: var(--accent-soft);
+  --shadow: var(--shadow-focus);
+  --shadow-float: var(--shadow-popover);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-canvas: #121418;
+  --bg-surface: #181b20;
+  --bg-subtle: #1e2228;
+  --bg-raised: #252a31;
+  --bg-inverse: #eef0f3;
+
+  --text-primary: #eef0f3;
+  --text-secondary: #a4abb5;
+  --text-tertiary: #7e8792;
+  --text-disabled: #5f6670;
+  --text-inverse: #20242c;
+
+  --border-default: #30353e;
+  --border-strong: #434a54;
+
+  --accent-primary: #8e99db;
+  --accent-hover: #a1abe4;
+  --accent-soft: #242a46;
+
+  --state-success: #63ad9a;
+  --state-success-soft: #1d302b;
+  --state-warning: #d1a056;
+  --state-warning-soft: #342a1d;
+  --state-danger: #d87975;
+  --state-danger-soft: #382322;
+  --state-info: #78a7d0;
+  --state-info-soft: #1f2d3a;
+
+  --agent-fg: #aaa3ca;
+  --agent-bg: #24222d;
+  --agent-border: #3d394b;
+
+  --focus-ring: rgba(142, 153, 219, .32);
+  --shadow-focus: 0 1px 2px rgba(0, 0, 0, .22);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, .34);
+  --shadow-dialog: 0 12px 32px rgba(0, 0, 0, .42);
+
+  --log-bg: #101216;
+  --log-fg: #dde1e8;
+  --log-muted: #8c95a2;
+
+  --canvas: var(--bg-canvas);
+  --surface: var(--bg-surface);
+  --surface-soft: var(--bg-subtle);
+  --surface-strong: var(--bg-raised);
+  --ink: var(--text-primary);
+  --ink-soft: var(--text-secondary);
+  --ink-faint: var(--text-tertiary);
+  --line: var(--border-default);
+  --line-strong: var(--border-strong);
+  --nav: #15181d;
+  --nav-soft: #1e2228;
+  --teal: var(--state-success);
+  --teal-soft: var(--state-success-soft);
+  --blue: var(--state-info);
+  --blue-soft: var(--state-info-soft);
+  --amber: var(--state-warning);
+  --amber-soft: var(--state-warning-soft);
+  --red: var(--state-danger);
+  --red-soft: var(--state-danger-soft);
+  --indigo: var(--accent-primary);
+  --indigo-soft: var(--accent-soft);
+  --shadow: var(--shadow-focus);
+  --shadow-float: var(--shadow-popover);
+}

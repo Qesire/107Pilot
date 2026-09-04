@@ -13,9 +13,15 @@ from pilot107.agent.capabilities import (
     AgentCapabilityClaims,
     AgentCapabilitySigner,
 )
+from pilot107.agent.checkpoint_repair import (
+    ToolReceiptCheckpointRebuilder,
+    build_tool_receipt_checkpoint_rebuilder,
+)
+from pilot107.agent.heartbeat import PeriodicHeartbeat
 from pilot107.agent.project import is_project_agent_profile
 from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.protocol import AgentdClientError, AgentTurnEvent, DurableAgentTurnRequest
+from pilot107.agent.repair_protocol import ReceiptRepairingDurableAgentTurnRequest
 from pilot107.agent.session import AgentTurnLease, AgentTurnState
 from pilot107.agent.store import AgentSessionStore
 from pilot107.core.control_repository import ControlRepository, OutboxMessage
@@ -52,9 +58,7 @@ _PROJECT_WORKSPACE_TOOLS = frozenset(
         "sandbox_exec",
     }
 )
-_BUILDER_WORKFLOW_TOOLS = frozenset(
-    {"builder_context_get", "builder_build_submit"}
-)
+_BUILDER_WORKFLOW_TOOLS = frozenset({"builder_context_get", "builder_build_submit"})
 _TERMINAL_STATES = frozenset(
     {AgentTurnState.COMPLETED, AgentTurnState.CANCELLED, AgentTurnState.FAILED}
 )
@@ -102,6 +106,7 @@ class AgentTurnWorker:
         clock: Callable[[], int] | None = None,
         publish_event_hint: Callable[[str, int], None] | None = None,
         phase_aware_builder: bool = False,
+        checkpoint_rebuilder: ToolReceiptCheckpointRebuilder | None = None,
     ) -> None:
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
@@ -118,6 +123,9 @@ class AgentTurnWorker:
         self._clock = clock or (lambda: int(time.time()))
         self._publish_event_hint = publish_event_hint or (lambda _session, _sequence: None)
         self.phase_aware_builder = phase_aware_builder
+        self.checkpoint_rebuilder = (
+            checkpoint_rebuilder or build_tool_receipt_checkpoint_rebuilder(store)
+        )
 
     def dispatch_due(self, *, limit: int) -> AgentTurnDispatchResult:
         if limit <= 0:
@@ -175,7 +183,29 @@ class AgentTurnWorker:
 
         session = self.store.get_session(claim.session_id, owner=claim.owner)
         context_refs = _context_refs(session.source)
-        request = DurableAgentTurnRequest(
+        checkpoint = current.final_checkpoint
+        event_sequence_base = current.event_sequence
+        try:
+            receipt_repairs = (
+                ()
+                if self.checkpoint_rebuilder is None
+                else self.checkpoint_rebuilder.build(
+                    turn_id=turn_id,
+                    session_id=claim.session_id,
+                    owner=claim.owner,
+                    checkpoint=checkpoint,
+                    session_source=session.source,
+                )
+            )
+        except Exception:
+            self._interrupt_and_retry(
+                message,
+                claim,
+                checkpoint,
+                "checkpoint_repair_error",
+            )
+            raise
+        request = ReceiptRepairingDurableAgentTurnRequest(
             session_id=claim.session_id,
             turn_id=turn_id,
             owner=claim.owner,
@@ -189,57 +219,84 @@ class AgentTurnWorker:
                 session.source,
                 context_refs=context_refs,
             ),
-            checkpoint=current.final_checkpoint,
+            checkpoint=checkpoint,
             profile_id=session.profile_id,
+            receipt_repairs=receipt_repairs,
         )
-        checkpoint = current.final_checkpoint
         terminal: AgentTurnEvent | None = None
         cancel_sent = False
+        heartbeat = PeriodicHeartbeat(
+            lambda: self._renew_dispatch_leases(message, claim),
+            interval_seconds=self._heartbeat_interval_seconds(),
+            name=f"agent-turn-heartbeat:{turn_id}",
+        ).start()
         try:
-            for event in self.agentd_client.stream_durable_turn(request):
-                self.store.append_event(
-                    turn_id,
-                    claim=claim,
-                    sequence=event.sequence,
-                    event_type=event.type,
-                    payload=event.payload,
-                )
-                if event.type == "checkpoint":
-                    checkpoint = _object_or_none(event.payload.get("checkpoint"))
-                elif event.type == "turn_completed":
-                    checkpoint = _object_or_none(event.payload.get("checkpoint")) or checkpoint
-                self._publish_hint(claim.session_id, event.sequence)
-                current = self.store.get_turn(turn_id, owner=claim.owner)
-                if current.cancel_requested and not cancel_sent:
-                    self.agentd_client.cancel_turn(turn_id)
-                    cancel_sent = True
-                if event.type in {"turn_completed", "turn_failed"}:
-                    terminal = event
-        except AgentdClientError as exc:
-            checkpoint = exc.checkpoint or checkpoint
-            self._interrupt_and_retry(message, claim, checkpoint, exc.code)
-            raise
-        except Exception:
-            self._interrupt_and_retry(message, claim, checkpoint, "internal_error")
-            raise
+            try:
+                for event in self.agentd_client.stream_durable_turn(request):
+                    heartbeat.raise_if_failed()
+                    durable_sequence = event_sequence_base + event.sequence
+                    self.store.append_event(
+                        turn_id,
+                        claim=claim,
+                        sequence=durable_sequence,
+                        event_type=event.type,
+                        payload=event.payload,
+                    )
+                    if event.type == "checkpoint":
+                        checkpoint = _object_or_none(event.payload.get("checkpoint"))
+                    elif event.type == "turn_completed":
+                        checkpoint = _object_or_none(event.payload.get("checkpoint")) or checkpoint
+                    self._publish_hint(claim.session_id, durable_sequence)
+                    current = self.store.get_turn(turn_id, owner=claim.owner)
+                    if current.cancel_requested and not cancel_sent:
+                        self.agentd_client.cancel_turn(turn_id)
+                        cancel_sent = True
+                    if event.type in {"turn_completed", "turn_failed"}:
+                        terminal = event
+            except AgentdClientError as exc:
+                checkpoint = exc.checkpoint or checkpoint
+                self._interrupt_and_retry(message, claim, checkpoint, exc.code)
+                raise
+            except Exception:
+                self._interrupt_and_retry(message, claim, checkpoint, "internal_error")
+                raise
 
-        if terminal is None:
-            self._interrupt_and_retry(message, claim, checkpoint, "stream_ended")
-            raise AgentdClientError(
-                "pilot-agentd stream ended without a terminal event",
-                code="protocol_error",
-                retryable=True,
-                checkpoint=checkpoint,
+            heartbeat.raise_if_failed()
+            if terminal is None:
+                self._interrupt_and_retry(message, claim, checkpoint, "stream_ended")
+                raise AgentdClientError(
+                    "pilot-agentd stream ended without a terminal event",
+                    code="protocol_error",
+                    retryable=True,
+                    checkpoint=checkpoint,
+                )
+            self._finish_terminal(
+                message,
+                claim,
+                terminal,
+                checkpoint,
+                profile_id=session.profile_id,
+                source=session.source,
             )
-        self._finish_terminal(
-            message,
-            claim,
-            terminal,
-            checkpoint,
-            profile_id=session.profile_id,
-            source=session.source,
+            return True
+        finally:
+            heartbeat.stop()
+
+    def _renew_dispatch_leases(
+        self,
+        message: OutboxMessage,
+        claim: AgentTurnLease,
+    ) -> None:
+        self.store.renew_turn(claim, lease_seconds=self.lease_seconds)
+        self.control_repository.renew_outbox(
+            message_id=message.message_id,
+            owner=self.worker_id,
+            fencing_token=message.fencing_token,
+            lease_seconds=self.lease_seconds,
         )
-        return True
+
+    def _heartbeat_interval_seconds(self) -> float:
+        return max(1.0, min(30.0, self.lease_seconds / 3.0))
 
     def _finish_terminal(
         self,
@@ -380,8 +437,7 @@ class AgentTurnWorker:
                 ),
                 max_invocations=128,
                 max_bytes=1024 * 1024,
-                expires_at=now
-                + min(self.lease_seconds, MAX_AGENT_CAPABILITY_LIFETIME_SECONDS),
+                expires_at=now + MAX_AGENT_CAPABILITY_LIFETIME_SECONDS,
                 project_id=project_id if isinstance(project_id, str) else None,
                 workspace_id=workspace_id if isinstance(workspace_id, str) else None,
                 operations=(

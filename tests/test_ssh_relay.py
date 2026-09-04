@@ -236,7 +236,21 @@ class FileManifestRelayClient(FakeRelayClient):
         self.file_shell = shell_command
         return CommandResult(
             0,
-            '[{"name":"control.sock","type":"socket","size":0,"mtime":1}]\n',
+            json.dumps(
+                {
+                    "entries": [
+                        {
+                            "name": "control.sock",
+                            "type": "socket",
+                            "size": 0,
+                            "mtime": 1,
+                        }
+                    ],
+                    "has_more": False,
+                    "directory_revision": "revision-1",
+                }
+            )
+            + "\n",
             "",
         )
 
@@ -322,12 +336,14 @@ def test_ssh_publication_relay_rejects_unknown_protocol_status(tmp_path: Path) -
 def test_ssh_file_manifest_preserves_special_file_types(tmp_path: Path) -> None:
     client = FileManifestRelayClient(relay_config(tmp_path))
 
-    entries = SshRelayExecutor(client).list_dir(
+    page = SshRelayExecutor(client).list_dir(
         path="/public/home/alice/exp",
         owner="alice",
     )
 
-    assert entries[0].type == "socket"
+    assert page.entries[0].type == "socket"
+    assert page.has_more is False
+    assert page.next_cursor is None
     assert client.file_shell is not None
     assert "stat.S_ISREG" in client.file_shell
     assert "stat.S_ISSOCK" in client.file_shell
