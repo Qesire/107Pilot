@@ -14,6 +14,12 @@ from pilot107.agent.capabilities import (
     AgentCapabilityError,
     AgentCapabilitySigner,
 )
+from pilot107.agent.operation_attempts import (
+    AgentOperationAttemptConflict,
+    AgentOperationAttemptStatus,
+    AgentOperationAttemptStore,
+    build_agent_operation_attempt_store,
+)
 from pilot107.agent.operation_ledger import (
     AgentOperationConflict,
     AgentOperationIntent,
@@ -61,6 +67,7 @@ class AgentToolGateway:
         profile_handlers: Mapping[str, Mapping[str, AgentReadHandler]] | None = None,
         operation_ledger: AgentOperationLedger | None = None,
         operation_reconciler: AgentOperationReconciler | None = None,
+        operation_attempt_store: AgentOperationAttemptStore | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.store = store
@@ -78,6 +85,14 @@ class AgentToolGateway:
             store,
             self.operation_ledger,
             clock=self._clock,
+        )
+        self.operation_attempt_store = (
+            operation_attempt_store
+            or (
+                build_agent_operation_attempt_store(store, clock=self._clock)
+                if self.operation_ledger is not None
+                else None
+            )
         )
 
     def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult:
@@ -338,6 +353,36 @@ class AgentToolGateway:
             )
         if record.state is AgentOperationState.FAILED:
             self._replay_failed_operation(record, invocation, claims)
+
+        if record.state is AgentOperationState.RUNNING and self.operation_attempt_store is not None:
+            status = self.operation_attempt_store.classify(
+                intent.operation_key,
+                owner=invocation.owner,
+                turn_id=invocation.turn_id,
+                state_version=invocation.state_version,
+                fencing_token=claims.fencing_token,
+            )
+            if status is AgentOperationAttemptStatus.STALE:
+                try:
+                    self.operation_attempt_store.mark_stale(
+                        intent.operation_key,
+                        owner=invocation.owner,
+                        session_id=invocation.session_id,
+                        current_turn_id=invocation.turn_id,
+                        current_state_version=invocation.state_version,
+                        current_fencing_token=claims.fencing_token,
+                        invocation_id=invocation.invocation_id,
+                    )
+                except AgentOperationAttemptConflict:
+                    raise AgentToolGatewayError(
+                        "Agent Turn capability is stale or fenced",
+                        code="AGENT.TOOL.FENCED",
+                    ) from None
+                record = self.operation_ledger.get(
+                    intent.operation_key,
+                    owner=invocation.owner,
+                )
+
         if self.operation_reconciler is not None and (
             record.state in {AgentOperationState.UNKNOWN, AgentOperationState.STALE}
             or (
@@ -393,6 +438,23 @@ class AgentToolGateway:
                 code="AGENT.TOOL.OPERATION_UNKNOWN",
                 retryable=record.state is not AgentOperationState.UNKNOWN,
             )
+
+        if self.operation_attempt_store is not None:
+            try:
+                self.operation_attempt_store.prepare(
+                    intent.operation_key,
+                    owner=invocation.owner,
+                    session_id=invocation.session_id,
+                    turn_id=invocation.turn_id,
+                    state_version=invocation.state_version,
+                    fencing_token=claims.fencing_token,
+                    invocation_id=invocation.invocation_id,
+                )
+            except AgentOperationAttemptConflict:
+                raise AgentToolGatewayError(
+                    "Agent Turn capability is stale or fenced",
+                    code="AGENT.TOOL.FENCED",
+                ) from None
         try:
             self.operation_ledger.start(
                 intent.operation_key,
@@ -424,6 +486,17 @@ class AgentToolGateway:
                 code="AGENT.TOOL.OPERATION_IN_PROGRESS",
                 retryable=True,
             ) from None
+        if self.operation_attempt_store is not None and not self.operation_attempt_store.heartbeat(
+            intent.operation_key,
+            owner=invocation.owner,
+            turn_id=invocation.turn_id,
+            state_version=invocation.state_version,
+            fencing_token=claims.fencing_token,
+        ):
+            raise AgentToolGatewayError(
+                "Agent Turn capability became stale before mutation execution",
+                code="AGENT.TOOL.FENCED",
+            )
         return None
 
     def _replay_completed_operation(
