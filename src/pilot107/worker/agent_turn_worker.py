@@ -13,10 +13,15 @@ from pilot107.agent.capabilities import (
     AgentCapabilityClaims,
     AgentCapabilitySigner,
 )
+from pilot107.agent.checkpoint_repair import (
+    ToolReceiptCheckpointRebuilder,
+    build_tool_receipt_checkpoint_rebuilder,
+)
 from pilot107.agent.heartbeat import PeriodicHeartbeat
 from pilot107.agent.project import is_project_agent_profile
 from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.protocol import AgentdClientError, AgentTurnEvent, DurableAgentTurnRequest
+from pilot107.agent.repair_protocol import ReceiptRepairingDurableAgentTurnRequest
 from pilot107.agent.session import AgentTurnLease, AgentTurnState
 from pilot107.agent.store import AgentSessionStore
 from pilot107.core.control_repository import ControlRepository, OutboxMessage
@@ -53,9 +58,7 @@ _PROJECT_WORKSPACE_TOOLS = frozenset(
         "sandbox_exec",
     }
 )
-_BUILDER_WORKFLOW_TOOLS = frozenset(
-    {"builder_context_get", "builder_build_submit"}
-)
+_BUILDER_WORKFLOW_TOOLS = frozenset({"builder_context_get", "builder_build_submit"})
 _TERMINAL_STATES = frozenset(
     {AgentTurnState.COMPLETED, AgentTurnState.CANCELLED, AgentTurnState.FAILED}
 )
@@ -103,6 +106,7 @@ class AgentTurnWorker:
         clock: Callable[[], int] | None = None,
         publish_event_hint: Callable[[str, int], None] | None = None,
         phase_aware_builder: bool = False,
+        checkpoint_rebuilder: ToolReceiptCheckpointRebuilder | None = None,
     ) -> None:
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
@@ -119,6 +123,9 @@ class AgentTurnWorker:
         self._clock = clock or (lambda: int(time.time()))
         self._publish_event_hint = publish_event_hint or (lambda _session, _sequence: None)
         self.phase_aware_builder = phase_aware_builder
+        self.checkpoint_rebuilder = (
+            checkpoint_rebuilder or build_tool_receipt_checkpoint_rebuilder(store)
+        )
 
     def dispatch_due(self, *, limit: int) -> AgentTurnDispatchResult:
         if limit <= 0:
@@ -176,7 +183,28 @@ class AgentTurnWorker:
 
         session = self.store.get_session(claim.session_id, owner=claim.owner)
         context_refs = _context_refs(session.source)
-        request = DurableAgentTurnRequest(
+        checkpoint = current.final_checkpoint
+        try:
+            receipt_repairs = (
+                ()
+                if self.checkpoint_rebuilder is None
+                else self.checkpoint_rebuilder.build(
+                    turn_id=turn_id,
+                    session_id=claim.session_id,
+                    owner=claim.owner,
+                    checkpoint=checkpoint,
+                    session_source=session.source,
+                )
+            )
+        except Exception:
+            self._interrupt_and_retry(
+                message,
+                claim,
+                checkpoint,
+                "checkpoint_repair_error",
+            )
+            raise
+        request = ReceiptRepairingDurableAgentTurnRequest(
             session_id=claim.session_id,
             turn_id=turn_id,
             owner=claim.owner,
@@ -190,10 +218,10 @@ class AgentTurnWorker:
                 session.source,
                 context_refs=context_refs,
             ),
-            checkpoint=current.final_checkpoint,
+            checkpoint=checkpoint,
             profile_id=session.profile_id,
+            receipt_repairs=receipt_repairs,
         )
-        checkpoint = current.final_checkpoint
         terminal: AgentTurnEvent | None = None
         cancel_sent = False
         heartbeat = PeriodicHeartbeat(
@@ -407,8 +435,7 @@ class AgentTurnWorker:
                 ),
                 max_invocations=128,
                 max_bytes=1024 * 1024,
-                expires_at=now
-                + min(self.lease_seconds, MAX_AGENT_CAPABILITY_LIFETIME_SECONDS),
+                expires_at=now + MAX_AGENT_CAPABILITY_LIFETIME_SECONDS,
                 project_id=project_id if isinstance(project_id, str) else None,
                 workspace_id=workspace_id if isinstance(workspace_id, str) else None,
                 operations=(
