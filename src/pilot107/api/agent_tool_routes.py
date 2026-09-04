@@ -5,28 +5,18 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import asdict
-from typing import Protocol
 
-from pilot107.agent.operation_authority import OperationLedgerAuthoritativeGateway
+from pilot107.agent.operation_authority import DurableOperationController
 from pilot107.agent.operation_ledger import SQLiteAgentOperationLedger
 from pilot107.agent.operation_ledger_postgres import PostgresAgentOperationLedger
 from pilot107.agent.operation_results import SQLiteAgentOperationResultStore
 from pilot107.agent.operation_results_postgres import PostgresAgentOperationResultStore
-from pilot107.agent.protocol import (
-    TOOL_RESULT_PROTOCOL_VERSION,
-    ToolInvocation,
-    ToolResult,
-    parse_tool_invocation,
-)
+from pilot107.agent.protocol import TOOL_RESULT_PROTOCOL_VERSION, parse_tool_invocation
 from pilot107.agent.tool_gateway import AgentToolGateway, AgentToolGatewayError
 from pilot107.api.http_types import ApiResponse
 from pilot107.api.metrics import ControlPlaneMetrics
 
 _MAX_BODY_BYTES = 1024 * 1024
-
-
-class AgentToolInvoker(Protocol):
-    def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult: ...
 
 
 class AgentToolRoutes:
@@ -37,11 +27,9 @@ class AgentToolRoutes:
         *,
         operation_authority_enabled: bool = True,
     ) -> None:
-        self.gateway: AgentToolInvoker = (
-            _with_operation_authority(gateway)
-            if operation_authority_enabled
-            else gateway
-        )
+        if operation_authority_enabled:
+            _enable_operation_authority(gateway)
+        self.gateway = gateway
         self.metrics = metrics
 
     def handle_post(
@@ -124,24 +112,29 @@ class AgentToolRoutes:
         )
 
 
-def _with_operation_authority(gateway: AgentToolGateway) -> AgentToolInvoker:
+def _enable_operation_authority(gateway: AgentToolGateway) -> None:
+    """Bind the durable controller to the same database as AgentSessionStore."""
+
     store = getattr(gateway, "store", None)
-    if store is None:
-        return gateway
+    if store is None or not hasattr(gateway, "set_operation_controller"):
+        return
     dsn = getattr(store, "dsn", None)
     if isinstance(dsn, str) and dsn:
-        return OperationLedgerAuthoritativeGateway(
-            gateway=gateway,
-            ledger=PostgresAgentOperationLedger(dsn),
-            results=PostgresAgentOperationResultStore(dsn),
+        gateway.set_operation_controller(
+            DurableOperationController(
+                ledger=PostgresAgentOperationLedger(dsn),
+                results=PostgresAgentOperationResultStore(dsn),
+            )
         )
+        return
     db_path = getattr(store, "db_path", None)
     if db_path is None:
-        return gateway
-    return OperationLedgerAuthoritativeGateway(
-        gateway=gateway,
-        ledger=SQLiteAgentOperationLedger(db_path),
-        results=SQLiteAgentOperationResultStore(db_path),
+        return
+    gateway.set_operation_controller(
+        DurableOperationController(
+            ledger=SQLiteAgentOperationLedger(db_path),
+            results=SQLiteAgentOperationResultStore(db_path),
+        )
     )
 
 
