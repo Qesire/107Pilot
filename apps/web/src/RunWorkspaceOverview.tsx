@@ -1,5 +1,8 @@
+import { useState } from "react";
 import { ArrowRight, CircleAlert, FileCheck2, Fingerprint, TerminalSquare } from "lucide-react";
 import { StatusBadge } from "./components";
+import { RunRepairPanel } from "./RunRepairPanel";
+import { canOpenRepair } from "./run-repair";
 import {
   runWorkspaceNextTab,
   type EvidenceTab,
@@ -40,8 +43,11 @@ function attentionTone(
 }
 
 export function RunWorkspaceOverview({ workspace, onNavigate }: RunWorkspaceOverviewProps) {
+  const [repairOpen, setRepairOpen] = useState(false);
   const targetTab = runWorkspaceNextTab(workspace.next_action.kind);
+  const repairAvailable = canOpenRepair(workspace);
   const canNavigate = targetTab !== "overview";
+  const canAct = repairAvailable || canNavigate;
   const evidence = workspace.evidence_summary;
 
   return (
@@ -79,18 +85,28 @@ export function RunWorkspaceOverview({ workspace, onNavigate }: RunWorkspaceOver
             <p className="panel-kicker">下一步</p>
             <h3 id="run-next-action-heading">{workspace.next_action.label}</h3>
           </div>
-          {canNavigate ? (
+          {canAct ? (
             <button
               className="button primary"
               type="button"
-              onClick={() => onNavigate(targetTab)}
+              aria-expanded={repairAvailable ? repairOpen : undefined}
+              onClick={() => {
+                if (repairAvailable) {
+                  setRepairOpen((open) => !open);
+                  return;
+                }
+                onNavigate(targetTab);
+              }}
             >
-              继续 <ArrowRight aria-hidden="true" size={15} />
+              {repairAvailable ? (repairOpen ? "收起修复" : "准备修复") : "继续"}
+              <ArrowRight aria-hidden="true" size={15} />
             </button>
           ) : null}
         </div>
         <p>{workspace.next_action.detail}</p>
       </section>
+
+      {repairOpen ? <RunRepairPanel workspace={workspace} onNavigate={onNavigate} /> : null}
 
       <section className="panel" aria-labelledby="run-evidence-summary-heading">
         <div className="panel-heading">
