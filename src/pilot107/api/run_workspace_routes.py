@@ -13,11 +13,11 @@ from pilot107.services.run_workspace_service import RunWorkspaceService
 
 
 class RunWorkspaceRoutes:
-    """Existing Run route plus a compatibility composition point for workspace reads.
+    """Existing Run route plus a compatibility composition point for workspace APIs.
 
     ``Pilot107HttpApi`` already delegates GET routing to this object.  Until the
-    larger HTTP composition root is refactored, the Research Workspace read API
-    is attached here without changing Run semantics.  SQLite can be discovered
+    larger HTTP composition root is refactored, the Research Workspace API is
+    attached here without changing Run semantics.  SQLite can be discovered
     from the existing RunStore ``db_path``; PostgreSQL deliberately fails closed
     until a native ResearchWorkspaceStore is injected.
     """
@@ -40,11 +40,7 @@ class RunWorkspaceRoutes:
     ) -> ApiResponse | None:
         if parts and parts[0] == "research-workspaces":
             if self.research_routes is None:
-                return _error(
-                    503,
-                    "RESEARCH_WORKSPACE.STORE_UNAVAILABLE",
-                    "Research Workspace storage is not configured for this backend",
-                )
+                return _research_store_unavailable()
             response = self.research_routes.handle_get(
                 parts,
                 params=params,
@@ -71,6 +67,30 @@ class RunWorkspaceRoutes:
             return _error(403, "RUN_WORKSPACE.FORBIDDEN", "run is owned by another user")
         return ApiResponse(status=200, payload=payload)
 
+    def handle_post(
+        self,
+        parts: list[str],
+        *,
+        body: bytes,
+        identity: UserIdentity | None,
+    ) -> ApiResponse | None:
+        """Delegate Research Workspace writes once the composition root calls us.
+
+        The method is intentionally inert for all non-workspace paths.  Adding
+        this method does not itself expose writes; ``Pilot107HttpApi._handle_post``
+        must explicitly delegate to it, which is kept as a separate landing step.
+        """
+
+        if not parts or parts[0] != "research-workspaces":
+            return None
+        if self.research_routes is None:
+            return _research_store_unavailable()
+        return self.research_routes.handle_post(
+            parts,
+            body=body,
+            identity=identity,
+        )
+
 
 def _sqlite_research_routes(
     service: RunWorkspaceService,
@@ -83,6 +103,14 @@ def _sqlite_research_routes(
     except (TypeError, ValueError):
         return None
     return ResearchWorkspaceRoutes(ResearchWorkspaceService(store))
+
+
+def _research_store_unavailable() -> ApiResponse:
+    return _error(
+        503,
+        "RESEARCH_WORKSPACE.STORE_UNAVAILABLE",
+        "Research Workspace storage is not configured for this backend",
+    )
 
 
 def _error(status: int, code: str, message: str) -> ApiResponse:
