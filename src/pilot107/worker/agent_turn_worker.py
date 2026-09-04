@@ -184,6 +184,7 @@ class AgentTurnWorker:
         session = self.store.get_session(claim.session_id, owner=claim.owner)
         context_refs = _context_refs(session.source)
         checkpoint = current.final_checkpoint
+        event_sequence_base = current.event_sequence
         try:
             receipt_repairs = (
                 ()
@@ -233,10 +234,11 @@ class AgentTurnWorker:
             try:
                 for event in self.agentd_client.stream_durable_turn(request):
                     heartbeat.raise_if_failed()
+                    durable_sequence = event_sequence_base + event.sequence
                     self.store.append_event(
                         turn_id,
                         claim=claim,
-                        sequence=event.sequence,
+                        sequence=durable_sequence,
                         event_type=event.type,
                         payload=event.payload,
                     )
@@ -244,7 +246,7 @@ class AgentTurnWorker:
                         checkpoint = _object_or_none(event.payload.get("checkpoint"))
                     elif event.type == "turn_completed":
                         checkpoint = _object_or_none(event.payload.get("checkpoint")) or checkpoint
-                    self._publish_hint(claim.session_id, event.sequence)
+                    self._publish_hint(claim.session_id, durable_sequence)
                     current = self.store.get_turn(turn_id, owner=claim.owner)
                     if current.cancel_requested and not cancel_sent:
                         self.agentd_client.cancel_turn(turn_id)
