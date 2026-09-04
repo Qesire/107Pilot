@@ -14,6 +14,7 @@ from pilot107.agent.capabilities import (
     AgentCapabilityError,
     AgentCapabilitySigner,
 )
+from pilot107.agent.heartbeat import PeriodicHeartbeat
 from pilot107.agent.operation_attempts import (
     AgentOperationAttemptConflict,
     AgentOperationAttemptStatus,
@@ -179,7 +180,12 @@ class AgentToolGateway:
                 return replay
 
         try:
-            read_result = handler(invocation.owner, invocation.arguments)
+            read_result = self._invoke_handler(
+                handler,
+                invocation=invocation,
+                claims=claims,
+                operation_intent=operation_intent,
+            )
         except AgentToolGatewayError as exc:
             if operation_intent is not None:
                 self._fail_operation(operation_intent, invocation, claims, exc)
@@ -308,6 +314,44 @@ class AgentToolGateway:
             evidence_refs=read_result.evidence_refs,
             bytes_returned=bytes_returned,
         )
+
+    def _invoke_handler(
+        self,
+        handler: AgentReadHandler,
+        *,
+        invocation: ToolInvocation,
+        claims: AgentCapabilityClaims,
+        operation_intent: AgentOperationIntent | None,
+    ) -> AgentReadResult:
+        if operation_intent is None or self.operation_attempt_store is None:
+            return handler(invocation.owner, invocation.arguments)
+
+        def beat() -> None:
+            assert self.operation_attempt_store is not None
+            if not self.operation_attempt_store.heartbeat(
+                operation_intent.operation_key,
+                owner=invocation.owner,
+                turn_id=invocation.turn_id,
+                state_version=invocation.state_version,
+                fencing_token=claims.fencing_token,
+            ):
+                raise AgentOperationAttemptConflict("operation attempt heartbeat was fenced")
+
+        heartbeat = PeriodicHeartbeat(
+            beat,
+            interval_seconds=self._operation_heartbeat_interval_seconds(claims),
+            name=f"agent-operation-heartbeat:{operation_intent.operation_key[-16:]}",
+        ).start()
+        try:
+            result = handler(invocation.owner, invocation.arguments)
+        finally:
+            heartbeat.stop()
+        heartbeat.raise_if_failed()
+        return result
+
+    def _operation_heartbeat_interval_seconds(self, claims: AgentCapabilityClaims) -> float:
+        remaining = max(1, claims.expires_at - int(self._now().timestamp()))
+        return max(1.0, min(10.0, remaining / 3.0))
 
     def _operation_intent(
         self,
