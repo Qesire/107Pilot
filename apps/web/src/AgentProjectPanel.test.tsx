@@ -24,6 +24,29 @@ import type {
   WorkspaceChangeSet,
 } from "./types";
 
+type GateReceiptFixture = {
+  task_id: string;
+  run_id: string;
+  run_terminal_state: string;
+  evidence_state: string;
+  evidence_refs: string[];
+  evidence_digest: string;
+  integrity_verified_at: string;
+  integrity_state: string;
+  workspace_revision: number | null;
+  workspace_digest: string;
+  legacy_boundary: boolean;
+  capsule_ref: string | null;
+  capsule_state: string;
+};
+
+type GateTaskFixture = AgentTask & {
+  completion_policy: "evidence_required" | "evidence_and_capsule_required";
+  gate_state: "completed" | "awaiting_evidence" | "awaiting_integrity" | "awaiting_capsule";
+  gate_receipt: GateReceiptFixture | null;
+  legacy_gate_unverified: boolean;
+};
+
 function changeSet(state: WorkspaceChangeSet["state"]): WorkspaceChangeSet {
   return {
     schema_version: "pilot107.workspace-changeset/v1",
@@ -43,10 +66,41 @@ function changeSet(state: WorkspaceChangeSet["state"]): WorkspaceChangeSet {
   };
 }
 
-function task(overrides: Partial<AgentTask> = {}): AgentTask {
+function gateReceipt(input: {
+  taskId: string;
+  runId: string;
+  evidenceRefs: string[];
+}): GateReceiptFixture {
+  return {
+    task_id: input.taskId,
+    run_id: input.runId,
+    run_terminal_state: "completed",
+    evidence_state: "finalized",
+    evidence_refs: input.evidenceRefs,
+    evidence_digest: "d".repeat(64),
+    integrity_verified_at: "2026-08-25T12:01:00Z",
+    integrity_state: "verified",
+    workspace_revision: null,
+    workspace_digest: "a".repeat(64),
+    legacy_boundary: false,
+    capsule_ref: null,
+    capsule_state: "not_required",
+  };
+}
+
+function task(overrides: Partial<GateTaskFixture> = {}): GateTaskFixture {
+  const taskId = overrides.task_id ?? "task-1";
+  const linkedRunId = overrides.linked_run_id ?? "run-1";
+  const result = overrides.result ?? {
+    status: "succeeded" as const,
+    evidence_refs: ["evidence:1"],
+    error_code: null,
+    message: null,
+  };
+  const evidenceRefs = result.status === "succeeded" ? result.evidence_refs : ["evidence:1"];
   return {
     schema_version: "pilot107.agent-task/v1",
-    task_id: "task-1",
+    task_id: taskId,
     owner: "alice",
     session_id: "session-1",
     turn_id: "turn-1",
@@ -71,16 +125,19 @@ function task(overrides: Partial<AgentTask> = {}): AgentTask {
       expires_at: "2026-08-25T13:00:00Z",
       approved_by: "alice",
     },
-    linked_run_id: "run-1",
-    result: {
-      status: "succeeded",
-      evidence_refs: ["evidence:1"],
-      error_code: null,
-      message: null,
-    },
+    linked_run_id: linkedRunId,
+    result,
     lease: null,
     created_at: "2026-08-25T12:00:00Z",
     updated_at: "2026-08-25T12:01:00Z",
+    completion_policy: "evidence_required",
+    gate_state: "completed",
+    gate_receipt: gateReceipt({
+      taskId,
+      runId: linkedRunId ?? "run-1",
+      evidenceRefs,
+    }),
+    legacy_gate_unverified: false,
     ...overrides,
   };
 }
@@ -262,7 +319,7 @@ describe("Agent Project review presentation", () => {
     });
   });
 
-  it("selects only the newest successful task bound to the current approval scope", () => {
+  it("selects only the newest verified task bound to the current approval scope", () => {
     const failed = task({ task_id: "task-failed", state: "failed", updated_at: "2026-08-25T12:05:00Z" });
     const otherProject = task({ task_id: "task-other", project_id: "project-2", updated_at: "2026-08-25T12:06:00Z" });
     const older = task({ task_id: "task-older", updated_at: "2026-08-25T12:02:00Z" });
@@ -273,6 +330,42 @@ describe("Agent Project review presentation", () => {
       .toBe("task-newest");
     expect(canGenerateFormalCandidate(changeSet("reviewable"), newest, binding)).toBe(false);
     expect(canGenerateFormalCandidate(changeSet("published"), newest, binding)).toBe(true);
+  });
+
+  it("rejects legacy success and nonterminal gate projections", () => {
+    const binding = { projectId: "project-1", workspaceId: "workspace-1", sessionId: "session-1" };
+    const legacy = task({
+      task_id: "task-legacy",
+      gate_receipt: null,
+      legacy_gate_unverified: true,
+    });
+    const awaitingEvidence = task({
+      task_id: "task-awaiting",
+      gate_state: "awaiting_evidence",
+    });
+
+    expect(formalCandidateTask([legacy, awaitingEvidence], binding)).toBeNull();
+    expect(canGenerateFormalCandidate(changeSet("published"), legacy, binding)).toBe(false);
+  });
+
+  it("rejects a succeeded task whose legacy result disagrees with the trusted gate", () => {
+    const binding = { projectId: "project-1", workspaceId: "workspace-1", sessionId: "session-1" };
+    const mismatch = task({
+      task_id: "task-mismatch",
+      result: {
+        status: "succeeded",
+        evidence_refs: ["evidence:legacy"],
+        error_code: null,
+        message: null,
+      },
+      gate_receipt: gateReceipt({
+        taskId: "task-mismatch",
+        runId: "run-1",
+        evidenceRefs: ["evidence:trusted"],
+      }),
+    });
+
+    expect(formalCandidateTask([mismatch], binding)).toBeNull();
   });
 
   it("materializes server-derived lineage and scientific formal defaults", () => {
