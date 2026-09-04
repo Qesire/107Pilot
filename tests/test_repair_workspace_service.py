@@ -139,6 +139,11 @@ def test_repair_workspace_projects_existing_authorities_without_raw_agent_payloa
     assert payload["agent"]["executions"][0]["execution_id"] == "agent-execution-1"
     assert payload["repair_tickets"][0]["ticket_id"] == "ticket-1"
     assert payload["derived_runs"][0]["run_id"] == "run-derived"
+    assert payload["truncation"] == {
+        "remediation_sessions": False,
+        "agent_advice": False,
+        "repair_tickets": False,
+    }
     assert payload["status"]["has_repair_activity"] is True
     assert payload["status"]["awaiting_approval"] is True
     assert payload["next_action"]["kind"] == "review_proposal"
@@ -146,6 +151,9 @@ def test_repair_workspace_projects_existing_authorities_without_raw_agent_payloa
     encoded = json.dumps(payload, ensure_ascii=False)
     assert "private-model-thought" not in encoded
     assert "private-source-body" not in encoded
+    assert "code_context" not in encoded
+    assert "error_message" not in encoded
+    assert '"payload"' not in encoded
 
 
 def test_repair_workspace_is_owner_scoped(tmp_path: Path) -> None:
