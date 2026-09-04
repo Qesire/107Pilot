@@ -131,15 +131,20 @@ def test_shadow_gateway_records_legacy_failure_and_preserves_exception(tmp_path:
     assert receipt.error_code == "AGENT.TOOL.CAPABILITY_DENIED"
 
 
-def test_shadow_gateway_does_not_replay_from_ledger_yet(tmp_path: Path) -> None:
+def test_shadow_gateway_still_calls_legacy_gateway_for_provider_replay(tmp_path: Path) -> None:
     ledger = SQLiteAgentOperationLedger(tmp_path / "agent.db", clock=FixedClock())
     delegate = FakeGateway()
     gateway = OperationLedgerShadowGateway(gateway=delegate, ledger=ledger)  # type: ignore[arg-type]
 
-    gateway.invoke("capability", _invocation(call="inv-a", idempotency="idem-a"))
-    with pytest.raises(Exception):
-        # The current legacy Gateway would decide how a second provider call is
-        # treated.  The shadow ledger must not silently suppress it yet.
-        gateway.invoke("capability", _invocation(call="inv-b", idempotency="idem-b"))
+    first = gateway.invoke("capability", _invocation(call="inv-a", idempotency="idem-a"))
+    second = gateway.invoke("capability", _invocation(call="inv-b", idempotency="idem-b"))
 
+    assert first.result == second.result == {"state": "scheduled"}
     assert delegate.calls == ["inv-a", "inv-b"]
+    receipt = ledger.get(
+        operation_identity_for_invocation(
+            _invocation(call="inv-a", idempotency="idem-a")
+        ).operation_key,
+        owner="alice",
+    )
+    assert receipt.state is AgentOperationState.COMPLETED
