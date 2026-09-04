@@ -1,4 +1,4 @@
-"""HTTP route for the evidence-first Run workspace read model."""
+"""HTTP routes for evidence-first Run workspace read models."""
 
 from __future__ import annotations
 
@@ -21,21 +21,31 @@ class RunWorkspaceRoutes:
         identity: UserIdentity | None,
     ) -> ApiResponse | None:
         # GET /api/v1/runs/{run_id}/workspace
-        if len(parts) != 3 or parts[0] != "runs" or parts[2] != "workspace":
+        # GET /api/v1/runs/{run_id}/repair-workspace
+        if len(parts) != 3 or parts[0] != "runs" or parts[2] not in {
+            "workspace",
+            "repair-workspace",
+        }:
             return None
+        repair = parts[2] == "repair-workspace"
+        prefix = "REPAIR_WORKSPACE" if repair else "RUN_WORKSPACE"
         if params:
             return _error(
                 400,
-                "RUN_WORKSPACE.INVALID_QUERY",
-                "workspace does not accept query parameters",
+                f"{prefix}.INVALID_QUERY",
+                f"{parts[2]} does not accept query parameters",
             )
         owner = identity.username if identity is not None else None
         try:
-            payload = self.service.get(parts[1], owner=owner)
+            payload = (
+                self.service.get_repair(parts[1], owner=owner)
+                if repair
+                else self.service.get(parts[1], owner=owner)
+            )
         except KeyError:
-            return _error(404, "RUN_WORKSPACE.NOT_FOUND", "run not found")
+            return _error(404, f"{prefix}.NOT_FOUND", "run not found")
         except PermissionError:
-            return _error(403, "RUN_WORKSPACE.FORBIDDEN", "run is owned by another user")
+            return _error(403, f"{prefix}.FORBIDDEN", "run is owned by another user")
         return ApiResponse(status=200, payload=payload)
 
 
