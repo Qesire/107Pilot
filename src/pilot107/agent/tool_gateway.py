@@ -90,9 +90,9 @@ class AgentToolGateway:
             else None
         )
         if active_controller is not None:
-            # This lookup is intentionally read-only.  It happens before the
-            # provider-call-ID-bound legacy reservation so a completed durable
-            # operation can replay even when the provider emits a new call ID.
+            # Durable replay may bypass a provider-call-ID-bound legacy record,
+            # but it must never bypass the current Turn fencing authority.
+            self._validate_turn_fence(claims, invocation)
             replay = active_controller.replay_existing(invocation)
             if replay is not None:
                 return replay
@@ -353,6 +353,24 @@ class AgentToolGateway:
                 "Agent tool invocation deadline has expired",
                 code="AGENT.TOOL.DEADLINE_EXPIRED",
             )
+
+    def _validate_turn_fence(
+        self,
+        claims: AgentCapabilityClaims,
+        invocation: ToolInvocation,
+    ) -> None:
+        try:
+            self.store.get_turn_tool_usage(
+                turn_id=invocation.turn_id,
+                owner=invocation.owner,
+                expected_state_version=invocation.state_version,
+                expected_fencing_token=claims.fencing_token,
+            )
+        except AgentSessionConflict:
+            raise AgentToolGatewayError(
+                "Agent Turn capability is stale or fenced",
+                code="AGENT.TOOL.FENCED",
+            ) from None
 
     def _raise_store_conflict(
         self,
