@@ -5,8 +5,19 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import asdict
+from typing import Protocol
 
-from pilot107.agent.protocol import TOOL_RESULT_PROTOCOL_VERSION, parse_tool_invocation
+from pilot107.agent.operation_authority import OperationLedgerAuthoritativeGateway
+from pilot107.agent.operation_ledger import SQLiteAgentOperationLedger
+from pilot107.agent.operation_ledger_postgres import PostgresAgentOperationLedger
+from pilot107.agent.operation_results import SQLiteAgentOperationResultStore
+from pilot107.agent.operation_results_postgres import PostgresAgentOperationResultStore
+from pilot107.agent.protocol import (
+    TOOL_RESULT_PROTOCOL_VERSION,
+    ToolInvocation,
+    ToolResult,
+    parse_tool_invocation,
+)
 from pilot107.agent.tool_gateway import AgentToolGateway, AgentToolGatewayError
 from pilot107.api.http_types import ApiResponse
 from pilot107.api.metrics import ControlPlaneMetrics
@@ -14,13 +25,23 @@ from pilot107.api.metrics import ControlPlaneMetrics
 _MAX_BODY_BYTES = 1024 * 1024
 
 
+class AgentToolInvoker(Protocol):
+    def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult: ...
+
+
 class AgentToolRoutes:
     def __init__(
         self,
         gateway: AgentToolGateway,
         metrics: ControlPlaneMetrics | None = None,
+        *,
+        operation_authority_enabled: bool = True,
     ) -> None:
-        self.gateway = gateway
+        self.gateway: AgentToolInvoker = (
+            _with_operation_authority(gateway)
+            if operation_authority_enabled
+            else gateway
+        )
         self.metrics = metrics
 
     def handle_post(
@@ -103,6 +124,27 @@ class AgentToolRoutes:
         )
 
 
+def _with_operation_authority(gateway: AgentToolGateway) -> AgentToolInvoker:
+    store = getattr(gateway, "store", None)
+    if store is None:
+        return gateway
+    dsn = getattr(store, "dsn", None)
+    if isinstance(dsn, str) and dsn:
+        return OperationLedgerAuthoritativeGateway(
+            gateway=gateway,
+            ledger=PostgresAgentOperationLedger(dsn),
+            results=PostgresAgentOperationResultStore(dsn),
+        )
+    db_path = getattr(store, "db_path", None)
+    if db_path is None:
+        return gateway
+    return OperationLedgerAuthoritativeGateway(
+        gateway=gateway,
+        ledger=SQLiteAgentOperationLedger(db_path),
+        results=SQLiteAgentOperationResultStore(db_path),
+    )
+
+
 def _gateway_error(
     exc: AgentToolGatewayError,
     *,
@@ -123,6 +165,9 @@ def _gateway_error(
         "AGENT.TOOL.FENCED",
         "AGENT.TOOL.IDEMPOTENCY_CONFLICT",
         "AGENT.TOOL.INVOCATION_IN_PROGRESS",
+        "AGENT.OPERATION.IN_PROGRESS",
+        "AGENT.OPERATION.RECONCILIATION_REQUIRED",
+        "AGENT.OPERATION.STATE_CONFLICT",
         "AGENT.BUILDER.IDEMPOTENCY_CONFLICT",
         "AGENT.BUILDER.NO_PROGRESS",
         "AGENT.BUILDER.SNAPSHOT_INVALID",
@@ -145,7 +190,12 @@ def _gateway_error(
         status = 400
     elif code == "AGENT.BUILDER.VALIDATIONS_INVALID":
         status = 400
-    elif code in {"AGENT.TOOL.UNAVAILABLE", "AGENT.BUILDER.ENVELOPE_UNAVAILABLE"}:
+    elif code in {
+        "AGENT.TOOL.UNAVAILABLE",
+        "AGENT.BUILDER.ENVELOPE_UNAVAILABLE",
+        "AGENT.OPERATION.RESULT_UNAVAILABLE",
+        "AGENT.OPERATION.RESULT_MISMATCH",
+    }:
         status = 503
     else:
         status = 502
@@ -179,6 +229,13 @@ def _public_message(code: str) -> str:
         "AGENT.TOOL.FENCED": "Agent Turn capability is stale or fenced",
         "AGENT.TOOL.IDEMPOTENCY_CONFLICT": "Agent tool idempotency conflict",
         "AGENT.TOOL.INVOCATION_IN_PROGRESS": "Agent tool invocation is in progress",
+        "AGENT.OPERATION.IN_PROGRESS": "Agent operation is already in progress",
+        "AGENT.OPERATION.RECONCILIATION_REQUIRED": (
+            "Agent operation requires reconciliation before retry"
+        ),
+        "AGENT.OPERATION.STATE_CONFLICT": "Agent operation state does not permit execution",
+        "AGENT.OPERATION.RESULT_UNAVAILABLE": "Agent operation replay result is unavailable",
+        "AGENT.OPERATION.RESULT_MISMATCH": "Agent operation replay result failed integrity checks",
         "AGENT.TOOL.INVOCATION_BUDGET_EXCEEDED": "Agent tool invocation budget exceeded",
         "AGENT.TOOL.BYTE_BUDGET_EXCEEDED": "Agent tool byte budget exceeded",
         "AGENT.TOOL.COMMAND_BUDGET_EXCEEDED": "Agent sandbox command budget exceeded",
