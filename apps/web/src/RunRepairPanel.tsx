@@ -244,6 +244,7 @@ export function RunRepairPanel({ workspace, onNavigate }: RunRepairPanelProps) {
         ) : (
           <>
             <dl className="fact-list">
+              <div><dt>修复会话</dt><dd className="mono wrap-anywhere">{session.session_id}</dd></div>
               <div><dt>Source Run</dt><dd className="mono wrap-anywhere">{session.source_run_id}</dd></div>
               <div><dt>Source Contract</dt><dd className="mono wrap-anywhere">{session.source_contract_id ?? "未绑定"}</dd></div>
               <div><dt>策略</dt><dd>{session.automation_policy}</dd></div>
