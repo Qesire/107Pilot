@@ -189,9 +189,24 @@ class SQLiteWorkspaceLiveStore:
     def ensure_head(self, workspace: AgentWorkspaceRecord) -> WorkspaceLiveHead:
         if not isinstance(workspace, AgentWorkspaceRecord):
             raise TypeError("workspace must be AgentWorkspaceRecord")
-        # Capture before entering the DB transaction.  This is a one-time
-        # bootstrap for legacy Workspaces; AC4-B will make every later mutation
-        # pass through a journal/fence rather than rescanning here.
+        try:
+            existing = self.get_head(workspace.workspace_id, owner=workspace.owner)
+        except KeyError:
+            existing = None
+        if existing is not None:
+            if (
+                existing.project_id != workspace.project_id
+                or existing.base_snapshot_digest != workspace.snapshot.digest
+            ):
+                raise WorkspaceLiveConflict(
+                    "Workspace live head refers to different immutable content",
+                    current=existing,
+                )
+            return existing
+
+        # Capture only while bootstrapping a legacy/imported Workspace.  AC4-B
+        # will make every later mutation pass through a journal/fence rather
+        # than rescanning on ordinary live-head reads.
         live_digest = capture_workspace_live_digest(workspace)
         now = self._now()
         with self.connect() as connection:
@@ -456,8 +471,8 @@ def capture_workspace_live_digest(
 
     The manifest intentionally excludes mtime and absolute paths.  It includes
     each relative path, entry kind, permission mode and regular-file content
-    digest/size so identical scientific content is stable across machines while
-    permission changes remain observable.
+    digest/size.  Absolute deployment paths therefore do not affect the digest,
+    while permission changes remain observable.
     """
 
     if not isinstance(workspace, AgentWorkspaceRecord):
@@ -604,7 +619,7 @@ def _lease_seconds(value: int) -> int:
 def _timestamp(value: datetime) -> str:
     if value.tzinfo is None:
         raise ValueError("Workspace live timestamp must be timezone-aware")
-    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return value.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _timestamp_value(value: object, label: str) -> str:
@@ -616,4 +631,4 @@ def _timestamp_value(value: object, label: str) -> str:
         raise ValueError(f"{label} is invalid") from exc
     if parsed.tzinfo is None:
         raise ValueError(f"{label} must be timezone-aware")
-    return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return parsed.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
