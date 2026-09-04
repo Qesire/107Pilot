@@ -60,7 +60,11 @@ export function runExperimentStage(state: RunState): ExperimentStage {
 
 export function experimentRunNextAction(state: RunState): { label: string; tab: string; detail: string } {
   if (repairRunStates.has(state)) {
-    return { label: "查看诊断", tab: "diagnosis", detail: "运行需要处理。先依据诊断与运行证据决定是否修复。" };
+    return {
+      label: "进入修复工作区",
+      tab: "repair",
+      detail: "运行需要处理。把 Diagnosis、Evidence、审批、修复动作与派生 Run 放在同一失败恢复上下文中。",
+    };
   }
   if (state === "SUCCEEDED") {
     return { label: "查看结果", tab: "results", detail: "运行已经完成，检查结果与可核验运行证据。" };
@@ -208,12 +212,12 @@ export function ExperimentShell({ user, location, navigate, context, children }:
         />
         <PhaseButton
           label="修复"
-          detail={run && repairRunStates.has(run.state) ? "需要处理" : run ? "诊断入口" : "按需出现"}
+          detail={run && repairRunStates.has(run.state) ? "失败恢复" : run ? "按需查看" : "按需出现"}
           active={stage === "repair"}
           done={false}
           icon={Wrench}
           disabled={!run}
-          onClick={run ? () => openRunTab("diagnosis") : undefined}
+          onClick={run ? () => openRunTab("repair") : undefined}
         />
       </nav>
 
