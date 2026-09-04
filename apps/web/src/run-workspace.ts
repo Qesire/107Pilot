@@ -24,6 +24,7 @@ export type EvidenceTab =
   | "logs"
   | "results"
   | "diagnosis"
+  | "repair"
   | "capsule"
   | "objects";
 
@@ -90,7 +91,7 @@ export interface RunWorkspaceTabRequirements {
 }
 
 export function runWorkspaceTabRequirements(tab: EvidenceTab): RunWorkspaceTabRequirements {
-  if (tab === "overview" || tab === "timeline") {
+  if (tab === "overview" || tab === "timeline" || tab === "repair") {
     return { evidence: false, diagnoses: false, capsule: false, health: false };
   }
   if (tab === "diagnosis") {
@@ -105,7 +106,7 @@ export function runWorkspaceTabRequirements(tab: EvidenceTab): RunWorkspaceTabRe
 export function runWorkspaceNextTab(kind: RunWorkspaceNextActionKind): EvidenceTab {
   switch (kind) {
     case "prepare_repair":
-      return "diagnosis";
+      return "repair";
     case "inspect_failure":
       return "logs";
     case "inspect_collection":
