@@ -1,9 +1,10 @@
 """Authoritative durable-operation replay in front of the legacy Tool Gateway.
 
 The Pi/model loop stays unchanged.  This control-plane adapter decides whether a
-provider-emitted tool call represents a new domain operation or a replay of an
-already completed one.  A completed receipt with a replayable ``result_ref`` is
-returned without invoking the legacy Gateway again.
+provider-emitted *mutating* tool call represents a new domain operation or a
+replay of an already completed one.  A completed receipt with a replayable
+``result_ref`` is returned without invoking the legacy Gateway again.  Read-only
+and ephemeral validation tools keep their original live semantics.
 """
 
 from __future__ import annotations
@@ -22,6 +23,18 @@ from pilot107.agent.operation_results import (
 )
 from pilot107.agent.protocol import ToolInvocation, ToolResult
 from pilot107.agent.tool_gateway import AgentToolGateway, AgentToolGatewayError
+
+# Durable replay protects domain mutations and cluster scheduling.  Ordinary
+# reads must remain live, while sandbox_exec is deliberately excluded because
+# it is an ephemeral validation step rather than a persisted domain mutation.
+DURABLE_MUTATION_TOOL_NAMES = frozenset(
+    {
+        "project_blueprint_save",
+        "workspace_patch",
+        "validation_schedule",
+        "builder_build_submit",
+    }
+)
 
 
 class AuthoritativeOperationLedger(Protocol):
@@ -91,12 +104,17 @@ class OperationLedgerAuthoritativeGateway:
         gateway: AgentToolGateway,
         ledger: AuthoritativeOperationLedger,
         results: AuthoritativeOperationResultStore,
+        protected_tools: frozenset[str] = DURABLE_MUTATION_TOOL_NAMES,
     ) -> None:
         self.gateway = gateway
         self.ledger = ledger
         self.results = results
+        self.protected_tools = protected_tools
 
     def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult:
+        if invocation.tool_name not in self.protected_tools:
+            return self.gateway.invoke(token, invocation)
+
         identity = operation_identity_for_invocation(invocation)
         receipt, created = self.ledger.reserve(
             identity,
@@ -106,8 +124,6 @@ class OperationLedgerAuthoritativeGateway:
             replay = self._existing(receipt, invocation)
             if replay is not None:
                 return replay
-            # ``_existing`` only returns None for a freshly reservable state;
-            # existing durable rows are otherwise terminal or fail-closed.
             raise AgentToolGatewayError(
                 "Agent operation cannot be executed from its current state",
                 code="AGENT.OPERATION.STATE_CONFLICT",
