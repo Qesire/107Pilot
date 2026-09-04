@@ -1,8 +1,8 @@
 """Build fail-closed checkpoint repair deltas from durable Agent facts.
 
-The rebuilder never inspects Workspace files and never executes a tool.  It only
+The rebuilder never inspects Workspace files and never executes a tool. It only
 joins already-persisted ``tool_call_requested`` Turn events with terminal
-``agent_tool_invocations`` rows.  The resulting delta is applied by pilot-agentd
+``agent_tool_invocations`` rows. The resulting delta is applied by pilot-agentd
 at checkpoint restore time, where the existing TypeScript checkpoint
 canonicalizer remains authoritative for the next checkpoint digest.
 """
@@ -170,10 +170,14 @@ def _build_repairs(
     checkpoint: Mapping[str, object] | None,
     session_source: Mapping[str, object],
 ) -> tuple[ToolReceiptRepair, ...]:
-    parent_digest, base_sequence, completed_ids = _base_checkpoint(events, checkpoint)
+    parent_digest, base_sequence, completed_ids = _base_checkpoint(
+        events,
+        checkpoint,
+        turn_id=turn_id,
+    )
     if checkpoint is not None and base_sequence is None:
-        # A checkpoint that cannot be bound back to this Turn's durable event
-        # stream is not safe to extend with inferred tool completion.
+        # A same-Turn checkpoint that cannot be bound back to this Turn's
+        # durable event stream is not safe to extend with inferred completion.
         return ()
     after_sequence = 0 if base_sequence is None else base_sequence
     invocation_by_id = {str(row["invocation_id"]): row for row in invocations}
@@ -210,7 +214,7 @@ def _build_repairs(
             continue
         if tool_call_id in seen_requested:
             # Duplicate provider call identity after the same parent checkpoint
-            # is ambiguous.  Do not synthesize any later state.
+            # is ambiguous. Do not synthesize any later state.
             break
         seen_requested.add(tool_call_id)
 
@@ -258,11 +262,13 @@ def _build_repairs(
             result=stored_result,
             bytes_returned=bytes_returned,
         )
+        # This exactly mirrors normal agentd tool details. receipt_ref remains
+        # repair metadata and therefore does not perturb the repaired checkpoint
+        # relative to a checkpoint created on the live path.
         details = {
             "result": public_result,
             "evidence_refs": list(evidence_refs),
             "bytes_returned": bytes_returned,
-            "receipt_ref": receipt_ref,
         }
         repairs.append(
             ToolReceiptRepair(
@@ -293,18 +299,32 @@ def _build_repairs(
 def _base_checkpoint(
     events: list[Mapping[str, Any]],
     checkpoint: Mapping[str, object] | None,
+    *,
+    turn_id: str,
 ) -> tuple[str | None, int | None, set[str]]:
     if checkpoint is None:
-        return None, None, set()
+        return None, 0, set()
     digest = checkpoint.get("digest")
+    checkpoint_turn_id = checkpoint.get("turn_id")
     completed = checkpoint.get("completed_tools")
-    if not isinstance(digest, str) or len(digest) != 64 or not isinstance(completed, list):
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 64
+        or not isinstance(checkpoint_turn_id, str)
+        or not checkpoint_turn_id
+        or not isinstance(completed, list)
+    ):
         return "", None, set()
     completed_ids = {
         str(item["tool_call_id"])
         for item in completed
         if isinstance(item, Mapping) and isinstance(item.get("tool_call_id"), str)
     }
+    if checkpoint_turn_id != turn_id:
+        # A checkpoint inherited from the preceding Turn predates every event
+        # in this Turn and therefore establishes sequence zero.
+        return digest, 0, completed_ids
+
     matched_sequence: int | None = None
     for event in events:
         payload = _json_object(event["payload_json"])
