@@ -24,7 +24,8 @@ export function sessionsForRun(
 ): RemediationSession[] {
   return sessions
     .filter((session) => session.source_run_id === runId)
-    .toSorted((left, right) => right.updated_at.localeCompare(left.updated_at));
+    .slice()
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
 }
 
 export function approvedProposalIds(session: RemediationSession): Set<string> {
