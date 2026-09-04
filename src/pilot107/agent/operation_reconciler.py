@@ -1,7 +1,7 @@
 """Domain-backed reconciliation for durable Agent mutation operations.
 
-This module is intentionally separate from Workspace state.  It may only repair
-an ``agent_operations`` record from already-persisted domain facts.  It never
+This module is intentionally separate from Workspace state. It may only repair
+an ``agent_operations`` record from already-persisted domain facts. It never
 scans or mutates Workspace files to guess whether a patch or sandbox command ran.
 
 The first recovery authorities are deliberately narrow:
@@ -10,8 +10,8 @@ The first recovery authorities are deliberately narrow:
 * ``validation_schedule`` -> an AgentTask that has advanced beyond the raw
   ``pending/version=0`` creation boundary
 
-A raw pending AgentTask is *not* enough evidence: the process may have crashed
-between ``create_task`` and initial outbox materialization.  That case remains
+A raw pending AgentTask is not enough evidence: the process may have crashed
+between ``create_task`` and initial outbox materialization. That case remains
 UNKNOWN until the task lifecycle itself advances or a later control-plane repair
 materializes the missing execute message.
 """
@@ -51,7 +51,7 @@ def build_agent_operation_reconciler(
     *,
     clock: Callable[[], datetime] | None = None,
 ) -> AgentOperationReconciler | None:
-    """Build a reconciler against the same durable database as AgentSessionStore."""
+    """Build a reconciler against the same durable DB as AgentSessionStore."""
 
     if ledger is None:
         return None
@@ -96,7 +96,7 @@ class SQLiteAgentOperationReconciler:
             return None
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            now = self._now_text(sqlite=True)
+            now = _clock_value(self._clock).isoformat()
             if not _sqlite_current_turn(
                 connection,
                 invocation=invocation,
@@ -151,14 +151,9 @@ class SQLiteAgentOperationReconciler:
                 ).fetchone()
                 return _task_resolution(row)
         except sqlite3.OperationalError:
+            # A missing authority table is not proof of any side-effect outcome.
             return None
         return None
-
-    def _now_text(self, *, sqlite: bool) -> str:
-        value = _clock_value(self._clock)
-        del sqlite
-        # AgentSession SQLite leases are written with ``datetime.isoformat()``.
-        return value.isoformat()
 
 
 class PostgresAgentOperationReconciler:
@@ -239,38 +234,35 @@ class PostgresAgentOperationReconciler:
         connection: Any,
         record: AgentOperationRecord,
     ) -> tuple[dict[str, Any], str | None] | None:
-        try:
-            if record.tool_name == "builder_build_submit":
-                row = connection.execute(
-                    """
-                    SELECT submission_id, change_set_id, sandbox_result_id, task_id,
-                           receipt_json
-                    FROM agent_builder_submissions
-                    WHERE owner = %s AND request_key = %s
-                    """,
-                    (record.owner, record.request_key),
-                ).fetchone()
-                return _builder_resolution(row)
-            if record.tool_name == "validation_schedule":
-                row = connection.execute(
-                    """
-                    SELECT task_id, state, version, linked_run_id, schedule_receipt
-                    FROM agent_tasks WHERE owner = %s AND request_key = %s
-                    """,
-                    (record.owner, record.request_key),
-                ).fetchone()
-                return _task_resolution(row)
-        except self._psycopg.Error:
-            return None
+        if record.tool_name == "builder_build_submit":
+            row = connection.execute(
+                """
+                SELECT submission_id, change_set_id, sandbox_result_id, task_id,
+                       receipt_json
+                FROM agent_builder_submissions
+                WHERE owner = %s AND request_key = %s
+                """,
+                (record.owner, record.request_key),
+            ).fetchone()
+            return _builder_resolution(row)
+        if record.tool_name == "validation_schedule":
+            row = connection.execute(
+                """
+                SELECT task_id, state, version, linked_run_id, schedule_receipt
+                FROM agent_tasks WHERE owner = %s AND request_key = %s
+                """,
+                (record.owner, record.request_key),
+            ).fetchone()
+            return _task_resolution(row)
         return None
 
 
 def _builder_resolution(
-    row: Mapping[str, Any] | None,
+    row: Mapping[str, Any] | sqlite3.Row | None,
 ) -> tuple[dict[str, Any], str | None] | None:
     if row is None:
         return None
-    receipt = _json_mapping(row.get("receipt_json"))
+    receipt = _json_mapping(_row_value(row, "receipt_json"))
     if receipt is None:
         return None
     submission_id = str(row["submission_id"])
@@ -280,21 +272,21 @@ def _builder_resolution(
         ("sandbox_result_id", "sandbox"),
         ("task_id", "agent-task"),
     ):
-        value = row.get(column)
+        value = _row_value(row, column)
         if value is not None:
             refs.append(f"{prefix}:{value}")
     return _stored_operation_result(receipt, refs), refs[0]
 
 
 def _task_resolution(
-    row: Mapping[str, Any] | None,
+    row: Mapping[str, Any] | sqlite3.Row | None,
 ) -> tuple[dict[str, Any], str | None] | None:
     if row is None:
         return None
     state = str(row["state"])
     version = int(row["version"])
-    linked_run_id = row.get("linked_run_id")
-    schedule_receipt = row.get("schedule_receipt")
+    linked_run_id = _row_value(row, "linked_run_id")
+    schedule_receipt = _row_value(row, "schedule_receipt")
     # Creation alone is not proof that the initial execute outbox was durable.
     if state == "pending" and version == 0 and linked_run_id is None and schedule_receipt is None:
         return None
@@ -311,11 +303,10 @@ def _task_resolution(
 
 def _stored_operation_result(result: Mapping[str, object], refs: list[str]) -> dict[str, Any]:
     payload = _finite_json_object(result, "reconciled result")
-    bytes_returned = len(_canonical(payload))
     return {
         "result": payload,
         "evidence_refs": list(refs),
-        "bytes_returned": bytes_returned,
+        "bytes_returned": len(_canonical(payload)),
     }
 
 
@@ -429,20 +420,9 @@ def _sqlite_note_unresolved(
     invocation: ToolInvocation,
     now: str,
 ) -> None:
-    state = (
-        AgentOperationState.STALE.value
-        if record.state is AgentOperationState.RUNNING
-        and record.origin_turn_id != invocation.turn_id
-        else AgentOperationState.UNKNOWN.value
-        if record.state is AgentOperationState.UNKNOWN
-        else record.state.value
-    )
-    error = {
-        "code": "AGENT.TOOL.OPERATION_UNKNOWN",
-        "message": "No authoritative domain receipt can prove the mutation outcome",
-        "retryable": False,
-    }
-    connection.execute(
+    state = _unresolved_state(record, invocation).value
+    error = _unresolved_error()
+    updated = connection.execute(
         """
         UPDATE agent_operations
         SET state = ?, error_json = ?, reconciliation_attempt = reconciliation_attempt + 1,
@@ -460,6 +440,8 @@ def _sqlite_note_unresolved(
             record.session_id,
         ),
     )
+    if updated.rowcount != 1:
+        raise RuntimeError("operation unresolved reconciliation lost its state race")
 
 
 def _postgres_note_unresolved(
@@ -470,20 +452,7 @@ def _postgres_note_unresolved(
     now: datetime,
     jsonb: Any,
 ) -> None:
-    state = (
-        AgentOperationState.STALE.value
-        if record.state is AgentOperationState.RUNNING
-        and record.origin_turn_id != invocation.turn_id
-        else AgentOperationState.UNKNOWN.value
-        if record.state is AgentOperationState.UNKNOWN
-        else record.state.value
-    )
-    error = {
-        "code": "AGENT.TOOL.OPERATION_UNKNOWN",
-        "message": "No authoritative domain receipt can prove the mutation outcome",
-        "retryable": False,
-    }
-    connection.execute(
+    row = connection.execute(
         """
         UPDATE agent_operations
         SET state = %s, error_json = %s,
@@ -491,26 +460,45 @@ def _postgres_note_unresolved(
             last_invocation_id = %s, updated_at = %s
         WHERE operation_key = %s AND owner = %s AND session_id = %s
           AND state IN ('running', 'stale', 'unknown', 'reconciling')
+        RETURNING operation_key
         """,
         (
-            state,
-            jsonb(error),
+            _unresolved_state(record, invocation).value,
+            jsonb(_unresolved_error()),
             invocation.invocation_id,
             now,
             record.operation_key,
             record.owner,
             record.session_id,
         ),
-    )
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("operation unresolved reconciliation lost its state race")
+
+
+def _unresolved_state(
+    record: AgentOperationRecord,
+    invocation: ToolInvocation,
+) -> AgentOperationState:
+    if record.state is AgentOperationState.RUNNING and record.origin_turn_id != invocation.turn_id:
+        return AgentOperationState.STALE
+    if record.state is AgentOperationState.UNKNOWN:
+        return AgentOperationState.UNKNOWN
+    return record.state
+
+
+def _unresolved_error() -> dict[str, object]:
+    return {
+        "code": "AGENT.TOOL.OPERATION_UNKNOWN",
+        "message": "No authoritative domain receipt can prove the mutation outcome",
+        "retryable": False,
+    }
 
 
 def _is_reconcilable_state(record: AgentOperationRecord, invocation: ToolInvocation) -> bool:
     if record.state in {AgentOperationState.UNKNOWN, AgentOperationState.STALE}:
         return True
-    return (
-        record.state is AgentOperationState.RUNNING
-        and record.origin_turn_id != invocation.turn_id
-    )
+    return record.state is AgentOperationState.RUNNING and record.origin_turn_id != invocation.turn_id
 
 
 def _assert_reconcile_request(
@@ -523,9 +511,15 @@ def _assert_reconcile_request(
     if (
         invocation.owner != record.owner
         or invocation.session_id != record.session_id
+        or isinstance(expected_fencing_token, bool)
+        or not isinstance(expected_fencing_token, int)
         or expected_fencing_token < 1
     ):
         raise ValueError("operation reconciliation binding is invalid")
+
+
+def _row_value(row: Mapping[str, Any] | sqlite3.Row, key: str) -> Any:
+    return row[key]
 
 
 def _json_mapping(value: object) -> dict[str, Any] | None:
