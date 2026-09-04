@@ -31,7 +31,7 @@ describe("ExperimentShell", () => {
   });
 
   it("derives one decision-oriented next action from the Run state", () => {
-    expect(experimentRunNextAction("FAILED").tab).toBe("diagnosis");
+    expect(experimentRunNextAction("FAILED").tab).toBe("repair");
     expect(experimentRunNextAction("SUCCEEDED").tab).toBe("results");
     expect(experimentRunNextAction("RUNNING").tab).toBe("logs");
   });
@@ -65,6 +65,7 @@ describe("ExperimentShell", () => {
     );
     expect(markup).toContain("contract_test");
     expect(markup).toContain("run_test");
-    expect(markup).toContain("需要处理");
+    expect(markup).toContain("失败恢复");
+    expect(markup).toContain("进入修复工作区");
   });
 });
