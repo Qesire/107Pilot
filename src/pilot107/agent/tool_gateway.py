@@ -1,4 +1,4 @@
-"""Authoritative reservation, authorization, and budgets for Agent read tools."""
+"""Authoritative reservation, authorization, and budgets for Agent tools."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from pilot107.agent.capabilities import (
     AgentCapabilityClaims,
@@ -38,6 +38,22 @@ class AgentReadResult:
 type AgentReadHandler = Callable[[str, Mapping[str, object]], AgentReadResult]
 
 
+class AgentOperationController(Protocol):
+    """Optional durable authority inserted at the real mutation boundary."""
+
+    def protects(self, tool_name: str) -> bool: ...
+
+    def replay_existing(self, invocation: ToolInvocation) -> ToolResult | None: ...
+
+    def reserve_or_replay(self, invocation: ToolInvocation) -> ToolResult | None: ...
+
+    def complete(self, invocation: ToolInvocation, result: ToolResult) -> None: ...
+
+    def fail(self, invocation: ToolInvocation, *, error_code: str) -> None: ...
+
+    def mark_unknown(self, invocation: ToolInvocation) -> None: ...
+
+
 class AgentToolGateway:
     def __init__(
         self,
@@ -47,6 +63,7 @@ class AgentToolGateway:
         handlers: Mapping[str, AgentReadHandler],
         profile_handlers: Mapping[str, Mapping[str, AgentReadHandler]] | None = None,
         clock: Callable[[], datetime] | None = None,
+        operation_controller: AgentOperationController | None = None,
     ) -> None:
         self.store = store
         self.signer = signer
@@ -55,10 +72,27 @@ class AgentToolGateway:
             profile: dict(values) for profile, values in (profile_handlers or {}).items()
         }
         self._clock = clock or (lambda: datetime.now(UTC))
+        self.operation_controller = operation_controller
+
+    def set_operation_controller(self, controller: AgentOperationController | None) -> None:
+        """Configure durable mutation authority without changing Agent/Pi execution."""
+
+        self.operation_controller = controller
 
     def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult:
         claims = self._verify(token)
         self._validate_binding(claims, invocation)
+
+        controller = self.operation_controller
+        protected = controller is not None and controller.protects(invocation.tool_name)
+        if protected:
+            # This lookup is intentionally read-only.  It happens before the
+            # provider-call-ID-bound legacy reservation so a completed durable
+            # operation can replay even when the provider emits a new call ID.
+            replay = controller.replay_existing(invocation)
+            if replay is not None:
+                return replay
+
         arguments_digest = hashlib.sha256(_canonical(invocation.arguments)).hexdigest()
         try:
             reserved, created = self.store.reserve_tool_invocation(
@@ -122,14 +156,54 @@ class AgentToolGateway:
             raise AgentToolGatewayError(
                 "Agent tool is unavailable", code="AGENT.TOOL.UNAVAILABLE"
             )
+
+        if protected:
+            # All capability, fencing, budget, and handler-availability checks
+            # have passed.  This is the last safe point before the real mutation.
+            try:
+                race_replay = controller.reserve_or_replay(invocation)
+            except AgentToolGatewayError as exc:
+                self._persist_failure(
+                    invocation,
+                    claims,
+                    code=exc.code,
+                    message=str(exc),
+                    retryable=exc.retryable,
+                )
+                raise
+            if race_replay is not None:
+                if usage.bytes_returned + race_replay.bytes_returned > claims.max_bytes:
+                    self._persist_failure(
+                        invocation,
+                        claims,
+                        code="AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
+                        message="Agent tool byte budget exceeded",
+                    )
+                    raise AgentToolGatewayError(
+                        "Agent tool byte budget exceeded",
+                        code="AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
+                    )
+                self._persist_success(
+                    invocation,
+                    claims,
+                    result=race_replay.result,
+                    evidence_refs=race_replay.evidence_refs,
+                    bytes_returned=race_replay.bytes_returned,
+                )
+                return race_replay
+
         try:
             read_result = handler(invocation.owner, invocation.arguments)
         except AgentToolGatewayError as exc:
+            if protected:
+                controller.fail(invocation, error_code=exc.code)
             self._persist_failure(
                 invocation, claims, code=exc.code, message=str(exc), retryable=exc.retryable
             )
             raise
         except Exception:
+            if protected:
+                controller.mark_unknown(invocation)
             self._persist_failure(
                 invocation,
                 claims,
@@ -140,6 +214,8 @@ class AgentToolGateway:
                 "Agent read tool failed", code="AGENT.TOOL.READ_FAILED"
             ) from None
         if not isinstance(read_result, AgentReadResult):
+            if protected:
+                controller.mark_unknown(invocation)
             self._persist_failure(
                 invocation,
                 claims,
@@ -152,6 +228,11 @@ class AgentToolGateway:
             )
         bytes_returned = len(_canonical(read_result.result))
         if usage.bytes_returned + bytes_returned > claims.max_bytes:
+            if protected:
+                controller.fail(
+                    invocation,
+                    error_code="AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
+                )
             self._persist_failure(
                 invocation,
                 claims,
@@ -162,20 +243,8 @@ class AgentToolGateway:
                 "Agent tool byte budget exceeded",
                 code="AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
             )
-        stored_result = {
-            "result": read_result.result,
-            "evidence_refs": list(read_result.evidence_refs),
-        }
-        self.store.finish_tool_invocation(
-            invocation_id=invocation.invocation_id,
-            owner=invocation.owner,
-            expected_state_version=invocation.state_version,
-            expected_fencing_token=claims.fencing_token,
-            result=stored_result,
-            error=None,
-            bytes_returned=bytes_returned,
-        )
-        return ToolResult(
+
+        result = ToolResult(
             schema_version=TOOL_RESULT_PROTOCOL_VERSION,
             invocation_id=invocation.invocation_id,
             result=read_result.result,
@@ -183,6 +252,27 @@ class AgentToolGateway:
             evidence_refs=read_result.evidence_refs,
             bytes_returned=bytes_returned,
         )
+        if protected:
+            try:
+                controller.complete(invocation, result)
+            except Exception:
+                # A side effect and replay payload may already exist.  Preserve
+                # uncertainty rather than allow the next process to execute it
+                # blindly after a receipt persistence failure.
+                try:
+                    controller.mark_unknown(invocation)
+                except Exception:
+                    pass
+                raise
+
+        self._persist_success(
+            invocation,
+            claims,
+            result=read_result.result,
+            evidence_refs=read_result.evidence_refs,
+            bytes_returned=bytes_returned,
+        )
+        return result
 
     def _verify(self, token: str) -> AgentCapabilityClaims:
         try:
@@ -318,6 +408,29 @@ class AgentToolGateway:
             error=None,
             evidence_refs=tuple(stored["evidence_refs"]),
             bytes_returned=record.bytes_returned,
+        )
+
+    def _persist_success(
+        self,
+        invocation: ToolInvocation,
+        claims: AgentCapabilityClaims,
+        *,
+        result: Mapping[str, object] | None,
+        evidence_refs: tuple[str, ...],
+        bytes_returned: int,
+    ) -> None:
+        stored_result = {
+            "result": result,
+            "evidence_refs": list(evidence_refs),
+        }
+        self.store.finish_tool_invocation(
+            invocation_id=invocation.invocation_id,
+            owner=invocation.owner,
+            expected_state_version=invocation.state_version,
+            expected_fencing_token=claims.fencing_token,
+            result=stored_result,
+            error=None,
+            bytes_returned=bytes_returned,
         )
 
     def _persist_failure(
