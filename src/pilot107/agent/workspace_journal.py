@@ -425,6 +425,8 @@ class SQLiteWorkspaceMutationJournalStore:
             current = _row_to_journal(row)
             if current.state is WorkspaceMutationState.COMMITTED:
                 return current
+            if lease.workspace_id != current.workspace_id or lease.owner != owner:
+                raise WorkspaceLiveConflict("Workspace journal lease does not own this mutation")
             if (
                 current.state is not WorkspaceMutationState.FILES_APPLIED
                 or current.to_revision is None
@@ -520,12 +522,31 @@ class SQLiteWorkspaceMutationJournalStore:
         mutation_id: str,
         *,
         owner: str,
+        observed_live_digest: str,
     ) -> WorkspaceMutationJournal:
         _key(mutation_id, "mutation_id")
         if not is_safe_username(owner):
             raise ValueError("Workspace mutation owner is invalid")
+        _digest(observed_live_digest, "observed_live_digest")
         now = self._now()
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM agent_workspace_mutation_journal
+                WHERE mutation_id = ? AND owner = ?
+                """,
+                (mutation_id, owner),
+            ).fetchone()
+            if row is None:
+                raise KeyError(mutation_id)
+            current = _row_to_journal(row)
+            if current.state is WorkspaceMutationState.ROLLED_BACK:
+                return current
+            if observed_live_digest != current.from_digest:
+                raise WorkspaceLiveConflict(
+                    "Workspace observed live digest does not prove rollback"
+                )
             cursor = connection.execute(
                 """
                 UPDATE agent_workspace_mutation_journal
@@ -541,17 +562,17 @@ class SQLiteWorkspaceMutationJournalStore:
                 """,
                 (now, mutation_id, owner),
             )
-            row = connection.execute(
+            updated = connection.execute(
                 """
                 SELECT * FROM agent_workspace_mutation_journal
                 WHERE mutation_id = ? AND owner = ?
                 """,
                 (mutation_id, owner),
             ).fetchone()
-        if row is None:
-            raise KeyError(mutation_id)
-        record = _row_to_journal(row)
-        if cursor.rowcount != 1 and record.state is not WorkspaceMutationState.ROLLED_BACK:
+        if updated is None:
+            raise RuntimeError("Workspace mutation journal disappeared")
+        record = _row_to_journal(updated)
+        if cursor.rowcount != 1:
             raise WorkspaceLiveConflict("Workspace mutation cannot be marked rolled back")
         return record
 
