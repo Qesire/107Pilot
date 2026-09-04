@@ -1,10 +1,9 @@
-"""Pure read projection for one failed Run's recovery graph.
+"""Pure read projection for one Run's recovery graph.
 
 The service does not create or advance remediation, Agent, ticket, Project, or
-Run state.  It reads the existing control database and returns only stable,
-owner-scoped audit facts needed by the product.  Raw Agent payloads, code
-context, shell output, and free-form execution error bodies are intentionally
-excluded from this aggregate response.
+Run state. It reads existing control-plane facts and returns only stable,
+owner-scoped fields needed by the product. Raw Agent payloads, code context,
+shell output, and free-form execution error bodies are intentionally excluded.
 """
 
 from __future__ import annotations
@@ -16,6 +15,10 @@ from typing import Any
 from pilot107.core.remediation import RemediationState
 from pilot107.core.run_store import DiagnosisRecord, RunRecord, RunStore
 from pilot107.core.states import RunState
+
+_SESSION_LIMIT = 50
+_ADVICE_LIMIT = 100
+_TICKET_LIMIT = 50
 
 _REPAIR_ACTIVE_RUN_STATES = frozenset(
     {
@@ -42,6 +45,8 @@ _FAILED_SOURCE_STATES = frozenset(
 
 @dataclass(frozen=True)
 class RepairWorkspaceService:
+    """Aggregate existing repair authorities without becoming a new authority."""
+
     store: RunStore
 
     def get(self, run_id: str, *, owner: str | None = None) -> dict[str, Any]:
@@ -50,9 +55,9 @@ class RepairWorkspaceService:
             raise PermissionError("run is owned by another user")
 
         diagnoses = self.store.list_diagnoses(run.run_id)
-        sessions = self._remediation_sessions(run)
+        sessions, sessions_truncated = self._remediation_sessions(run)
         agent = self._agent_trace(run)
-        tickets = self._repair_tickets(run)
+        tickets, tickets_truncated = self._repair_tickets(run)
         derived_runs = self.store.list_child_runs(run.run_id)
 
         return {
@@ -63,6 +68,11 @@ class RepairWorkspaceService:
             "agent": agent,
             "repair_tickets": tickets,
             "derived_runs": [_derived_run(item) for item in derived_runs],
+            "truncation": {
+                "remediation_sessions": sessions_truncated,
+                "agent_advice": bool(agent["truncated"]),
+                "repair_tickets": tickets_truncated,
+            },
             "status": _status(sessions, agent, tickets, derived_runs),
             "next_action": _next_action(
                 run,
@@ -74,42 +84,43 @@ class RepairWorkspaceService:
             ),
         }
 
-    def _remediation_sessions(self, run: RunRecord) -> list[dict[str, Any]]:
+    def _remediation_sessions(self, run: RunRecord) -> tuple[list[dict[str, Any]], bool]:
         with self.store.connect() as conn:
             rows = conn.execute(
                 """
                 SELECT session_id, state, version, automation_policy, provider,
-                       stop_reason, takeover_reason, budget_json, usage_json,
-                       created_at, updated_at
+                       budget_json, usage_json, created_at, updated_at
                 FROM remediation_sessions
                 WHERE owner = ? AND source_run_id = ?
                 ORDER BY updated_at DESC, session_id DESC
-                LIMIT 51
+                LIMIT ?
                 """,
-                (run.owner, run.run_id),
+                (run.owner, run.run_id, _SESSION_LIMIT + 1),
             ).fetchall()
-        return [
-            {
-                "session_id": str(row["session_id"]),
-                "state": str(row["state"]),
-                "version": int(row["version"]),
-                "automation_policy": str(row["automation_policy"]),
-                "provider": str(row["provider"]),
-                "stop_reason": _optional_text(row["stop_reason"]),
-                "takeover_reason": _optional_text(row["takeover_reason"]),
-                "budget": _json_object(row["budget_json"]),
-                "usage": _json_object(row["usage_json"]),
-                "created_at": str(row["created_at"]),
-                "updated_at": str(row["updated_at"]),
-            }
-            for row in rows[:50]
-        ] + ([{"truncated": True}] if len(rows) > 50 else [])
+        selected = rows[:_SESSION_LIMIT]
+        return (
+            [
+                {
+                    "session_id": str(row["session_id"]),
+                    "state": str(row["state"]),
+                    "version": int(row["version"]),
+                    "automation_policy": str(row["automation_policy"]),
+                    "provider": str(row["provider"]),
+                    "budget": _json_object(row["budget_json"]),
+                    "usage": _json_object(row["usage_json"]),
+                    "created_at": str(row["created_at"]),
+                    "updated_at": str(row["updated_at"]),
+                }
+                for row in selected
+            ],
+            len(rows) > _SESSION_LIMIT,
+        )
 
     def _agent_trace(self, run: RunRecord) -> dict[str, Any]:
         advice, next_cursor = self.store.list_agent_advice_page(
             owner=run.owner,
             run_id=run.run_id,
-            limit=100,
+            limit=_ADVICE_LIMIT,
         )
         advice_payload: list[dict[str, Any]] = []
         decisions_payload: list[dict[str, Any]] = []
@@ -135,7 +146,6 @@ class RepairWorkspaceService:
                     "decision": decision.decision,
                     "actor": decision.actor,
                     "action_ids": list(decision.action_ids),
-                    "note": decision.note,
                     "advice_version": decision.advice_version,
                     "created_at": decision.created_at,
                 }
@@ -165,44 +175,41 @@ class RepairWorkspaceService:
             "truncated": next_cursor is not None,
         }
 
-    def _repair_tickets(self, run: RunRecord) -> list[dict[str, Any]]:
+    def _repair_tickets(self, run: RunRecord) -> tuple[list[dict[str, Any]], bool]:
         with self.store.connect() as conn:
             rows = conn.execute(
                 """
                 SELECT ticket_id, state, session_id, source_contract_id,
                        diagnosis_ids_json, requested_change,
                        resolution_manifest_id, resolution_run_id,
-                       resolution_comparison_json, abandon_reason,
-                       created_at, updated_at
+                       abandon_reason, created_at, updated_at
                 FROM repair_tickets
                 WHERE owner = ? AND source_run_id = ?
                 ORDER BY updated_at DESC, ticket_id DESC
-                LIMIT 51
+                LIMIT ?
                 """,
-                (run.owner, run.run_id),
+                (run.owner, run.run_id, _TICKET_LIMIT + 1),
             ).fetchall()
-        projected = [
-            {
-                "ticket_id": str(row["ticket_id"]),
-                "state": str(row["state"]),
-                "session_id": _optional_text(row["session_id"]),
-                "source_contract_id": _optional_text(row["source_contract_id"]),
-                "diagnosis_ids": _json_string_list(row["diagnosis_ids_json"]),
-                "requested_change": _optional_text(row["requested_change"]),
-                "resolution_manifest_id": _optional_text(row["resolution_manifest_id"]),
-                "resolution_run_id": _optional_text(row["resolution_run_id"]),
-                "resolution_comparison": _optional_json_object(
-                    row["resolution_comparison_json"]
-                ),
-                "abandon_reason": _optional_text(row["abandon_reason"]),
-                "created_at": str(row["created_at"]),
-                "updated_at": str(row["updated_at"]),
-            }
-            for row in rows[:50]
-        ]
-        if len(rows) > 50:
-            projected.append({"truncated": True})
-        return projected
+        selected = rows[:_TICKET_LIMIT]
+        return (
+            [
+                {
+                    "ticket_id": str(row["ticket_id"]),
+                    "state": str(row["state"]),
+                    "session_id": _optional_text(row["session_id"]),
+                    "source_contract_id": _optional_text(row["source_contract_id"]),
+                    "diagnosis_ids": _json_string_list(row["diagnosis_ids_json"]),
+                    "requested_change": _optional_text(row["requested_change"]),
+                    "resolution_manifest_id": _optional_text(row["resolution_manifest_id"]),
+                    "resolution_run_id": _optional_text(row["resolution_run_id"]),
+                    "abandon_reason": _optional_text(row["abandon_reason"]),
+                    "created_at": str(row["created_at"]),
+                    "updated_at": str(row["updated_at"]),
+                }
+                for row in selected
+            ],
+            len(rows) > _TICKET_LIMIT,
+        )
 
 
 def _source_run(run: RunRecord) -> dict[str, Any]:
@@ -247,29 +254,18 @@ def _derived_run(run: RunRecord) -> dict[str, Any]:
     }
 
 
-def _real_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [item for item in items if "truncated" not in item]
-
-
 def _status(
     sessions: list[dict[str, Any]],
     agent: dict[str, Any],
     tickets: list[dict[str, Any]],
     derived_runs: list[RunRecord],
 ) -> dict[str, bool]:
-    real_sessions = _real_items(sessions)
-    real_tickets = _real_items(tickets)
     return {
         "has_repair_activity": bool(
-            real_sessions
-            or agent["advice"]
-            or agent["executions"]
-            or real_tickets
-            or derived_runs
+            sessions or agent["advice"] or agent["executions"] or tickets or derived_runs
         ),
         "awaiting_approval": any(
-            item["state"] == RemediationState.AWAITING_APPROVAL.value
-            for item in real_sessions
+            item["state"] == RemediationState.AWAITING_APPROVAL.value for item in sessions
         ),
         "has_derived_run": bool(derived_runs),
         "has_successful_derived_run": any(
@@ -287,11 +283,8 @@ def _next_action(
     tickets: list[dict[str, Any]],
     derived_runs: list[RunRecord],
 ) -> dict[str, str]:
-    real_sessions = _real_items(sessions)
-    real_tickets = _real_items(tickets)
     if any(
-        item["state"] == RemediationState.AWAITING_APPROVAL.value
-        for item in real_sessions
+        item["state"] == RemediationState.AWAITING_APPROVAL.value for item in sessions
     ):
         return {
             "kind": "review_proposal",
@@ -314,7 +307,7 @@ def _next_action(
             "label": "比较修复前后结果",
             "detail": "已有计算成功的派生运行；仍需检查 Evidence 与科学结果。",
         }
-    if real_sessions or agent["advice"] or agent["executions"] or real_tickets:
+    if sessions or agent["advice"] or agent["executions"] or tickets:
         return {
             "kind": "continue_repair",
             "label": "继续受控修复",
@@ -344,10 +337,6 @@ def _json_object(value: object) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError("persisted repair workspace object is invalid")
     return parsed
-
-
-def _optional_json_object(value: object) -> dict[str, Any] | None:
-    return None if value is None else _json_object(value)
 
 
 def _json_string_list(value: object) -> list[str]:
