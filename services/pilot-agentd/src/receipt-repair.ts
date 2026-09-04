@@ -6,10 +6,10 @@ import {
   AgentCheckpointSchema,
   parseExecutableTurnRequest,
   type AgentCheckpoint,
+  type AgentTurnEvent,
   type DurableAgentTurnRequest,
   type ExecutableAgentTurnRequest,
   type JsonObject,
-  type JsonValue,
 } from "./protocol.js";
 import {
   computeCheckpointDigest,
@@ -21,6 +21,7 @@ import type { TurnRunner } from "./server.js";
 
 const REPAIR_PROTOCOL_VERSION = "pilot107.agent-turn-request/v3";
 const DURABLE_PROTOCOL_VERSION = "pilot107.agent-turn-request/v2";
+const EVENT_PROTOCOL_VERSION = "pilot107.agent-turn-event/v1";
 const MAX_REPAIRS = 256;
 const MAX_CHECKPOINT_BYTES = 4 * 1024 * 1024;
 const RESUME_PROMPT =
@@ -86,7 +87,28 @@ export class ReceiptRepairingTurnRunner implements TurnRunner {
     }
     const checkpoint = applyReceiptRepairs(request, repairs);
     repairsByRequest.delete(request);
-    await this.base.execute({ ...request, checkpoint }, write, signal);
+
+    const repairedCheckpointEvent: AgentTurnEvent = {
+      schema_version: EVENT_PROTOCOL_VERSION,
+      turn_id: request.turn_id,
+      sequence: 1,
+      timestamp: new Date().toISOString(),
+      type: "checkpoint",
+      payload: { checkpoint },
+    };
+    await write(repairedCheckpointEvent);
+
+    await this.base.execute(
+      { ...request, checkpoint },
+      async (event) => {
+        const shifted = {
+          ...event,
+          sequence: event.sequence + 1,
+        } as AgentTurnEvent;
+        await write(shifted);
+      },
+      signal,
+    );
   }
 }
 
