@@ -1,4 +1,4 @@
-"""Authoritative reservation, authorization, and budgets for Agent read tools."""
+"""Authoritative reservation, authorization, and budgets for Agent tools."""
 
 from __future__ import annotations
 
@@ -13,6 +13,15 @@ from pilot107.agent.capabilities import (
     AgentCapabilityClaims,
     AgentCapabilityError,
     AgentCapabilitySigner,
+)
+from pilot107.agent.operation_ledger import (
+    AgentOperationConflict,
+    AgentOperationIntent,
+    AgentOperationLedger,
+    AgentOperationRecord,
+    AgentOperationState,
+    build_agent_operation_ledger,
+    operation_intent_for_invocation,
 )
 from pilot107.agent.project import is_project_agent_profile
 from pilot107.agent.protocol import TOOL_RESULT_PROTOCOL_VERSION, ToolInvocation, ToolResult
@@ -46,6 +55,7 @@ class AgentToolGateway:
         signer: AgentCapabilitySigner,
         handlers: Mapping[str, AgentReadHandler],
         profile_handlers: Mapping[str, Mapping[str, AgentReadHandler]] | None = None,
+        operation_ledger: AgentOperationLedger | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.store = store
@@ -55,6 +65,10 @@ class AgentToolGateway:
             profile: dict(values) for profile, values in (profile_handlers or {}).items()
         }
         self._clock = clock or (lambda: datetime.now(UTC))
+        self.operation_ledger = operation_ledger or build_agent_operation_ledger(
+            store,
+            clock=self._clock,
+        )
 
     def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult:
         claims = self._verify(token)
@@ -122,14 +136,47 @@ class AgentToolGateway:
             raise AgentToolGatewayError(
                 "Agent tool is unavailable", code="AGENT.TOOL.UNAVAILABLE"
             )
+
+        operation_intent = self._operation_intent(invocation, claims, arguments_digest)
+        if operation_intent is not None:
+            replay = self._reserve_or_replay_operation(
+                operation_intent,
+                invocation,
+                claims,
+                usage_bytes=usage.bytes_returned,
+            )
+            if replay is not None:
+                return replay
+
         try:
             read_result = handler(invocation.owner, invocation.arguments)
         except AgentToolGatewayError as exc:
+            if operation_intent is not None:
+                self._fail_operation(operation_intent, invocation, claims, exc)
             self._persist_failure(
                 invocation, claims, code=exc.code, message=str(exc), retryable=exc.retryable
             )
             raise
         except Exception:
+            if operation_intent is not None:
+                self._unknown_operation(
+                    operation_intent,
+                    invocation,
+                    claims,
+                    code="AGENT.TOOL.OPERATION_UNKNOWN",
+                    message="Agent mutation outcome requires reconciliation",
+                )
+                self._persist_failure(
+                    invocation,
+                    claims,
+                    code="AGENT.TOOL.OPERATION_UNKNOWN",
+                    message="Agent mutation outcome requires reconciliation",
+                    retryable=False,
+                )
+                raise AgentToolGatewayError(
+                    "Agent mutation outcome requires reconciliation",
+                    code="AGENT.TOOL.OPERATION_UNKNOWN",
+                ) from None
             self._persist_failure(
                 invocation,
                 claims,
@@ -140,6 +187,24 @@ class AgentToolGateway:
                 "Agent read tool failed", code="AGENT.TOOL.READ_FAILED"
             ) from None
         if not isinstance(read_result, AgentReadResult):
+            if operation_intent is not None:
+                self._unknown_operation(
+                    operation_intent,
+                    invocation,
+                    claims,
+                    code="AGENT.TOOL.INVALID_RESULT",
+                    message="Mutation completed without a valid ToolResult",
+                )
+                self._persist_failure(
+                    invocation,
+                    claims,
+                    code="AGENT.TOOL.OPERATION_UNKNOWN",
+                    message="Agent mutation outcome requires reconciliation",
+                )
+                raise AgentToolGatewayError(
+                    "Agent mutation outcome requires reconciliation",
+                    code="AGENT.TOOL.OPERATION_UNKNOWN",
+                )
             self._persist_failure(
                 invocation,
                 claims,
@@ -151,6 +216,32 @@ class AgentToolGateway:
                 code="AGENT.TOOL.INVALID_RESULT",
             )
         bytes_returned = len(_canonical(read_result.result))
+        stored_result = {
+            "result": read_result.result,
+            "evidence_refs": list(read_result.evidence_refs),
+        }
+        if operation_intent is not None:
+            operation_result = {
+                **stored_result,
+                "bytes_returned": bytes_returned,
+            }
+            try:
+                assert self.operation_ledger is not None
+                self.operation_ledger.complete(
+                    operation_intent.operation_key,
+                    owner=invocation.owner,
+                    expected_state_version=invocation.state_version,
+                    expected_fencing_token=claims.fencing_token,
+                    result=operation_result,
+                    side_effect_ref=(
+                        read_result.evidence_refs[0] if read_result.evidence_refs else None
+                    ),
+                )
+            except AgentOperationConflict:
+                raise AgentToolGatewayError(
+                    "Agent mutation receipt could not be committed under the current fence",
+                    code="AGENT.TOOL.FENCED",
+                ) from None
         if usage.bytes_returned + bytes_returned > claims.max_bytes:
             self._persist_failure(
                 invocation,
@@ -162,10 +253,6 @@ class AgentToolGateway:
                 "Agent tool byte budget exceeded",
                 code="AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
             )
-        stored_result = {
-            "result": read_result.result,
-            "evidence_refs": list(read_result.evidence_refs),
-        }
         self.store.finish_tool_invocation(
             invocation_id=invocation.invocation_id,
             owner=invocation.owner,
@@ -183,6 +270,234 @@ class AgentToolGateway:
             evidence_refs=read_result.evidence_refs,
             bytes_returned=bytes_returned,
         )
+
+    def _operation_intent(
+        self,
+        invocation: ToolInvocation,
+        claims: AgentCapabilityClaims,
+        arguments_digest: str,
+    ) -> AgentOperationIntent | None:
+        if self.operation_ledger is None:
+            return None
+        try:
+            return operation_intent_for_invocation(
+                self.store,
+                invocation,
+                arguments_digest=arguments_digest,
+            )
+        except AgentOperationConflict:
+            self._raise_operation_conflict(claims, invocation)
+
+    def _reserve_or_replay_operation(
+        self,
+        intent: AgentOperationIntent,
+        invocation: ToolInvocation,
+        claims: AgentCapabilityClaims,
+        *,
+        usage_bytes: int,
+    ) -> ToolResult | None:
+        assert self.operation_ledger is not None
+        try:
+            record, _ = self.operation_ledger.reserve(
+                intent,
+                invocation_id=invocation.invocation_id,
+                expected_state_version=invocation.state_version,
+                expected_fencing_token=claims.fencing_token,
+            )
+        except AgentOperationConflict:
+            self._raise_operation_conflict(claims, invocation)
+        if record.state is AgentOperationState.COMPLETED:
+            return self._replay_completed_operation(
+                record,
+                invocation,
+                claims,
+                usage_bytes=usage_bytes,
+            )
+        if record.state is AgentOperationState.FAILED:
+            self._replay_failed_operation(record, invocation, claims)
+        if record.state is AgentOperationState.RUNNING:
+            self._persist_failure(
+                invocation,
+                claims,
+                code="AGENT.TOOL.OPERATION_IN_PROGRESS",
+                message="Agent mutation is already in progress",
+                retryable=True,
+            )
+            raise AgentToolGatewayError(
+                "Agent mutation is already in progress",
+                code="AGENT.TOOL.OPERATION_IN_PROGRESS",
+                retryable=True,
+            )
+        if record.state in {
+            AgentOperationState.STALE,
+            AgentOperationState.RECONCILING,
+            AgentOperationState.UNKNOWN,
+        }:
+            self._persist_failure(
+                invocation,
+                claims,
+                code="AGENT.TOOL.OPERATION_UNKNOWN",
+                message="Agent mutation outcome requires reconciliation",
+                retryable=record.state is not AgentOperationState.UNKNOWN,
+            )
+            raise AgentToolGatewayError(
+                "Agent mutation outcome requires reconciliation",
+                code="AGENT.TOOL.OPERATION_UNKNOWN",
+                retryable=record.state is not AgentOperationState.UNKNOWN,
+            )
+        try:
+            self.operation_ledger.start(
+                intent.operation_key,
+                owner=invocation.owner,
+                invocation_id=invocation.invocation_id,
+                expected_state_version=invocation.state_version,
+                expected_fencing_token=claims.fencing_token,
+            )
+        except AgentOperationConflict:
+            current = self.operation_ledger.get(intent.operation_key, owner=invocation.owner)
+            if current.state is AgentOperationState.COMPLETED:
+                return self._replay_completed_operation(
+                    current,
+                    invocation,
+                    claims,
+                    usage_bytes=usage_bytes,
+                )
+            if current.state is AgentOperationState.FAILED:
+                self._replay_failed_operation(current, invocation, claims)
+            raise AgentToolGatewayError(
+                "Agent mutation is already in progress or requires reconciliation",
+                code="AGENT.TOOL.OPERATION_IN_PROGRESS",
+                retryable=True,
+            ) from None
+        return None
+
+    def _replay_completed_operation(
+        self,
+        record: AgentOperationRecord,
+        invocation: ToolInvocation,
+        claims: AgentCapabilityClaims,
+        *,
+        usage_bytes: int,
+    ) -> ToolResult:
+        stored = record.result
+        if (
+            not isinstance(stored, dict)
+            or not isinstance(stored.get("result"), dict)
+            or not isinstance(stored.get("evidence_refs"), list)
+            or not all(isinstance(item, str) for item in stored["evidence_refs"])
+            or isinstance(stored.get("bytes_returned"), bool)
+            or not isinstance(stored.get("bytes_returned"), int)
+            or stored["bytes_returned"] < 0
+        ):
+            raise AgentToolGatewayError(
+                "Stored Agent operation receipt is invalid",
+                code="AGENT.TOOL.INVALID_RESULT",
+            )
+        bytes_returned = stored["bytes_returned"]
+        if usage_bytes + bytes_returned > claims.max_bytes:
+            self._persist_failure(
+                invocation,
+                claims,
+                code="AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
+                message="Agent tool byte budget exceeded",
+            )
+            raise AgentToolGatewayError(
+                "Agent tool byte budget exceeded",
+                code="AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
+            )
+        invocation_result = {
+            "result": stored["result"],
+            "evidence_refs": stored["evidence_refs"],
+        }
+        self.store.finish_tool_invocation(
+            invocation_id=invocation.invocation_id,
+            owner=invocation.owner,
+            expected_state_version=invocation.state_version,
+            expected_fencing_token=claims.fencing_token,
+            result=invocation_result,
+            error=None,
+            bytes_returned=bytes_returned,
+        )
+        return ToolResult(
+            schema_version=TOOL_RESULT_PROTOCOL_VERSION,
+            invocation_id=invocation.invocation_id,
+            result=stored["result"],
+            error=None,
+            evidence_refs=tuple(stored["evidence_refs"]),
+            bytes_returned=bytes_returned,
+        )
+
+    def _replay_failed_operation(
+        self,
+        record: AgentOperationRecord,
+        invocation: ToolInvocation,
+        claims: AgentCapabilityClaims,
+    ) -> None:
+        error = record.error or {
+            "code": "AGENT.TOOL.READ_FAILED",
+            "message": "Agent mutation failed",
+            "retryable": False,
+        }
+        code = str(error.get("code", "AGENT.TOOL.READ_FAILED"))
+        message = str(error.get("message", "Agent mutation failed"))
+        retryable = bool(error.get("retryable", False))
+        self._persist_failure(
+            invocation,
+            claims,
+            code=code,
+            message=message,
+            retryable=retryable,
+        )
+        raise AgentToolGatewayError(message, code=code, retryable=retryable)
+
+    def _fail_operation(
+        self,
+        intent: AgentOperationIntent,
+        invocation: ToolInvocation,
+        claims: AgentCapabilityClaims,
+        exc: AgentToolGatewayError,
+    ) -> None:
+        assert self.operation_ledger is not None
+        try:
+            self.operation_ledger.fail(
+                intent.operation_key,
+                owner=invocation.owner,
+                expected_state_version=invocation.state_version,
+                expected_fencing_token=claims.fencing_token,
+                error={
+                    "code": exc.code,
+                    "message": str(exc),
+                    "retryable": exc.retryable,
+                },
+            )
+        except AgentOperationConflict:
+            raise AgentToolGatewayError(
+                "Agent mutation failure could not be committed under the current fence",
+                code="AGENT.TOOL.FENCED",
+            ) from None
+
+    def _unknown_operation(
+        self,
+        intent: AgentOperationIntent,
+        invocation: ToolInvocation,
+        claims: AgentCapabilityClaims,
+        *,
+        code: str,
+        message: str,
+    ) -> None:
+        assert self.operation_ledger is not None
+        try:
+            self.operation_ledger.mark_unknown(
+                intent.operation_key,
+                owner=invocation.owner,
+                expected_state_version=invocation.state_version,
+                expected_fencing_token=claims.fencing_token,
+                error={"code": code, "message": message, "retryable": False},
+            )
+        except AgentOperationConflict:
+            # Leaving the operation in running state is fail-closed: a replay
+            # will not call the handler again until a reconciler resolves it.
+            pass
 
     def _verify(self, token: str) -> AgentCapabilityClaims:
         try:
@@ -281,6 +596,27 @@ class AgentToolGateway:
         raise AgentToolGatewayError(
             "Agent tool idempotency key conflicts with different content",
             code="AGENT.TOOL.IDEMPOTENCY_CONFLICT",
+        ) from None
+
+    def _raise_operation_conflict(
+        self,
+        claims: AgentCapabilityClaims,
+        invocation: ToolInvocation,
+    ) -> None:
+        try:
+            self.store.get_turn_tool_usage(
+                turn_id=invocation.turn_id,
+                owner=invocation.owner,
+                expected_state_version=invocation.state_version,
+                expected_fencing_token=claims.fencing_token,
+            )
+        except AgentSessionConflict:
+            raise AgentToolGatewayError(
+                "Agent Turn capability is stale or fenced", code="AGENT.TOOL.FENCED"
+            ) from None
+        raise AgentToolGatewayError(
+            "Agent durable operation identity conflicts with different content",
+            code="AGENT.TOOL.OPERATION_CONFLICT",
         ) from None
 
     def _replay(self, record: Any, invocation_id: str) -> ToolResult:
