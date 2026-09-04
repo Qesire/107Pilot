@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from pilot107.api.http_types import ApiResponse
 from pilot107.api.research_workspace_routes import ResearchWorkspaceRoutes
 from pilot107.core.identity import UserIdentity
+from pilot107.core.postgres_research_workspace import PostgresResearchWorkspaceStore
 from pilot107.core.research_workspace import SQLiteResearchWorkspaceStore
 from pilot107.services.research_workspace_service import ResearchWorkspaceService
 from pilot107.services.run_workspace_service import RunWorkspaceService
@@ -17,9 +18,9 @@ class RunWorkspaceRoutes:
 
     ``Pilot107HttpApi`` already delegates GET routing to this object.  Until the
     larger HTTP composition root is refactored, the Research Workspace API is
-    attached here without changing Run semantics.  SQLite can be discovered
-    from the existing RunStore ``db_path``; PostgreSQL deliberately fails closed
-    until a native ResearchWorkspaceStore is injected.
+    attached here without changing Run semantics.  The active RunStore selects
+    the same durable backend for Research Workspace bindings; PostgreSQL never
+    falls back to its compatibility SQLite path.
     """
 
     def __init__(
@@ -29,7 +30,7 @@ class RunWorkspaceRoutes:
         research_routes: ResearchWorkspaceRoutes | None = None,
     ) -> None:
         self.service = service
-        self.research_routes = research_routes or _sqlite_research_routes(service)
+        self.research_routes = research_routes or _research_routes(service)
 
     def handle_get(
         self,
@@ -92,16 +93,22 @@ class RunWorkspaceRoutes:
         )
 
 
-def _sqlite_research_routes(
+def _research_routes(
     service: RunWorkspaceService,
 ) -> ResearchWorkspaceRoutes | None:
-    # PostgreSQL domain stores intentionally expose ``db_path`` as a compatibility
-    # path while keeping ``dsn`` as the real authority.  Never mistake that
-    # compatibility path for the active database or Research Workspace bindings
-    # would silently fork into a sidecar SQLite file.
-    if getattr(service.store, "dsn", None) is not None:
-        return None
     db_path = getattr(service.store, "db_path", None)
+    dsn = getattr(service.store, "dsn", None)
+    if dsn is not None:
+        if db_path is None:
+            return None
+        try:
+            store = PostgresResearchWorkspaceStore(
+                str(dsn),
+                compatibility_path=db_path,
+            )
+        except (TypeError, ValueError):
+            return None
+        return ResearchWorkspaceRoutes(ResearchWorkspaceService(store))
     if db_path is None:
         return None
     try:
