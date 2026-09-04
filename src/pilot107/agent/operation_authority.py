@@ -1,10 +1,15 @@
-"""Authoritative durable-operation replay in front of the legacy Tool Gateway.
+"""Durable operation authority for Agent mutation tools.
 
-The Pi/model loop stays unchanged.  This control-plane adapter decides whether a
-provider-emitted *mutating* tool call represents a new domain operation or a
-replay of an already completed one.  A completed receipt with a replayable
-``result_ref`` is returned without invoking the legacy Gateway again.  Read-only
-and ephemeral validation tools keep their original live semantics.
+The model/Pi loop is intentionally untouched.  The production integration is a
+small controller used by :class:`AgentToolGateway` at two precise boundaries:
+
+1. after capability binding, but before legacy provider-call reservation, it may
+   replay an already terminal operation without consulting provider call IDs;
+2. after all legacy preconditions pass and immediately before the real mutation
+   handler, it reserves and starts the durable operation.
+
+This prevents authorization, budget, or handler-availability failures from
+poisoning a durable receipt while still closing the provider-call-ID replay gap.
 """
 
 from __future__ import annotations
@@ -24,9 +29,9 @@ from pilot107.agent.operation_results import (
 from pilot107.agent.protocol import ToolInvocation, ToolResult
 from pilot107.agent.tool_gateway import AgentToolGateway, AgentToolGatewayError
 
-# Durable replay protects domain mutations and cluster scheduling.  Ordinary
-# reads must remain live, while sandbox_exec is deliberately excluded because
-# it is an ephemeral validation step rather than a persisted domain mutation.
+# Durable replay protects persisted mutations and cluster scheduling.  Ordinary
+# reads remain live.  ``sandbox_exec`` is deliberately excluded because it is an
+# ephemeral validation step rather than a persisted domain mutation.
 DURABLE_MUTATION_TOOL_NAMES = frozenset(
     {
         "project_blueprint_save",
@@ -95,92 +100,95 @@ class AuthoritativeOperationResultStore(Protocol):
     def get(self, result_ref: str, *, owner: str) -> AgentOperationResultRecord: ...
 
 
-class OperationLedgerAuthoritativeGateway:
-    """Suppress duplicate domain execution once a terminal receipt is durable."""
+class DurableOperationController:
+    """Provider-call-independent authority used at the real handler boundary."""
 
     def __init__(
         self,
         *,
-        gateway: AgentToolGateway,
         ledger: AuthoritativeOperationLedger,
         results: AuthoritativeOperationResultStore,
         protected_tools: frozenset[str] = DURABLE_MUTATION_TOOL_NAMES,
     ) -> None:
-        self.gateway = gateway
         self.ledger = ledger
         self.results = results
         self.protected_tools = protected_tools
 
-    def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult:
-        if invocation.tool_name not in self.protected_tools:
-            return self.gateway.invoke(token, invocation)
+    def protects(self, tool_name: str) -> bool:
+        return tool_name in self.protected_tools
 
+    def replay_existing(self, invocation: ToolInvocation) -> ToolResult | None:
+        """Read existing authority without creating a receipt.
+
+        This method is safe to call immediately after capability validation.  A
+        completed receipt can bypass the legacy ``invocation_id`` conflict; an
+        absent receipt leaves all old preconditions untouched.
+        """
+
+        if not self.protects(invocation.tool_name):
+            return None
+        identity = operation_identity_for_invocation(invocation)
+        try:
+            receipt = self.ledger.get(identity.operation_key, owner=invocation.owner)
+        except KeyError:
+            return None
+        return self._existing(receipt, invocation)
+
+    def reserve_or_replay(self, invocation: ToolInvocation) -> ToolResult | None:
+        """Reserve at the last safe point before the mutation handler executes."""
+
+        if not self.protects(invocation.tool_name):
+            return None
         identity = operation_identity_for_invocation(invocation)
         receipt, created = self.ledger.reserve(
             identity,
             invocation_id=invocation.invocation_id,
         )
         if not created:
-            replay = self._existing(receipt, invocation)
-            if replay is not None:
-                return replay
-            raise AgentToolGatewayError(
-                "Agent operation cannot be executed from its current state",
-                code="AGENT.OPERATION.STATE_CONFLICT",
-            )
-
-        receipt = self.ledger.mark_running(
+            return self._existing(receipt, invocation)
+        self.ledger.mark_running(
             receipt.operation_key,
             owner=invocation.owner,
             invocation_id=invocation.invocation_id,
         )
-        try:
-            result = self.gateway.invoke(token, invocation)
-        except AgentToolGatewayError as exc:
-            self.ledger.fail(
-                receipt.operation_key,
-                owner=invocation.owner,
-                invocation_id=invocation.invocation_id,
-                error_code=exc.code,
-            )
-            raise
-        except Exception:
-            # The process observed an unclassified failure after entering the
-            # execution window.  A side effect may already exist; never invite
-            # a blind retry by calling the operation failed.
-            self.ledger.mark_unknown(
-                receipt.operation_key,
-                owner=invocation.owner,
-            )
-            raise
+        return None
 
-        if result.error is not None or result.result is None:
-            # The current legacy Gateway raises on failures, so an error envelope
-            # here is protocol drift.  Treat it as unknown rather than replaying
-            # an envelope whose side-effect semantics are not established.
-            self.ledger.mark_unknown(
-                receipt.operation_key,
-                owner=invocation.owner,
-            )
-            raise AgentToolGatewayError(
-                "Agent operation returned an invalid authoritative result",
-                code="AGENT.TOOL.INVALID_RESULT",
-            )
-
+    def complete(self, invocation: ToolInvocation, result: ToolResult) -> None:
+        if not self.protects(invocation.tool_name):
+            return
+        identity = operation_identity_for_invocation(invocation)
         stored = self.results.put(
-            operation_key=receipt.operation_key,
+            operation_key=identity.operation_key,
             owner=invocation.owner,
             result=result,
         )
         self.ledger.complete(
-            receipt.operation_key,
+            identity.operation_key,
             owner=invocation.owner,
             invocation_id=invocation.invocation_id,
             result_digest=stored.result_digest,
             result_ref=stored.result_ref,
             side_effect_receipt_ref=_side_effect_receipt_ref(result),
         )
-        return result
+
+    def fail(self, invocation: ToolInvocation, *, error_code: str) -> None:
+        """Persist a stable handler-level failure after execution has started."""
+
+        if not self.protects(invocation.tool_name):
+            return
+        identity = operation_identity_for_invocation(invocation)
+        self.ledger.fail(
+            identity.operation_key,
+            owner=invocation.owner,
+            invocation_id=invocation.invocation_id,
+            error_code=error_code,
+        )
+
+    def mark_unknown(self, invocation: ToolInvocation) -> None:
+        if not self.protects(invocation.tool_name):
+            return
+        identity = operation_identity_for_invocation(invocation)
+        self.ledger.mark_unknown(identity.operation_key, owner=invocation.owner)
 
     def _existing(
         self,
@@ -234,7 +242,61 @@ class OperationLedgerAuthoritativeGateway:
                 retryable=True,
             )
 
-        return None
+        raise AgentToolGatewayError(
+            "Agent operation state does not permit execution",
+            code="AGENT.OPERATION.STATE_CONFLICT",
+        )
+
+
+class OperationLedgerAuthoritativeGateway:
+    """Compatibility adapter retained for focused controller tests only.
+
+    Production routing no longer uses this outer wrapper because it cannot know
+    whether a legacy Gateway error happened before or after the mutation handler.
+    New integration must use :class:`DurableOperationController` inside
+    ``AgentToolGateway``.
+    """
+
+    def __init__(
+        self,
+        *,
+        gateway: AgentToolGateway,
+        ledger: AuthoritativeOperationLedger,
+        results: AuthoritativeOperationResultStore,
+        protected_tools: frozenset[str] = DURABLE_MUTATION_TOOL_NAMES,
+    ) -> None:
+        self.gateway = gateway
+        self.controller = DurableOperationController(
+            ledger=ledger,
+            results=results,
+            protected_tools=protected_tools,
+        )
+
+    def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult:
+        if not self.controller.protects(invocation.tool_name):
+            return self.gateway.invoke(token, invocation)
+        replay = self.controller.replay_existing(invocation)
+        if replay is not None:
+            return replay
+        replay = self.controller.reserve_or_replay(invocation)
+        if replay is not None:
+            return replay
+        try:
+            result = self.gateway.invoke(token, invocation)
+        except AgentToolGatewayError as exc:
+            self.controller.fail(invocation, error_code=exc.code)
+            raise
+        except Exception:
+            self.controller.mark_unknown(invocation)
+            raise
+        if result.error is not None or result.result is None:
+            self.controller.mark_unknown(invocation)
+            raise AgentToolGatewayError(
+                "Agent operation returned an invalid authoritative result",
+                code="AGENT.TOOL.INVALID_RESULT",
+            )
+        self.controller.complete(invocation, result)
+        return result
 
 
 def _side_effect_receipt_ref(result: ToolResult) -> str | None:
