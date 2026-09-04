@@ -12,19 +12,18 @@ from pilot107.core.repair_ticket import RepairTicket, RepairTicketState
 from pilot107.core.repair_ticket_store import RepairTicketStore
 from pilot107.core.run_store import RunStore
 from pilot107.core.states import RunState
+from pilot107.services.repair_workspace_service import RepairWorkspaceService
 from pilot107.services.run_workspace_service import RunWorkspaceService
 
 
-def _service(tmp_path: Path) -> tuple[RunWorkspaceService, RunStore, RemediationStore, RepairTicketStore]:
+def _service(
+    tmp_path: Path,
+) -> tuple[RepairWorkspaceService, RunStore, RemediationStore, RepairTicketStore]:
     database = tmp_path / "pilot107.db"
     runs = RunStore(database)
     remediation = RemediationStore(database)
     tickets = RepairTicketStore(database)
-    service = RunWorkspaceService(
-        store=runs,
-        remediation_store=remediation,
-        repair_ticket_store=tickets,
-    )
+    service = RepairWorkspaceService(store=runs)
     return service, runs, remediation, tickets
 
 
@@ -118,7 +117,7 @@ def test_repair_workspace_projects_existing_authorities_without_raw_agent_payloa
         lineage_reason="manual_retry",
     )
 
-    payload = service.get_repair("run-failed", owner="alice")
+    payload = service.get("run-failed", owner="alice")
 
     assert payload["schema_version"] == "pilot107.repair-workspace/v1"
     assert payload["source_run"]["run_id"] == "run-failed"
@@ -154,29 +153,32 @@ def test_repair_workspace_is_owner_scoped(tmp_path: Path) -> None:
     _failed_run(runs)
 
     with pytest.raises(PermissionError):
-        service.get_repair("run-failed", owner="bob")
+        service.get("run-failed", owner="bob")
 
 
 def test_repair_workspace_starts_from_evidence_bound_diagnosis(tmp_path: Path) -> None:
     service, runs, _, _ = _service(tmp_path)
     _failed_run(runs)
 
-    payload = service.get_repair("run-failed", owner="alice")
+    payload = service.get("run-failed", owner="alice")
 
     assert payload["status"] == {
         "has_repair_activity": False,
         "awaiting_approval": False,
         "has_derived_run": False,
-        "verified_success": False,
+        "has_successful_derived_run": False,
     }
     assert payload["next_action"]["kind"] == "start_repair"
     assert payload["diagnoses"][0]["diagnosis_id"] == "diag-1"
 
 
 def test_repair_workspace_route_has_distinct_contract(tmp_path: Path) -> None:
-    service, runs, _, _ = _service(tmp_path)
+    repair_service, runs, _, _ = _service(tmp_path)
     _failed_run(runs)
-    routes = RunWorkspaceRoutes(service)
+    routes = RunWorkspaceRoutes(
+        RunWorkspaceService(store=runs),
+        repair_service=repair_service,
+    )
 
     response = routes.handle_get(
         ["runs", "run-failed", "repair-workspace"],
