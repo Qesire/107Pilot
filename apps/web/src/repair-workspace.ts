@@ -137,6 +137,28 @@ export interface RepairWorkspace {
   };
 }
 
+const ACTIVE_DERIVED_RUN_STATES = new Set([
+  "DRAFT",
+  "VALIDATED",
+  "SUBMITTING",
+  "SUBMITTED",
+  "PENDING",
+  "RUNNING",
+  "COMPLETING",
+  "UNKNOWN",
+]);
+
+export function repairWorkspacePollInterval(
+  workspace: RepairWorkspace | undefined,
+): number | false {
+  if (!workspace) return 5_000;
+  if (workspace.status.awaiting_approval) return 5_000;
+  if (workspace.derived_runs.some((run) => ACTIVE_DERIVED_RUN_STATES.has(run.state))) {
+    return 5_000;
+  }
+  return false;
+}
+
 async function fetchRepairWorkspace(
   user: string,
   runId: string,
@@ -170,25 +192,6 @@ export function useRepairWorkspace(user: string, runId: string | null) {
     queryKey: ["repair-workspace", user, runId],
     queryFn: ({ signal }) => fetchRepairWorkspace(user, runId ?? "", signal),
     enabled: Boolean(runId),
-    refetchInterval: (query) => {
-      const workspace = query.state.data;
-      if (!workspace) return 5_000;
-      if (workspace.status.awaiting_approval) return 5_000;
-      if (
-        workspace.derived_runs.some((run) =>
-          [
-            "DRAFT",
-            "VALIDATED",
-            "SUBMITTING",
-            "SUBMITTED",
-            "PENDING",
-            "RUNNING",
-            "COMPLETING",
-            "UNKNOWN",
-          ].includes(run.state),
-        )
-      ) return 5_000;
-      return false;
-    },
+    refetchInterval: (query) => repairWorkspacePollInterval(query.state.data),
   });
 }
