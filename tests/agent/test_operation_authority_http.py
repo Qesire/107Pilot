@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,12 +15,18 @@ from pilot107.agent.tool_gateway import AgentReadResult, AgentToolGateway
 from pilot107.api.agent_tool_routes import AgentToolRoutes
 
 
-class FixedClock:
+class MutableClock:
+    def __init__(self) -> None:
+        self.value = datetime(2026, 9, 4, 4, 30, tzinfo=UTC)
+
     def __call__(self) -> datetime:
-        return datetime(2026, 9, 4, 4, 30, tzinfo=UTC)
+        return self.value
 
     def epoch(self) -> int:
-        return int(self().timestamp())
+        return int(self.value.timestamp())
+
+    def advance(self, seconds: int) -> None:
+        self.value += timedelta(seconds=seconds)
 
 
 def _running_gateway(
@@ -30,7 +36,7 @@ def _running_gateway(
     tool_name: str,
     handler,
 ):
-    clock = FixedClock()
+    clock = MutableClock()
     store = SQLiteAgentSessionStore(db_path, clock=clock)
     source = (
         {"project_id": "project-1", "workspace_id": "workspace-1"}
@@ -64,7 +70,7 @@ def _running_gateway(
         tools=frozenset({tool_name}),
         max_invocations=8,
         max_bytes=262_144,
-        expires_at=clock.epoch() + 60,
+        expires_at=clock.epoch() + 600,
         project_id="project-1" if profile_id == "experiment_builder" else None,
         workspace_id="workspace-1" if profile_id == "experiment_builder" else None,
         operations=(
@@ -81,7 +87,7 @@ def _running_gateway(
         clock=clock,
     )
     routes = AgentToolRoutes(gateway)
-    return routes, signer.sign(claims), session, claim
+    return routes, signer.sign(claims), session, claim, store, clock
 
 
 def _mutation(session_id: str, turn_id: str, state_version: int, call_id: str) -> ToolInvocation:
@@ -103,7 +109,7 @@ def _mutation(session_id: str, turn_id: str, state_version: int, call_id: str) -
             "request_key": "user-request-1",
             "expected_revision": 4,
         },
-        deadline="2026-09-04T04:31:00Z",
+        deadline="2026-09-04T04:40:00Z",
     )
 
 
@@ -119,7 +125,7 @@ def _read(session_id: str, turn_id: str, state_version: int, call_id: str) -> To
         profile_id="hpc-readonly-v1",
         tool_name="run_get",
         arguments={"run_id": "run-1"},
-        deadline="2026-09-04T04:31:00Z",
+        deadline="2026-09-04T04:40:00Z",
     )
 
 
@@ -163,7 +169,7 @@ def test_http_boundary_replays_mutation_for_new_provider_call_id(tmp_path: Path)
         )
 
     db_path = tmp_path / "agent.db"
-    routes, token, session, claim = _running_gateway(
+    routes, token, session, claim, _, _ = _running_gateway(
         db_path,
         profile_id="experiment_builder",
         tool_name="validation_schedule",
@@ -203,7 +209,7 @@ def test_http_boundary_keeps_read_tools_live(tmp_path: Path) -> None:
             evidence_refs=("run:run-1",),
         )
 
-    routes, token, session, claim = _running_gateway(
+    routes, token, session, claim, _, _ = _running_gateway(
         tmp_path / "agent.db",
         profile_id="hpc-readonly-v1",
         tool_name="run_get",
@@ -235,7 +241,7 @@ def test_invalid_capability_does_not_create_operation_receipt(tmp_path: Path) ->
         return AgentReadResult(result={"status": "scheduled"}, evidence_refs=())
 
     db_path = tmp_path / "agent.db"
-    routes, _, session, claim = _running_gateway(
+    routes, _, session, claim, _, _ = _running_gateway(
         db_path,
         profile_id="experiment_builder",
         tool_name="validation_schedule",
@@ -268,7 +274,7 @@ def test_http_boundary_blocks_existing_running_mutation(tmp_path: Path) -> None:
         return AgentReadResult(result={"status": "scheduled"}, evidence_refs=())
 
     db_path = tmp_path / "agent.db"
-    routes, token, session, claim = _running_gateway(
+    routes, token, session, claim, _, _ = _running_gateway(
         db_path,
         profile_id="experiment_builder",
         tool_name="validation_schedule",
@@ -306,3 +312,59 @@ def test_http_boundary_blocks_existing_running_mutation(tmp_path: Path) -> None:
     assert response.payload["error"]["code"] == "AGENT.OPERATION.IN_PROGRESS"
     assert response.payload["error"]["retryable"] is True
     assert calls == []
+
+
+def test_completed_replay_rejects_stale_turn_fence_after_reclaim(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def schedule(owner, arguments):
+        calls.append(str(arguments["request_key"]))
+        return AgentReadResult(
+            result={"status": "scheduled", "run_id": "run-1"},
+            evidence_refs=("run:run-1",),
+        )
+
+    db_path = tmp_path / "agent.db"
+    routes, token, session, claim, store, clock = _running_gateway(
+        db_path,
+        profile_id="experiment_builder",
+        tool_name="validation_schedule",
+        handler=schedule,
+    )
+    first = _post(
+        routes,
+        token,
+        _mutation(
+            session.session_id,
+            claim.turn_id,
+            claim.state_version,
+            "provider-call-a",
+        ),
+    )
+    assert first is not None and first.status == 200
+    assert calls == ["user-request-1"]
+
+    clock.advance(121)
+    reclaimed = store.claim_turn(
+        claim.turn_id,
+        worker_id="worker-2",
+        lease_seconds=120,
+    )
+    assert reclaimed is not None
+    assert reclaimed.fencing_token > claim.fencing_token
+
+    replay = _post(
+        routes,
+        token,
+        _mutation(
+            session.session_id,
+            claim.turn_id,
+            claim.state_version,
+            "provider-call-b",
+        ),
+    )
+
+    assert replay is not None
+    assert replay.status == 409
+    assert replay.payload["error"]["code"] == "AGENT.TOOL.FENCED"
+    assert calls == ["user-request-1"]
