@@ -7,7 +7,12 @@ import {
   createFauxModelRuntime,
   type ModelRuntime,
 } from "./models.js";
-import { closeAgentdServer, createAgentdServer } from "./server.js";
+import { ReceiptRepairingTurnRunner } from "./receipt-repair.js";
+import {
+  closeAgentdServer,
+  createAgentdServer,
+  type TurnRunner,
+} from "./server.js";
 import { ToolGatewayClient } from "./tool-gateway.js";
 import { TurnExecutor } from "./turn-executor.js";
 
@@ -19,7 +24,7 @@ export interface AgentdExecutorDependencies {
 export function createAgentdExecutor(
   config: AgentdConfig,
   dependencies: AgentdExecutorDependencies = {},
-): TurnExecutor {
+): TurnRunner {
   let runtime: ModelRuntime | undefined = dependencies.runtime;
   if (runtime === undefined && config.configured) {
     runtime =
@@ -40,13 +45,14 @@ export function createAgentdExecutor(
             ? {}
             : { fetch: dependencies.toolGatewayFetch }),
         });
-  return new TurnExecutor(
+  const executor = new TurnExecutor(
     (profileId) =>
       runtime?.profile.id === profileId ? runtime : undefined,
     undefined,
     toolGateway,
     config.phaseAwareBuilder,
   );
+  return new ReceiptRepairingTurnRunner(executor);
 }
 
 export function createAgentdApplication(env: NodeJS.ProcessEnv = process.env) {
