@@ -1,7 +1,7 @@
 """Provider-independent durable identities and receipts for Agent side effects.
 
-The operation ledger deliberately does not redefine Workspace state.  It records
-whether a typed Agent mutation intent has crossed a side-effect boundary.  Live
+The operation ledger deliberately does not redefine Workspace state. It records
+whether a typed Agent mutation intent has crossed a side-effect boundary. Live
 Workspace revisions and journals remain a separate Workspace concern.
 """
 
@@ -168,7 +168,12 @@ def operation_intent_for_invocation(
     *,
     arguments_digest: str,
 ) -> AgentOperationIntent | None:
-    """Return a stable side-effect identity, independent of provider call IDs."""
+    """Return a stable side-effect identity independent of provider/Turn call IDs.
+
+    ``intent_digest`` is intentionally *not* part of ``operation_key``. The key
+    identifies the durable domain request; the digest is compared separately so
+    changed canonical content under the same request identity fails closed.
+    """
 
     if invocation.tool_name not in _SIDE_EFFECT_TOOLS:
         return None
@@ -177,24 +182,24 @@ def operation_intent_for_invocation(
     turn = store.get_turn(invocation.turn_id, owner=invocation.owner)
     if turn.session_id != invocation.session_id:
         raise AgentOperationConflict("operation Turn does not belong to its Session")
+    request_key = _domain_request_key(invocation.arguments, fallback=turn.request_key)
     target_ref = _target_ref(invocation.arguments)
     target_revision = _target_revision(invocation.arguments)
-    body = {
+    identity = {
         "owner": invocation.owner,
         "session_id": invocation.session_id,
-        "request_key": turn.request_key,
+        "request_key": request_key,
         "tool_name": invocation.tool_name,
-        "intent_digest": arguments_digest,
         "target_ref": target_ref,
         "target_revision": target_revision,
     }
-    operation_key = "operation-" + hashlib.sha256(_canonical(body)).hexdigest()
+    operation_key = "operation-" + hashlib.sha256(_canonical(identity)).hexdigest()
     return AgentOperationIntent(
         operation_key=operation_key,
         owner=invocation.owner,
         session_id=invocation.session_id,
         origin_turn_id=invocation.turn_id,
-        request_key=turn.request_key,
+        request_key=request_key,
         tool_name=invocation.tool_name,
         intent_digest=arguments_digest,
         target_ref=target_ref,
@@ -207,11 +212,11 @@ def build_agent_operation_ledger(
     *,
     clock: Callable[[], datetime] | None = None,
 ) -> AgentOperationLedger | None:
-    """Select the ledger matching the existing durable Session store.
+    """Select a ledger matching the existing durable Session store.
 
-    Unknown test doubles remain supported and simply use the legacy invocation
-    ledger.  Production SQLite/PostgreSQL stores always receive an operation
-    ledger without changing service wiring or Workspace construction.
+    Unknown test doubles retain the legacy invocation ledger. Production
+    SQLite/PostgreSQL stores gain operation receipts without changing service or
+    Workspace construction.
     """
 
     db_path = getattr(store, "db_path", None)
@@ -342,6 +347,13 @@ class SQLiteAgentOperationLedger:
         now = self._now_text()
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._assert_current_turn(
+                conn,
+                intent,
+                expected_state_version=expected_state_version,
+                expected_fencing_token=expected_fencing_token,
+                now=now,
+            )
             cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO agent_operations (
@@ -350,16 +362,8 @@ class SQLiteAgentOperationLedger:
                     origin_invocation_id, last_invocation_id, result_json, error_json,
                     receipt_ref, result_digest, side_effect_ref, reconciliation_attempt,
                     created_at, updated_at
-                )
-                SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, NULL, NULL,
-                       NULL, NULL, NULL, 0, ?, ?
-                WHERE EXISTS (
-                    SELECT 1 FROM agent_turns
-                    WHERE turn_id = ? AND session_id = ? AND owner = ?
-                      AND state = 'running' AND cancel_requested = 0
-                      AND state_version = ? AND fencing_token = ?
-                      AND lease_expires_at > ?
-                )
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, NULL, NULL,
+                          NULL, NULL, NULL, 0, ?, ?)
                 """,
                 (
                     intent.operation_key,
@@ -375,23 +379,18 @@ class SQLiteAgentOperationLedger:
                     invocation_id,
                     now,
                     now,
-                    intent.origin_turn_id,
-                    intent.session_id,
-                    intent.owner,
-                    expected_state_version,
-                    expected_fencing_token,
-                    now,
                 ),
             )
+            created = cursor.rowcount == 1
             row = conn.execute(
                 "SELECT * FROM agent_operations WHERE operation_key = ? AND owner = ?",
                 (intent.operation_key, intent.owner),
             ).fetchone()
             if row is None:
-                raise AgentOperationConflict("operation Turn capability is stale or fenced")
+                raise RuntimeError("operation insert did not produce a row")
             record = _row_to_operation(row)
             _ensure_intent(record, intent)
-            if cursor.rowcount != 1:
+            if not created:
                 conn.execute(
                     """
                     UPDATE agent_operations SET last_invocation_id = ?, updated_at = ?
@@ -405,7 +404,7 @@ class SQLiteAgentOperationLedger:
                 ).fetchone()
                 assert row is not None
                 record = _row_to_operation(row)
-        return record, cursor.rowcount == 1
+        return record, created
 
     def start(
         self,
@@ -438,7 +437,6 @@ class SQLiteAgentOperationLedger:
     ) -> AgentOperationRecord:
         payload = _json_object(result, "result")
         digest = hashlib.sha256(_canonical(payload)).hexdigest()
-        receipt_ref = f"agent-operation:{operation_key}:sha256:{digest}"
         return self._finish(
             operation_key,
             owner=owner,
@@ -447,7 +445,7 @@ class SQLiteAgentOperationLedger:
             state=AgentOperationState.COMPLETED,
             result=payload,
             error=None,
-            receipt_ref=receipt_ref,
+            receipt_ref=f"agent-operation:{operation_key}:sha256:{digest}",
             result_digest=digest,
             side_effect_ref=side_effect_ref,
         )
@@ -463,7 +461,6 @@ class SQLiteAgentOperationLedger:
     ) -> AgentOperationRecord:
         payload = _json_object(error, "error")
         digest = hashlib.sha256(_canonical({"error": payload})).hexdigest()
-        receipt_ref = f"agent-operation:{operation_key}:sha256:{digest}"
         return self._finish(
             operation_key,
             owner=owner,
@@ -472,7 +469,7 @@ class SQLiteAgentOperationLedger:
             state=AgentOperationState.FAILED,
             result=None,
             error=payload,
-            receipt_ref=receipt_ref,
+            receipt_ref=f"agent-operation:{operation_key}:sha256:{digest}",
             result_digest=digest,
             side_effect_ref=None,
         )
@@ -486,7 +483,6 @@ class SQLiteAgentOperationLedger:
         expected_fencing_token: int,
         error: Mapping[str, object],
     ) -> AgentOperationRecord:
-        payload = _json_object(error, "error")
         return self._finish(
             operation_key,
             owner=owner,
@@ -494,7 +490,7 @@ class SQLiteAgentOperationLedger:
             expected_fencing_token=expected_fencing_token,
             state=AgentOperationState.UNKNOWN,
             result=None,
-            error=payload,
+            error=_json_object(error, "error"),
             receipt_ref=None,
             result_digest=None,
             side_effect_ref=None,
@@ -511,6 +507,35 @@ class SQLiteAgentOperationLedger:
         if row is None:
             raise KeyError(operation_key)
         return _row_to_operation(row)
+
+    def _assert_current_turn(
+        self,
+        conn: sqlite3.Connection,
+        intent: AgentOperationIntent,
+        *,
+        expected_state_version: int,
+        expected_fencing_token: int,
+        now: str,
+    ) -> None:
+        row = conn.execute(
+            """
+            SELECT 1 FROM agent_turns
+            WHERE turn_id = ? AND session_id = ? AND owner = ?
+              AND state = 'running' AND cancel_requested = 0
+              AND state_version = ? AND fencing_token = ?
+              AND lease_expires_at > ?
+            """,
+            (
+                intent.origin_turn_id,
+                intent.session_id,
+                intent.owner,
+                expected_state_version,
+                expected_fencing_token,
+                now,
+            ),
+        ).fetchone()
+        if row is None:
+            raise AgentOperationConflict("operation Turn capability is stale or fenced")
 
     def _transition(
         self,
@@ -680,6 +705,25 @@ class PostgresAgentOperationLedger:
         _operation_request(intent, invocation_id, expected_state_version, expected_fencing_token)
         now = self._now()
         with self.connect() as conn:
+            valid = conn.execute(
+                """
+                SELECT 1 FROM agent_turns
+                WHERE turn_id = %s AND session_id = %s AND owner = %s
+                  AND state = 'running' AND cancel_requested = 0
+                  AND state_version = %s AND fencing_token = %s
+                  AND lease_expires_at > %s
+                """,
+                (
+                    intent.origin_turn_id,
+                    intent.session_id,
+                    intent.owner,
+                    expected_state_version,
+                    expected_fencing_token,
+                    now,
+                ),
+            ).fetchone()
+            if valid is None:
+                raise AgentOperationConflict("operation Turn capability is stale or fenced")
             row = conn.execute(
                 """
                 INSERT INTO agent_operations (
@@ -688,16 +732,8 @@ class PostgresAgentOperationLedger:
                     origin_invocation_id, last_invocation_id, result_json, error_json,
                     receipt_ref, result_digest, side_effect_ref, reconciliation_attempt,
                     created_at, updated_at
-                )
-                SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, 'reserved', %s, %s,
-                       NULL, NULL, NULL, NULL, NULL, 0, %s, %s
-                WHERE EXISTS (
-                    SELECT 1 FROM agent_turns
-                    WHERE turn_id = %s AND session_id = %s AND owner = %s
-                      AND state = 'running' AND cancel_requested = 0
-                      AND state_version = %s AND fencing_token = %s
-                      AND lease_expires_at > %s
-                )
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'reserved', %s, %s,
+                          NULL, NULL, NULL, NULL, NULL, 0, %s, %s)
                 ON CONFLICT DO NOTHING
                 RETURNING *
                 """,
@@ -715,12 +751,6 @@ class PostgresAgentOperationLedger:
                     invocation_id,
                     now,
                     now,
-                    intent.origin_turn_id,
-                    intent.session_id,
-                    intent.owner,
-                    expected_state_version,
-                    expected_fencing_token,
-                    now,
                 ),
             ).fetchone()
             created = row is not None
@@ -730,7 +760,7 @@ class PostgresAgentOperationLedger:
                     (intent.operation_key, intent.owner),
                 ).fetchone()
             if row is None:
-                raise AgentOperationConflict("operation Turn capability is stale or fenced")
+                raise RuntimeError("operation insert did not produce a row")
             record = _row_to_operation(row)
             _ensure_intent(record, intent)
             if not created:
@@ -979,9 +1009,7 @@ class PostgresAgentOperationLedger:
             ).fetchone()
             if existing is not None:
                 if str(existing["checksum"]) != checksum:
-                    raise RuntimeError(
-                        f"migration checksum changed: {_POSTGRES_MIGRATION_ID}"
-                    )
+                    raise RuntimeError(f"migration checksum changed: {_POSTGRES_MIGRATION_ID}")
                 return
             for statement in _POSTGRES_STATEMENTS:
                 conn.execute(statement)
@@ -1017,7 +1045,6 @@ def _ensure_intent(record: AgentOperationRecord, intent: AgentOperationIntent) -
     if (
         record.owner != intent.owner
         or record.session_id != intent.session_id
-        or record.origin_turn_id != intent.origin_turn_id
         or record.request_key != intent.request_key
         or record.tool_name != intent.tool_name
         or record.intent_digest != intent.intent_digest
@@ -1025,6 +1052,13 @@ def _ensure_intent(record: AgentOperationRecord, intent: AgentOperationIntent) -
         or record.target_revision != intent.target_revision
     ):
         raise AgentOperationConflict("operation_key refers to different intent content")
+
+
+def _domain_request_key(arguments: Mapping[str, object], *, fallback: str) -> str:
+    candidate = arguments.get("request_key")
+    if isinstance(candidate, str) and candidate:
+        return _nonempty(candidate, "request_key")
+    return _nonempty(fallback, "request_key")
 
 
 def _target_ref(arguments: Mapping[str, object]) -> str | None:
@@ -1041,12 +1075,18 @@ def _target_ref(arguments: Mapping[str, object]) -> str | None:
 
 
 def _target_revision(arguments: Mapping[str, object]) -> str | None:
-    expected_version = arguments.get("expected_version")
-    if isinstance(expected_version, int) and not isinstance(expected_version, bool):
-        return f"version:{expected_version}"
-    change_set_id = arguments.get("change_set_id")
-    if isinstance(change_set_id, str) and change_set_id:
-        return f"changeset:{change_set_id}"
+    for key, prefix in (
+        ("expected_version", "version"),
+        ("expected_project_version", "project-version"),
+        ("expected_workspace_snapshot_digest", "workspace-snapshot"),
+        ("change_set_id", "changeset"),
+        ("base_change_set_id", "base-changeset"),
+    ):
+        value = arguments.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return f"{prefix}:{value}"
+        if isinstance(value, str) and value:
+            return f"{prefix}:{value}"
     patches = arguments.get("patches")
     if isinstance(patches, list):
         source_digests: list[str | None] = []
