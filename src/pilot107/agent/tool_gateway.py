@@ -84,12 +84,16 @@ class AgentToolGateway:
         self._validate_binding(claims, invocation)
 
         controller = self.operation_controller
-        protected = controller is not None and controller.protects(invocation.tool_name)
-        if protected:
+        active_controller = (
+            controller
+            if controller is not None and controller.protects(invocation.tool_name)
+            else None
+        )
+        if active_controller is not None:
             # This lookup is intentionally read-only.  It happens before the
             # provider-call-ID-bound legacy reservation so a completed durable
             # operation can replay even when the provider emits a new call ID.
-            replay = controller.replay_existing(invocation)
+            replay = active_controller.replay_existing(invocation)
             if replay is not None:
                 return replay
 
@@ -157,11 +161,11 @@ class AgentToolGateway:
                 "Agent tool is unavailable", code="AGENT.TOOL.UNAVAILABLE"
             )
 
-        if protected:
+        if active_controller is not None:
             # All capability, fencing, budget, and handler-availability checks
             # have passed.  This is the last safe point before the real mutation.
             try:
-                race_replay = controller.reserve_or_replay(invocation)
+                race_replay = active_controller.reserve_or_replay(invocation)
             except AgentToolGatewayError as exc:
                 self._persist_failure(
                     invocation,
@@ -195,15 +199,15 @@ class AgentToolGateway:
         try:
             read_result = handler(invocation.owner, invocation.arguments)
         except AgentToolGatewayError as exc:
-            if protected:
-                controller.fail(invocation, error_code=exc.code)
+            if active_controller is not None:
+                active_controller.fail(invocation, error_code=exc.code)
             self._persist_failure(
                 invocation, claims, code=exc.code, message=str(exc), retryable=exc.retryable
             )
             raise
         except Exception:
-            if protected:
-                controller.mark_unknown(invocation)
+            if active_controller is not None:
+                active_controller.mark_unknown(invocation)
             self._persist_failure(
                 invocation,
                 claims,
@@ -214,8 +218,8 @@ class AgentToolGateway:
                 "Agent read tool failed", code="AGENT.TOOL.READ_FAILED"
             ) from None
         if not isinstance(read_result, AgentReadResult):
-            if protected:
-                controller.mark_unknown(invocation)
+            if active_controller is not None:
+                active_controller.mark_unknown(invocation)
             self._persist_failure(
                 invocation,
                 claims,
@@ -228,8 +232,8 @@ class AgentToolGateway:
             )
         bytes_returned = len(_canonical(read_result.result))
         if usage.bytes_returned + bytes_returned > claims.max_bytes:
-            if protected:
-                controller.fail(
+            if active_controller is not None:
+                active_controller.fail(
                     invocation,
                     error_code="AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
                 )
@@ -252,15 +256,15 @@ class AgentToolGateway:
             evidence_refs=read_result.evidence_refs,
             bytes_returned=bytes_returned,
         )
-        if protected:
+        if active_controller is not None:
             try:
-                controller.complete(invocation, result)
+                active_controller.complete(invocation, result)
             except Exception:
                 # A side effect and replay payload may already exist.  Preserve
                 # uncertainty rather than allow the next process to execute it
                 # blindly after a receipt persistence failure.
                 try:
-                    controller.mark_unknown(invocation)
+                    active_controller.mark_unknown(invocation)
                 except Exception:
                     pass
                 raise
