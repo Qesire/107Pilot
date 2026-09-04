@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -26,6 +27,42 @@ SKIP_PREFIXES = (
 SKIP_NAMES = {"package-lock.json", "uv.lock"}
 ALLOW_MARKER = "secret-scan: allow"
 
+# Deliberate negative-test/documentation fixtures are allowed only by exact
+# path + exact line digest.  Editing even one byte makes the scanner fail again,
+# so this cannot silently turn into a file-level or rule-level exception.
+AUDITED_FIXTURE_LINE_SHA256 = frozenset(
+    {
+        (
+            "docs/superpowers/plans/2026-08-10-pilot-agentd-a0.md",
+            "d8f4b485b4bc34858db088794947905f0d1cc9a3efffa2832583fc5f72545ef5",
+        ),
+        (
+            "services/pilot-agentd/tests/config.test.ts",
+            "d8f4b485b4bc34858db088794947905f0d1cc9a3efffa2832583fc5f72545ef5",
+        ),
+        (
+            "services/pilot-agentd/tests/config.test.ts",
+            "c4a13a7e03d5b87a57728d0c950acac4603a58e296022c86d15c94229aacfe3e",
+        ),
+        (
+            "services/pilot-agentd/tests/config.test.ts",
+            "e22478a5e35b5e64a1fb6f7e9bc1981004f5b9f4db5916fa651d5a8c130d0fe7",
+        ),
+        (
+            "services/pilot-agentd/tests/models.test.ts",
+            "d8f4b485b4bc34858db088794947905f0d1cc9a3efffa2832583fc5f72545ef5",
+        ),
+        (
+            "services/pilot-agentd/tests/server.test.ts",
+            "e2e0dc4d049dd8b16af13291bc3a77f8ac000fcf620a7efc68a70c3a68ea9e78",
+        ),
+        (
+            "tests/agent/test_client.py",
+            "fa29f884f5388b54c8ecda831889fc3305c0693b5717da85eec2e4c1b82e94fd",
+        ),
+    }
+)
+
 
 def candidate_paths(root: Path) -> list[Path]:
     output = subprocess.check_output(
@@ -33,6 +70,11 @@ def candidate_paths(root: Path) -> list[Path]:
         cwd=root,
     )
     return [root / item.decode("utf-8") for item in output.split(b"\0") if item]
+
+
+def _audited_fixture_line(relative: str, line: str) -> bool:
+    digest = hashlib.sha256(line.encode("utf-8")).hexdigest()
+    return (relative, digest) in AUDITED_FIXTURE_LINE_SHA256
 
 
 def findings(root: Path) -> list[tuple[str, int, str]]:
@@ -46,7 +88,7 @@ def findings(root: Path) -> list[tuple[str, int, str]]:
         except UnicodeDecodeError:
             continue
         for line_number, line in enumerate(lines, 1):
-            if ALLOW_MARKER in line:
+            if ALLOW_MARKER in line or _audited_fixture_line(relative, line):
                 continue
             for name, pattern in PATTERNS.items():
                 if pattern.search(line):
