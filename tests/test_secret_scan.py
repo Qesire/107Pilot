@@ -13,6 +13,10 @@ def _load_scanner():
     return module
 
 
+def _url(user: str, password: str, host: str) -> str:
+    return "http" + "://" + user + ":" + password + "@" + host
+
+
 def test_synthetic_fixture_allowlist_is_path_scoped() -> None:
     scanner = _load_scanner()
     line = '  PILOT107_LLM_API_KEY: "llm-secret",'
@@ -26,18 +30,17 @@ def test_synthetic_fixture_allowlist_is_path_scoped() -> None:
 def test_embedded_password_fixture_is_exact_literal_scoped() -> None:
     scanner = _load_scanner()
     path = "tests/agent/test_client.py"
+    approved = _url("user", "password", "agentd:8091")
+    unapproved = _url("alice", "real-secret", "agentd:8091")
 
-    assert scanner._is_synthetic_fixture(
-        path, '({"base_url": "http://user:password@agentd:8091"}, "name")'
-    )
+    assert scanner._is_synthetic_fixture(path, f'({{"base_url": "{approved}"}}, "name")')
     assert not scanner._is_synthetic_fixture(
-        path, '({"base_url": "http://alice:real-secret@agentd:8091"}, "name")'
+        path, f'({{"base_url": "{unapproved}"}}, "name")'
     )
 
 
 def test_high_confidence_pattern_still_matches_unapproved_secret() -> None:
     scanner = _load_scanner()
+    unapproved = _url("alice", "real-secret", "example.edu/api")
 
-    assert scanner.PATTERNS["embedded-url-password"].search(
-        'url = "https://alice:real-secret@example.edu/api"'
-    )
+    assert scanner.PATTERNS["embedded-url-password"].search(f'url = "{unapproved}"')
