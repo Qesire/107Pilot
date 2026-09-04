@@ -13,6 +13,7 @@ from pilot107.agent.capabilities import (
     AgentCapabilityClaims,
     AgentCapabilitySigner,
 )
+from pilot107.agent.heartbeat import PeriodicHeartbeat
 from pilot107.agent.project import is_project_agent_profile
 from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.protocol import AgentdClientError, AgentTurnEvent, DurableAgentTurnRequest
@@ -195,51 +196,77 @@ class AgentTurnWorker:
         checkpoint = current.final_checkpoint
         terminal: AgentTurnEvent | None = None
         cancel_sent = False
+        heartbeat = PeriodicHeartbeat(
+            lambda: self._renew_dispatch_leases(message, claim),
+            interval_seconds=self._heartbeat_interval_seconds(),
+            name=f"agent-turn-heartbeat:{turn_id}",
+        ).start()
         try:
-            for event in self.agentd_client.stream_durable_turn(request):
-                self.store.append_event(
-                    turn_id,
-                    claim=claim,
-                    sequence=event.sequence,
-                    event_type=event.type,
-                    payload=event.payload,
-                )
-                if event.type == "checkpoint":
-                    checkpoint = _object_or_none(event.payload.get("checkpoint"))
-                elif event.type == "turn_completed":
-                    checkpoint = _object_or_none(event.payload.get("checkpoint")) or checkpoint
-                self._publish_hint(claim.session_id, event.sequence)
-                current = self.store.get_turn(turn_id, owner=claim.owner)
-                if current.cancel_requested and not cancel_sent:
-                    self.agentd_client.cancel_turn(turn_id)
-                    cancel_sent = True
-                if event.type in {"turn_completed", "turn_failed"}:
-                    terminal = event
-        except AgentdClientError as exc:
-            checkpoint = exc.checkpoint or checkpoint
-            self._interrupt_and_retry(message, claim, checkpoint, exc.code)
-            raise
-        except Exception:
-            self._interrupt_and_retry(message, claim, checkpoint, "internal_error")
-            raise
+            try:
+                for event in self.agentd_client.stream_durable_turn(request):
+                    heartbeat.raise_if_failed()
+                    self.store.append_event(
+                        turn_id,
+                        claim=claim,
+                        sequence=event.sequence,
+                        event_type=event.type,
+                        payload=event.payload,
+                    )
+                    if event.type == "checkpoint":
+                        checkpoint = _object_or_none(event.payload.get("checkpoint"))
+                    elif event.type == "turn_completed":
+                        checkpoint = _object_or_none(event.payload.get("checkpoint")) or checkpoint
+                    self._publish_hint(claim.session_id, event.sequence)
+                    current = self.store.get_turn(turn_id, owner=claim.owner)
+                    if current.cancel_requested and not cancel_sent:
+                        self.agentd_client.cancel_turn(turn_id)
+                        cancel_sent = True
+                    if event.type in {"turn_completed", "turn_failed"}:
+                        terminal = event
+            except AgentdClientError as exc:
+                checkpoint = exc.checkpoint or checkpoint
+                self._interrupt_and_retry(message, claim, checkpoint, exc.code)
+                raise
+            except Exception:
+                self._interrupt_and_retry(message, claim, checkpoint, "internal_error")
+                raise
 
-        if terminal is None:
-            self._interrupt_and_retry(message, claim, checkpoint, "stream_ended")
-            raise AgentdClientError(
-                "pilot-agentd stream ended without a terminal event",
-                code="protocol_error",
-                retryable=True,
-                checkpoint=checkpoint,
+            heartbeat.raise_if_failed()
+            if terminal is None:
+                self._interrupt_and_retry(message, claim, checkpoint, "stream_ended")
+                raise AgentdClientError(
+                    "pilot-agentd stream ended without a terminal event",
+                    code="protocol_error",
+                    retryable=True,
+                    checkpoint=checkpoint,
+                )
+            self._finish_terminal(
+                message,
+                claim,
+                terminal,
+                checkpoint,
+                profile_id=session.profile_id,
+                source=session.source,
             )
-        self._finish_terminal(
-            message,
-            claim,
-            terminal,
-            checkpoint,
-            profile_id=session.profile_id,
-            source=session.source,
+            return True
+        finally:
+            heartbeat.stop()
+
+    def _renew_dispatch_leases(
+        self,
+        message: OutboxMessage,
+        claim: AgentTurnLease,
+    ) -> None:
+        self.store.renew_turn(claim, lease_seconds=self.lease_seconds)
+        self.control_repository.renew_outbox(
+            message_id=message.message_id,
+            owner=self.worker_id,
+            fencing_token=message.fencing_token,
+            lease_seconds=self.lease_seconds,
         )
-        return True
+
+    def _heartbeat_interval_seconds(self) -> float:
+        return max(1.0, min(30.0, self.lease_seconds / 3.0))
 
     def _finish_terminal(
         self,
