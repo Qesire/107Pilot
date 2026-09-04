@@ -59,9 +59,16 @@ class AgentOperationLedger(Protocol):
         error_code: str,
     ) -> AgentOperationReceiptRecord: ...
 
+    def mark_unknown(
+        self,
+        operation_key: str,
+        *,
+        owner: str,
+    ) -> AgentOperationReceiptRecord: ...
+
 
 class OperationLedgerShadowGateway:
-    """Record legacy Gateway outcomes without changing their runtime semantics."""
+    """Record legacy Gateway outcomes without changing their replay authority."""
 
     def __init__(self, *, gateway: AgentToolGateway, ledger: AgentOperationLedger) -> None:
         self.gateway = gateway
@@ -83,7 +90,8 @@ class OperationLedgerShadowGateway:
         try:
             result = self.gateway.invoke(token, invocation)
         except AgentToolGatewayError as exc:
-            # Shadow recording must preserve the legacy exception and public code.
+            # A Gateway rejection has a stable public error code and is safe to
+            # record as terminal failure without inventing a side-effect fact.
             self.ledger.fail(
                 receipt.operation_key,
                 owner=invocation.owner,
@@ -91,6 +99,24 @@ class OperationLedgerShadowGateway:
                 error_code=exc.code,
             )
             raise
+        except Exception:
+            # An unexpected exception may have happened after an external side
+            # effect.  The shadow ledger must not call it "failed" and invite a
+            # blind retry; it records UNKNOWN for a later domain reconciler.
+            self.ledger.mark_unknown(
+                receipt.operation_key,
+                owner=invocation.owner,
+            )
+            raise
+
+        if result.error is not None:
+            self.ledger.fail(
+                receipt.operation_key,
+                owner=invocation.owner,
+                invocation_id=invocation.invocation_id,
+                error_code=str(result.error.get("code") or "AGENT.TOOL.ERROR"),
+            )
+            return result
 
         self.ledger.complete(
             receipt.operation_key,
@@ -106,6 +132,10 @@ class OperationLedgerShadowGateway:
 def operation_identity_for_invocation(
     invocation: ToolInvocation,
 ) -> DurableOperationIdentity:
+    # The legacy agentd idempotency key is derived from turn_id + toolCallId and
+    # therefore changes when a provider emits a new tool-call ID.  Domain tools
+    # that expose a request_key get that stronger identity; all other calls are
+    # bounded to their durable Turn rather than to the provider call ID.
     request_key = _argument_string(invocation.arguments, "request_key") or invocation.turn_id
     target_type, target_id = _target(invocation.arguments)
     target_revision = (
