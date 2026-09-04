@@ -7,7 +7,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NoReturn
 
 from pilot107.agent.capabilities import (
     AgentCapabilityClaims,
@@ -253,15 +253,23 @@ class AgentToolGateway:
                 "Agent tool byte budget exceeded",
                 code="AGENT.TOOL.BYTE_BUDGET_EXCEEDED",
             )
-        self.store.finish_tool_invocation(
-            invocation_id=invocation.invocation_id,
-            owner=invocation.owner,
-            expected_state_version=invocation.state_version,
-            expected_fencing_token=claims.fencing_token,
-            result=stored_result,
-            error=None,
-            bytes_returned=bytes_returned,
-        )
+        try:
+            self.store.finish_tool_invocation(
+                invocation_id=invocation.invocation_id,
+                owner=invocation.owner,
+                expected_state_version=invocation.state_version,
+                expected_fencing_token=claims.fencing_token,
+                result=stored_result,
+                error=None,
+                bytes_returned=bytes_returned,
+            )
+        except AgentSessionConflict:
+            if operation_intent is not None:
+                raise AgentToolGatewayError(
+                    "Agent mutation receipt is durable but the Turn is stale or fenced",
+                    code="AGENT.TOOL.FENCED",
+                ) from None
+            raise
         return ToolResult(
             schema_version=TOOL_RESULT_PROTOCOL_VERSION,
             invocation_id=invocation.invocation_id,
@@ -364,6 +372,13 @@ class AgentToolGateway:
                 )
             if current.state is AgentOperationState.FAILED:
                 self._replay_failed_operation(current, invocation, claims)
+            self._persist_failure(
+                invocation,
+                claims,
+                code="AGENT.TOOL.OPERATION_IN_PROGRESS",
+                message="Agent mutation is already in progress or requires reconciliation",
+                retryable=True,
+            )
             raise AgentToolGatewayError(
                 "Agent mutation is already in progress or requires reconciliation",
                 code="AGENT.TOOL.OPERATION_IN_PROGRESS",
@@ -409,15 +424,21 @@ class AgentToolGateway:
             "result": stored["result"],
             "evidence_refs": stored["evidence_refs"],
         }
-        self.store.finish_tool_invocation(
-            invocation_id=invocation.invocation_id,
-            owner=invocation.owner,
-            expected_state_version=invocation.state_version,
-            expected_fencing_token=claims.fencing_token,
-            result=invocation_result,
-            error=None,
-            bytes_returned=bytes_returned,
-        )
+        try:
+            self.store.finish_tool_invocation(
+                invocation_id=invocation.invocation_id,
+                owner=invocation.owner,
+                expected_state_version=invocation.state_version,
+                expected_fencing_token=claims.fencing_token,
+                result=invocation_result,
+                error=None,
+                bytes_returned=bytes_returned,
+            )
+        except AgentSessionConflict:
+            raise AgentToolGatewayError(
+                "Agent mutation receipt is durable but the Turn is stale or fenced",
+                code="AGENT.TOOL.FENCED",
+            ) from None
         return ToolResult(
             schema_version=TOOL_RESULT_PROTOCOL_VERSION,
             invocation_id=invocation.invocation_id,
@@ -432,7 +453,7 @@ class AgentToolGateway:
         record: AgentOperationRecord,
         invocation: ToolInvocation,
         claims: AgentCapabilityClaims,
-    ) -> None:
+    ) -> NoReturn:
         error = record.error or {
             "code": "AGENT.TOOL.READ_FAILED",
             "message": "Agent mutation failed",
@@ -495,8 +516,8 @@ class AgentToolGateway:
                 error={"code": code, "message": message, "retryable": False},
             )
         except AgentOperationConflict:
-            # Leaving the operation in running state is fail-closed: a replay
-            # will not call the handler again until a reconciler resolves it.
+            # A running record is safer than guessing a terminal outcome. A
+            # reconciler must resolve it before any later execution can proceed.
             pass
 
     def _verify(self, token: str) -> AgentCapabilityClaims:
@@ -580,7 +601,7 @@ class AgentToolGateway:
         claims: AgentCapabilityClaims,
         invocation: ToolInvocation,
         cause: AgentSessionConflict,
-    ) -> None:
+    ) -> NoReturn:
         del cause
         try:
             self.store.get_turn_tool_usage(
@@ -602,7 +623,7 @@ class AgentToolGateway:
         self,
         claims: AgentCapabilityClaims,
         invocation: ToolInvocation,
-    ) -> None:
+    ) -> NoReturn:
         try:
             self.store.get_turn_tool_usage(
                 turn_id=invocation.turn_id,
@@ -614,6 +635,12 @@ class AgentToolGateway:
             raise AgentToolGatewayError(
                 "Agent Turn capability is stale or fenced", code="AGENT.TOOL.FENCED"
             ) from None
+        self._persist_failure(
+            invocation,
+            claims,
+            code="AGENT.TOOL.OPERATION_CONFLICT",
+            message="Agent durable operation identity conflicts with different content",
+        )
         raise AgentToolGatewayError(
             "Agent durable operation identity conflicts with different content",
             code="AGENT.TOOL.OPERATION_CONFLICT",
