@@ -1,14 +1,12 @@
-"""Crash-recoverable Workspace editing over immutable imported snapshots.
+"""Crash-recoverable editing for isolated Agent Workspaces.
 
-This module deliberately wraps the existing :class:`WorkspaceEditor` rather
-than changing ``AgentWorkspaceRecord`` or ``WorkspaceChangeSet``.  The imported
-snapshot remains immutable; every local mutation is serialized by an OS lock,
-a fenced live-head lease, a durable backup, and a write-ahead journal.
+Imported ``AgentWorkspaceRecord.snapshot`` and ``WorkspaceChangeSet`` remain
+unchanged. Mutable local state is serialized by an OS lock, fenced live-head
+lease, durable backup, and write-ahead mutation journal.
 """
 
 from __future__ import annotations
 
-import base64
 import difflib
 import fcntl
 import hashlib
@@ -17,11 +15,11 @@ import os
 import stat
 import tempfile
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import IO, Any, Iterator
+from typing import Any, Iterator
 
 from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.workspace import (
@@ -83,12 +81,7 @@ class WorkspaceRecoveryReport:
 
 
 class DurableWorkspaceEditor(WorkspaceEditor):
-    """WorkspaceEditor with live revision, WAL journal, backup, and recovery.
-
-    The implementation is intentionally SQLite-scoped because the live-head and
-    journal schemas currently share the ProjectStore SQLite transaction domain.
-    PostgreSQL parity is a separate AC4 slice and must not be silently faked.
-    """
+    """SQLite Workspace editor with filesystem/DB crash recovery."""
 
     def __init__(
         self,
@@ -118,7 +111,6 @@ class DurableWorkspaceEditor(WorkspaceEditor):
         self.backup_root.mkdir(parents=True, exist_ok=True)
         self.lease_seconds = lease_seconds
         self.crash_hook = crash_hook
-        # Construct live-store first: journal migration 007 references table 006.
         self.live_store = SQLiteWorkspaceLiveStore(db_path, clock=clock)
         self.journal_store = SQLiteWorkspaceMutationJournalStore(db_path, clock=clock)
 
@@ -149,34 +141,27 @@ class DurableWorkspaceEditor(WorkspaceEditor):
             recovery = self._recover_locked(workspace)
             if recovery.conflicted:
                 raise WorkspaceConflict("Workspace has an unresolved durable mutation conflict")
-
             head = self.live_store.ensure_head(workspace)
             before_digest, before_manifest = _capture_manifest(workspace)
             if before_digest != head.live_digest:
                 raise WorkspaceConflict(
                     "Workspace local content drifted outside the live revision authority"
                 )
-
-            prepared, change_set, unified_diff = self._prepare(
-                workspace,
-                patches,
-            )
+            prepared, change_set, unified_diff = self._prepare(workspace, patches)
             change_set = self.store.save_change_set(change_set, diff_text=unified_diff)
             request_key = f"workspace-edit:{head.live_revision}:{change_set.change_set_id}"
-            writer_id = f"workspace-editor:{os.getpid()}:{uuid.uuid4().hex}"
             lease = self.live_store.claim_writer(
                 workspace.workspace_id,
                 owner=owner,
-                writer_id=writer_id,
+                writer_id=f"workspace-editor:{os.getpid()}:{uuid.uuid4().hex}",
                 lease_seconds=self.lease_seconds,
             )
             head = self.live_store.get_head(workspace.workspace_id, owner=owner)
-            backup_dir = self._backup_path(workspace, request_key)
+            backup = self._backup_path(workspace, request_key)
             journal: WorkspaceMutationJournal | None = None
             try:
-                expected_manifest = _expected_manifest(before_manifest, prepared)
-                expected_after_digest = _manifest_digest(expected_manifest)
-                _write_backup(backup_dir, prepared)
+                expected_after = _manifest_digest(_expected_manifest(before_manifest, prepared))
+                _write_backup(backup, Path(workspace.local_root).resolve(strict=True), prepared)
                 journal = self.journal_store.prepare(
                     head=head,
                     lease=lease,
@@ -190,22 +175,21 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                         )
                         for item in prepared
                     ),
-                    backup_ref=str(backup_dir),
+                    backup_ref=str(backup),
                     change_set_id=change_set.change_set_id,
                 )
                 self._crash("after_journal_prepared")
+                root = Path(workspace.local_root).resolve(strict=True)
                 for item in prepared:
                     lease = self.live_store.renew_writer(
-                        lease,
-                        lease_seconds=self.lease_seconds,
+                        lease, lease_seconds=self.lease_seconds
                     )
-                    _apply_prepared(item, Path(workspace.local_root).resolve(strict=True))
+                    _apply_prepared(item, root)
                     self._crash(f"after_file:{item.path}")
-
                 observed_after, _ = _capture_manifest(workspace)
-                if observed_after != expected_after_digest:
+                if observed_after != expected_after:
                     raise WorkspaceLiveConflict(
-                        "Workspace changed outside the controlled mutation while files were applied"
+                        "Workspace changed outside the controlled mutation"
                     )
                 journal = self.journal_store.mark_files_applied(
                     journal.mutation_id,
@@ -214,20 +198,17 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                     to_digest=observed_after,
                 )
                 self._crash("after_files_applied")
-                journal = self.journal_store.commit(
+                self.journal_store.commit(
                     journal.mutation_id,
                     owner=owner,
                     lease=lease,
                 )
                 self._crash("after_commit")
-                _remove_backup(backup_dir)
+                _remove_tree(backup)
                 return change_set
             except Exception:
-                # BaseException is deliberately not caught.  A process death,
-                # cancellation primitive, or injected hard-crash leaves the
-                # durable journal + backup for the next recovery pass.
                 if journal is not None:
-                    self._rollback_after_exception(workspace, journal)
+                    self._rollback_exception(workspace, journal)
                 raise
             finally:
                 try:
@@ -241,13 +222,12 @@ class DurableWorkspaceEditor(WorkspaceEditor):
             return self._recover_locked(workspace)
 
     def _recover_locked(self, workspace: AgentWorkspaceRecord) -> WorkspaceRecoveryReport:
-        head = self.live_store.ensure_head(workspace)
+        self.live_store.ensure_head(workspace)
         committed: list[str] = []
         rolled_back: list[str] = []
         conflicted: list[str] = []
         for journal in self.journal_store.list_open(
-            workspace.workspace_id,
-            owner=workspace.owner,
+            workspace.workspace_id, owner=workspace.owner
         ):
             observed, _ = _capture_manifest(workspace)
             if journal.state is WorkspaceMutationState.PREPARED:
@@ -257,25 +237,17 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                         owner=workspace.owner,
                         observed_live_digest=observed,
                     )
-                    _remove_backup(Path(journal.backup_ref))
+                    _remove_tree(Path(journal.backup_ref))
                     rolled_back.append(journal.mutation_id)
                     continue
-                if not _touched_paths_are_known(workspace, journal):
-                    self.journal_store.mark_conflicted(
-                        journal.mutation_id,
-                        owner=workspace.owner,
-                        error_code="WORKSPACE_RECOVERY_THIRD_STATE",
-                    )
+                if not _touched_paths_known(workspace, journal):
+                    self._conflict(journal, "WORKSPACE_RECOVERY_THIRD_STATE")
                     conflicted.append(journal.mutation_id)
                     continue
                 _restore_backup(workspace, Path(journal.backup_ref))
                 restored, _ = _capture_manifest(workspace)
                 if restored != journal.from_digest:
-                    self.journal_store.mark_conflicted(
-                        journal.mutation_id,
-                        owner=workspace.owner,
-                        error_code="WORKSPACE_RECOVERY_DIGEST_MISMATCH",
-                    )
+                    self._conflict(journal, "WORKSPACE_RECOVERY_DIGEST_MISMATCH")
                     conflicted.append(journal.mutation_id)
                     continue
                 self.journal_store.mark_rolled_back(
@@ -283,30 +255,33 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                     owner=workspace.owner,
                     observed_live_digest=restored,
                 )
-                _remove_backup(Path(journal.backup_ref))
+                _remove_tree(Path(journal.backup_ref))
                 rolled_back.append(journal.mutation_id)
                 continue
-
             if journal.state is WorkspaceMutationState.FILES_APPLIED:
                 if journal.to_digest is not None and observed == journal.to_digest:
-                    current = self.live_store.get_head(workspace.workspace_id, owner=workspace.owner)
+                    head = self.live_store.get_head(
+                        workspace.workspace_id, owner=workspace.owner
+                    )
                     if (
-                        current.live_revision == journal.from_revision
-                        and current.live_digest == journal.from_digest
+                        head.live_revision == journal.from_revision
+                        and head.live_digest == journal.from_digest
                     ):
                         try:
                             lease = self.live_store.claim_writer(
                                 workspace.workspace_id,
                                 owner=workspace.owner,
-                                writer_id=f"workspace-recovery:{os.getpid()}:{uuid.uuid4().hex}",
+                                writer_id=(
+                                    f"workspace-recovery:{os.getpid()}:{uuid.uuid4().hex}"
+                                ),
                                 lease_seconds=self.lease_seconds,
                             )
                         except WorkspaceLiveConflict:
                             raise WorkspaceConflict(
-                                "Workspace recovery is waiting for the prior writer lease to expire"
+                                "Workspace recovery is waiting for the prior writer lease"
                             ) from None
                         try:
-                            _rebind_open_journal(self.journal_store, journal, lease)
+                            _rebind_journal(self.journal_store, journal, lease)
                             self.journal_store.commit(
                                 journal.mutation_id,
                                 owner=workspace.owner,
@@ -317,20 +292,11 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                                 self.live_store.release_writer(lease)
                             except WorkspaceLiveConflict:
                                 pass
-                        _remove_backup(Path(journal.backup_ref))
+                        _remove_tree(Path(journal.backup_ref))
                         committed.append(journal.mutation_id)
-                        head = self.live_store.get_head(
-                            workspace.workspace_id,
-                            owner=workspace.owner,
-                        )
                         continue
-                self.journal_store.mark_conflicted(
-                    journal.mutation_id,
-                    owner=workspace.owner,
-                    error_code="WORKSPACE_FILES_APPLIED_UNPROVEN",
-                )
+                self._conflict(journal, "WORKSPACE_FILES_APPLIED_UNPROVEN")
                 conflicted.append(journal.mutation_id)
-        del head
         return WorkspaceRecoveryReport(
             workspace_id=workspace.workspace_id,
             committed=tuple(committed),
@@ -338,22 +304,16 @@ class DurableWorkspaceEditor(WorkspaceEditor):
             conflicted=tuple(conflicted),
         )
 
-    def _rollback_after_exception(
+    def _rollback_exception(
         self,
         workspace: AgentWorkspaceRecord,
         journal: WorkspaceMutationJournal,
     ) -> None:
         current = self.journal_store.get(journal.mutation_id, owner=workspace.owner)
         if current.state is not WorkspaceMutationState.PREPARED:
-            # Once FILES_APPLIED is durable, do not guess a rollback.  Recovery
-            # may safely commit it if the complete post-write digest is proven.
             return
-        if not _touched_paths_are_known(workspace, current):
-            self.journal_store.mark_conflicted(
-                current.mutation_id,
-                owner=workspace.owner,
-                error_code="WORKSPACE_ROLLBACK_THIRD_STATE",
-            )
+        if not _touched_paths_known(workspace, current):
+            self._conflict(current, "WORKSPACE_ROLLBACK_THIRD_STATE")
             return
         _restore_backup(workspace, Path(current.backup_ref))
         restored, _ = _capture_manifest(workspace)
@@ -363,13 +323,14 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                 owner=workspace.owner,
                 observed_live_digest=restored,
             )
-            _remove_backup(Path(current.backup_ref))
+            _remove_tree(Path(current.backup_ref))
         else:
-            self.journal_store.mark_conflicted(
-                current.mutation_id,
-                owner=workspace.owner,
-                error_code="WORKSPACE_ROLLBACK_DIGEST_MISMATCH",
-            )
+            self._conflict(current, "WORKSPACE_ROLLBACK_DIGEST_MISMATCH")
+
+    def _conflict(self, journal: WorkspaceMutationJournal, code: str) -> None:
+        self.journal_store.mark_conflicted(
+            journal.mutation_id, owner=journal.owner, error_code=code
+        )
 
     def _prepare(
         self,
@@ -392,8 +353,8 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                 raise TypeError("patch must be WorkspacePatch")
             target = root.joinpath(*PurePosixPath(relative).parts)
             _validate_patch_target(root, target)
-            existing = target.exists()
-            if existing:
+            exists = target.exists()
+            if exists:
                 resolved = target.resolve(strict=True)
                 if not resolved.is_relative_to(root) or not resolved.is_file():
                     raise WorkspacePolicyError("Workspace patch target is not a contained file")
@@ -402,12 +363,12 @@ class DurableWorkspaceEditor(WorkspaceEditor):
             else:
                 before = b""
                 mode = 0o600
-            before_digest = hashlib.sha256(before).hexdigest() if existing else None
+            before_digest = hashlib.sha256(before).hexdigest() if exists else None
             if patch.operation == "create":
-                if existing or expected_source_digest is not None:
+                if exists or expected_source_digest is not None:
                     raise WorkspaceConflict("create patch no longer matches an absent source")
             else:
-                if not existing:
+                if not exists:
                     raise WorkspaceConflict("patch source file no longer exists")
                 if expected_source_digest != before_digest:
                     raise WorkspaceConflict("patch source digest no longer matches")
@@ -448,7 +409,7 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                     operation=patch.operation,
                     before=before,
                     after=after,
-                    existed=existing,
+                    existed=exists,
                     mode=mode,
                     change=change,
                     unified_diff=unified,
@@ -480,11 +441,10 @@ class DurableWorkspaceEditor(WorkspaceEditor):
 
     @contextmanager
     def _workspace_lock(self, workspace: AgentWorkspaceRecord) -> Iterator[None]:
-        digest = hashlib.sha256(
+        name = hashlib.sha256(
             f"{workspace.owner}\0{workspace.workspace_id}".encode()
         ).hexdigest()
-        path = self.lock_root / f"{digest}.lock"
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path = self.lock_root / f"{name}.lock"
         with path.open("a+b") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
@@ -501,8 +461,8 @@ def _capture_manifest(
     workspace: AgentWorkspaceRecord,
 ) -> tuple[str, dict[str, _ManifestEntry]]:
     root = Path(workspace.local_root)
-    root_info = root.lstat()
-    if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+    info = root.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
         raise WorkspaceLiveConflict("Workspace local root is not a real directory")
     root = root.resolve(strict=True)
     entries: dict[str, _ManifestEntry] = {}
@@ -510,22 +470,18 @@ def _capture_manifest(
     while stack:
         directory = stack.pop()
         for child in sorted(os.scandir(directory), key=lambda item: item.name, reverse=True):
-            info = child.stat(follow_symlinks=False)
+            item = child.stat(follow_symlinks=False)
             path = Path(child.path)
             relative = path.relative_to(root).as_posix()
-            if stat.S_ISLNK(info.st_mode):
+            if stat.S_ISLNK(item.st_mode):
                 raise WorkspaceLiveConflict("Workspace live manifest contains a symlink")
-            mode = stat.S_IMODE(info.st_mode)
-            if stat.S_ISDIR(info.st_mode):
+            mode = stat.S_IMODE(item.st_mode)
+            if stat.S_ISDIR(item.st_mode):
                 entries[relative] = _ManifestEntry(relative, "directory", mode)
                 stack.append(path)
-            elif stat.S_ISREG(info.st_mode):
+            elif stat.S_ISREG(item.st_mode):
                 entries[relative] = _ManifestEntry(
-                    relative,
-                    "file",
-                    mode,
-                    info.st_size,
-                    _file_sha256(path),
+                    relative, "file", mode, item.st_size, _file_sha256(path)
                 )
             else:
                 raise WorkspaceLiveConflict("Workspace live manifest contains unsupported file type")
@@ -534,42 +490,41 @@ def _capture_manifest(
     return _manifest_digest(entries), entries
 
 
-def _manifest_digest(entries: dict[str, _ManifestEntry]) -> str:
-    payload_entries: list[dict[str, object]] = []
+def _manifest_digest(entries: Mapping[str, _ManifestEntry]) -> str:
+    values: list[dict[str, object]] = []
     for path in sorted(entries):
         item = entries[path]
-        value: dict[str, object] = {"path": item.path, "kind": item.kind, "mode": item.mode}
+        value: dict[str, object] = {
+            "path": item.path,
+            "kind": item.kind,
+            "mode": item.mode,
+        }
         if item.kind == "file":
-            value["size_bytes"] = item.size_bytes
-            value["sha256"] = item.sha256
-        payload_entries.append(value)
+            value.update(size_bytes=item.size_bytes, sha256=item.sha256)
+        values.append(value)
     encoded = json.dumps(
-        {"schema_version": "pilot107.workspace-live-manifest/v1", "entries": payload_entries},
+        {"schema_version": "pilot107.workspace-live-manifest/v1", "entries": values},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
-    ).encode("utf-8")
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
 def _expected_manifest(
-    before: dict[str, _ManifestEntry],
-    patches: tuple[_PreparedPatch, ...],
+    before: Mapping[str, _ManifestEntry], patches: tuple[_PreparedPatch, ...]
 ) -> dict[str, _ManifestEntry]:
     result = dict(before)
     for item in patches:
         if item.operation == "delete":
             result.pop(item.path, None)
             continue
-        pure = PurePosixPath(item.path)
-        parts = pure.parts[:-1]
         parent = PurePosixPath()
-        for part in parts:
+        for part in PurePosixPath(item.path).parts[:-1]:
             parent /= part
             relative = parent.as_posix()
-            if relative not in result:
-                result[relative] = _ManifestEntry(relative, "directory", 0o700)
+            result.setdefault(relative, _ManifestEntry(relative, "directory", 0o700))
         result[item.path] = _ManifestEntry(
             item.path,
             "file",
@@ -589,88 +544,94 @@ def _apply_prepared(item: _PreparedPatch, root: Path) -> None:
         if _file_sha256(current) != item.change.before_sha256:
             raise WorkspaceLiveConflict("Workspace target changed before delete")
         current.unlink()
-        _fsync_directory(current.parent)
+        _fsync_dir(current.parent)
         return
-    _ensure_parent_directories(root, item.target.parent)
+    _ensure_parents(root, item.target.parent)
     if item.existed:
         current = item.target.resolve(strict=True)
         if _file_sha256(current) != item.change.before_sha256:
             raise WorkspaceLiveConflict("Workspace target changed before replace")
     elif item.target.exists():
         raise WorkspaceLiveConflict("Workspace create target appeared concurrently")
-    _atomic_write_mode(item.target, item.after, item.mode if item.existed else 0o600)
+    _atomic_write(item.target, item.after, item.mode if item.existed else 0o600)
 
 
-def _write_backup(path: Path, prepared: tuple[_PreparedPatch, ...]) -> None:
-    if path.exists():
-        manifest_path = path / "manifest.json"
-        if manifest_path.is_file():
+def _write_backup(root: Path, workspace_root: Path, prepared: tuple[_PreparedPatch, ...]) -> None:
+    if root.exists():
+        if (root / "manifest.json").is_file():
             return
-        raise WorkspaceLiveConflict("Workspace backup path exists without a durable manifest")
-    path.mkdir(parents=True, mode=0o700)
-    manifest: dict[str, Any] = {"schema_version": "pilot107.workspace-backup/v1", "files": []}
+        raise WorkspaceLiveConflict("Workspace backup exists without durable manifest")
+    root.mkdir(parents=True, mode=0o700)
+    created_parents: set[str] = set()
+    files: list[dict[str, object]] = []
     for index, item in enumerate(prepared):
-        blob_name: str | None = None
+        parent = item.target.parent
+        while parent != workspace_root:
+            if not parent.exists():
+                created_parents.add(parent.relative_to(workspace_root).as_posix())
+            parent = parent.parent
+        blob: str | None = None
         if item.existed:
-            blob_name = f"{index:04d}.bin"
-            _durable_write(path / blob_name, item.before, 0o600)
-        manifest["files"].append(
+            blob = f"{index:04d}.bin"
+            _durable_write(root / blob, item.before, 0o600)
+        files.append(
             {
                 "path": item.path,
                 "existed": item.existed,
                 "mode": item.mode,
                 "before_sha256": item.change.before_sha256,
                 "after_sha256": item.change.after_sha256,
-                "blob": blob_name,
+                "blob": blob,
             }
         )
+    manifest = {
+        "schema_version": "pilot107.workspace-backup/v1",
+        "files": files,
+        "created_parents": sorted(created_parents, key=lambda value: value.count("/")),
+    }
     _durable_write(
-        path / "manifest.json",
+        root / "manifest.json",
         json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode(),
         0o600,
     )
-    _fsync_directory(path)
+    _fsync_dir(root)
 
 
 def _restore_backup(workspace: AgentWorkspaceRecord, backup: Path) -> None:
-    manifest = _read_backup_manifest(backup)
+    manifest = _backup_manifest(backup)
     root = Path(workspace.local_root).resolve(strict=True)
-    created_parents: list[Path] = []
     for item in manifest["files"]:
-        relative = str(item["path"])
-        target = root.joinpath(*PurePosixPath(relative).parts)
+        target = root.joinpath(*PurePosixPath(str(item["path"])).parts)
         _validate_patch_target(root, target)
         if bool(item["existed"]):
-            blob = backup / str(item["blob"])
-            content = blob.read_bytes()
+            content = (backup / str(item["blob"])).read_bytes()
             expected = item.get("before_sha256")
             if not isinstance(expected, str) or hashlib.sha256(content).hexdigest() != expected:
                 raise WorkspaceLiveConflict("Workspace backup content digest is invalid")
-            created_parents.extend(_ensure_parent_directories(root, target.parent))
-            _atomic_write_mode(target, content, int(item["mode"]))
-        else:
-            if target.exists():
-                info = target.lstat()
-                if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-                    raise WorkspaceLiveConflict("Workspace rollback target is not a regular file")
-                target.unlink()
-                _fsync_directory(target.parent)
-    # Parent directories created by the mutation are not encoded separately;
-    # remove empty ancestors that contain no imported or restored file.
-    for item in reversed(manifest["files"]):
-        target = root.joinpath(*PurePosixPath(str(item["path"])).parts).parent
-        while target != root and target.is_dir():
-            try:
-                target.rmdir()
-            except OSError:
-                break
-            target = target.parent
-    del created_parents
+            _ensure_parents(root, target.parent)
+            _atomic_write(target, content, int(item["mode"]))
+        elif target.exists():
+            target_info = target.lstat()
+            if stat.S_ISLNK(target_info.st_mode) or not stat.S_ISREG(target_info.st_mode):
+                raise WorkspaceLiveConflict("Workspace rollback target is not a regular file")
+            target.unlink()
+            _fsync_dir(target.parent)
+    parents = manifest.get("created_parents", [])
+    if not isinstance(parents, list):
+        raise WorkspaceLiveConflict("Workspace backup parent provenance is invalid")
+    for relative in sorted((str(value) for value in parents), key=lambda value: -value.count("/")):
+        candidate = root.joinpath(*PurePosixPath(relative).parts)
+        if candidate == root or not candidate.is_relative_to(root):
+            raise WorkspaceLiveConflict("Workspace backup parent escaped root")
+        try:
+            candidate.rmdir()
+            _fsync_dir(candidate.parent)
+        except OSError:
+            pass
 
 
-def _touched_paths_are_known(
-    workspace: AgentWorkspaceRecord,
-    journal: WorkspaceMutationJournal,
+def _touched_paths_known(
+    workspace: AgentWorkspaceRecord, journal: WorkspaceMutationJournal
 ) -> bool:
     root = Path(workspace.local_root).resolve(strict=True)
     for item in journal.files:
@@ -679,29 +640,25 @@ def _touched_paths_are_known(
             return False
         if not target.exists():
             if item.before_sha256 is None or item.after_sha256 is None:
-                # create-before or delete-after are both known absent states.
                 continue
             return False
-        try:
-            if not target.is_file():
-                return False
-            digest = _file_sha256(target)
-        except OSError:
+        if not target.is_file():
             return False
-        known = {value for value in (item.before_sha256, item.after_sha256) if value is not None}
+        digest = _file_sha256(target)
+        known = {value for value in (item.before_sha256, item.after_sha256) if value}
         if digest not in known:
             return False
     return True
 
 
-def _rebind_open_journal(
+def _rebind_journal(
     store: SQLiteWorkspaceMutationJournalStore,
     journal: WorkspaceMutationJournal,
     lease: WorkspaceWriterLease,
-) -> WorkspaceMutationJournal:
+) -> None:
     if lease.workspace_id != journal.workspace_id or lease.owner != journal.owner:
         raise WorkspaceLiveConflict("Workspace recovery lease does not own journal")
-    now = store._now()  # same canonical timestamp domain as the journal store
+    now = store._now()
     with store.connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
         live = connection.execute(
@@ -722,7 +679,7 @@ def _rebind_open_journal(
             """
             UPDATE agent_workspace_mutation_journal
             SET writer_id = ?, fencing_token = ?, updated_at = ?
-            WHERE mutation_id = ? AND owner = ? AND state IN ('prepared', 'files_applied')
+            WHERE mutation_id = ? AND owner = ? AND state = 'files_applied'
               AND from_revision = ? AND from_digest = ?
             """,
             (
@@ -735,16 +692,11 @@ def _rebind_open_journal(
                 journal.from_digest,
             ),
         )
-        row = connection.execute(
-            "SELECT * FROM agent_workspace_mutation_journal WHERE mutation_id = ? AND owner = ?",
-            (journal.mutation_id, journal.owner),
-        ).fetchone()
-    if cursor.rowcount != 1 or row is None:
-        raise WorkspaceLiveConflict("Workspace recovery journal could not be rebound")
-    return store.get(journal.mutation_id, owner=journal.owner)
+        if cursor.rowcount != 1:
+            raise WorkspaceLiveConflict("Workspace recovery journal could not be rebound")
 
 
-def _read_backup_manifest(path: Path) -> dict[str, Any]:
+def _backup_manifest(path: Path) -> dict[str, Any]:
     try:
         value = json.loads((path / "manifest.json").read_text())
     except (OSError, json.JSONDecodeError) as exc:
@@ -757,24 +709,35 @@ def _read_backup_manifest(path: Path) -> dict[str, Any]:
     return value
 
 
-def _atomic_write_mode(destination: Path, content: bytes, mode: int) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+def _ensure_parents(root: Path, parent: Path) -> None:
+    if parent == root:
+        return
+    current = root
+    for part in parent.relative_to(root).parts:
+        current /= part
+        if current.exists():
+            info = current.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise WorkspaceLiveConflict("Workspace parent is not a real directory")
+        else:
+            current.mkdir(mode=0o700)
+            _fsync_dir(current.parent)
+
+
+def _atomic_write(path: Path, content: bytes, mode: int) -> None:
     temporary: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=destination.parent,
-            prefix=f".{destination.name}.",
-            delete=False,
+            mode="wb", dir=path.parent, prefix=f".{path.name}.", delete=False
         ) as handle:
             temporary = handle.name
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, mode)
-        os.replace(temporary, destination)
+        os.replace(temporary, path)
         temporary = None
-        _fsync_directory(destination.parent)
+        _fsync_dir(path.parent)
     finally:
         if temporary is not None:
             Path(temporary).unlink(missing_ok=True)
@@ -783,30 +746,11 @@ def _atomic_write_mode(destination: Path, content: bytes, mode: int) -> None:
 def _durable_write(path: Path, content: bytes, mode: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with path.open("xb") as handle:
-        os.chmod(handle.fileno(), mode)
+        os.fchmod(handle.fileno(), mode)
         handle.write(content)
         handle.flush()
         os.fsync(handle.fileno())
-    _fsync_directory(path.parent)
-
-
-def _ensure_parent_directories(root: Path, parent: Path) -> list[Path]:
-    if parent == root:
-        return []
-    relative = parent.relative_to(root)
-    current = root
-    created: list[Path] = []
-    for part in relative.parts:
-        current = current / part
-        if current.exists():
-            info = current.lstat()
-            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-                raise WorkspaceLiveConflict("Workspace parent path is not a real directory")
-            continue
-        current.mkdir(mode=0o700)
-        created.append(current)
-        _fsync_directory(current.parent)
-    return created
+    _fsync_dir(path.parent)
 
 
 def _file_sha256(path: Path) -> str:
@@ -817,7 +761,7 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _fsync_directory(path: Path) -> None:
+def _fsync_dir(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(descriptor)
@@ -825,19 +769,12 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _remove_backup(path: Path) -> None:
+def _remove_tree(path: Path) -> None:
     if not path.exists():
         return
-    for child in sorted(path.iterdir(), reverse=True):
+    for child in path.iterdir():
         if child.is_dir():
-            _remove_backup(child)
+            _remove_tree(child)
         else:
             child.unlink(missing_ok=True)
     path.rmdir()
-    parent = path.parent
-    for _ in range(2):
-        try:
-            parent.rmdir()
-        except OSError:
-            break
-        parent = parent.parent
