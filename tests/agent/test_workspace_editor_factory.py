@@ -35,12 +35,14 @@ def test_postgres_like_project_store_reads_can_start_but_mutation_fails_closed(
         workspace_root=tmp_path / "agent-workspaces",
     )
 
-    with pytest.raises(WorkspaceDurabilityUnavailable, match="PostgreSQL"):
+    with pytest.raises(WorkspaceDurabilityUnavailable, match="PostgreSQL") as caught:
         editor.apply_patches(
             "workspace-1",
             "alice",
             (("a.py", None, WorkspacePatch(operation="create", content="x = 1\n")),),
         )
+    assert caught.value.code == "AGENT.TOOL.WORKSPACE_DURABILITY_UNAVAILABLE"
+    assert caught.value.retryable is False
 
 
 def test_unknown_project_store_is_mutation_fail_closed(tmp_path: Path) -> None:
@@ -49,9 +51,10 @@ def test_unknown_project_store_is_mutation_fail_closed(tmp_path: Path) -> None:
         workspace_root=tmp_path / "agent-workspaces",
     )
 
-    with pytest.raises(WorkspaceDurabilityUnavailable, match="no supported"):
+    with pytest.raises(WorkspaceDurabilityUnavailable, match="no supported") as caught:
         editor.apply_patches(
             "workspace-1",
             "alice",
             (("a.py", None, WorkspacePatch(operation="create", content="x = 1\n")),),
         )
+    assert caught.value.code == "AGENT.TOOL.WORKSPACE_DURABILITY_UNAVAILABLE"
