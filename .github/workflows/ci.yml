@@ -2,10 +2,21 @@ name: ci
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# Full CI is intentionally limited to main and pull requests. Agent/work branches
+# can contain many small commits; running all five jobs for every intermediate
+# push wastes private-repository hosted-runner minutes without adding a new
+# integration boundary. A newer run supersedes an older run for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   python:
