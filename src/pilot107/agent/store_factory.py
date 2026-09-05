@@ -75,11 +75,13 @@ def resolve_durable_store_selection(
         )
     if runtime_watch_sqlite_path is not None or observation_sqlite_path is not None:
         raise ConfigurationError(
-            "SQLite lifecycle store overrides are retired; use PostgreSQL for all durable state"
+            "SQLite runtime authority has been retired; "
+            "lifecycle store overrides must use PostgreSQL"
         )
     if postgres_dsn is None or control_postgres_dsn is None:
         raise ConfigurationError(
-            "PostgreSQL mode requires domain and control repositories; SQLite fallback is retired"
+            "PostgreSQL mode requires domain and control repositories; "
+            "SQLite runtime authority has been retired"
         )
     if _postgres_database_identity(postgres_dsn) != _postgres_database_identity(
         control_postgres_dsn
@@ -136,7 +138,8 @@ def _required_postgres_dsn(
 ) -> str:
     if selection.mode is not DatabaseMode.POSTGRES or not selection.postgres_dsn:
         raise ConfigurationError(
-            f"{component} store requires PostgreSQL; SQLite fallback has been retired"
+            f"{component} store requires PostgreSQL; "
+            "SQLite runtime authority has been retired"
         )
     return selection.postgres_dsn
 
@@ -144,7 +147,8 @@ def _required_postgres_dsn(
 def _require_builder_dsn(value: str | None, *, component: str) -> str:
     if not value:
         raise ConfigurationError(
-            f"{component} store requires PostgreSQL; SQLite fallback has been retired"
+            f"{component} store requires PostgreSQL; "
+            "SQLite runtime authority has been retired"
         )
     return value
 
