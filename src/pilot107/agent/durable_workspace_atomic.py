@@ -22,6 +22,7 @@ from pilot107.agent.durable_workspace import (
     DurableWorkspaceEditor,
     WorkspaceRecoveryReport,
 )
+from pilot107.agent.operation_context import current_agent_operation_key
 from pilot107.agent.workspace import (
     AgentWorkspaceRecord,
     WorkspaceChangeSet,
@@ -88,7 +89,8 @@ class AtomicDurableWorkspaceEditor(DurableWorkspaceEditor):
                         "Workspace local content changed before writer fence was acquired"
                     )
                 change_set = _bind_change_set_to_live_revision(proposed_change_set, head)
-                request_key = (
+                operation_key = current_agent_operation_key()
+                request_key = operation_key or (
                     f"workspace-edit:{head.live_revision}:{change_set.change_set_id}:"
                     f"{uuid.uuid4().hex}"
                 )
