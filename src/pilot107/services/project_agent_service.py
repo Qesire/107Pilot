@@ -38,7 +38,6 @@ from pilot107.agent.workspace import (
     WorkspaceApproval,
     WorkspaceChangeSet,
     WorkspaceChangeSetState,
-    WorkspaceEditor,
     WorkspaceImporter,
     WorkspacePatch,
     WorkspacePolicyError,
@@ -46,6 +45,7 @@ from pilot107.agent.workspace import (
     change_set_payload,
     workspace_payload,
 )
+from pilot107.agent.workspace_editor_factory import build_authoritative_workspace_editor
 from pilot107.core.contracts import ContractRecord, ContractService
 from pilot107.core.contracts import contract_payload as formal_contract_record_payload
 from pilot107.core.evidence_binding import EvidenceBinder, EvidenceBundle
@@ -143,7 +143,10 @@ class ProjectAgentService:
         self.agent_session_service = agent_session_service
         self.evidence_binder = evidence_binder
         self.agent_task_store = agent_task_store
-        self.editor = WorkspaceEditor(store=store)
+        self.editor = build_authoritative_workspace_editor(
+            store=store,
+            workspace_root=self.workspace_root,
+        )
 
     def create_project(
         self,

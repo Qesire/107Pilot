@@ -21,6 +21,7 @@ from pilot107.agent.operation_attempts import (
     AgentOperationAttemptStore,
     build_agent_operation_attempt_store,
 )
+from pilot107.agent.operation_context import bind_agent_operation_key
 from pilot107.agent.operation_ledger import (
     AgentOperationConflict,
     AgentOperationIntent,
@@ -323,8 +324,16 @@ class AgentToolGateway:
         claims: AgentCapabilityClaims,
         operation_intent: AgentOperationIntent | None,
     ) -> AgentReadResult:
+        operation_key = (
+            None if operation_intent is None else operation_intent.operation_key
+        )
+
+        def call_handler() -> AgentReadResult:
+            with bind_agent_operation_key(operation_key):
+                return handler(invocation.owner, invocation.arguments)
+
         if operation_intent is None or self.operation_attempt_store is None:
-            return handler(invocation.owner, invocation.arguments)
+            return call_handler()
 
         def beat() -> None:
             assert self.operation_attempt_store is not None
@@ -343,7 +352,7 @@ class AgentToolGateway:
             name=f"agent-operation-heartbeat:{operation_intent.operation_key[-16:]}",
         ).start()
         try:
-            result = handler(invocation.owner, invocation.arguments)
+            result = call_handler()
         finally:
             heartbeat.stop()
         heartbeat.raise_if_failed()

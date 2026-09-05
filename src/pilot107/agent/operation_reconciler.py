@@ -4,16 +4,18 @@ This module is intentionally separate from Workspace state. It may only repair
 an ``agent_operations`` record from already-persisted domain facts. It never
 scans or mutates Workspace files to guess whether a patch or sandbox command ran.
 
-The first recovery authorities are deliberately narrow:
+Recovery authorities are deliberately narrow:
 
 * ``builder_build_submit`` -> terminal ``agent_builder_submissions.receipt_json``
 * ``validation_schedule`` -> an AgentTask that has advanced beyond the raw
   ``pending/version=0`` creation boundary
+* ``workspace_patch`` -> a COMMITTED AC4 Workspace mutation journal bound to the
+  exact same durable operation id and file plan
 
 A raw pending AgentTask is not enough evidence: the process may have crashed
-between ``create_task`` and initial outbox materialization. That case remains
-UNKNOWN until the task lifecycle itself advances or a later control-plane repair
-materializes the missing execute message.
+between ``create_task`` and initial outbox materialization. Likewise, a prepared,
+files-applied, or unbound Workspace journal is not a committed Agent operation
+receipt.
 """
 
 from __future__ import annotations
@@ -104,7 +106,7 @@ class SQLiteAgentOperationReconciler:
                 now=now,
             ):
                 return None
-            resolution = self._resolution(connection, record)
+            resolution = self._resolution(connection, record, invocation)
             if resolution is None:
                 _sqlite_note_unresolved(
                     connection,
@@ -128,6 +130,7 @@ class SQLiteAgentOperationReconciler:
         self,
         connection: sqlite3.Connection,
         record: AgentOperationRecord,
+        invocation: ToolInvocation,
     ) -> tuple[dict[str, Any], str | None] | None:
         try:
             if record.tool_name == "builder_build_submit":
@@ -150,6 +153,12 @@ class SQLiteAgentOperationReconciler:
                     (record.owner, record.request_key),
                 ).fetchone()
                 return _task_resolution(row)
+            if record.tool_name == "workspace_patch":
+                return _sqlite_workspace_patch_resolution(
+                    connection,
+                    record=record,
+                    invocation=invocation,
+                )
         except sqlite3.OperationalError:
             # A missing authority table is not proof of any side-effect outcome.
             return None
@@ -254,6 +263,9 @@ class PostgresAgentOperationReconciler:
                 (record.owner, record.request_key),
             ).fetchone()
             return _task_resolution(row)
+        # AC4 PostgreSQL Workspace mutation is deliberately fail-closed until
+        # live-head/journal parity exists, so there is no PostgreSQL Workspace
+        # side-effect receipt to reconcile here.
         return None
 
 
@@ -299,6 +311,166 @@ def _task_resolution(
     }
     ref = f"agent-task:{task_id}"
     return _stored_operation_result(result, [ref]), ref
+
+
+def _sqlite_workspace_patch_resolution(
+    connection: sqlite3.Connection,
+    *,
+    record: AgentOperationRecord,
+    invocation: ToolInvocation,
+) -> tuple[dict[str, Any], str | None] | None:
+    identity = _workspace_patch_identity(invocation.arguments)
+    if identity is None:
+        return None
+    project_id, workspace_id, approval_summary_zh, expected_files = identity
+    if record.target_ref != f"workspace:{workspace_id}":
+        return None
+    rows = _workspace_receipt_rows(
+        connection,
+        owner=record.owner,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        operation_key=record.operation_key,
+        files_json=_workspace_files_json(expected_files),
+    )
+    if len(rows) != 1:
+        return None
+    row = rows[0]
+    change_set = _json_mapping(row["payload_json"])
+    if change_set is None:
+        return None
+    change_set_id = str(row["change_set_id"])
+    if (
+        change_set.get("change_set_id") != change_set_id
+        or change_set.get("project_id") != project_id
+        or change_set.get("workspace_id") != workspace_id
+        or change_set.get("owner") != record.owner
+        or not isinstance(change_set.get("created_at"), str)
+    ):
+        return None
+    # workspace_patch originally returns the ChangeSet immediately after its
+    # durable creation. Later sandbox/review transitions may have updated the
+    # same row, so reconstruct that initial immutable DRAFT view rather than
+    # replaying later state as if it were the original mutation receipt.
+    created_at = str(change_set["created_at"])
+    initial = dict(change_set)
+    initial["state"] = "draft"
+    initial["version"] = 1
+    initial["sandbox_results"] = []
+    initial["approval"] = None
+    initial["updated_at"] = created_at
+    initial["approval_summary_zh"] = approval_summary_zh
+    ref = f"changeset:{change_set_id}"
+    return _stored_operation_result(initial, [ref]), ref
+
+
+def _workspace_receipt_rows(
+    connection: sqlite3.Connection,
+    *,
+    owner: str,
+    project_id: str,
+    workspace_id: str,
+    operation_key: str,
+    files_json: str,
+) -> list[sqlite3.Row]:
+    return connection.execute(
+        """
+        SELECT j.change_set_id, c.payload_json
+        FROM agent_workspace_mutation_journal AS j
+        JOIN agent_workspace_changesets AS c
+          ON c.change_set_id = j.change_set_id
+         AND c.owner = j.owner
+         AND c.workspace_id = j.workspace_id
+         AND c.project_id = j.project_id
+        WHERE j.owner = ? AND j.workspace_id = ? AND j.project_id = ?
+          AND j.state = 'committed' AND j.change_set_id IS NOT NULL
+          AND j.request_key = ? AND j.files_json = ?
+        ORDER BY j.updated_at DESC, j.mutation_id DESC
+        """,
+        (owner, workspace_id, project_id, operation_key, files_json),
+    ).fetchall()
+
+
+def _workspace_patch_identity(
+    arguments: Mapping[str, object],
+) -> tuple[str, str, str, tuple[tuple[str, str, str | None, str | None], ...]] | None:
+    project_id = arguments.get("project_id")
+    workspace_id = arguments.get("workspace_id")
+    approval_summary_zh = arguments.get("approval_summary_zh")
+    patches = arguments.get("patches")
+    if (
+        not isinstance(project_id, str)
+        or not project_id
+        or not isinstance(workspace_id, str)
+        or not workspace_id
+        or not isinstance(approval_summary_zh, str)
+        or not isinstance(patches, list)
+        or not 1 <= len(patches) <= 256
+    ):
+        return None
+    planned: list[tuple[str, str, str | None, str | None]] = []
+    seen: set[str] = set()
+    for raw in patches:
+        if not isinstance(raw, Mapping):
+            return None
+        path = raw.get("path")
+        operation = raw.get("operation")
+        before = raw.get("expected_source_digest")
+        content = raw.get("content")
+        if (
+            not isinstance(path, str)
+            or not path
+            or path in seen
+            or operation not in {"create", "modify", "delete"}
+        ):
+            return None
+        seen.add(path)
+        if operation == "create":
+            if before is not None or not isinstance(content, str):
+                return None
+            before_digest = None
+            after_digest = hashlib.sha256(content.encode()).hexdigest()
+        elif operation == "modify":
+            if not _sha256_text(before) or not isinstance(content, str):
+                return None
+            before_digest = str(before)
+            after_digest = hashlib.sha256(content.encode()).hexdigest()
+        else:
+            if not _sha256_text(before) or content is not None:
+                return None
+            before_digest = str(before)
+            after_digest = None
+        planned.append((path, str(operation), before_digest, after_digest))
+    return project_id, workspace_id, approval_summary_zh, tuple(sorted(planned))
+
+
+def _workspace_files_json(
+    files: tuple[tuple[str, str, str | None, str | None], ...],
+) -> str:
+    payload = [
+        {
+            "path": path,
+            "operation": operation,
+            "before_sha256": before,
+            "after_sha256": after,
+        }
+        for path, operation, before, after in files
+    ]
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _sha256_text(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _stored_operation_result(result: Mapping[str, object], refs: list[str]) -> dict[str, Any]:
@@ -511,6 +683,7 @@ def _assert_reconcile_request(
     if (
         invocation.owner != record.owner
         or invocation.session_id != record.session_id
+        or invocation.tool_name != record.tool_name
         or isinstance(expected_fencing_token, bool)
         or not isinstance(expected_fencing_token, int)
         or expected_fencing_token < 1
