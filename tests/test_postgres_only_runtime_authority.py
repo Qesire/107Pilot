@@ -39,7 +39,7 @@ def test_live_production_composition_has_no_research_workspace_bridge() -> None:
         assert all(marker not in source for marker in forbidden), relative
 
 
-def test_production_composition_cannot_construct_sqlite_runtime_authority() -> None:
+def test_production_composition_has_no_sqlite_runtime_authority() -> None:
     sources = (
         "src/pilot107/api/service.py",
         "src/pilot107/api/http_app.py",
@@ -79,7 +79,7 @@ def test_control_repository_factory_has_no_sqlite_fallback() -> None:
 
     assert "SQLiteControlRepository" not in source
     assert "return PostgresControlRepository" in source
-    assert "SQLite fallback has been retired" in source
+    assert "SQLite runtime authority has been retired" in source
 
 
 def test_workarea_is_the_only_live_research_boundary_source() -> None:

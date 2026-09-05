@@ -21,6 +21,7 @@ def build_control_repository(
     del sqlite_path
     if not postgres_dsn:
         raise ValueError(
-            "PostgreSQL control repository is required; SQLite fallback has been retired"
+            "PostgreSQL control repository is required; "
+            "SQLite runtime authority has been retired"
         )
     return PostgresControlRepository(postgres_dsn)

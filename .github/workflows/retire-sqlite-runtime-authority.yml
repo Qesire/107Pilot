@@ -8,7 +8,9 @@ on:
       - scripts/retire-sqlite-runtime-authority.py
       - .github/workflows/retire-sqlite-runtime-authority.yml
       - src/pilot107/agent/store_factory.py
+      - src/pilot107/core/control_repository_factory.py
       - src/pilot107/api/run_workspace_routes.py
+      - tests/test_lifecycle_store_selection.py
       - tests/test_postgres_only_runtime_authority.py
 
 permissions:
@@ -29,6 +31,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Normalize one-shot generator authority contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/retire-sqlite-runtime-authority.py")
+          text = path.read_text(encoding="utf-8")
+          legacy = "SQLite fallback has been retired"
+          canonical = "SQLite runtime authority has been retired"
+          if legacy not in text:
+              raise SystemExit("expected legacy one-shot authority wording")
+          path.write_text(text.replace(legacy, canonical), encoding="utf-8")
+          PY
       - name: Apply deterministic source cleanup
         run: python scripts/retire-sqlite-runtime-authority.py
       - name: Finalize fail-closed constructor typing
@@ -65,6 +80,8 @@ jobs:
       - name: Fix and verify touched Python sources
         run: |
           uv run ruff check --fix \
+            src/pilot107/agent/store_factory.py \
+            src/pilot107/core/control_repository_factory.py \
             src/pilot107/api/service.py \
             src/pilot107/api/http_app.py \
             src/pilot107/api/run_workspace_routes.py \
@@ -72,6 +89,8 @@ jobs:
             tests/test_lifecycle_store_selection.py \
             tests/test_postgres_only_runtime_authority.py
           uv run ruff check \
+            src/pilot107/agent/store_factory.py \
+            src/pilot107/core/control_repository_factory.py \
             src/pilot107/api/service.py \
             src/pilot107/api/http_app.py \
             src/pilot107/api/run_workspace_routes.py \
@@ -80,11 +99,14 @@ jobs:
             tests/test_postgres_only_runtime_authority.py
       - name: Verify touched production typing
         run: |
-          # The two disabled codes are pre-existing helper-level debt in these files.
-          # This one-shot landing gate remains strict for every other mypy error code.
+          # The two disabled codes are pre-existing helper-level debt in the large
+          # API/worker composition files. This one-shot gate remains strict for
+          # every other mypy error code and self-deletes after successful landing.
           uv run mypy --follow-imports=skip \
             --disable-error-code unused-ignore \
             --disable-error-code no-any-return \
+            src/pilot107/agent/store_factory.py \
+            src/pilot107/core/control_repository_factory.py \
             src/pilot107/api/service.py \
             src/pilot107/api/http_app.py \
             src/pilot107/api/run_workspace_routes.py \

@@ -20,6 +20,9 @@ from pilot107.worker.service import WorkerServiceConfig, build_worker_service
 from pilot107.worker.service import config_from_env as worker_config_from_env
 
 
+SQLITE_RETIRED = "SQLite runtime authority has been retired"
+
+
 def test_environment_resolves_postgres_when_dsn_is_present(tmp_path: Path) -> None:
     dsn = "postgresql://api@db.internal:5432/pilot107"
     api = api_config_from_env(
@@ -67,10 +70,7 @@ def test_postgres_dsn_rejects_inline_and_file_sources(tmp_path: Path) -> None:
 
 
 def test_sqlite_mode_is_a_rejected_deprecation_sentinel(tmp_path: Path) -> None:
-    with pytest.raises(
-        ConfigurationError,
-        match="SQLite runtime authority has been retired",
-    ):
+    with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
         resolve_durable_store_selection(
             database_mode=DatabaseMode.SQLITE,
             sqlite_path=tmp_path / "pilot107.db",
@@ -80,10 +80,7 @@ def test_sqlite_mode_is_a_rejected_deprecation_sentinel(tmp_path: Path) -> None:
 
 
 def test_postgres_mode_rejects_sqlite_lifecycle_override(tmp_path: Path) -> None:
-    with pytest.raises(
-        ConfigurationError,
-        match="SQLite lifecycle store overrides are retired",
-    ):
+    with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
         resolve_durable_store_selection(
             database_mode=DatabaseMode.POSTGRES,
             sqlite_path=tmp_path / "pilot107.db",
@@ -94,7 +91,7 @@ def test_postgres_mode_rejects_sqlite_lifecycle_override(tmp_path: Path) -> None
 
 
 def test_postgres_mode_requires_domain_and_control_dsn(tmp_path: Path) -> None:
-    with pytest.raises(ConfigurationError, match="SQLite fallback is retired"):
+    with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
         resolve_durable_store_selection(
             database_mode=DatabaseMode.POSTGRES,
             sqlite_path=tmp_path / "pilot107.db",
@@ -134,12 +131,12 @@ def test_direct_agent_store_builders_have_no_sqlite_fallback(tmp_path: Path) -> 
         build_project_store,
         build_agent_task_store,
     ):
-        with pytest.raises(ConfigurationError, match="SQLite fallback has been retired"):
+        with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
             builder(sqlite_path=tmp_path / "legacy.db", postgres_dsn=None)
 
 
 def test_control_repository_has_no_sqlite_fallback(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="SQLite fallback has been retired"):
+    with pytest.raises(ValueError, match=SQLITE_RETIRED):
         build_control_repository(
             sqlite_path=tmp_path / "legacy.db",
             postgres_dsn=None,
@@ -157,15 +154,9 @@ def test_api_and_worker_fail_closed_without_postgres(tmp_path: Path) -> None:
         evidence_root=tmp_path / "worker-evidence",
     )
 
-    with pytest.raises(
-        ConfigurationError,
-        match="SQLite runtime authority has been retired",
-    ):
+    with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
         build_api_service(api)
-    with pytest.raises(
-        ConfigurationError,
-        match="SQLite runtime authority has been retired",
-    ):
+    with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
         build_worker_service(worker)
 
 
