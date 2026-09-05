@@ -1,8 +1,11 @@
-"""Provider-independent durable identities and receipts for Agent side effects.
+"""PostgreSQL durable identities and receipts for Agent side effects.
 
 The operation ledger deliberately does not redefine Workspace state. It records
 whether a typed Agent mutation intent has crossed a side-effect boundary. Live
 Workspace revisions and journals remain a separate Workspace concern.
+
+The competition runtime has one persistence authority: PostgreSQL. SQLite is
+not a supported operation-ledger backend or fallback.
 """
 
 from __future__ import annotations
@@ -11,18 +14,15 @@ import hashlib
 import importlib
 import json
 import re
-import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from pathlib import Path
 from typing import Any, Protocol
 
 from pilot107.agent.protocol import ToolInvocation
 from pilot107.agent.store import AgentSessionStore
 from pilot107.core.postgres_domain_schema import initialize_postgres_domain_schema
-from pilot107.core.schema_migrations import SchemaMigration, apply_schema_migrations
 
 _OPERATION_ID = re.compile(r"^operation-[a-f0-9]{64}$")
 _DIGEST = re.compile(r"^[a-f0-9]{64}$")
@@ -168,12 +168,7 @@ def operation_intent_for_invocation(
     *,
     arguments_digest: str,
 ) -> AgentOperationIntent | None:
-    """Return a stable side-effect identity independent of provider/Turn call IDs.
-
-    ``intent_digest`` is intentionally *not* part of ``operation_key``. The key
-    identifies the durable domain request; the digest is compared separately so
-    changed canonical content under the same request identity fails closed.
-    """
+    """Return a stable side-effect identity independent of provider/Turn call IDs."""
 
     if invocation.tool_name not in _SIDE_EFFECT_TOOLS:
         return None
@@ -211,67 +206,14 @@ def build_agent_operation_ledger(
     store: AgentSessionStore,
     *,
     clock: Callable[[], datetime] | None = None,
-) -> AgentOperationLedger | None:
-    """Select a ledger matching the existing durable Session store.
+) -> AgentOperationLedger:
+    """Build the operation ledger from the PostgreSQL session authority."""
 
-    Unknown test doubles retain the legacy invocation ledger. Production
-    SQLite/PostgreSQL stores gain operation receipts without changing service or
-    Workspace construction.
-    """
-
-    db_path = getattr(store, "db_path", None)
-    if isinstance(db_path, Path):
-        return SQLiteAgentOperationLedger(db_path, clock=clock)
     dsn = getattr(store, "dsn", None)
-    if isinstance(dsn, str) and dsn:
-        return PostgresAgentOperationLedger(dsn, clock=clock)
-    return None
+    if not isinstance(dsn, str) or not dsn:
+        raise RuntimeError("Agent operation ledger requires a PostgreSQL-backed store")
+    return PostgresAgentOperationLedger(dsn, clock=clock)
 
-
-_SQLITE_MIGRATIONS = (
-    SchemaMigration(
-        migration_id="006a.002.agent_operations",
-        statements=(
-            """
-            CREATE TABLE agent_operations (
-                operation_key TEXT PRIMARY KEY,
-                owner TEXT NOT NULL,
-                session_id TEXT NOT NULL REFERENCES agent_sessions(session_id),
-                origin_turn_id TEXT NOT NULL REFERENCES agent_turns(turn_id),
-                request_key TEXT NOT NULL,
-                tool_name TEXT NOT NULL,
-                intent_digest TEXT NOT NULL,
-                target_ref TEXT,
-                target_revision TEXT,
-                state TEXT NOT NULL,
-                origin_invocation_id TEXT NOT NULL,
-                last_invocation_id TEXT NOT NULL,
-                result_json TEXT,
-                error_json TEXT,
-                receipt_ref TEXT,
-                result_digest TEXT,
-                side_effect_ref TEXT,
-                reconciliation_attempt INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                CHECK (state IN (
-                    'reserved', 'running', 'completed', 'failed',
-                    'stale', 'reconciling', 'unknown'
-                )),
-                CHECK (reconciliation_attempt >= 0)
-            )
-            """,
-            """
-            CREATE INDEX idx_agent_operations_owner_state
-            ON agent_operations(owner, state, updated_at, operation_key)
-            """,
-            """
-            CREATE INDEX idx_agent_operations_session
-            ON agent_operations(owner, session_id, created_at, operation_key)
-            """,
-        ),
-    ),
-)
 
 _POSTGRES_MIGRATION_ID = "004a.034.agent_operations"
 _POSTGRES_STATEMENTS = (
@@ -315,369 +257,6 @@ _POSTGRES_STATEMENTS = (
 )
 
 
-class SQLiteAgentOperationLedger:
-    def __init__(
-        self,
-        db_path: Path,
-        *,
-        clock: Callable[[], datetime] | None = None,
-    ) -> None:
-        self.db_path = db_path
-        self._clock = clock or (lambda: datetime.now(UTC))
-        with self.connect() as conn:
-            apply_schema_migrations(conn, _SQLITE_MIGRATIONS)
-
-    def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 10000")
-        return conn
-
-    def reserve(
-        self,
-        intent: AgentOperationIntent,
-        *,
-        invocation_id: str,
-        expected_state_version: int,
-        expected_fencing_token: int,
-    ) -> tuple[AgentOperationRecord, bool]:
-        _operation_request(intent, invocation_id, expected_state_version, expected_fencing_token)
-        now = self._now_text()
-        with self.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            self._assert_current_turn(
-                conn,
-                intent,
-                expected_state_version=expected_state_version,
-                expected_fencing_token=expected_fencing_token,
-                now=now,
-            )
-            cursor = conn.execute(
-                """
-                INSERT OR IGNORE INTO agent_operations (
-                    operation_key, owner, session_id, origin_turn_id, request_key,
-                    tool_name, intent_digest, target_ref, target_revision, state,
-                    origin_invocation_id, last_invocation_id, result_json, error_json,
-                    receipt_ref, result_digest, side_effect_ref, reconciliation_attempt,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, NULL, NULL,
-                          NULL, NULL, NULL, 0, ?, ?)
-                """,
-                (
-                    intent.operation_key,
-                    intent.owner,
-                    intent.session_id,
-                    intent.origin_turn_id,
-                    intent.request_key,
-                    intent.tool_name,
-                    intent.intent_digest,
-                    intent.target_ref,
-                    intent.target_revision,
-                    invocation_id,
-                    invocation_id,
-                    now,
-                    now,
-                ),
-            )
-            created = cursor.rowcount == 1
-            row = conn.execute(
-                "SELECT * FROM agent_operations WHERE operation_key = ? AND owner = ?",
-                (intent.operation_key, intent.owner),
-            ).fetchone()
-            if row is None:
-                raise RuntimeError("operation insert did not produce a row")
-            record = _row_to_operation(row)
-            _ensure_intent(record, intent)
-            if not created:
-                conn.execute(
-                    """
-                    UPDATE agent_operations SET last_invocation_id = ?, updated_at = ?
-                    WHERE operation_key = ? AND owner = ?
-                    """,
-                    (invocation_id, now, intent.operation_key, intent.owner),
-                )
-                row = conn.execute(
-                    "SELECT * FROM agent_operations WHERE operation_key = ? AND owner = ?",
-                    (intent.operation_key, intent.owner),
-                ).fetchone()
-                assert row is not None
-                record = _row_to_operation(row)
-        return record, created
-
-    def start(
-        self,
-        operation_key: str,
-        *,
-        owner: str,
-        invocation_id: str,
-        expected_state_version: int,
-        expected_fencing_token: int,
-    ) -> AgentOperationRecord:
-        return self._transition(
-            operation_key,
-            owner=owner,
-            invocation_id=invocation_id,
-            expected_state_version=expected_state_version,
-            expected_fencing_token=expected_fencing_token,
-            from_states=(AgentOperationState.RESERVED,),
-            to_state=AgentOperationState.RUNNING,
-        )
-
-    def complete(
-        self,
-        operation_key: str,
-        *,
-        owner: str,
-        expected_state_version: int,
-        expected_fencing_token: int,
-        result: Mapping[str, object],
-        side_effect_ref: str | None,
-    ) -> AgentOperationRecord:
-        payload = _json_object(result, "result")
-        digest = hashlib.sha256(_canonical(payload)).hexdigest()
-        return self._finish(
-            operation_key,
-            owner=owner,
-            expected_state_version=expected_state_version,
-            expected_fencing_token=expected_fencing_token,
-            state=AgentOperationState.COMPLETED,
-            result=payload,
-            error=None,
-            receipt_ref=f"agent-operation:{operation_key}:sha256:{digest}",
-            result_digest=digest,
-            side_effect_ref=side_effect_ref,
-        )
-
-    def fail(
-        self,
-        operation_key: str,
-        *,
-        owner: str,
-        expected_state_version: int,
-        expected_fencing_token: int,
-        error: Mapping[str, object],
-    ) -> AgentOperationRecord:
-        payload = _json_object(error, "error")
-        digest = hashlib.sha256(_canonical({"error": payload})).hexdigest()
-        return self._finish(
-            operation_key,
-            owner=owner,
-            expected_state_version=expected_state_version,
-            expected_fencing_token=expected_fencing_token,
-            state=AgentOperationState.FAILED,
-            result=None,
-            error=payload,
-            receipt_ref=f"agent-operation:{operation_key}:sha256:{digest}",
-            result_digest=digest,
-            side_effect_ref=None,
-        )
-
-    def mark_unknown(
-        self,
-        operation_key: str,
-        *,
-        owner: str,
-        expected_state_version: int,
-        expected_fencing_token: int,
-        error: Mapping[str, object],
-    ) -> AgentOperationRecord:
-        return self._finish(
-            operation_key,
-            owner=owner,
-            expected_state_version=expected_state_version,
-            expected_fencing_token=expected_fencing_token,
-            state=AgentOperationState.UNKNOWN,
-            result=None,
-            error=_json_object(error, "error"),
-            receipt_ref=None,
-            result_digest=None,
-            side_effect_ref=None,
-        )
-
-    def get(self, operation_key: str, *, owner: str) -> AgentOperationRecord:
-        _operation_key(operation_key)
-        _nonempty(owner, "owner")
-        with self.connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM agent_operations WHERE operation_key = ? AND owner = ?",
-                (operation_key, owner),
-            ).fetchone()
-        if row is None:
-            raise KeyError(operation_key)
-        return _row_to_operation(row)
-
-    def _assert_current_turn(
-        self,
-        conn: sqlite3.Connection,
-        intent: AgentOperationIntent,
-        *,
-        expected_state_version: int,
-        expected_fencing_token: int,
-        now: str,
-    ) -> None:
-        row = conn.execute(
-            """
-            SELECT 1 FROM agent_turns
-            WHERE turn_id = ? AND session_id = ? AND owner = ?
-              AND state = 'running' AND cancel_requested = 0
-              AND state_version = ? AND fencing_token = ?
-              AND lease_expires_at > ?
-            """,
-            (
-                intent.origin_turn_id,
-                intent.session_id,
-                intent.owner,
-                expected_state_version,
-                expected_fencing_token,
-                now,
-            ),
-        ).fetchone()
-        if row is None:
-            raise AgentOperationConflict("operation Turn capability is stale or fenced")
-
-    def _transition(
-        self,
-        operation_key: str,
-        *,
-        owner: str,
-        invocation_id: str,
-        expected_state_version: int,
-        expected_fencing_token: int,
-        from_states: tuple[AgentOperationState, ...],
-        to_state: AgentOperationState,
-    ) -> AgentOperationRecord:
-        _operation_key(operation_key)
-        _nonempty(owner, "owner")
-        _nonempty(invocation_id, "invocation_id")
-        _positive(expected_state_version, "expected_state_version")
-        _positive(expected_fencing_token, "expected_fencing_token")
-        now = self._now_text()
-        placeholders = ",".join("?" for _ in from_states)
-        with self.connect() as conn:
-            updated = conn.execute(
-                f"""
-                UPDATE agent_operations
-                SET state = ?, last_invocation_id = ?, updated_at = ?
-                WHERE operation_key = ? AND owner = ? AND state IN ({placeholders})
-                  AND EXISTS (
-                      SELECT 1 FROM agent_turns
-                      WHERE agent_turns.turn_id = agent_operations.origin_turn_id
-                        AND agent_turns.owner = agent_operations.owner
-                        AND agent_turns.state = 'running'
-                        AND agent_turns.cancel_requested = 0
-                        AND agent_turns.state_version = ?
-                        AND agent_turns.fencing_token = ?
-                        AND agent_turns.lease_expires_at > ?
-                  )
-                """,
-                (
-                    to_state.value,
-                    invocation_id,
-                    now,
-                    operation_key,
-                    owner,
-                    *(state.value for state in from_states),
-                    expected_state_version,
-                    expected_fencing_token,
-                    now,
-                ),
-            )
-            if updated.rowcount != 1:
-                raise AgentOperationConflict("operation is active, terminal, stale, or fenced")
-            row = conn.execute(
-                "SELECT * FROM agent_operations WHERE operation_key = ? AND owner = ?",
-                (operation_key, owner),
-            ).fetchone()
-        assert row is not None
-        return _row_to_operation(row)
-
-    def _finish(
-        self,
-        operation_key: str,
-        *,
-        owner: str,
-        expected_state_version: int,
-        expected_fencing_token: int,
-        state: AgentOperationState,
-        result: Mapping[str, object] | None,
-        error: Mapping[str, object] | None,
-        receipt_ref: str | None,
-        result_digest: str | None,
-        side_effect_ref: str | None,
-    ) -> AgentOperationRecord:
-        _operation_key(operation_key)
-        _nonempty(owner, "owner")
-        _positive(expected_state_version, "expected_state_version")
-        _positive(expected_fencing_token, "expected_fencing_token")
-        result_json = (
-            None if result is None else json.dumps(result, ensure_ascii=False, sort_keys=True)
-        )
-        error_json = (
-            None if error is None else json.dumps(error, ensure_ascii=False, sort_keys=True)
-        )
-        now = self._now_text()
-        with self.connect() as conn:
-            updated = conn.execute(
-                """
-                UPDATE agent_operations
-                SET state = ?, result_json = ?, error_json = ?, receipt_ref = ?,
-                    result_digest = ?, side_effect_ref = ?, updated_at = ?
-                WHERE operation_key = ? AND owner = ? AND state = 'running'
-                  AND EXISTS (
-                      SELECT 1 FROM agent_turns
-                      WHERE agent_turns.turn_id = agent_operations.origin_turn_id
-                        AND agent_turns.owner = agent_operations.owner
-                        AND agent_turns.state = 'running'
-                        AND agent_turns.cancel_requested = 0
-                        AND agent_turns.state_version = ?
-                        AND agent_turns.fencing_token = ?
-                        AND agent_turns.lease_expires_at > ?
-                  )
-                """,
-                (
-                    state.value,
-                    result_json,
-                    error_json,
-                    receipt_ref,
-                    result_digest,
-                    side_effect_ref,
-                    now,
-                    operation_key,
-                    owner,
-                    expected_state_version,
-                    expected_fencing_token,
-                    now,
-                ),
-            )
-            if updated.rowcount != 1:
-                existing = conn.execute(
-                    "SELECT * FROM agent_operations WHERE operation_key = ? AND owner = ?",
-                    (operation_key, owner),
-                ).fetchone()
-                if existing is not None:
-                    record = _row_to_operation(existing)
-                    if (
-                        record.state is state
-                        and record.result == (None if result is None else dict(result))
-                        and record.error == (None if error is None else dict(error))
-                        and record.receipt_ref == receipt_ref
-                        and record.result_digest == result_digest
-                    ):
-                        return record
-                raise AgentOperationConflict("operation is terminal, stale, or fenced")
-            row = conn.execute(
-                "SELECT * FROM agent_operations WHERE operation_key = ? AND owner = ?",
-                (operation_key, owner),
-            ).fetchone()
-        assert row is not None
-        return _row_to_operation(row)
-
-    def _now_text(self) -> str:
-        return _timestamp(self._clock())
-
-
 class PostgresAgentOperationLedger:
     def __init__(
         self,
@@ -706,15 +285,24 @@ class PostgresAgentOperationLedger:
         expected_state_version: int,
         expected_fencing_token: int,
     ) -> tuple[AgentOperationRecord, bool]:
-        _operation_request(intent, invocation_id, expected_state_version, expected_fencing_token)
+        _operation_request(
+            intent,
+            invocation_id,
+            expected_state_version,
+            expected_fencing_token,
+        )
         now = self._now()
         with self.connect() as conn:
             valid = conn.execute(
                 """
                 SELECT 1 FROM agent_turns
-                WHERE turn_id = %s AND session_id = %s AND owner = %s
-                  AND state = 'running' AND cancel_requested = 0
-                  AND state_version = %s AND fencing_token = %s
+                WHERE turn_id = %s
+                  AND session_id = %s
+                  AND owner = %s
+                  AND state = 'running'
+                  AND cancel_requested = 0
+                  AND state_version = %s
+                  AND fencing_token = %s
                   AND lease_expires_at > %s
                 """,
                 (
@@ -727,17 +315,36 @@ class PostgresAgentOperationLedger:
                 ),
             ).fetchone()
             if valid is None:
-                raise AgentOperationConflict("operation Turn capability is stale or fenced")
+                raise AgentOperationConflict(
+                    "operation Turn capability is stale or fenced"
+                )
             row = conn.execute(
                 """
                 INSERT INTO agent_operations (
-                    operation_key, owner, session_id, origin_turn_id, request_key,
-                    tool_name, intent_digest, target_ref, target_revision, state,
-                    origin_invocation_id, last_invocation_id, result_json, error_json,
-                    receipt_ref, result_digest, side_effect_ref, reconciliation_attempt,
-                    created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'reserved', %s, %s,
-                          NULL, NULL, NULL, NULL, NULL, 0, %s, %s)
+                    operation_key,
+                    owner,
+                    session_id,
+                    origin_turn_id,
+                    request_key,
+                    tool_name,
+                    intent_digest,
+                    target_ref,
+                    target_revision,
+                    state,
+                    origin_invocation_id,
+                    last_invocation_id,
+                    result_json,
+                    error_json,
+                    receipt_ref,
+                    result_digest,
+                    side_effect_ref,
+                    reconciliation_attempt,
+                    created_at,
+                    updated_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, 'reserved',
+                    %s, %s, NULL, NULL, NULL, NULL, NULL, 0, %s, %s
+                )
                 ON CONFLICT DO NOTHING
                 RETURNING *
                 """,
@@ -760,7 +367,10 @@ class PostgresAgentOperationLedger:
             created = row is not None
             if row is None:
                 row = conn.execute(
-                    "SELECT * FROM agent_operations WHERE operation_key = %s AND owner = %s",
+                    """
+                    SELECT * FROM agent_operations
+                    WHERE operation_key = %s AND owner = %s
+                    """,
                     (intent.operation_key, intent.owner),
                 ).fetchone()
             if row is None:
@@ -770,8 +380,10 @@ class PostgresAgentOperationLedger:
             if not created:
                 row = conn.execute(
                     """
-                    UPDATE agent_operations SET last_invocation_id = %s, updated_at = %s
-                    WHERE operation_key = %s AND owner = %s RETURNING *
+                    UPDATE agent_operations
+                    SET last_invocation_id = %s, updated_at = %s
+                    WHERE operation_key = %s AND owner = %s
+                    RETURNING *
                     """,
                     (invocation_id, now, intent.operation_key, intent.owner),
                 ).fetchone()
@@ -874,7 +486,10 @@ class PostgresAgentOperationLedger:
         _nonempty(owner, "owner")
         with self.connect() as conn:
             row = conn.execute(
-                "SELECT * FROM agent_operations WHERE operation_key = %s AND owner = %s",
+                """
+                SELECT * FROM agent_operations
+                WHERE operation_key = %s AND owner = %s
+                """,
                 (operation_key, owner),
             ).fetchone()
         if row is None:
@@ -903,7 +518,9 @@ class PostgresAgentOperationLedger:
                 """
                 UPDATE agent_operations
                 SET state = %s, last_invocation_id = %s, updated_at = %s
-                WHERE operation_key = %s AND owner = %s AND state = ANY(%s)
+                WHERE operation_key = %s
+                  AND owner = %s
+                  AND state = ANY(%s)
                   AND EXISTS (
                       SELECT 1 FROM agent_turns
                       WHERE agent_turns.turn_id = agent_operations.origin_turn_id
@@ -929,7 +546,9 @@ class PostgresAgentOperationLedger:
                 ),
             ).fetchone()
         if row is None:
-            raise AgentOperationConflict("operation is active, terminal, stale, or fenced")
+            raise AgentOperationConflict(
+                "operation is active, terminal, stale, or fenced"
+            )
         return _row_to_operation(row)
 
     def _finish(
@@ -955,9 +574,16 @@ class PostgresAgentOperationLedger:
             row = conn.execute(
                 """
                 UPDATE agent_operations
-                SET state = %s, result_json = %s, error_json = %s, receipt_ref = %s,
-                    result_digest = %s, side_effect_ref = %s, updated_at = %s
-                WHERE operation_key = %s AND owner = %s AND state = 'running'
+                SET state = %s,
+                    result_json = %s,
+                    error_json = %s,
+                    receipt_ref = %s,
+                    result_digest = %s,
+                    side_effect_ref = %s,
+                    updated_at = %s
+                WHERE operation_key = %s
+                  AND owner = %s
+                  AND state = 'running'
                   AND EXISTS (
                       SELECT 1 FROM agent_turns
                       WHERE agent_turns.turn_id = agent_operations.origin_turn_id
@@ -987,7 +613,10 @@ class PostgresAgentOperationLedger:
             ).fetchone()
             if row is None:
                 existing = conn.execute(
-                    "SELECT * FROM agent_operations WHERE operation_key = %s AND owner = %s",
+                    """
+                    SELECT * FROM agent_operations
+                    WHERE operation_key = %s AND owner = %s
+                    """,
                     (operation_key, owner),
                 ).fetchone()
                 if existing is not None:
@@ -1000,27 +629,38 @@ class PostgresAgentOperationLedger:
                         and record.result_digest == result_digest
                     ):
                         return record
-                raise AgentOperationConflict("operation is terminal, stale, or fenced")
+                raise AgentOperationConflict(
+                    "operation is terminal, stale, or fenced"
+                )
         return _row_to_operation(row)
 
     def _ensure_schema(self) -> None:
         checksum = _migration_checksum(_POSTGRES_STATEMENTS)
         with self.connect() as conn, conn.transaction():
-            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("pilot107:migrations",))
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                ("pilot107:migrations",),
+            )
             existing = conn.execute(
-                "SELECT checksum FROM schema_migrations WHERE migration_id = %s",
+                """
+                SELECT checksum FROM schema_migrations
+                WHERE migration_id = %s
+                """,
                 (_POSTGRES_MIGRATION_ID,),
             ).fetchone()
             if existing is not None:
                 if str(existing["checksum"]) != checksum:
-                    raise RuntimeError(f"migration checksum changed: {_POSTGRES_MIGRATION_ID}")
+                    raise RuntimeError(
+                        f"migration checksum changed: {_POSTGRES_MIGRATION_ID}"
+                    )
                 return
             for statement in _POSTGRES_STATEMENTS:
                 conn.execute(statement)
             conn.execute(
                 """
-                INSERT INTO schema_migrations (migration_id, checksum, applied_at)
-                VALUES (%s, %s, %s)
+                INSERT INTO schema_migrations (
+                    migration_id, checksum, applied_at
+                ) VALUES (%s, %s, %s)
                 """,
                 (_POSTGRES_MIGRATION_ID, checksum, datetime.now(UTC)),
             )
