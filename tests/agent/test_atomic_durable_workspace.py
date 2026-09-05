@@ -7,9 +7,9 @@ import pytest
 
 from pilot107.agent.durable_workspace_atomic import AtomicDurableWorkspaceEditor
 from pilot107.agent.project_store import SQLiteProjectStore
+from pilot107.agent.sandbox import SandboxExecutor
 from pilot107.agent.workspace import WorkspacePatch
 from pilot107.services.project_agent_service import ProjectAgentService
-from pilot107.agent.sandbox import SandboxExecutor
 
 
 class SimulatedHardCrash(BaseException):
