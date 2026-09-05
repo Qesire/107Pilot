@@ -30,43 +30,26 @@ jobs:
           python-version: "3.12"
       - name: Apply deterministic source cleanup
         run: python scripts/retire-sqlite-runtime-authority.py
-      - name: Finalize fail-closed constructor narrowing
+      - name: Finalize fail-closed constructor typing
         run: |
           python - <<'PY'
           from pathlib import Path
 
           path = Path("src/pilot107/api/http_app.py")
           text = path.read_text(encoding="utf-8")
-          old = '''        if remediation_service is None and remediation_store is None:
-              raise ValueError("remediation_store is required; SQLite fallback has been retired")
-          self.remediation_service = remediation_service or RemediationService(
-              run_store=store,
-              remediation_store=remediation_store,
-              advice_service=self.agent_advice_service,
-              contract_store=contract_store,
-              evidence_store=evidence_store,
-              project_agent_service=project_agent_service,
+          import_line = "from typing import Any\n"
+          argument = "            remediation_store=remediation_store,\n"
+          if text.count(import_line) != 1:
+              raise SystemExit("expected typing import exactly once")
+          if text.count(argument) != 1:
+              raise SystemExit("expected generated remediation argument exactly once")
+          text = text.replace(import_line, "from typing import Any, cast\n", 1)
+          text = text.replace(
+              argument,
+              "            remediation_store=cast(RemediationStore, remediation_store),\n",
+              1,
           )
-          '''
-          new = '''        if remediation_service is None:
-              if remediation_store is None:
-                  raise ValueError(
-                      "remediation_store is required; SQLite fallback has been retired"
-                  )
-              self.remediation_service = RemediationService(
-                  run_store=store,
-                  remediation_store=remediation_store,
-                  advice_service=self.agent_advice_service,
-                  contract_store=contract_store,
-                  evidence_store=evidence_store,
-                  project_agent_service=project_agent_service,
-              )
-          else:
-              self.remediation_service = remediation_service
-          '''
-          if text.count(old) != 1:
-              raise SystemExit("expected generated remediation fallback exactly once")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          path.write_text(text, encoding="utf-8")
           PY
       - name: Install Python test environment
         run: uv sync --locked --extra dev --extra api
