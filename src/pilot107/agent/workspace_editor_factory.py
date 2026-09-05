@@ -60,7 +60,7 @@ class AuthoritativeSQLiteWorkspaceEditor(AtomicDurableWorkspaceEditor):
             return super().apply_patches(workspace_id, owner, patches)
         except (WorkspacePolicyError, WorkspaceConflict) as exc:
             _translate_workspace_error(exc)
-            raise AssertionError("unreachable")
+            raise AssertionError("unreachable") from exc
 
 
 class AuthoritativePostgresWorkspaceEditor(PostgresAtomicDurableWorkspaceEditor):
@@ -76,7 +76,7 @@ class AuthoritativePostgresWorkspaceEditor(PostgresAtomicDurableWorkspaceEditor)
             return super().apply_patches(workspace_id, owner, patches)
         except (WorkspacePolicyError, WorkspaceConflict) as exc:
             _translate_workspace_error(exc)
-            raise AssertionError("unreachable")
+            raise AssertionError("unreachable") from exc
 
 
 class UnavailableWorkspaceEditor(WorkspaceEditor):
