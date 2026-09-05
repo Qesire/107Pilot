@@ -9,10 +9,10 @@ import type { AgentdConfig } from "./config.js";
 import type { EventWrite } from "./events.js";
 import {
   isTerminalEvent,
-  parseExecutableTurnRequest,
   type AgentTurnEvent,
   type ExecutableAgentTurnRequest,
 } from "./protocol.js";
+import { parseRepairableExecutableTurnRequest } from "./receipt-repair.js";
 import { AGENTD_VERSION } from "./version.js";
 
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -308,7 +308,7 @@ async function readTurnRequest(
     throw new HttpBoundaryError(400, "invalid_json");
   }
   try {
-    return parseExecutableTurnRequest(value);
+    return parseRepairableExecutableTurnRequest(value);
   } catch {
     throw new HttpBoundaryError(422, "invalid_turn");
   }

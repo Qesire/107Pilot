@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileDiff, FlaskConical, FolderGit2, Plus, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, ApiRequestError } from "./api";
+import { isAgentTaskGateVerified } from "./agentTaskGate";
 import { AgentConversation } from "./AgentSessionPanel";
 import { QueryBoundary, StatusBadge, formatTimestamp } from "./components";
 import {
@@ -914,10 +915,7 @@ export function formalCandidateTask(
       task.project_id === binding.projectId
       && task.workspace_id === binding.workspaceId
       && task.session_id === binding.sessionId
-      && task.state === "succeeded"
-      && task.result?.status === "succeeded"
-      && Boolean(task.linked_run_id)
-      && task.result.evidence_refs.length > 0
+      && isAgentTaskGateVerified(task)
     ))
     .sort((left, right) => (
       right.updated_at.localeCompare(left.updated_at)
