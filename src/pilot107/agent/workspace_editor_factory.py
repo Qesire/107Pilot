@@ -6,11 +6,19 @@ from pathlib import Path
 
 from pilot107.agent.durable_workspace import DurableWorkspaceEditor
 from pilot107.agent.project_store import ProjectStore
+from pilot107.agent.tool_gateway import AgentToolGatewayError
 from pilot107.agent.workspace import WorkspaceChangeSet, WorkspaceEditor, WorkspacePatch
 
 
-class WorkspaceDurabilityUnavailable(RuntimeError):
+class WorkspaceDurabilityUnavailable(AgentToolGatewayError):
     """The selected Project persistence backend lacks AC4 mutation authority."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            message,
+            code="AGENT.TOOL.WORKSPACE_DURABILITY_UNAVAILABLE",
+            retryable=False,
+        )
 
 
 class UnavailableWorkspaceEditor(WorkspaceEditor):
