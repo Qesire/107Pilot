@@ -1,20 +1,21 @@
 """Research Workspace boundary aggregate for the scientific provenance graph.
 
-A ResearchWorkspace is the user-level boundary of one research context.  It is
-*not* the Agent's isolated filesystem ``AgentWorkspaceRecord`` and it is not a
-linear Experiment lifecycle.  The aggregate owns only durable membership edges
-between existing domain facts:
+A ``ResearchWorkspace`` is the user-level boundary of one research context. It
+is deliberately different from the Agent's isolated filesystem
+``AgentWorkspaceRecord`` and deliberately has no lifecycle state machine.
 
-- Contracts may be referenced by multiple Research Workspaces.
-- A Run has exactly one primary Research Workspace boundary once bound.
-- An Agent Project has exactly one primary Research Workspace boundary once bound.
+The aggregate owns only membership edges between existing durable facts:
+
+- Contracts may be reused by multiple Research Workspaces.
+- A Run has one primary Research Workspace boundary once bound; parent/child
+  Run lineage may cross Research Workspace boundaries.
+- An Agent Project has one primary Research Workspace boundary once bound.
 - File/data/model references may be reused by multiple Research Workspaces.
-- Evidence, diagnoses and repair lineage are reached through Run/AgentProject
-  provenance and are deliberately not duplicated here.
+- Evidence, diagnosis and repair facts are reached through Run/AgentProject
+  provenance and are not duplicated here.
 
-This module is PostgreSQL-only because PostgreSQL is the production authority.
-SQLite remains a development/test implementation for the older domain stores;
-we do not create a second production ResearchWorkspace authority.
+PostgreSQL is the production authority. SQLite is not given a second production
+ResearchWorkspace implementation.
 """
 
 from __future__ import annotations
@@ -26,13 +27,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from pilot107.core.identity import is_safe_username
 from pilot107.core.postgres_domain_schema import initialize_postgres_domain_schema
 
-_MIGRATION_ID = "006c.002.research_workspace_boundary"
+_MIGRATION_002_ID = "006c.002.research_workspace_boundary"
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$")
 _ASSET_KINDS = frozenset({"file", "directory", "dataset", "model", "code", "external"})
 
-_MIGRATION_STATEMENTS = (
+# Frozen historical migration. Do not edit: its checksum may already exist in a
+# deployed schema_migrations table. Corrections must be additive migrations.
+_MIGRATION_002_STATEMENTS = (
     """
     CREATE TABLE research_workspaces (
         research_workspace_id TEXT PRIMARY KEY,
@@ -106,9 +110,23 @@ _MIGRATION_STATEMENTS = (
     """,
 )
 
+# ResearchWorkspace membership and AgentWorkspace provenance are orthogonal.
+# The first migration copied AgentWorkspace revision/digest into the membership
+# edge; remove that duplication without changing the historical checksum.
+_MIGRATION_003_ID = "006c.003.research_workspace_run_edge_normalization"
+_MIGRATION_003_STATEMENTS = (
+    "ALTER TABLE research_workspace_runs DROP COLUMN workspace_revision",
+    "ALTER TABLE research_workspace_runs DROP COLUMN workspace_digest",
+)
+
+_MIGRATIONS = (
+    (_MIGRATION_002_ID, _MIGRATION_002_STATEMENTS),
+    (_MIGRATION_003_ID, _MIGRATION_003_STATEMENTS),
+)
+
 
 class ResearchWorkspaceConflict(RuntimeError):
-    """Raised when an edge would violate the research boundary contract."""
+    """Raised when an edge would violate the research-boundary contract."""
 
 
 @dataclass(frozen=True)
@@ -131,6 +149,8 @@ class ResearchWorkspaceAssetRef:
 
 @dataclass(frozen=True)
 class ResearchWorkspaceGraph:
+    """Local graph projection, not a lifecycle state object."""
+
     workspace: ResearchWorkspaceRecord
     contract_ids: tuple[str, ...]
     run_ids: tuple[str, ...]
@@ -139,7 +159,7 @@ class ResearchWorkspaceGraph:
 
 
 class PostgresResearchWorkspaceStore:
-    """PostgreSQL authority for ResearchWorkspace identity and graph edges."""
+    """PostgreSQL authority for ResearchWorkspace identity and membership edges."""
 
     def __init__(self, dsn: str) -> None:
         if not dsn or any(character in dsn for character in "\r\n\0"):
@@ -273,11 +293,12 @@ class PostgresResearchWorkspaceStore:
         owner: str,
         run_id: str,
     ) -> None:
-        """Bind one immutable execution attempt to exactly one primary boundary.
+        """Bind a Run to one primary research boundary.
 
-        Parent/child Run lineage may cross ResearchWorkspace boundaries.  The
-        edge here only states where *this* Run was executed and therefore
-        requires the Run's immutable workspace revision/digest provenance.
+        This edge does not require an AgentWorkspace revision. A normal Contract
+        Run, an Agent-produced Run, or a Run derived from a parent in a different
+        ResearchWorkspace can all belong to the boundary. Exact execution
+        provenance remains authoritative on the Run itself.
         """
 
         self._assert_workspace(research_workspace_id, owner)
@@ -285,22 +306,13 @@ class PostgresResearchWorkspaceStore:
         now = datetime.now(UTC)
         with self.connect() as connection, connection.transaction():
             run = connection.execute(
-                """
-                SELECT owner, workspace_revision, workspace_digest
-                FROM runs WHERE run_id = %s
-                """,
+                "SELECT owner FROM runs WHERE run_id = %s",
                 (run_id,),
             ).fetchone()
             if run is None:
                 raise KeyError(run_id)
             if str(run["owner"]) != owner:
                 raise ResearchWorkspaceConflict("Run owner does not match ResearchWorkspace")
-            revision = run["workspace_revision"]
-            digest = run["workspace_digest"]
-            if revision is None or digest is None:
-                raise ResearchWorkspaceConflict(
-                    "Workspace-bound Run must carry immutable workspace revision/digest provenance"
-                )
             existing = connection.execute(
                 "SELECT research_workspace_id FROM research_workspace_runs WHERE run_id = %s",
                 (run_id,),
@@ -314,11 +326,10 @@ class PostgresResearchWorkspaceStore:
             connection.execute(
                 """
                 INSERT INTO research_workspace_runs (
-                    research_workspace_id, run_id, workspace_revision,
-                    workspace_digest, linked_at
-                ) VALUES (%s, %s, %s, %s, %s)
+                    research_workspace_id, run_id, linked_at
+                ) VALUES (%s, %s, %s)
                 """,
-                (research_workspace_id, run_id, int(revision), str(digest), now),
+                (research_workspace_id, run_id, now),
             )
             self._touch(connection, research_workspace_id, owner, now)
 
@@ -487,29 +498,30 @@ class PostgresResearchWorkspaceStore:
             raise ResearchWorkspaceConflict("ResearchWorkspace boundary changed during link")
 
     def _ensure_schema(self) -> None:
-        checksum = _migration_checksum(_MIGRATION_STATEMENTS)
         with self.connect() as connection, connection.transaction():
             connection.execute(
                 "SELECT pg_advisory_xact_lock(hashtext(%s))",
                 ("pilot107:migrations",),
             )
-            existing = connection.execute(
-                "SELECT checksum FROM schema_migrations WHERE migration_id = %s",
-                (_MIGRATION_ID,),
-            ).fetchone()
-            if existing is not None:
-                if str(existing["checksum"]) != checksum:
-                    raise RuntimeError(f"migration checksum changed: {_MIGRATION_ID}")
-                return
-            for statement in _MIGRATION_STATEMENTS:
-                connection.execute(statement)
-            connection.execute(
-                """
-                INSERT INTO schema_migrations (migration_id, checksum, applied_at)
-                VALUES (%s, %s, %s)
-                """,
-                (_MIGRATION_ID, checksum, datetime.now(UTC)),
-            )
+            for migration_id, statements in _MIGRATIONS:
+                checksum = _migration_checksum(statements)
+                existing = connection.execute(
+                    "SELECT checksum FROM schema_migrations WHERE migration_id = %s",
+                    (migration_id,),
+                ).fetchone()
+                if existing is not None:
+                    if str(existing["checksum"]) != checksum:
+                        raise RuntimeError(f"migration checksum changed: {migration_id}")
+                    continue
+                for statement in statements:
+                    connection.execute(statement)
+                connection.execute(
+                    """
+                    INSERT INTO schema_migrations (migration_id, checksum, applied_at)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (migration_id, checksum, datetime.now(UTC)),
+                )
 
 
 def _workspace_id(owner: str, request_key: str) -> str:
@@ -544,7 +556,8 @@ def _timestamp_text(value: Any) -> str:
 
 
 def _owner(value: str) -> None:
-    _key(value, "owner")
+    if not is_safe_username(value):
+        raise ValueError("owner is invalid")
 
 
 def _key(value: str, field: str) -> None:
