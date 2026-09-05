@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pilot107.agent.durable_workspace import DurableWorkspaceEditor
+from pilot107.agent.durable_workspace_atomic import AtomicDurableWorkspaceEditor
 from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.tool_gateway import AgentToolGatewayError
 from pilot107.agent.workspace import WorkspaceChangeSet, WorkspaceEditor, WorkspacePatch
@@ -55,16 +55,17 @@ def build_authoritative_workspace_editor(
 ) -> WorkspaceEditor:
     """Return the only editor permitted to mutate Agent Workspace files.
 
-    SQLite has an AC4 live-head + journal implementation. PostgreSQL Project
-    persistence already exists, but its AC4 live-head/journal transaction domain
-    is not implemented yet. Falling back to the legacy editor in PostgreSQL
-    mode would silently reintroduce the crash/concurrency hole, so mutations are
-    rejected while read-only Project/Workspace operations remain available.
+    SQLite has the full AC4 live-head, journal, crash recovery, and atomic
+    ChangeSet publication boundary. PostgreSQL Project persistence already
+    exists, but its AC4 live-head/journal transaction domain is not implemented
+    yet. Falling back to the legacy editor in PostgreSQL mode would silently
+    reintroduce the crash/concurrency hole, so mutations are rejected while
+    read-only Project/Workspace operations remain available.
     """
 
     db_path = getattr(store, "db_path", None)
     if isinstance(db_path, Path):
-        return DurableWorkspaceEditor(
+        return AtomicDurableWorkspaceEditor(
             store=store,
             state_root=workspace_root.resolve().parent / "agent-workspace-state",
         )
