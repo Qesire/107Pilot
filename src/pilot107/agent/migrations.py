@@ -116,6 +116,98 @@ AGENT_SESSION_MIGRATIONS = (
             """,
         ),
     ),
+    SchemaMigration(
+        migration_id="006a.002.agent_checkpoint_pointer",
+        statements=(
+            """
+            UPDATE agent_turns
+            SET final_checkpoint_json = (
+                SELECT json_extract(event.payload_json, '$.checkpoint')
+                FROM agent_turn_events AS event
+                WHERE event.turn_id = agent_turns.turn_id
+                  AND event.event_type = 'checkpoint'
+                  AND json_type(event.payload_json, '$.checkpoint') = 'object'
+                ORDER BY event.sequence DESC
+                LIMIT 1
+            )
+            WHERE state IN ('queued', 'running', 'interrupted')
+              AND EXISTS (
+                  SELECT 1
+                  FROM agent_turn_events AS event
+                  WHERE event.turn_id = agent_turns.turn_id
+                    AND event.event_type = 'checkpoint'
+                    AND json_type(event.payload_json, '$.checkpoint') = 'object'
+              )
+            """,
+            """
+            CREATE TRIGGER agent_turn_checkpoint_pointer
+            AFTER INSERT ON agent_turn_events
+            WHEN NEW.event_type = 'checkpoint'
+            BEGIN
+                SELECT CASE
+                    WHEN json_type(NEW.payload_json, '$.checkpoint') IS NOT 'object'
+                    THEN RAISE(ABORT, 'checkpoint event must contain checkpoint object')
+                END;
+                UPDATE agent_turns
+                SET final_checkpoint_json = json_extract(NEW.payload_json, '$.checkpoint')
+                WHERE turn_id = NEW.turn_id;
+            END
+            """,
+        ),
+    ),
+    SchemaMigration(
+        migration_id="006a.003.agent_checkpoint_pointer_identity",
+        statements=(
+            """
+            UPDATE agent_turns
+            SET final_checkpoint_json = (
+                SELECT json_extract(event.payload_json, '$.checkpoint')
+                FROM agent_turn_events AS event
+                WHERE event.turn_id = agent_turns.turn_id
+                  AND event.session_id = agent_turns.session_id
+                  AND event.owner = agent_turns.owner
+                  AND event.event_type = 'checkpoint'
+                  AND json_type(event.payload_json, '$.checkpoint') = 'object'
+                ORDER BY event.sequence DESC
+                LIMIT 1
+            )
+            WHERE state IN ('queued', 'running', 'interrupted')
+              AND EXISTS (
+                  SELECT 1
+                  FROM agent_turn_events AS event
+                  WHERE event.turn_id = agent_turns.turn_id
+                    AND event.event_type = 'checkpoint'
+              )
+            """,
+            "DROP TRIGGER IF EXISTS agent_turn_checkpoint_pointer",
+            """
+            CREATE TRIGGER agent_turn_checkpoint_pointer
+            AFTER INSERT ON agent_turn_events
+            WHEN NEW.event_type = 'checkpoint'
+            BEGIN
+                SELECT CASE
+                    WHEN json_type(NEW.payload_json, '$.checkpoint') IS NOT 'object'
+                    THEN RAISE(ABORT, 'checkpoint event must contain checkpoint object')
+                END;
+                SELECT CASE
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                        FROM agent_turns
+                        WHERE turn_id = NEW.turn_id
+                          AND session_id = NEW.session_id
+                          AND owner = NEW.owner
+                    )
+                    THEN RAISE(ABORT, 'checkpoint event identity does not match Turn')
+                END;
+                UPDATE agent_turns
+                SET final_checkpoint_json = json_extract(NEW.payload_json, '$.checkpoint')
+                WHERE turn_id = NEW.turn_id
+                  AND session_id = NEW.session_id
+                  AND owner = NEW.owner;
+            END
+            """,
+        ),
+    ),
 )
 
 # Task persistence uses its own migration history because agent_tasks is an

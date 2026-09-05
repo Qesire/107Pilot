@@ -8,6 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from pilot107.agent.checkpoint_durability import ensure_postgres_checkpoint_pointer
 from pilot107.agent.market_sessions import SQLiteMarketSessionStore
 from pilot107.agent.postgres_project_store import PostgresProjectStore
 from pilot107.agent.postgres_store import PostgresAgentSessionStore
@@ -109,7 +110,9 @@ def build_agent_session_store(
     *, sqlite_path: Path, postgres_dsn: str | None
 ) -> AgentSessionStore:
     if postgres_dsn:
-        return PostgresAgentSessionStore(postgres_dsn)
+        store = PostgresAgentSessionStore(postgres_dsn)
+        ensure_postgres_checkpoint_pointer(postgres_dsn)
+        return store
     return SQLiteAgentSessionStore(sqlite_path)
 
 
