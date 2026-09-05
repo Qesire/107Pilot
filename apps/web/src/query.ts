@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api } from "./api";
-import type { AgentTask } from "./types";
+import type { AgentTask, RuntimeWatchState } from "./types";
+import { runtimePollingInterval, type RuntimeViewerVisibility } from "./runtime-polling";
 import {
   cpuAllocation,
   jobsByState,
@@ -194,13 +195,19 @@ export function useRunEvidence(user: string, runId: string | null) {
   });
 }
 
-export function useRuntimeWatch(user: string, runId: string | null) {
+export function useRuntimeWatch(
+  user: string,
+  runId: string | null,
+  visibility: RuntimeViewerVisibility = "visible",
+) {
   return useQuery({
     queryKey: ["runtime-watch", user, runId],
     queryFn: ({ signal }) => api.runtimeWatch(user, runId ?? "", signal),
     enabled: Boolean(runId),
     retry: false,
-    refetchInterval: (query) => query.state.data?.state === "stopped" ? false : 5_000,
+    refetchInterval: (query) =>
+      runtimePollingInterval("summary", query.state.data?.state, visibility),
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -208,23 +215,32 @@ export function useRuntimeWatchLogs(
   user: string,
   runId: string | null,
   stream: "stdout" | "stderr",
+  watchState: RuntimeWatchState | null = null,
+  visibility: RuntimeViewerVisibility = "visible",
 ) {
   return useQuery({
     queryKey: ["runtime-watch-logs", user, runId, stream],
     queryFn: ({ signal }) => api.runtimeWatchLogs(user, runId ?? "", stream, signal),
     enabled: Boolean(runId),
     retry: false,
-    refetchInterval: 5_000,
+    refetchInterval: () => runtimePollingInterval("logs", watchState, visibility),
+    refetchIntervalInBackground: false,
   });
 }
 
-export function useRuntimeWatchAlerts(user: string, runId: string | null) {
+export function useRuntimeWatchAlerts(
+  user: string,
+  runId: string | null,
+  watchState: RuntimeWatchState | null = null,
+  visibility: RuntimeViewerVisibility = "visible",
+) {
   return useQuery({
     queryKey: ["runtime-watch-alerts", user, runId],
     queryFn: ({ signal }) => api.runtimeWatchAlerts(user, runId ?? "", signal),
     enabled: Boolean(runId),
     retry: false,
-    refetchInterval: 5_000,
+    refetchInterval: () => runtimePollingInterval("alerts", watchState, visibility),
+    refetchIntervalInBackground: false,
   });
 }
 
