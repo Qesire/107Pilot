@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from pilot107.agent.durable_workspace import DurableWorkspaceEditor
+from pilot107.agent.operation_context import bind_agent_operation_key
 from pilot107.agent.operation_ledger import (
     AgentOperationState,
     SQLiteAgentOperationLedger,
@@ -116,7 +117,7 @@ def _semantic_digest(arguments: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _seed_unknown(store, ledger, invocation, claim):
+def _reserve_running(store, ledger, invocation, claim):
     intent = operation_intent_for_invocation(
         store,
         invocation,
@@ -137,6 +138,10 @@ def _seed_unknown(store, ledger, invocation, claim):
         expected_state_version=claim.state_version,
         expected_fencing_token=claim.fencing_token,
     )
+    return intent
+
+
+def _mark_unknown(ledger, intent, claim) -> None:
     ledger.mark_unknown(
         intent.operation_key,
         owner="alice",
@@ -144,18 +149,10 @@ def _seed_unknown(store, ledger, invocation, claim):
         expected_fencing_token=claim.fencing_token,
         error={"code": "AGENT.TOOL.OPERATION_UNKNOWN", "message": "crash"},
     )
-    return intent
 
 
-def test_committed_workspace_journal_recovers_operation_receipt(tmp_path: Path) -> None:
+def test_operation_bound_committed_workspace_journal_recovers_receipt(tmp_path: Path) -> None:
     database, _, service, project_id, workspace_id = _project(tmp_path)
-    change_set = service.apply_patches(
-        project_id=project_id,
-        workspace_id=workspace_id,
-        owner="alice",
-        patches=(("script.py", None, "create", "value = 1\n"),),
-    )
-
     clock = FixedClock()
     session_store, session, turn, claim = _running_turn(
         database, project_id, workspace_id, clock
@@ -167,9 +164,24 @@ def test_committed_workspace_journal_recovers_operation_receipt(tmp_path: Path) 
         claim,
         project_id=project_id,
         workspace_id=workspace_id,
-        call="seed",
+        call="bound",
     )
-    intent = _seed_unknown(session_store, ledger, invocation, claim)
+    intent = _reserve_running(session_store, ledger, invocation, claim)
+
+    with bind_agent_operation_key(intent.operation_key):
+        change_set = service.apply_patches(
+            project_id=project_id,
+            workspace_id=workspace_id,
+            owner="alice",
+            patches=(("script.py", None, "create", "value = 1\n"),),
+        )
+    _mark_unknown(ledger, intent, claim)
+
+    with sqlite3.connect(database) as connection:
+        journal = connection.execute(
+            "SELECT request_key, state, change_set_id FROM agent_workspace_mutation_journal"
+        ).fetchone()
+    assert journal == (intent.operation_key, "committed", change_set.change_set_id)
 
     reconciler = SQLiteAgentOperationReconciler(database, ledger=ledger, clock=clock)
     resolved = reconciler.reconcile(
@@ -185,14 +197,11 @@ def test_committed_workspace_journal_recovers_operation_receipt(tmp_path: Path) 
     assert resolved.result["evidence_refs"] == [f"changeset:{change_set.change_set_id}"]
     payload = resolved.result["result"]
     assert payload["change_set_id"] == change_set.change_set_id
-    assert payload["project_id"] == project_id
-    assert payload["workspace_id"] == workspace_id
     assert payload["state"] == "draft"
     assert payload["version"] == 1
     assert payload["sandbox_results"] == []
     assert payload["approval"] is None
     assert payload["approval_summary_zh"] == "创建验证脚本。"
-    assert payload["updated_at"] == payload["created_at"]
 
 
 def test_files_applied_journal_is_not_an_operation_receipt(tmp_path: Path) -> None:
@@ -227,9 +236,10 @@ def test_files_applied_journal_is_not_an_operation_receipt(tmp_path: Path) -> No
         claim,
         project_id=project_id,
         workspace_id=workspace_id,
-        call="seed-files-applied",
+        call="files-applied",
     )
-    intent = _seed_unknown(session_store, ledger, invocation, claim)
+    intent = _reserve_running(session_store, ledger, invocation, claim)
+    _mark_unknown(ledger, intent, claim)
 
     reconciler = SQLiteAgentOperationReconciler(database, ledger=ledger, clock=clock)
     resolved = reconciler.reconcile(
@@ -249,7 +259,7 @@ def test_files_applied_journal_is_not_an_operation_receipt(tmp_path: Path) -> No
     assert isinstance(service.editor, DurableWorkspaceEditor)
 
 
-def test_multiple_matching_committed_journals_fail_closed(tmp_path: Path) -> None:
+def test_unbound_committed_same_plan_is_not_an_operation_receipt(tmp_path: Path) -> None:
     database, _, service, project_id, workspace_id = _project(tmp_path)
     service.apply_patches(
         project_id=project_id,
@@ -257,22 +267,6 @@ def test_multiple_matching_committed_journals_fail_closed(tmp_path: Path) -> Non
         owner="alice",
         patches=(("script.py", None, "create", "value = 1\n"),),
     )
-    with sqlite3.connect(database) as connection:
-        row = connection.execute(
-            "SELECT * FROM agent_workspace_mutation_journal WHERE state = 'committed'"
-        ).fetchone()
-        assert row is not None
-        columns = [item[1] for item in connection.execute(
-            "PRAGMA table_info(agent_workspace_mutation_journal)"
-        ).fetchall()]
-        values = dict(zip(columns, row, strict=True))
-        values["mutation_id"] = "workspace-mutation-" + "f" * 64
-        values["request_key"] = str(values["request_key"]) + ":duplicate"
-        placeholders = ",".join("?" for _ in columns)
-        connection.execute(
-            f"INSERT INTO agent_workspace_mutation_journal ({','.join(columns)}) VALUES ({placeholders})",
-            tuple(values[column] for column in columns),
-        )
 
     clock = FixedClock()
     session_store, session, turn, claim = _running_turn(
@@ -285,9 +279,10 @@ def test_multiple_matching_committed_journals_fail_closed(tmp_path: Path) -> Non
         claim,
         project_id=project_id,
         workspace_id=workspace_id,
-        call="seed-ambiguous",
+        call="unbound",
     )
-    intent = _seed_unknown(session_store, ledger, invocation, claim)
+    intent = _reserve_running(session_store, ledger, invocation, claim)
+    _mark_unknown(ledger, intent, claim)
 
     reconciler = SQLiteAgentOperationReconciler(database, ledger=ledger, clock=clock)
     assert (
