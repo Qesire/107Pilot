@@ -31,7 +31,11 @@ from pilot107.agent.workspace_journal import (
     WorkspaceMutationJournal,
     WorkspaceMutationState,
 )
-from pilot107.agent.workspace_live import WorkspaceLiveConflict, WorkspaceWriterLease
+from pilot107.agent.workspace_live import (
+    WorkspaceLiveConflict,
+    WorkspaceLiveHead,
+    WorkspaceWriterLease,
+)
 
 
 class AtomicDurableWorkspaceEditor(DurableWorkspaceEditor):
@@ -50,31 +54,44 @@ class AtomicDurableWorkspaceEditor(DurableWorkspaceEditor):
             recovery = self._recover_locked(workspace)
             if recovery.conflicted:
                 raise WorkspaceConflict("Workspace has an unresolved durable mutation conflict")
-            head = self.live_store.ensure_head(workspace)
+            observed_head = self.live_store.ensure_head(workspace)
             before_digest, before_manifest = _dw._capture_manifest(workspace)
-            if before_digest != head.live_digest:
+            if before_digest != observed_head.live_digest:
                 raise WorkspaceConflict(
                     "Workspace local content drifted outside the live revision authority"
                 )
-            prepared, change_set, unified_diff = self._prepare(workspace, patches)
-            change_set = _bind_change_set_to_live_revision(change_set, head)
+            prepared, proposed_change_set, unified_diff = self._prepare(workspace, patches)
             lease = self.live_store.claim_writer(
                 workspace.workspace_id,
                 owner=owner,
                 writer_id=f"workspace-editor:{os.getpid()}:{uuid.uuid4().hex}",
                 lease_seconds=self.lease_seconds,
             )
-            head = self.live_store.get_head(workspace.workspace_id, owner=owner)
-            request_key = (
-                f"workspace-edit:{head.live_revision}:{change_set.change_set_id}:"
-                f"{uuid.uuid4().hex}"
-            )
-            backup = self._backup_path(
-                workspace,
-                f"workspace-backup:{head.live_revision}:{change_set.change_set_id}",
-            )
             journal: WorkspaceMutationJournal | None = None
+            backup: Path | None = None
             try:
+                head = self.live_store.get_head(workspace.workspace_id, owner=owner)
+                if (
+                    head.live_revision != observed_head.live_revision
+                    or head.live_digest != observed_head.live_digest
+                ):
+                    raise WorkspaceLiveConflict(
+                        "Workspace live head advanced before writer fence was acquired"
+                    )
+                fenced_digest, fenced_manifest = _dw._capture_manifest(workspace)
+                if fenced_digest != before_digest or fenced_manifest != before_manifest:
+                    raise WorkspaceConflict(
+                        "Workspace local content changed before writer fence was acquired"
+                    )
+                change_set = _bind_change_set_to_live_revision(proposed_change_set, head)
+                request_key = (
+                    f"workspace-edit:{head.live_revision}:{change_set.change_set_id}:"
+                    f"{uuid.uuid4().hex}"
+                )
+                backup = self._backup_path(
+                    workspace,
+                    f"workspace-backup:{head.live_revision}:{change_set.change_set_id}",
+                )
                 expected_after = _dw._manifest_digest(
                     _dw._expected_manifest(before_manifest, prepared)
                 )
@@ -112,9 +129,9 @@ class AtomicDurableWorkspaceEditor(DurableWorkspaceEditor):
                     raise WorkspaceLiveConflict(
                         "Workspace changed outside the controlled mutation"
                     )
-                # This hook means the filesystem is fully applied and verified;
-                # the journal deliberately remains PREPARED until the atomic DB
-                # finalize below commits all authoritative metadata together.
+                # The filesystem is now fully applied and verified. The journal
+                # intentionally remains PREPARED until the transaction below
+                # publishes every authoritative database fact together.
                 self._crash("after_files_applied")
                 _atomic_finalize(
                     self,
@@ -131,7 +148,7 @@ class AtomicDurableWorkspaceEditor(DurableWorkspaceEditor):
             except Exception:
                 if journal is not None:
                     self._rollback_exception(workspace, journal)
-                else:
+                elif backup is not None:
                     with suppress(OSError):
                         _dw._remove_tree(backup)
                 raise
@@ -144,20 +161,10 @@ class AtomicDurableWorkspaceEditor(DurableWorkspaceEditor):
 
 def _bind_change_set_to_live_revision(
     change_set: WorkspaceChangeSet,
-    head: object,
+    head: WorkspaceLiveHead,
 ) -> WorkspaceChangeSet:
-    live_revision = getattr(head, "live_revision", None)
-    live_digest = getattr(head, "live_digest", None)
-    if (
-        isinstance(live_revision, bool)
-        or not isinstance(live_revision, int)
-        or live_revision < 1
-        or not isinstance(live_digest, str)
-        or len(live_digest) != 64
-    ):
-        raise WorkspaceLiveConflict("Workspace live head cannot bind ChangeSet identity")
     identity = hashlib.sha256(
-        f"{change_set.digest}\0{live_revision}\0{live_digest}".encode()
+        f"{change_set.digest}\0{head.live_revision}\0{head.live_digest}".encode()
     ).hexdigest()
     return replace(change_set, change_set_id=f"changeset-{identity[:24]}")
 
@@ -187,7 +194,9 @@ def _atomic_finalize(
         raise WorkspaceLiveConflict("Workspace atomic finalize requires a fresh DRAFT ChangeSet")
     if not isinstance(diff_text, str) or len(diff_text.encode()) > editor.max_diff_bytes:
         raise WorkspacePolicyError("Workspace diff exceeds the output limit")
-    if len(to_digest) != 64 or any(character not in "0123456789abcdef" for character in to_digest):
+    if len(to_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in to_digest
+    ):
         raise WorkspaceLiveConflict("Workspace target digest is invalid")
 
     now = editor.journal_store._now()  # noqa: SLF001 - shared SQLite transaction clock
