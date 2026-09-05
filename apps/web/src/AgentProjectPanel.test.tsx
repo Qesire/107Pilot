@@ -44,7 +44,7 @@ function changeSet(state: WorkspaceChangeSet["state"]): WorkspaceChangeSet {
 }
 
 function task(overrides: Partial<AgentTask> = {}): AgentTask {
-  return {
+  const base: AgentTask = {
     schema_version: "pilot107.agent-task/v1",
     task_id: "task-1",
     owner: "alice",
@@ -83,6 +83,30 @@ function task(overrides: Partial<AgentTask> = {}): AgentTask {
     updated_at: "2026-08-25T12:01:00Z",
     ...overrides,
   };
+  if (base.state !== "succeeded" || base.result?.status !== "succeeded" || !base.linked_run_id) {
+    return base;
+  }
+  return {
+    ...base,
+    completion_policy: "evidence_required",
+    gate_state: "completed",
+    legacy_gate_unverified: false,
+    gate_receipt: {
+      task_id: base.task_id,
+      run_id: base.linked_run_id,
+      run_terminal_state: "completed",
+      evidence_state: "finalized",
+      evidence_refs: base.result.evidence_refs,
+      evidence_digest: "c".repeat(64),
+      integrity_verified_at: "2026-08-25T12:00:30Z",
+      integrity_state: "verified",
+      workspace_revision: 1,
+      workspace_digest: base.resource_envelope.workspace_snapshot_digest,
+      legacy_boundary: false,
+      capsule_ref: null,
+      capsule_state: "NOT_REQUIRED",
+    },
+  } as AgentTask;
 }
 
 describe("Agent Project review presentation", () => {
@@ -262,7 +286,7 @@ describe("Agent Project review presentation", () => {
     });
   });
 
-  it("selects only the newest successful task bound to the current approval scope", () => {
+  it("selects only the newest gate-verified task bound to the current approval scope", () => {
     const failed = task({ task_id: "task-failed", state: "failed", updated_at: "2026-08-25T12:05:00Z" });
     const otherProject = task({ task_id: "task-other", project_id: "project-2", updated_at: "2026-08-25T12:06:00Z" });
     const older = task({ task_id: "task-older", updated_at: "2026-08-25T12:02:00Z" });
