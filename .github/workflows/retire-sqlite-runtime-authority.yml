@@ -1,0 +1,58 @@
+name: retire-sqlite-runtime-authority
+
+on:
+  push:
+    branches:
+      - integration/v3.1-source-cleanup
+    paths:
+      - scripts/retire-sqlite-runtime-authority.py
+      - .github/workflows/retire-sqlite-runtime-authority.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: integration/v3.1-source-cleanup
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.3"
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply deterministic source cleanup
+        run: python scripts/retire-sqlite-runtime-authority.py
+      - name: Install Python test environment
+        run: uv sync --locked --extra dev --extra api
+      - name: Fix and verify Python lint
+        run: |
+          uv run ruff check src tests scripts --fix
+          uv run ruff check src tests scripts
+      - name: Verify static typing
+        run: uv run mypy src
+      - name: Verify PostgreSQL authority regressions
+        run: |
+          uv run pytest tests/test_lifecycle_store_selection.py -q
+          uv run pytest tests/test_postgres_only_runtime_authority.py -q
+      - name: Verify Python suite before landing
+        run: uv run pytest -q
+      - name: Land cleanup and remove one-shot machinery
+        shell: bash
+        run: |
+          rm scripts/retire-sqlite-runtime-authority.py
+          rm .github/workflows/retire-sqlite-runtime-authority.yml
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source cleanup changes to commit"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "refactor(storage): remove remaining SQLite runtime composition"
+          git push origin HEAD:integration/v3.1-source-cleanup
