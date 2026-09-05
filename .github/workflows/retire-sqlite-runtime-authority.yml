@@ -55,7 +55,7 @@ jobs:
         run: uv sync --locked --extra dev --extra api
       - name: Verify production import closure
         run: |
-          uv run python - <<'PY'
+          PYTHONPATH=src uv run python - <<'PY'
           import pilot107.api.http_app
           import pilot107.api.run_workspace_routes
           import pilot107.api.service
