@@ -1,4 +1,4 @@
-"""Backend-aware construction for authoritative Workspace mutation editors."""
+"""Backend-aware construction for authoritative Agent Workspace mutation editors."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pilot107.agent.durable_workspace_atomic import AtomicDurableWorkspaceEditor
 from pilot107.agent.operation_context import current_agent_operation_key
+from pilot107.agent.postgres_workspace_atomic import PostgresAtomicDurableWorkspaceEditor
 from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.tool_gateway import AgentToolGatewayError
 from pilot107.agent.workspace import (
@@ -28,8 +29,26 @@ class WorkspaceDurabilityUnavailable(AgentToolGatewayError):
         )
 
 
+def _translate_workspace_error(exc: Exception) -> None:
+    if current_agent_operation_key() is None:
+        raise exc
+    if isinstance(exc, WorkspacePolicyError):
+        raise AgentToolGatewayError(
+            "Workspace patch violates the mutation policy",
+            code="AGENT.TOOL.WORKSPACE_POLICY",
+            retryable=False,
+        ) from None
+    if isinstance(exc, WorkspaceConflict):
+        raise AgentToolGatewayError(
+            "Workspace content changed before the mutation could commit",
+            code="AGENT.TOOL.WORKSPACE_CONFLICT",
+            retryable=True,
+        ) from None
+    raise exc
+
+
 class AuthoritativeSQLiteWorkspaceEditor(AtomicDurableWorkspaceEditor):
-    """Translate proven no-effect Workspace failures at the Gateway boundary."""
+    """SQLite AC4 editor with Gateway-facing error classification."""
 
     def apply_patches(
         self,
@@ -39,22 +58,25 @@ class AuthoritativeSQLiteWorkspaceEditor(AtomicDurableWorkspaceEditor):
     ) -> WorkspaceChangeSet:
         try:
             return super().apply_patches(workspace_id, owner, patches)
-        except WorkspacePolicyError:
-            if current_agent_operation_key() is None:
-                raise
-            raise AgentToolGatewayError(
-                "Workspace patch violates the mutation policy",
-                code="AGENT.TOOL.WORKSPACE_POLICY",
-                retryable=False,
-            ) from None
-        except WorkspaceConflict:
-            if current_agent_operation_key() is None:
-                raise
-            raise AgentToolGatewayError(
-                "Workspace content changed before the mutation could commit",
-                code="AGENT.TOOL.WORKSPACE_CONFLICT",
-                retryable=True,
-            ) from None
+        except (WorkspacePolicyError, WorkspaceConflict) as exc:
+            _translate_workspace_error(exc)
+            raise AssertionError("unreachable")
+
+
+class AuthoritativePostgresWorkspaceEditor(PostgresAtomicDurableWorkspaceEditor):
+    """PostgreSQL AC4 editor with the same Gateway error contract as SQLite."""
+
+    def apply_patches(
+        self,
+        workspace_id: str,
+        owner: str,
+        patches: tuple[tuple[str, str | None, WorkspacePatch], ...],
+    ) -> WorkspaceChangeSet:
+        try:
+            return super().apply_patches(workspace_id, owner, patches)
+        except (WorkspacePolicyError, WorkspaceConflict) as exc:
+            _translate_workspace_error(exc)
+            raise AssertionError("unreachable")
 
 
 class UnavailableWorkspaceEditor(WorkspaceEditor):
@@ -91,24 +113,25 @@ def build_authoritative_workspace_editor(
 ) -> WorkspaceEditor:
     """Return the only editor permitted to mutate Agent Workspace files.
 
-    SQLite has the full AC4 live-head, journal, crash recovery, and atomic
-    ChangeSet publication boundary. PostgreSQL Project persistence already
-    exists, but its AC4 live-head/journal transaction domain is not implemented
-    yet. Falling back to the legacy editor in PostgreSQL mode would silently
-    reintroduce the crash/concurrency hole, so mutations are rejected while
-    read-only Project/Workspace operations remain available.
+    Both supported persistence backends use the AC4 protocol: an OS lock,
+    durable live-head revision, fenced writer lease, write-ahead mutation
+    journal, verified filesystem backup, and atomic publication of ChangeSet +
+    live-head advance + COMMITTED receipt. PostgreSQL is the production
+    authority; SQLite remains the development/test implementation.
     """
 
+    state_root = workspace_root.resolve().parent / "agent-workspace-state"
     db_path = getattr(store, "db_path", None)
     if isinstance(db_path, Path):
         return AuthoritativeSQLiteWorkspaceEditor(
             store=store,
-            state_root=workspace_root.resolve().parent / "agent-workspace-state",
+            state_root=state_root,
         )
     dsn = getattr(store, "dsn", None)
     if isinstance(dsn, str) and dsn:
-        return UnavailableWorkspaceEditor(
-            "PostgreSQL Agent Workspace mutation requires AC4 PostgreSQL live-head/journal parity"
+        return AuthoritativePostgresWorkspaceEditor(
+            store=store,
+            state_root=state_root,
         )
     return UnavailableWorkspaceEditor(
         "Agent Workspace mutation store has no supported AC4 durability authority"
