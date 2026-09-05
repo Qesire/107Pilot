@@ -327,7 +327,7 @@ def _sqlite_workspace_patch_resolution(
         return None
     rows = connection.execute(
         """
-        SELECT j.change_set_id, j.files_json, c.payload_json
+        SELECT j.change_set_id, c.payload_json
         FROM agent_workspace_mutation_journal AS j
         JOIN agent_workspace_changesets AS c
           ON c.change_set_id = j.change_set_id
@@ -336,21 +336,19 @@ def _sqlite_workspace_patch_resolution(
          AND c.project_id = j.project_id
         WHERE j.owner = ? AND j.workspace_id = ? AND j.project_id = ?
           AND j.state = 'committed' AND j.change_set_id IS NOT NULL
+          AND j.files_json = ?
         ORDER BY j.updated_at DESC, j.mutation_id DESC
-        LIMIT 256
         """,
-        (record.owner, workspace_id, project_id),
+        (
+            record.owner,
+            workspace_id,
+            project_id,
+            _workspace_files_json(expected_files),
+        ),
     ).fetchall()
-    matches: list[sqlite3.Row] = []
-    for row in rows:
-        journal_files = _workspace_journal_files(row["files_json"])
-        if journal_files == expected_files:
-            matches.append(row)
-            if len(matches) > 1:
-                return None
-    if len(matches) != 1:
+    if len(rows) != 1:
         return None
-    row = matches[0]
+    row = rows[0]
     change_set = _json_mapping(row["payload_json"])
     if change_set is None:
         return None
@@ -432,38 +430,25 @@ def _workspace_patch_identity(
     return project_id, workspace_id, approval_summary_zh, tuple(sorted(planned))
 
 
-def _workspace_journal_files(
-    value: object,
-) -> tuple[tuple[str, str, str | None, str | None], ...] | None:
-    try:
-        decoded = json.loads(value) if isinstance(value, str) else value
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(decoded, list):
-        return None
-    files: list[tuple[str, str, str | None, str | None]] = []
-    for item in decoded:
-        if not isinstance(item, Mapping):
-            return None
-        path = item.get("path")
-        operation = item.get("operation")
-        before = item.get("before_sha256")
-        after = item.get("after_sha256")
-        if not isinstance(path, str) or operation not in {"create", "modify", "delete"}:
-            return None
-        if before is not None and not _sha256_text(before):
-            return None
-        if after is not None and not _sha256_text(after):
-            return None
-        files.append(
-            (
-                path,
-                str(operation),
-                None if before is None else str(before),
-                None if after is None else str(after),
-            )
-        )
-    return tuple(sorted(files))
+def _workspace_files_json(
+    files: tuple[tuple[str, str, str | None, str | None], ...],
+) -> str:
+    payload = [
+        {
+            "path": path,
+            "operation": operation,
+            "before_sha256": before,
+            "after_sha256": after,
+        }
+        for path, operation, before, after in files
+    ]
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 def _sha256_text(value: object) -> bool:
