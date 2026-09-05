@@ -105,12 +105,16 @@ class RemediationService:
         self,
         *,
         run_store: RunStore,
-        remediation_store: RemediationStore,
+        remediation_store: RemediationStore | None,
         advice_service: AdviceService,
         contract_store: ContractStore | None = None,
         evidence_store: EvidenceStore | None = None,
         project_agent_service: ProjectAgentService | None = None,
     ) -> None:
+        if remediation_store is None:
+            raise ValueError(
+                "remediation_store is required; SQLite fallback has been retired"
+            )
         self.run_store = run_store
         self.remediation_store = remediation_store
         self.advice_service = advice_service
@@ -182,11 +186,6 @@ class RemediationService:
         )
         if not claimed:
             return session
-        # Resolve the effective provider: an explicit non-None provider from
-        # the caller (e.g. the API's manual-advance) overrides the session's
-        # persisted choice; ``None`` (the Worker's auto-advance) means "use
-        # what the user picked at creation time". The resolved value is
-        # persisted so later transitions / replanning cycles stay consistent.
         if provider is not None:
             session = self.remediation_store.update_provider(
                 session_id,
@@ -240,7 +239,9 @@ class RemediationService:
     ) -> RemediationSession:
         session = self.remediation_store.get_session(session_id)
         if session.owner != actor:
-            raise RemediationServiceError("session belongs to another owner", code="AUTH.FORBIDDEN")
+            raise RemediationServiceError(
+                "session belongs to another owner", code="AUTH.FORBIDDEN"
+            )
         if session.state != RemediationState.AWAITING_APPROVAL:
             raise RemediationServiceError(
                 "session is not awaiting approval",
@@ -249,7 +250,10 @@ class RemediationService:
         if session.version != expected_version:
             raise RemediationConflict("remediation session version changed")
         proposal = self.remediation_store.get_proposal(proposal_id)
-        if proposal.session_id != session_id or proposal.policy_status != "allowed_preview":
+        if (
+            proposal.session_id != session_id
+            or proposal.policy_status != "allowed_preview"
+        ):
             raise RemediationServiceError(
                 "proposal is not executable in this session",
                 code="REMEDIATION.POLICY_DENIED",
@@ -301,7 +305,9 @@ class RemediationService:
     ) -> RemediationSession:
         session = self.remediation_store.get_session(session_id)
         if session.owner != actor:
-            raise RemediationServiceError("session belongs to another owner", code="AUTH.FORBIDDEN")
+            raise RemediationServiceError(
+                "session belongs to another owner", code="AUTH.FORBIDDEN"
+            )
         if session.state != RemediationState.AWAITING_APPROVAL:
             raise RemediationServiceError(
                 "session is not awaiting approval",
@@ -361,11 +367,15 @@ class RemediationService:
     ) -> RemediationSession:
         session = self.remediation_store.get_session(session_id)
         if session.owner != actor:
-            raise RemediationServiceError("session belongs to another owner", code="AUTH.FORBIDDEN")
+            raise RemediationServiceError(
+                "session belongs to another owner", code="AUTH.FORBIDDEN"
+            )
         if session.state == RemediationState.CANCELLED:
             return session
         if session.state in TERMINAL_REMEDIATION_STATES:
-            raise RemediationConflict("terminal remediation session cannot be cancelled")
+            raise RemediationConflict(
+                "terminal remediation session cannot be cancelled"
+            )
         if session.version != expected_version:
             raise RemediationConflict("remediation session version changed")
         return self.remediation_store.transition(
@@ -387,11 +397,18 @@ class RemediationService:
     ) -> RemediationSession:
         session = self.remediation_store.get_session(session_id)
         if session.owner != actor:
-            raise RemediationServiceError("session belongs to another owner", code="AUTH.FORBIDDEN")
-        if session.state == RemediationState.BLOCKED and session.stop_reason == "manual_takeover":
+            raise RemediationServiceError(
+                "session belongs to another owner", code="AUTH.FORBIDDEN"
+            )
+        if (
+            session.state == RemediationState.BLOCKED
+            and session.stop_reason == "manual_takeover"
+        ):
             return session
         if session.state in TERMINAL_REMEDIATION_STATES:
-            raise RemediationConflict("terminal remediation session cannot be taken over")
+            raise RemediationConflict(
+                "terminal remediation session cannot be taken over"
+            )
         if session.version != expected_version:
             raise RemediationConflict("remediation session version changed")
         reason = _bounded_note(note)
@@ -420,8 +437,13 @@ class RemediationService:
     ) -> tuple[RemediationSession, ActionExecution]:
         session = self.remediation_store.get_session(session_id)
         if session.owner != actor:
-            raise RemediationServiceError("session belongs to another owner", code="AUTH.FORBIDDEN")
-        if session.state not in {RemediationState.READY, RemediationState.PREPARING}:
+            raise RemediationServiceError(
+                "session belongs to another owner", code="AUTH.FORBIDDEN"
+            )
+        if session.state not in {
+            RemediationState.READY,
+            RemediationState.PREPARING,
+        }:
             raise RemediationConflict("remediation session is not executable")
         if session.version != expected_version:
             raise RemediationConflict("remediation session version changed")
@@ -487,7 +509,9 @@ class RemediationService:
         now = datetime.now(UTC).isoformat()
         execution = ActionExecution(
             execution_id="remexec_"
-            + hashlib.sha256(f"{session_id}\0{proposal_id}".encode()).hexdigest()[:32],
+            + hashlib.sha256(
+                f"{session_id}\0{proposal_id}".encode()
+            ).hexdigest()[:32],
             session_id=session_id,
             proposal_id=proposal_id,
             state=agent_execution.state,
@@ -503,10 +527,13 @@ class RemediationService:
             attempts=session.usage.attempts + 1,
             submissions=session.usage.submissions + (1 if submit else 0),
             wall_time_seconds=session.usage.wall_time_seconds,
-            llm_calls=session.usage.llm_calls + (1 if provider_uses_llm(turn.payload) else 0),
+            llm_calls=session.usage.llm_calls
+            + (1 if provider_uses_llm(turn.payload) else 0),
             llm_tokens=session.usage.llm_tokens,
         )
-        target = RemediationState.EXECUTING if submit else RemediationState.READY
+        target = (
+            RemediationState.EXECUTING if submit else RemediationState.READY
+        )
         updated = self.remediation_store.transition(
             session_id,
             expected_version=preparing.version,
@@ -541,7 +568,9 @@ class RemediationService:
         if session.version != expected_version:
             raise RemediationConflict("remediation session version changed")
         if session.state is not RemediationState.READY:
-            raise RemediationConflict("code repair Project requires an approved proposal")
+            raise RemediationConflict(
+                "code repair Project requires an approved proposal"
+            )
         proposal = self.remediation_store.get_proposal(proposal_id)
         if proposal.session_id != session_id:
             raise RemediationServiceError(
@@ -635,7 +664,9 @@ class RemediationService:
                 "repair source Run does not match Remediation",
                 code="REMEDIATION.REPAIR_BINDING_INVALID",
             )
-        view = projects.get_project(project_id, owner=actor, workspace_id=workspace_id)
+        view = projects.get_project(
+            project_id, owner=actor, workspace_id=workspace_id
+        )
         change_set = projects.store.get_change_set(change_set_id, owner=actor)
         if (
             view.project.origin is not ExperimentProjectOrigin.FAILED_RUN
@@ -679,7 +710,10 @@ class RemediationService:
             "change_set_id": change_set_id,
         }
         if not any(
-            all(item.get(key) == value for key, value in required_contract_binding.items())
+            all(
+                item.get(key) == value
+                for key, value in required_contract_binding.items()
+            )
             for item in contract.field_sources
         ):
             raise RemediationServiceError(
@@ -717,7 +751,9 @@ class RemediationService:
                 or existing.derived_contract_id != contract.contract_id
                 or existing.derived_run_id != run.run_id
             ):
-                raise RemediationConflict("code repair execution binding changed")
+                raise RemediationConflict(
+                    "code repair execution binding changed"
+                )
             if session.state is RemediationState.PREPARING:
                 recovered_usage = RemediationUsage(
                     attempts=session.usage.attempts + 1,
@@ -738,8 +774,13 @@ class RemediationService:
                     "code repair execution exists before Remediation preparation"
                 )
             return session, existing
-        if session.state not in {RemediationState.READY, RemediationState.PREPARING}:
-            raise RemediationConflict("code repair Remediation is not executable")
+        if session.state not in {
+            RemediationState.READY,
+            RemediationState.PREPARING,
+        }:
+            raise RemediationConflict(
+                "code repair Remediation is not executable"
+            )
         exhausted = session.usage.exhausted_reason(session.budget)
         if exhausted is not None:
             if session.state is RemediationState.READY:
@@ -840,7 +881,9 @@ class RemediationService:
                 "session belongs to another owner",
                 code="AUTH.FORBIDDEN",
             )
-        view = projects.get_project(project_id, owner=actor, workspace_id=workspace_id)
+        view = projects.get_project(
+            project_id, owner=actor, workspace_id=workspace_id
+        )
         change_set = projects.store.get_change_set(change_set_id, owner=actor)
         if (
             session.source_run_id != source_run_id
@@ -885,10 +928,14 @@ class RemediationService:
                 existing.session_id != session.session_id
                 or existing.proposal_id != proposal.proposal_id
             ):
-                raise RemediationConflict("code repair execution binding changed")
+                raise RemediationConflict(
+                    "code repair execution binding changed"
+                )
             return
         if session.state is not RemediationState.READY:
-            raise RemediationConflict("code repair Remediation is not executable")
+            raise RemediationConflict(
+                "code repair Remediation is not executable"
+            )
         exhausted = session.usage.exhausted_reason(session.budget)
         if exhausted is None:
             return
@@ -907,7 +954,9 @@ class RemediationService:
     def detail(self, session_id: str, *, owner: str) -> dict[str, Any]:
         session = self.remediation_store.get_session(session_id)
         if session.owner != owner:
-            raise RemediationServiceError("session belongs to another owner", code="AUTH.FORBIDDEN")
+            raise RemediationServiceError(
+                "session belongs to another owner", code="AUTH.FORBIDDEN"
+            )
         return remediation_session_payload(
             session,
             turns=self.remediation_store.list_turns(session_id),
@@ -917,7 +966,9 @@ class RemediationService:
             evaluations=self.remediation_store.list_evaluations(session_id),
         )
 
-    def _evaluate_execution(self, session: RemediationSession) -> RemediationSession:
+    def _evaluate_execution(
+        self, session: RemediationSession
+    ) -> RemediationSession:
         executions = self.remediation_store.list_executions(session.session_id)
         if not executions:
             raise RemediationServiceError(
@@ -953,10 +1004,14 @@ class RemediationService:
         self.remediation_store.append_evaluation(evaluation)
         return self._finish_evaluation(evaluating)
 
-    def _finish_evaluation(self, session: RemediationSession) -> RemediationSession:
+    def _finish_evaluation(
+        self, session: RemediationSession
+    ) -> RemediationSession:
         evaluations = self.remediation_store.list_evaluations(session.session_id)
         if not evaluations:
-            executions = self.remediation_store.list_executions(session.session_id)
+            executions = self.remediation_store.list_executions(
+                session.session_id
+            )
             if not executions or executions[-1].derived_run_id is None:
                 raise RemediationServiceError(
                     "evaluation has no recoverable execution",
@@ -979,7 +1034,9 @@ class RemediationService:
                     evidence_store=self.evidence_store,
                 )
             )
-            evaluations = self.remediation_store.list_evaluations(session.session_id)
+            evaluations = self.remediation_store.list_evaluations(
+                session.session_id
+            )
         outcome = evaluations[-1].outcome
         usage = _usage_with_elapsed_time(session)
         stop_reason: str | None
@@ -991,7 +1048,11 @@ class RemediationService:
             stop_reason = "execution_success_unverified"
         elif outcome == EvaluationOutcome.FAILED:
             exhausted = usage.exhausted_reason(session.budget)
-            target = RemediationState.EXHAUSTED if exhausted else RemediationState.PLANNING
+            target = (
+                RemediationState.EXHAUSTED
+                if exhausted
+                else RemediationState.PLANNING
+            )
             stop_reason = exhausted
         else:
             target = RemediationState.BLOCKED
@@ -1005,8 +1066,12 @@ class RemediationService:
             stop_reason=stop_reason,
         )
 
-    def _plan_turn(self, session: RemediationSession, *, provider: str) -> RemediationSession:
-        turn_index = len(self.remediation_store.list_evaluations(session.session_id))
+    def _plan_turn(
+        self, session: RemediationSession, *, provider: str
+    ) -> RemediationSession:
+        turn_index = len(
+            self.remediation_store.list_evaluations(session.session_id)
+        )
         source_run_id = self._current_run_id(session)
         advice_result = self.advice_service.advise(
             source_run_id,
@@ -1032,7 +1097,11 @@ class RemediationService:
                 "evidence_bundle_sha256": advice.evidence_bundle_sha256,
             },
         )
-        actions = [item for item in advice.payload.get("actions", []) if isinstance(item, dict)]
+        actions = [
+            item
+            for item in advice.payload.get("actions", [])
+            if isinstance(item, dict)
+        ]
         statuses: set[str] = set()
         for action in actions:
             action_id = str(action.get("action_id") or "")
@@ -1073,7 +1142,11 @@ class RemediationService:
 
     def _current_run_id(self, session: RemediationSession) -> str:
         evaluations = self.remediation_store.list_evaluations(session.session_id)
-        return evaluations[-1].derived_run_id if evaluations else session.source_run_id
+        return (
+            evaluations[-1].derived_run_id
+            if evaluations
+            else session.source_run_id
+        )
 
     def _source_digests(self, run: RunRecord) -> tuple[str, str]:
         diagnoses = [
@@ -1147,16 +1220,22 @@ def _dataclass_payload(value: Any) -> dict[str, Any]:
 
 
 def _evidence_ready(run: RunRecord) -> bool:
-    return run.collection_state in {CollectionState.SUCCEEDED, CollectionState.DEGRADED} and (
-        run.diagnosis_state in {DiagnosisState.SUCCEEDED, DiagnosisState.SKIPPED}
-    )
+    return run.collection_state in {
+        CollectionState.SUCCEEDED,
+        CollectionState.DEGRADED,
+    } and run.diagnosis_state in {
+        DiagnosisState.SUCCEEDED,
+        DiagnosisState.SKIPPED,
+    }
 
 
 def _evaluation_ready(run: RunRecord) -> bool:
     return (
         run.state in TERMINAL_RUN_STATES
-        and run.collection_state not in {CollectionState.PENDING, CollectionState.RUNNING}
-        and run.diagnosis_state not in {DiagnosisState.PENDING, DiagnosisState.RUNNING}
+        and run.collection_state
+        not in {CollectionState.PENDING, CollectionState.RUNNING}
+        and run.diagnosis_state
+        not in {DiagnosisState.PENDING, DiagnosisState.RUNNING}
     )
 
 
@@ -1173,7 +1252,8 @@ def _evaluate_run(
     execution_succeeded = run.state == RunState.SUCCEEDED and exit_zero
     evidence_complete = (
         run.collection_state == CollectionState.SUCCEEDED
-        and run.diagnosis_state in {DiagnosisState.SUCCEEDED, DiagnosisState.SKIPPED}
+        and run.diagnosis_state
+        in {DiagnosisState.SUCCEEDED, DiagnosisState.SKIPPED}
     )
     expected_verification = _verify_expected_outputs(
         run=run,
@@ -1182,12 +1262,9 @@ def _evaluate_run(
     )
     expected_outputs_ok = expected_verification["ok"]
     has_expected_outputs = bool(expected_verification["expected_outputs"])
-    # Strict run attribution: when the derived contract declares expected
-    # outputs AND we can read the baseline+inventory, verified_success requires
-    # the outputs to be newly produced (created/modified). If we cannot resolve
-    # expected outputs (no stores, no contract, no inventory), preserve the
-    # legacy condition so runs without declared outputs stay backward-compatible.
-    enforce_expected = has_expected_outputs and expected_verification["resolved"]
+    enforce_expected = (
+        has_expected_outputs and expected_verification["resolved"]
+    )
     if execution_succeeded and evidence_complete:
         if enforce_expected and not expected_outputs_ok:
             outcome = EvaluationOutcome.EXECUTION_SUCCESS_UNVERIFIED
@@ -1195,7 +1272,11 @@ def _evaluate_run(
             outcome = EvaluationOutcome.VERIFIED_SUCCESS
     elif execution_succeeded:
         outcome = EvaluationOutcome.EXECUTION_SUCCESS_UNVERIFIED
-    elif run.state in {RunState.FAILED, RunState.CANCELLED, RunState.SUBMIT_FAILED}:
+    elif run.state in {
+        RunState.FAILED,
+        RunState.CANCELLED,
+        RunState.SUBMIT_FAILED,
+    }:
         outcome = EvaluationOutcome.FAILED
     else:
         outcome = EvaluationOutcome.INCONCLUSIVE
@@ -1237,7 +1318,9 @@ def _evaluate_run(
         "source_evidence_digest": session.source_evidence_digest,
     }
     if has_expected_outputs:
-        comparison["expected_outputs"] = expected_verification["expected_outputs"]
+        comparison["expected_outputs"] = expected_verification[
+            "expected_outputs"
+        ]
         comparison["expected_outputs_ok"] = expected_outputs_ok
     return EvaluationResult(
         evaluation_id=evaluation_id,
@@ -1259,30 +1342,8 @@ def _verify_expected_outputs(
     contract_store: ContractStore | None,
     evidence_store: EvidenceStore | None,
 ) -> dict[str, Any]:
-    """Strictly verify declared expected outputs were newly produced.
-
-    Returns a dict with:
-      ``resolved`` (bool) — whether we could resolve the contract AND read the
-        derived run's inventory (False => fall back to legacy verification);
-      ``expected_outputs`` (list[dict]) — per-output {path, baseline_sha256,
-        final_sha256, status};
-      ``ok`` (bool) — True iff every declared output is ``created`` or
-        ``modified`` (newly produced or changed by this run).
-
-    Fail-closed semantics (round-6 audit P1-1): when the derived run HAS a
-    ``contract_id`` but verification dependencies (stores) are unavailable or
-    contract resolution fails, we return ``ok=False`` with ``resolved=True`` so
-    ``enforce_expected=True`` → ``EXECUTION_SUCCESS_UNVERIFIED``. The ONLY
-    ``ok=True`` paths are: (a) no ``contract_id`` (genuinely nothing to verify),
-    and (b) contract read succeeds AND declares no expected outputs.
-    """
-    # No contract_id → genuinely nothing to verify. Legacy path.
     if run.contract_id is None:
         return {"resolved": False, "expected_outputs": [], "ok": True}
-    # Contract_id present but verification dependencies unavailable → fail closed.
-    # We cannot know whether the contract declares expected outputs, so we must
-    # NOT silently upgrade to VERIFIED_SUCCESS. Return a placeholder entry so
-    # has_expected_outputs=True → enforce_expected=True → ok=False → UNVERIFIED.
     if contract_store is None or evidence_store is None:
         return {
             "resolved": True,
@@ -1298,8 +1359,7 @@ def _verify_expected_outputs(
         }
     try:
         contract = contract_store.get_contract(run.contract_id)
-    except Exception:  # noqa: BLE001 - verification must never crash evaluation
-        # Contract resolution failed → fail closed (same rationale as above).
+    except Exception:
         return {
             "resolved": True,
             "expected_outputs": [
@@ -1315,46 +1375,39 @@ def _verify_expected_outputs(
     outputs = contract.payload.get("outputs") or {}
     expected = outputs.get("expected") or []
     if not isinstance(expected, list) or not expected:
-        # Contract read succeeded and declares no expected outputs → genuinely
-        # nothing to verify. ok=True, resolved=True (we DID resolve the contract).
         return {"resolved": True, "expected_outputs": [], "ok": True}
     expected_paths = [parse_expected_output(item) for item in expected]
-    inventory_path = evidence_store.run_root(run.run_id) / "outputs" / "inventory.json"
+    inventory_path = (
+        evidence_store.run_root(run.run_id) / "outputs" / "inventory.json"
+    )
     try:
         inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, ValueError):
-        # Fail CLOSED: stores are present and expected outputs are declared, but
-        # the inventory is missing/unparseable. The audit's requirement #3
-        # ("missing expected output → degraded/not verified") is violated if we
-        # fall back to legacy VERIFIED_SUCCESS. Mark every expected output as
-        # inventory_unreadable with ok=False so enforce_expected=True →
-        # EXECUTION_SUCCESS_UNVERIFIED.
         return {
             "resolved": True,
             "expected_outputs": [
                 {
-                    "path": p,
+                    "path": path,
                     "baseline_sha256": None,
                     "final_sha256": None,
                     "status": "inventory_unreadable",
                 }
-                for p in expected_paths
+                for path in expected_paths
             ],
             "ok": False,
         }
     files = inventory.get("files") if isinstance(inventory, dict) else None
     if not isinstance(files, list):
-        # Same fail-closed semantics for a structurally-invalid inventory.
         return {
             "resolved": True,
             "expected_outputs": [
                 {
-                    "path": p,
+                    "path": path,
                     "baseline_sha256": None,
                     "final_sha256": None,
                     "status": "inventory_unreadable",
                 }
-                for p in expected_paths
+                for path in expected_paths
             ],
             "ok": False,
         }
@@ -1367,26 +1420,23 @@ def _verify_expected_outputs(
     ok = True
     for path in expected_paths:
         item = by_path.get(path)
-        status = "missing" if item is None else str(item.get("attribution") or "unknown")
+        status = (
+            "missing"
+            if item is None
+            else str(item.get("attribution") or "unknown")
+        )
         entries.append(
             {
                 "path": path,
                 "baseline_sha256": (
                     None if item is None else item.get("baseline_sha256")
                 ),
-                "final_sha256": None if item is None else item.get("final_sha256"),
+                "final_sha256": (
+                    None if item is None else item.get("final_sha256")
+                ),
                 "status": status,
             }
         )
-        # Round-8 P1-1: only ``created`` / ``modified`` satisfy strict
-        # expected-output verification. The ``baseline_unavailable`` attribution
-        # (emitted by ``compute_file_attribution`` when the pre-run baseline
-        # probe failed with ``status=timeout`` / ``path_invalid`` /
-        # ``path_too_long`` / ``error``) is intentionally NOT in this allow-set:
-        # we cannot prove the run produced the file, so ok=False →
-        # EXECUTION_SUCCESS_UNVERIFIED → session BLOCKED. This is an ADDITIONAL
-        # fail-closed condition on top of the round-6 stores-unavailable /
-        # contract-failure semantics; it does not regress them.
         if status not in {"created", "modified"}:
             ok = False
     return {"resolved": True, "expected_outputs": entries, "ok": ok}
@@ -1395,7 +1445,9 @@ def _verify_expected_outputs(
 def _usage_with_elapsed_time(session: RemediationSession) -> RemediationUsage:
     try:
         created_at = datetime.fromisoformat(session.created_at)
-        elapsed = max(0, int((datetime.now(UTC) - created_at).total_seconds()))
+        elapsed = max(
+            0, int((datetime.now(UTC) - created_at).total_seconds())
+        )
     except ValueError:
         elapsed = session.usage.wall_time_seconds
     return RemediationUsage(
@@ -1408,7 +1460,12 @@ def _usage_with_elapsed_time(session: RemediationSession) -> RemediationUsage:
 
 
 def _digest(value: object) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
@@ -1417,7 +1474,9 @@ def _bounded_note(note: str | None) -> str | None:
         return None
     normalized = note.strip()
     if len(normalized) > 1000:
-        raise RemediationServiceError("note exceeds 1000 characters", code="INVALID_NOTE")
+        raise RemediationServiceError(
+            "note exceeds 1000 characters", code="INVALID_NOTE"
+        )
     return normalized or None
 
 
