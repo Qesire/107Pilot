@@ -19,10 +19,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from pilot107.agent import durable_workspace as _dw
-from pilot107.agent.durable_workspace import (
-    DurableWorkspaceEditor,
-    WorkspaceRecoveryReport,
-)
+from pilot107.agent.durable_workspace import WorkspaceRecoveryReport
 from pilot107.agent.durable_workspace_atomic import (
     AtomicDurableWorkspaceEditor,
     _bind_change_set_to_live_revision,
@@ -67,9 +64,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
         crash_hook: Callable[[str], None] | None = None,
         clock: Callable[[], Any] | None = None,
     ) -> None:
-        # DurableWorkspaceEditor.__init__ is intentionally SQLite-specific, so
-        # initialize only the shared WorkspaceEditor contract here and install
-        # PostgreSQL live-head/journal implementations below.
+        # AtomicDurableWorkspaceEditor ultimately inherits an SQLite-specific
+        # DurableWorkspaceEditor initializer. Install only the shared editor
+        # contract here and then provide PostgreSQL live-head/journal stores.
         WorkspaceEditor.__init__(
             self,
             store=store,
@@ -78,7 +75,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
         )
         dsn = getattr(store, "dsn", None)
         if not isinstance(dsn, str) or not dsn:
-            raise TypeError("PostgresAtomicDurableWorkspaceEditor requires PostgreSQL ProjectStore")
+            raise TypeError(
+                "PostgresAtomicDurableWorkspaceEditor requires PostgreSQL ProjectStore"
+            )
         if isinstance(lease_seconds, bool) or not 1 <= lease_seconds <= 86_400:
             raise ValueError("lease_seconds must be between 1 and 86400")
         self.state_root = state_root.resolve()
@@ -220,7 +219,10 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
         diff_text: str,
         to_digest: str,
     ) -> None:
-        if journal.state is not WorkspaceMutationState.PREPARED or journal.change_set_id is not None:
+        if (
+            journal.state is not WorkspaceMutationState.PREPARED
+            or journal.change_set_id is not None
+        ):
             raise WorkspaceLiveConflict("Workspace journal is not a fresh PREPARED mutation")
         if (
             journal.workspace_id != change_set.workspace_id
@@ -233,7 +235,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
         ):
             raise WorkspaceLiveConflict("Workspace atomic finalize binding is invalid")
         if change_set.state.value != "draft" or change_set.version != 1:
-            raise WorkspaceLiveConflict("Workspace atomic finalize requires a fresh DRAFT ChangeSet")
+            raise WorkspaceLiveConflict(
+                "Workspace atomic finalize requires a fresh DRAFT ChangeSet"
+            )
         if not isinstance(diff_text, str) or len(diff_text.encode()) > self.max_diff_bytes:
             raise WorkspacePolicyError("Workspace diff exceeds the output limit")
         if len(to_digest) != 64 or any(
@@ -282,7 +286,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 expected_digest=journal.from_digest,
                 now=now,
             ):
-                raise WorkspaceLiveConflict("Workspace live head changed before atomic finalize")
+                raise WorkspaceLiveConflict(
+                    "Workspace live head changed before atomic finalize"
+                )
 
             existing = connection.execute(
                 """
@@ -466,7 +472,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 expected_digest=journal.from_digest,
                 now=now,
             ):
-                raise WorkspaceLiveConflict("Workspace recovery lease is stale or head advanced")
+                raise WorkspaceLiveConflict(
+                    "Workspace recovery lease is stale or head advanced"
+                )
             updated = connection.execute(
                 """
                 UPDATE agent_workspace_mutation_journal
@@ -485,7 +493,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 ),
             )
             if updated.rowcount != 1:
-                raise WorkspaceLiveConflict("Workspace recovery journal could not be rebound")
+                raise WorkspaceLiveConflict(
+                    "Workspace recovery journal could not be rebound"
+                )
 
     def _reclaim_workspace_backups(self, workspace: AgentWorkspaceRecord) -> None:
         root = self.backup_root / workspace.owner / workspace.workspace_id
