@@ -34,6 +34,7 @@ from pilot107.agent.operation_ledger import (
     AgentOperationRecord,
     AgentOperationState,
 )
+from pilot107.agent.postgres_workspace_durability import PostgresWorkspaceDurabilitySchema
 from pilot107.agent.protocol import ToolInvocation
 
 
@@ -175,11 +176,15 @@ class PostgresAgentOperationReconciler:
     ) -> None:
         if not dsn or any(character in dsn for character in "\r\n\0"):
             raise ValueError("PostgreSQL DSN is invalid")
+        # Reconciliation may be constructed before ProjectAgentService/editor.
+        # Installing/verifying AC4 schema here removes that startup-order coupling;
+        # this operation never reads or mutates Workspace filesystem content.
+        schema = PostgresWorkspaceDurabilitySchema(dsn)
         self.dsn = dsn
         self.ledger = ledger
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._psycopg = importlib.import_module("psycopg")
-        self._dict_row = importlib.import_module("psycopg.rows").dict_row
+        self._psycopg = schema._psycopg
+        self._dict_row = schema._dict_row
         self._jsonb = importlib.import_module("psycopg.types.json").Jsonb
 
     def connect(self) -> Any:
