@@ -407,9 +407,7 @@ def test_enabled_builder_turn_receives_only_phase_aware_facade_capability(
     claims = AgentCapabilitySigner(b"s" * 32, clock=clock.epoch).verify(
         client.requests[0].capability_token
     )
-    assert claims.tools == frozenset(
-        {"builder_context_get", "builder_build_submit"}
-    )
+    assert claims.tools == frozenset({"builder_context_get", "builder_build_submit"})
     assert claims.max_invocations == 128
     assert claims.max_commands == 64
 

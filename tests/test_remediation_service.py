@@ -593,14 +593,16 @@ class VerifyExpectedOutputsTests(unittest.TestCase):
 
     def test_created_expected_output_verifies(self) -> None:
         # Expected output newly produced by the run (baseline absent, now present).
-        self._write_inventory([
-            {
-                "relative_path": "out/result.txt",
-                "attribution": "created",
-                "baseline_sha256": None,
-                "final_sha256": "abc123",
-            }
-        ])
+        self._write_inventory(
+            [
+                {
+                    "relative_path": "out/result.txt",
+                    "attribution": "created",
+                    "baseline_sha256": None,
+                    "final_sha256": "abc123",
+                }
+            ]
+        )
         result = self._verify(
             run=self.derived_run,
             contract_store=self.contract_store,
@@ -625,14 +627,16 @@ class VerifyExpectedOutputsTests(unittest.TestCase):
 
     def test_unchanged_expected_output_does_not_verify(self) -> None:
         # Expected output present but attribution "unchanged" (baseline==final) → ok=False.
-        self._write_inventory([
-            {
-                "relative_path": "out/result.txt",
-                "attribution": "unchanged",
-                "baseline_sha256": "same",
-                "final_sha256": "same",
-            }
-        ])
+        self._write_inventory(
+            [
+                {
+                    "relative_path": "out/result.txt",
+                    "attribution": "unchanged",
+                    "baseline_sha256": "same",
+                    "final_sha256": "same",
+                }
+            ]
+        )
         result = self._verify(
             run=self.derived_run,
             contract_store=self.contract_store,
@@ -765,14 +769,16 @@ class VerifyExpectedOutputsTests(unittest.TestCase):
         )
         run_typed = replace(self.derived_run, contract_id=typed_contract.contract_id)
         # Inventory carries the created expected output keyed by its PATH.
-        self._write_inventory([
-            {
-                "relative_path": "out/result.txt",
-                "attribution": "created",
-                "baseline_sha256": None,
-                "final_sha256": "abc123",
-            }
-        ])
+        self._write_inventory(
+            [
+                {
+                    "relative_path": "out/result.txt",
+                    "attribution": "created",
+                    "baseline_sha256": None,
+                    "final_sha256": "abc123",
+                }
+            ]
+        )
         result = self._verify(
             run=run_typed,
             contract_store=self.contract_store,
@@ -798,14 +804,16 @@ class VerifyExpectedOutputsTests(unittest.TestCase):
         # Simulates: pre-create result.txt; baseline probe times out; job
         # succeeds but does NOT modify result.txt; final file exists unchanged.
         # The collector would emit attribution="baseline_unavailable".
-        self._write_inventory([
-            {
-                "relative_path": "out/result.txt",
-                "attribution": "baseline_unavailable",
-                "baseline_sha256": None,
-                "final_sha256": "abc123",
-            }
-        ])
+        self._write_inventory(
+            [
+                {
+                    "relative_path": "out/result.txt",
+                    "attribution": "baseline_unavailable",
+                    "baseline_sha256": None,
+                    "final_sha256": "abc123",
+                }
+            ]
+        )
         result = self._verify(
             run=self.derived_run,
             contract_store=self.contract_store,
@@ -832,14 +840,16 @@ class VerifyExpectedOutputsTests(unittest.TestCase):
         )
         from pilot107.services.remediation_service import _evaluate_run
 
-        self._write_inventory([
-            {
-                "relative_path": "out/result.txt",
-                "attribution": "baseline_unavailable",
-                "baseline_sha256": None,
-                "final_sha256": "abc123",
-            }
-        ])
+        self._write_inventory(
+            [
+                {
+                    "relative_path": "out/result.txt",
+                    "attribution": "baseline_unavailable",
+                    "baseline_sha256": None,
+                    "final_sha256": "abc123",
+                }
+            ]
+        )
         # Mark the derived run as a clean execution success with complete
         # evidence so the ONLY thing blocking VERIFIED_SUCCESS is the
         # baseline_unavailable expected output.

@@ -75,14 +75,10 @@ class RepairTicketState(StrEnum):
     ABANDONED = "abandoned"
 
 
-TERMINAL_TICKET_STATES = frozenset(
-    {RepairTicketState.RESOLVED, RepairTicketState.ABANDONED}
-)
+TERMINAL_TICKET_STATES = frozenset({RepairTicketState.RESOLVED, RepairTicketState.ABANDONED})
 
 _TRANSITIONS: dict[RepairTicketState, frozenset[RepairTicketState]] = {
-    RepairTicketState.OPEN: frozenset(
-        {RepairTicketState.RESOLVED, RepairTicketState.ABANDONED}
-    ),
+    RepairTicketState.OPEN: frozenset({RepairTicketState.RESOLVED, RepairTicketState.ABANDONED}),
     RepairTicketState.RESOLVED: frozenset(),
     RepairTicketState.ABANDONED: frozenset(),
 }

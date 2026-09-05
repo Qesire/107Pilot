@@ -82,9 +82,7 @@ class MarketReadService:
                 course_scopes=course_scopes,
                 query=query,
                 visibility=(
-                    None
-                    if visibility is None
-                    else RunPublicationVisibility(visibility.value)
+                    None if visibility is None else RunPublicationVisibility(visibility.value)
                 ),
                 tag=tag,
                 cursor=cursor,
@@ -104,9 +102,7 @@ class MarketReadService:
                 actor=actor,
                 course_scopes=course_scopes,
                 query=query,
-                visibility=(
-                    None if visibility is None else TemplateVisibility(visibility.value)
-                ),
+                visibility=(None if visibility is None else TemplateVisibility(visibility.value)),
                 cursor=cursor,
                 limit=limit,
             )
@@ -212,9 +208,7 @@ def _template_item(record: TemplateMarketItemRecord) -> MarketItemRecord:
         "publication": release.publication,
         "adoption": {
             "available": release.withdrawn_at is None,
-            "reason": (
-                None if release.withdrawn_at is None else "template_release_withdrawn"
-            ),
+            "reason": (None if release.withdrawn_at is None else "template_release_withdrawn"),
         },
         "metrics": {
             "adoption_count": record.metrics.adoption_count,

@@ -742,7 +742,9 @@ def _unresolved_error() -> dict[str, object]:
 def _is_reconcilable_state(record: AgentOperationRecord, invocation: ToolInvocation) -> bool:
     if record.state in {AgentOperationState.UNKNOWN, AgentOperationState.STALE}:
         return True
-    return record.state is AgentOperationState.RUNNING and record.origin_turn_id != invocation.turn_id
+    return (
+        record.state is AgentOperationState.RUNNING and record.origin_turn_id != invocation.turn_id
+    )
 
 
 def _assert_reconcile_request(

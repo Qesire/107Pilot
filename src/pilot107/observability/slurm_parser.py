@@ -7,9 +7,7 @@ from dataclasses import dataclass
 
 _JOB_ID = re.compile(r"^[A-Za-z0-9_.:+-]{1,128}$")
 _SECONDS = re.compile(r"^[0-9]+(?:\.[0-9]+)?$")
-_MEMORY = re.compile(
-    r"^(?P<value>[0-9]+(?:\.[0-9]+)?)(?P<unit>[KMGTPE]?)(?:i?B)?$", re.I
-)
+_MEMORY = re.compile(r"^(?P<value>[0-9]+(?:\.[0-9]+)?)(?P<unit>[KMGTPE]?)(?:i?B)?$", re.I)
 
 
 @dataclass(frozen=True)
@@ -159,9 +157,7 @@ def parse_sacct(stdout: str) -> ParsedRows[SacctRecord]:
     return ParsedRows(tuple(records), tuple(sorted(warnings, key=_warning_line)))
 
 
-def summarize_sacct_job(
-    records: tuple[SacctRecord, ...], job_id: str
-) -> SacctJobUsage | None:
+def summarize_sacct_job(records: tuple[SacctRecord, ...], job_id: str) -> SacctJobUsage | None:
     allocation = next((record for record in records if record.job_id_raw == job_id), None)
     if allocation is None:
         return None
@@ -185,15 +181,15 @@ def summarize_sacct_job(
         exit_code=allocation.exit_code,
         elapsed_seconds=allocation.elapsed_seconds,
         requested_walltime_seconds=(
-            None
-            if allocation.time_limit_minutes is None
-            else allocation.time_limit_minutes * 60
+            None if allocation.time_limit_minutes is None else allocation.time_limit_minutes * 60
         ),
         allocated_cpus=allocation.allocated_cpus,
         task_count=(
             allocation.task_count
             if allocation.task_count is not None
-            else max(step_tasks) if step_tasks else None
+            else max(step_tasks)
+            if step_tasks
+            else None
         ),
         allocated_memory_bytes=parse_memory_bytes(tres.get("mem", "")),
         total_cpu_seconds=allocation.total_cpu_seconds,
@@ -202,9 +198,7 @@ def summarize_sacct_job(
     )
 
 
-def _pipe_rows(
-    stdout: str, *, expected: int, operation: str
-) -> tuple[tuple[int, list[str]], ...]:
+def _pipe_rows(stdout: str, *, expected: int, operation: str) -> tuple[tuple[int, list[str]], ...]:
     del operation
     return tuple(
         (line_number, [column.strip() for column in line.split("|")])

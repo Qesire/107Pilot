@@ -28,11 +28,7 @@ class CodeContextTests(unittest.TestCase):
         self.workspace = self.root / "public" / "home" / "alice" / "demo"
         (self.workspace / "src").mkdir(parents=True)
         (self.workspace / "src" / "train.py").write_text(
-            "def train():\n"
-            "    values = [1, 2, 3]\n"
-            "    return values[4]\n"
-            "\n"
-            "train()\n",
+            "def train():\n    values = [1, 2, 3]\n    return values[4]\n\ntrain()\n",
             encoding="utf-8",
         )
         subprocess.run(["git", "init", "-q"], cwd=self.workspace, check=True)
@@ -69,7 +65,7 @@ class CodeContextTests(unittest.TestCase):
         bundle = service.capture(
             run,
             evidence_texts=(
-                'Traceback (most recent call last):\n'
+                "Traceback (most recent call last):\n"
                 '  File "src/train.py", line 3, in train\n'
                 "IndexError: list index out of range\n",
             ),
@@ -100,8 +96,7 @@ class CodeContextTests(unittest.TestCase):
         bundle = service.capture(
             run,
             evidence_texts=(
-                f'File "{self.workspace / ".env"}", line 1\n'
-                'File "/etc/passwd", line 1\n',
+                f'File "{self.workspace / ".env"}", line 1\nFile "/etc/passwd", line 1\n',
             ),
         )
 

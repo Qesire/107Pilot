@@ -54,11 +54,14 @@ class RunServiceTests(unittest.TestCase):
         self.assertEqual(run.owner, "alice")
         self.assertIsNotNone(run.job_id)
         self.assertEqual(run.submit_strategy, "in_memory")
-        self.assertEqual([event.event_type for event in self.store.list_events(run.run_id)], [
-            "run.created",
-            "run.submitting",
-            "run.submitted",
-        ])
+        self.assertEqual(
+            [event.event_type for event in self.store.list_events(run.run_id)],
+            [
+                "run.created",
+                "run.submitting",
+                "run.submitted",
+            ],
+        )
         self.assertEqual(
             {task["task_type"] for task in self.store.list_collection_tasks(run.run_id)},
             {"submission_snapshot", "runtime_status"},
@@ -247,9 +250,7 @@ class BaselineCaptureTests(unittest.TestCase):
                 contract_id=self.contract.contract_id,
             )
         )
-        baseline_path = (
-            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
-        )
+        baseline_path = self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
         self.assertTrue(baseline_path.exists())
         payload = json.loads(baseline_path.read_text(encoding="utf-8"))
         self.assertEqual(payload["schema"], "pilot107.baseline.v1")
@@ -288,9 +289,7 @@ class BaselineCaptureTests(unittest.TestCase):
                 contract_id=self.contract.contract_id,
             )
         )
-        baseline_path = (
-            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
-        )
+        baseline_path = self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
         self.assertFalse(baseline_path.exists())
 
     def test_baseline_skipped_when_contract_id_missing(self) -> None:
@@ -310,9 +309,7 @@ class BaselineCaptureTests(unittest.TestCase):
                 ),
             )
         )
-        baseline_path = (
-            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
-        )
+        baseline_path = self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
         self.assertFalse(baseline_path.exists())
 
     def test_baseline_truncates_over_32_outputs(self) -> None:
@@ -354,9 +351,7 @@ class BaselineCaptureTests(unittest.TestCase):
                 contract_id=contract.contract_id,
             )
         )
-        baseline_path = (
-            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
-        )
+        baseline_path = self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
         self.assertTrue(baseline_path.exists())
         payload = json.loads(baseline_path.read_text(encoding="utf-8"))
         self.assertEqual(payload["total_count"], 33)
@@ -407,9 +402,7 @@ class BaselineCaptureTests(unittest.TestCase):
                 contract_id=contract.contract_id,
             )
         )
-        baseline_path = (
-            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
-        )
+        baseline_path = self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
         self.assertTrue(baseline_path.exists())
         payload = json.loads(baseline_path.read_text(encoding="utf-8"))
         entries = payload["entries"]
@@ -445,9 +438,7 @@ class BaselineCaptureTests(unittest.TestCase):
                 contract_id=self.contract.contract_id,
             )
         )
-        baseline_path = (
-            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
-        )
+        baseline_path = self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
         self.assertTrue(baseline_path.exists())
         payload = json.loads(baseline_path.read_text(encoding="utf-8"))
         self.assertEqual(payload["baseline_status"], "captured")
@@ -493,8 +484,9 @@ class BaselineCaptureTests(unittest.TestCase):
             )
         )
         payload = json.loads(
-            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
-            .read_text(encoding="utf-8")
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json").read_text(
+                encoding="utf-8"
+            )
         )
         self.assertEqual(payload["baseline_status"], "partial_truncated")
         self.assertTrue(payload["truncated"])
@@ -536,8 +528,9 @@ class BaselineCaptureTests(unittest.TestCase):
             )
         )
         payload = json.loads(
-            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
-            .read_text(encoding="utf-8")
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json").read_text(
+                encoding="utf-8"
+            )
         )
         self.assertEqual(payload["baseline_status"], "not_required")
         self.assertEqual(payload["baselined_count"], 0)
@@ -563,9 +556,7 @@ class BaselineCaptureTests(unittest.TestCase):
                 contract_id=self.contract.contract_id,
             )
         )
-        baseline_path = (
-            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
-        )
+        baseline_path = self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
         self.assertFalse(baseline_path.exists())
 
     def test_baseline_deadline_stops_loop_with_timeout(self) -> None:
@@ -611,8 +602,9 @@ class BaselineCaptureTests(unittest.TestCase):
                 )
             )
         payload = json.loads(
-            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
-            .read_text(encoding="utf-8")
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json").read_text(
+                encoding="utf-8"
+            )
         )
         self.assertEqual(payload["baseline_status"], "unavailable")
         self.assertEqual(payload["error_code"], "baseline_insufficient_budget")
@@ -674,8 +666,9 @@ class BaselineCaptureTests(unittest.TestCase):
                 )
             )
         payload = json.loads(
-            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
-            .read_text(encoding="utf-8")
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json").read_text(
+                encoding="utf-8"
+            )
         )
         self.assertTrue(payload["timeout"])
         self.assertEqual(payload["baseline_status"], "partial_timeout")
@@ -748,8 +741,9 @@ class BaselineCaptureTests(unittest.TestCase):
                 )
             )
         payload = json.loads(
-            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
-            .read_text(encoding="utf-8")
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json").read_text(
+                encoding="utf-8"
+            )
         )
         self.assertTrue(payload["timeout"])
         self.assertEqual(payload["baseline_status"], "partial_timeout")
@@ -794,9 +788,7 @@ class BaselineCaptureTests(unittest.TestCase):
         # Simulate a lease that expires 20s from now → 20-15 = 5 → min(30, 5) = 5.
         from datetime import UTC, datetime, timedelta
 
-        expires_soon = (
-            datetime.now(UTC) + timedelta(seconds=20)
-        ).isoformat()
+        expires_soon = (datetime.now(UTC) + timedelta(seconds=20)).isoformat()
         service = self._service()
         budget, insufficient = service._baseline_budget(expires_soon)
         self.assertFalse(insufficient)
@@ -805,9 +797,7 @@ class BaselineCaptureTests(unittest.TestCase):
         self.assertGreater(budget, 3.0)
 
         # Lease far from expiry (120s) → 120-15 = 105 → min(30, 105) = 30 (capped).
-        expires_far = (
-            datetime.now(UTC) + timedelta(seconds=120)
-        ).isoformat()
+        expires_far = (datetime.now(UTC) + timedelta(seconds=120)).isoformat()
         budget_far, _ = service._baseline_budget(expires_far)
         self.assertEqual(budget_far, 30.0)
 
@@ -817,9 +807,7 @@ class BaselineCaptureTests(unittest.TestCase):
         from datetime import UTC, datetime, timedelta
 
         # Expires in 10s → 10-15 = -5 < 0.5 → insufficient.
-        expires_soon = (
-            datetime.now(UTC) + timedelta(seconds=10)
-        ).isoformat()
+        expires_soon = (datetime.now(UTC) + timedelta(seconds=10)).isoformat()
         service = self._service()
         budget, insufficient = service._baseline_budget(expires_soon)
         self.assertTrue(insufficient)
@@ -859,13 +847,12 @@ class BaselineCaptureTests(unittest.TestCase):
         )
         service = self._service()
         # Lease expires in 5s → 5-15 = -10 < 0.5 → insufficient_lease=True.
-        expires_soon = (
-            datetime.now(UTC) + timedelta(seconds=5)
-        ).isoformat()
+        expires_soon = (datetime.now(UTC) + timedelta(seconds=5)).isoformat()
         service._capture_baseline(run, lease_expires_at=expires_soon)
         payload = json.loads(
-            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
-            .read_text(encoding="utf-8")
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json").read_text(
+                encoding="utf-8"
+            )
         )
         self.assertEqual(payload["baseline_status"], "unavailable")
         self.assertEqual(payload["error_code"], "baseline_insufficient_lease")
@@ -914,8 +901,9 @@ class BaselineCaptureTests(unittest.TestCase):
         service = self._service()
         service._capture_baseline(run, lease_expires_at="not-a-timestamp")
         payload = json.loads(
-            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
-            .read_text(encoding="utf-8")
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json").read_text(
+                encoding="utf-8"
+            )
         )
         self.assertEqual(payload["baseline_status"], "unavailable")
         self.assertEqual(payload["error_code"], "baseline_lease_unparseable")
@@ -965,9 +953,7 @@ class BaselineCaptureTests(unittest.TestCase):
                     contract_id=contract.contract_id,
                 )
             )
-        baseline_path = (
-            self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
-        )
+        baseline_path = self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json"
         self.assertTrue(baseline_path.exists())
         payload = json.loads(baseline_path.read_text(encoding="utf-8"))
         self.assertEqual(payload["baseline_status"], "failed")
@@ -1035,8 +1021,9 @@ class BaselineStatClassificationTests(unittest.TestCase):
     def _capture(self, service: RunService, run, **kwargs) -> dict:
         service._capture_baseline(run, **kwargs)
         return json.loads(
-            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json")
-            .read_text(encoding="utf-8")
+            (self.evidence_store.run_root(run.run_id) / "baseline" / "baseline.json").read_text(
+                encoding="utf-8"
+            )
         )
 
     def test_local_stat_permission_error_is_status_error(self) -> None:
@@ -1110,7 +1097,9 @@ class BaselineStatClassificationTests(unittest.TestCase):
         class FakeExecutor:
             def run(self, argv, *, cwd=None, user=None, stdin=None, timeout_seconds=10.0):
                 return CommandResult(
-                    returncode=1, stdout="", stderr="stat: cannot stat: Permission denied",
+                    returncode=1,
+                    stdout="",
+                    stderr="stat: cannot stat: Permission denied",
                 )
 
             def realpath(self, path, *, timeout_seconds=10.0):
@@ -1132,7 +1121,9 @@ class BaselineStatClassificationTests(unittest.TestCase):
         class FakeExecutor:
             def run(self, argv, *, cwd=None, user=None, stdin=None, timeout_seconds=10.0):
                 return CommandResult(
-                    returncode=124, stdout="", stderr="command timed out",
+                    returncode=124,
+                    stdout="",
+                    stderr="command timed out",
                 )
 
             def realpath(self, path, *, timeout_seconds=10.0):

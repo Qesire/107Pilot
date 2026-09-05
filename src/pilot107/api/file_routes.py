@@ -244,9 +244,7 @@ class FileRoutes:
             path = _first_param(params, "path")
             if not path:
                 try:
-                    roots = resolve_owner_roots(
-                        self.upload_service.owner_roots, user=owner
-                    )
+                    roots = resolve_owner_roots(self.upload_service.owner_roots, user=owner)
                 except OwnerRootPolicyError as exc:
                     return _error(403, "FILES.PATH_FORBIDDEN", str(exc))
                 if not roots:
@@ -428,9 +426,7 @@ class FileRoutes:
             if not name:
                 return _error(400, "FILES.INVALID_REQUEST", "name is required")
             try:
-                created = self.executor.create_file(
-                    dir_path=dir_path, name=name, owner=owner
-                )
+                created = self.executor.create_file(dir_path=dir_path, name=name, owner=owner)
             except SlurmSubmissionRejected as exc:
                 message = str(exc)
                 if "already exists" in message:
@@ -478,9 +474,7 @@ class FileRoutes:
             path = _optional_string(payload, "path")
             if not path:
                 return _error(400, "FILES.INVALID_REQUEST", "path is required")
-            dest_dir = _optional_string(payload, "dest_dir") or posixpath.dirname(
-                path.rstrip("/")
-            )
+            dest_dir = _optional_string(payload, "dest_dir") or posixpath.dirname(path.rstrip("/"))
             if not dest_dir:
                 dest_dir = "/"
             try:
@@ -586,15 +580,11 @@ class FileRoutes:
                 )
             data = body or b""
             try:
-                new_offset = self.upload_service.append_bytes(
-                    parts[2], owner, offset, data
-                )
+                new_offset = self.upload_service.append_bytes(parts[2], owner, offset, data)
             except UploadError as exc:
                 return _tus_error(exc)
             if self._metrics is not None:
-                self._metrics.observe_upload_event(
-                    outcome="chunk", size_bytes=len(data)
-                )
+                self._metrics.observe_upload_event(outcome="chunk", size_bytes=len(data))
             return ApiResponse(
                 status=204,
                 payload={},
@@ -624,9 +614,7 @@ class FileRoutes:
                 return _tus_error(exc)
             if self._metrics is not None:
                 self._metrics.observe_upload_event(outcome="aborted")
-            return ApiResponse(
-                status=204, payload={}, headers={"Tus-Resumable": _TUS_VERSION}
-            )
+            return ApiResponse(status=204, payload={}, headers={"Tus-Resumable": _TUS_VERSION})
         return None
 
     def _tus_create(self, headers: Mapping[str, str], *, owner: str) -> ApiResponse:
@@ -641,9 +629,7 @@ class FileRoutes:
         if concat_lower.startswith("concat;") or concat_lower.startswith("final;"):
             partial_urls = concat.split(";", 1)[1].strip().split()
             partial_ids = [
-                url.rstrip("/").rsplit("/", 1)[-1]
-                for url in partial_urls
-                if url.strip()
+                url.rstrip("/").rsplit("/", 1)[-1] for url in partial_urls if url.strip()
             ]
             if not partial_ids:
                 return _tus_error_response(
@@ -662,17 +648,13 @@ class FileRoutes:
             except UploadError as exc:
                 return _tus_error(exc)
             if self._metrics is not None:
-                self._metrics.observe_upload_event(
-                    outcome="created", size_bytes=session.total_size
-                )
+                self._metrics.observe_upload_event(outcome="created", size_bytes=session.total_size)
             return _tus_created(session.upload_id)
 
         # partial: a parallel-upload byte bucket (destination set at concat)
         if concat.lower() == "partial":
             if upload_length is None:
-                return _tus_error_response(
-                    400, "TUS.MISSING_LENGTH", "Upload-Length is required"
-                )
+                return _tus_error_response(400, "TUS.MISSING_LENGTH", "Upload-Length is required")
             try:
                 session = self.upload_service.create_partial_session(
                     owner=owner, total_size=upload_length
@@ -683,9 +665,7 @@ class FileRoutes:
 
         # normal creation
         if upload_length is None:
-            return _tus_error_response(
-                400, "TUS.MISSING_LENGTH", "Upload-Length is required"
-            )
+            return _tus_error_response(400, "TUS.MISSING_LENGTH", "Upload-Length is required")
         target_path = metadata.get("target_path")
         filename = metadata.get("filename")
         if not target_path or not filename:
@@ -708,9 +688,7 @@ class FileRoutes:
                 self._metrics.observe_upload_event(outcome="quota_rejected")
             return _tus_error(exc)
         if self._metrics is not None:
-            self._metrics.observe_upload_event(
-                outcome="created", size_bytes=session.total_size
-            )
+            self._metrics.observe_upload_event(outcome="created", size_bytes=session.total_size)
         return _tus_created(session.upload_id)
 
 
@@ -759,9 +737,7 @@ def _strict_nonnegative_int_param(
     return int(raw)
 
 
-def _strict_optional_nonnegative_int_param(
-    params: Mapping[str, list[str]], key: str
-) -> int | None:
+def _strict_optional_nonnegative_int_param(params: Mapping[str, list[str]], key: str) -> int | None:
     raw = _first_param(params, key)
     if raw is None:
         return None
@@ -770,9 +746,7 @@ def _strict_optional_nonnegative_int_param(
     return int(raw)
 
 
-def _strict_optional_timestamp_param(
-    params: Mapping[str, list[str]], key: str
-) -> int | None:
+def _strict_optional_timestamp_param(params: Mapping[str, list[str]], key: str) -> int | None:
     raw = _first_param(params, key)
     if raw is None:
         return None
@@ -872,6 +846,4 @@ def _upload_error(exc: UploadError) -> ApiResponse:
 
 
 def _error(status: int, code: str, message: str) -> ApiResponse:
-    return ApiResponse(
-        status=status, payload={"error": {"code": code, "message": message}}
-    )
+    return ApiResponse(status=status, payload={"error": {"code": code, "message": message}})

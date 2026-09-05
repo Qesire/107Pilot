@@ -245,13 +245,21 @@ class UploadSessionStore:
                 " extracted_members, error) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    session.upload_id, session.owner, session.target_path,
-                    session.filename, session.total_size,
-                    session.sha256_expected, int(session.auto_extract),
-                    str(session.state), session.created_at,
-                    session.received_bytes, int(session.is_partial),
-                    session.sha256_actual, session.written_path,
-                    session.extracted_members, session.error,
+                    session.upload_id,
+                    session.owner,
+                    session.target_path,
+                    session.filename,
+                    session.total_size,
+                    session.sha256_expected,
+                    int(session.auto_extract),
+                    str(session.state),
+                    session.created_at,
+                    session.received_bytes,
+                    int(session.is_partial),
+                    session.sha256_actual,
+                    session.written_path,
+                    session.extracted_members,
+                    session.error,
                 ),
             )
 
@@ -262,9 +270,12 @@ class UploadSessionStore:
                 "sha256_actual=?, written_path=?, extracted_members=?, error=? "
                 "WHERE upload_id=?",
                 (
-                    str(session.state), session.received_bytes,
-                    session.sha256_actual, session.written_path,
-                    session.extracted_members, session.error,
+                    str(session.state),
+                    session.received_bytes,
+                    session.sha256_actual,
+                    session.written_path,
+                    session.extracted_members,
+                    session.error,
                     session.upload_id,
                 ),
             )
@@ -506,11 +517,7 @@ class FileUploadService:
 
     def list_sessions(self, owner: str) -> list[UploadSession]:
         with self._lock:
-            return [
-                session
-                for session in self._sessions.values()
-                if session.owner == owner
-            ]
+            return [session for session in self._sessions.values() if session.owner == owner]
 
     def abort(self, upload_id: str, owner: str) -> UploadSession:
         session = self._require_session(upload_id, owner)
@@ -533,9 +540,7 @@ class FileUploadService:
         """
         session = self._require_session(upload_id, owner)
         if session.state in _TERMINAL_STATES:
-            raise UploadError(
-                f"upload session is {session.state}", code="UPLOAD.STATE"
-            )
+            raise UploadError(f"upload session is {session.state}", code="UPLOAD.STATE")
         if not isinstance(offset, int) or offset < 0:
             raise UploadError("offset must be a non-negative integer")
         if offset > session.received_bytes:
@@ -651,9 +656,7 @@ class FileUploadService:
         if session.state in {UploadState.WRITTEN, UploadState.EXTRACTED}:
             return session
         if session.state in {UploadState.FAILED, UploadState.ABORTED}:
-            raise UploadError(
-                f"upload session is {session.state}", code="UPLOAD.STATE"
-            )
+            raise UploadError(f"upload session is {session.state}", code="UPLOAD.STATE")
         if session.is_partial:
             raise UploadError(
                 "partial uploads are merged via concatenation, not completed",
@@ -671,14 +674,10 @@ class FileUploadService:
             session.sha256_actual = digest
             if session.sha256_expected is not None and digest != session.sha256_expected:
                 session.state = UploadState.FAILED
-                session.error = (
-                    f"sha256 mismatch: expected {session.sha256_expected}, got {digest}"
-                )
+                session.error = f"sha256 mismatch: expected {session.sha256_expected}, got {digest}"
                 self._persist_update(session)
                 self._purge_staging(session)
-                raise UploadError(
-                    session.error, status=409, code="UPLOAD.SHA256_MISMATCH"
-                )
+                raise UploadError(session.error, status=409, code="UPLOAD.SHA256_MISMATCH")
             session.state = UploadState.VERIFIED
             written_path = self._write_to_cluster(session, assembled_path)
             session.written_path = written_path

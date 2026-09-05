@@ -54,9 +54,7 @@ class RuntimeWatchRoutes:
                             }
                             for cursor in watch.cursors
                         },
-                        "alert_count": len(
-                            self.store.list_alerts(run_id, owner=owner, limit=1000)
-                        ),
+                        "alert_count": len(self.store.list_alerts(run_id, owner=owner, limit=1000)),
                     },
                 )
             if len(parts) == 4 and parts[3] == "alerts":
@@ -75,9 +73,7 @@ class RuntimeWatchRoutes:
                                 "offset": item.offset,
                                 "created_at": item.created_at,
                             }
-                            for item in self.store.list_alerts(
-                                run_id, owner=owner, limit=1000
-                            )
+                            for item in self.store.list_alerts(run_id, owner=owner, limit=1000)
                         ]
                     },
                 )

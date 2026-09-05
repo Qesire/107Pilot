@@ -162,8 +162,7 @@ class PostgresProjectStore:
             ).fetchone()
             if row is None:
                 row = connection.execute(
-                    "SELECT * FROM agent_experiment_projects "
-                    "WHERE project_id = %s AND owner = %s",
+                    "SELECT * FROM agent_experiment_projects WHERE project_id = %s AND owner = %s",
                     (project_id, owner),
                 ).fetchone()
         if row is None:
@@ -602,9 +601,7 @@ class PostgresProjectStore:
             raise TypeError("Publication payload must be an object")
         return publication_from_payload(value)
 
-    def create_builder_submission(
-        self, record: BuilderSubmissionRecord
-    ) -> BuilderSubmissionRecord:
+    def create_builder_submission(self, record: BuilderSubmissionRecord) -> BuilderSubmissionRecord:
         from pilot107.agent.builder_workflow import BuilderSubmissionRecord
 
         if not isinstance(record, BuilderSubmissionRecord):
@@ -649,8 +646,7 @@ class PostgresProjectStore:
             ).fetchone()
             if row is None:
                 row = connection.execute(
-                    "SELECT * FROM agent_builder_submissions "
-                    "WHERE owner = %s AND request_key = %s",
+                    "SELECT * FROM agent_builder_submissions WHERE owner = %s AND request_key = %s",
                     (record.owner, record.request_key),
                 ).fetchone()
         if row is None:
@@ -659,15 +655,12 @@ class PostgresProjectStore:
         _assert_builder_submission_replay(result, record)
         return result
 
-    def get_builder_submission(
-        self, submission_id: str, *, owner: str
-    ) -> BuilderSubmissionRecord:
+    def get_builder_submission(self, submission_id: str, *, owner: str) -> BuilderSubmissionRecord:
         _key(submission_id, "submission_id")
         _key(owner, "owner")
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM agent_builder_submissions "
-                "WHERE submission_id = %s AND owner = %s",
+                "SELECT * FROM agent_builder_submissions WHERE submission_id = %s AND owner = %s",
                 (submission_id, owner),
             ).fetchone()
         if row is None:
@@ -681,8 +674,7 @@ class PostgresProjectStore:
         _key(request_key, "request_key")
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM agent_builder_submissions "
-                "WHERE owner = %s AND request_key = %s",
+                "SELECT * FROM agent_builder_submissions WHERE owner = %s AND request_key = %s",
                 (owner, request_key),
             ).fetchone()
         return None if row is None else _row_to_builder_submission(row)
@@ -710,9 +702,7 @@ class PostgresProjectStore:
                 "ORDER BY updated_at DESC, submission_id DESC LIMIT 100",
                 (owner, session_id, project_id, workspace_id),
             ).fetchall()
-        return _latest_builder_submission(
-            [_row_to_builder_submission(row) for row in rows]
-        )
+        return _latest_builder_submission([_row_to_builder_submission(row) for row in rows])
 
     def list_builder_submissions(
         self,
@@ -784,9 +774,7 @@ class PostgresProjectStore:
                 ),
             ).fetchone()
         if row is None:
-            raise BuilderSubmissionConflict(
-                "Builder submission version changed during update"
-            )
+            raise BuilderSubmissionConflict("Builder submission version changed during update")
         return _row_to_builder_submission(row)
 
     def _now(self) -> datetime:

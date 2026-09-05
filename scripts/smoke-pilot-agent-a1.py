@@ -173,9 +173,11 @@ def verify(
             f"/api/v1/agent-sessions/{session['session_id']}/events",
             owner="alice",
         )
-        if status == 200 and payload.get("items") and payload["items"][-1][
-            "event_type"
-        ] in {"turn_completed", "turn_failed"}:
+        if (
+            status == 200
+            and payload.get("items")
+            and payload["items"][-1]["event_type"] in {"turn_completed", "turn_failed"}
+        ):
             break
         time.sleep(0.25)
     else:
@@ -245,8 +247,7 @@ def verify(
             (turn["turn_id"],),
         ).fetchall()
         turn_rows = connection.execute(
-            "SELECT state_version, fencing_token, state FROM agent_turns "
-            "WHERE session_id = ?",
+            "SELECT state_version, fencing_token, state FROM agent_turns WHERE session_id = ?",
             (session["session_id"],),
         ).fetchall()
     if len(turn_rows) != 1:
@@ -301,12 +302,8 @@ def main() -> int:
     args = parser.parse_args()
     base_url = os.environ.get("PILOT107_A1_BASE_URL", "http://pilot107-api:8080")
     database = Path(os.environ.get("PILOT107_DB_PATH", "/var/lib/pilot107/pilot107.db"))
-    evidence_root = Path(
-        os.environ.get("PILOT107_EVIDENCE_ROOT", "/var/lib/pilot107/evidence")
-    )
-    workspace = Path(
-        os.environ.get("PILOT107_A1_WORKSPACE", "/var/lib/pilot107/a1-workspace")
-    )
+    evidence_root = Path(os.environ.get("PILOT107_EVIDENCE_ROOT", "/var/lib/pilot107/evidence"))
+    workspace = Path(os.environ.get("PILOT107_A1_WORKSPACE", "/var/lib/pilot107/a1-workspace"))
     state_path = Path(
         os.environ.get("PILOT107_A1_STATE_FILE", "/var/lib/pilot107/a1-smoke-state.json")
     )

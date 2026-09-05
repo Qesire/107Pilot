@@ -259,9 +259,7 @@ class PlatformSnapshotStoreTests(unittest.TestCase):
             "alice",
         )
         with sqlite3.connect(self.db_path) as conn:
-            migration = conn.execute(
-                "SELECT migration_id FROM schema_migrations"
-            ).fetchone()
+            migration = conn.execute("SELECT migration_id FROM schema_migrations").fetchone()
         self.assertEqual(migration[0], "003b.001.platform_snapshots")
 
 
@@ -314,7 +312,7 @@ def _slurm_snapshot(
             name="conda_env_list_json",
             argv=("conda", "env", "list", "--json"),
             returncode=conda_returncode,
-            stdout="{\"envs\": []}" if conda_returncode == 0 else "",
+            stdout='{"envs": []}' if conda_returncode == 0 else "",
             stderr="" if conda_returncode == 0 else "command unavailable",
         ),
     )
@@ -340,9 +338,7 @@ def _slurm_snapshot(
                 memory_mb=10_240,
             ),
         ),
-        limitations=(
-            ("conda env list unavailable",) if conda_returncode != 0 else ()
-        ),
+        limitations=(("conda env list unavailable",) if conda_returncode != 0 else ()),
     )
 
 

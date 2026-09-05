@@ -73,13 +73,20 @@ def main() -> int:
         # 2. docker compose down (same flags as stop-cpu-rc.sh).
         compose_down = subprocess.run(
             [
-                "docker", "compose",
-                "--project-name", PROJECT_NAME,
-                "--env-file", str(ENV_FILE),
-                "-f", str(COMPOSE_DIR / "compose.yml"),
-                "-f", str(COMPOSE_DIR / "compose.competition.yml"),
-                "-f", str(COMPOSE_DIR / "compose.cpu-rc.yml"),
-                "--profile", "competition",
+                "docker",
+                "compose",
+                "--project-name",
+                PROJECT_NAME,
+                "--env-file",
+                str(ENV_FILE),
+                "-f",
+                str(COMPOSE_DIR / "compose.yml"),
+                "-f",
+                str(COMPOSE_DIR / "compose.competition.yml"),
+                "-f",
+                str(COMPOSE_DIR / "compose.cpu-rc.yml"),
+                "--profile",
+                "competition",
                 "down",
             ],
             cwd=str(ROOT),
@@ -93,14 +100,22 @@ def main() -> int:
         # Assert 0 containers running for the project.
         ps = subprocess.run(
             [
-                "docker", "compose",
-                "--project-name", PROJECT_NAME,
-                "--env-file", str(ENV_FILE),
-                "-f", str(COMPOSE_DIR / "compose.yml"),
-                "-f", str(COMPOSE_DIR / "compose.competition.yml"),
-                "-f", str(COMPOSE_DIR / "compose.cpu-rc.yml"),
-                "--profile", "competition",
-                "ps", "-q",
+                "docker",
+                "compose",
+                "--project-name",
+                PROJECT_NAME,
+                "--env-file",
+                str(ENV_FILE),
+                "-f",
+                str(COMPOSE_DIR / "compose.yml"),
+                "-f",
+                str(COMPOSE_DIR / "compose.competition.yml"),
+                "-f",
+                str(COMPOSE_DIR / "compose.cpu-rc.yml"),
+                "--profile",
+                "competition",
+                "ps",
+                "-q",
             ],
             cwd=str(ROOT),
             capture_output=True,
@@ -262,9 +277,7 @@ def _assert_post_restart_inventory(
 
     post_entry = files_by_path.get(post_rel)
     if post_entry is None:
-        raise RuntimeError(
-            f"post-restart inventory missing {post_rel}: {list(files_by_path)}"
-        )
+        raise RuntimeError(f"post-restart inventory missing {post_rel}: {list(files_by_path)}")
     # Round 4 changed compute_file_attribution so expected outputs with a
     # captured baseline classify as "created"/"modified"/"unchanged"/"missing"
     # (strict baseline-vs-final) instead of the mtime-based "created_by_run".
@@ -288,9 +301,7 @@ def _assert_post_restart_inventory(
     expected_sha = hashlib.sha256(b"ok\n").hexdigest()
     actual_sha = post_entry.get("final_sha256")
     if not isinstance(actual_sha, str) or not actual_sha:
-        raise RuntimeError(
-            f"post-restart {post_rel}: final_sha256 missing/empty: {actual_sha!r}"
-        )
+        raise RuntimeError(f"post-restart {post_rel}: final_sha256 missing/empty: {actual_sha!r}")
     if actual_sha != expected_sha:
         raise RuntimeError(
             f"post-restart {post_rel}: final_sha256={actual_sha!r} != expected {expected_sha!r}"
@@ -299,8 +310,7 @@ def _assert_post_restart_inventory(
     pre_entry = files_by_path.get(pre_rel)
     if pre_entry is None:
         raise RuntimeError(
-            f"post-restart inventory missing pre-restart leftover {pre_rel}: "
-            f"{list(files_by_path)}"
+            f"post-restart inventory missing pre-restart leftover {pre_rel}: {list(files_by_path)}"
         )
     if pre_entry.get("attribution") != "preexisting":
         raise RuntimeError(
@@ -319,15 +329,11 @@ def _assert_post_restart_inventory(
         + int(summary.get("created_by_run", 0))
     )
     if produced_count < 1:
-        raise RuntimeError(
-            f"post-restart attribution_summary produced count < 1: {summary!r}"
-        )
+        raise RuntimeError(f"post-restart attribution_summary produced count < 1: {summary!r}")
 
 
 def _get(path: str) -> dict:
-    request = urllib.request.Request(
-        url=f"{BASE_URL}{path}", headers={"X-Pilot107-User": "alice"}
-    )
+    request = urllib.request.Request(url=f"{BASE_URL}{path}", headers={"X-Pilot107-User": "alice"})
     with urllib.request.urlopen(request, timeout=30, context=SSL_CONTEXT) as response:
         return json.loads(response.read().decode("utf-8"))
 

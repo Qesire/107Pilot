@@ -10,9 +10,7 @@ BASE_URL = "http://127.0.0.1:3000/api/v1"
 
 def main() -> int:
     recipes = _get("/recipes")
-    if not any(
-        item.get("recipe_id") == "recipe_python_cpu" for item in recipes.get("items", [])
-    ):
+    if not any(item.get("recipe_id") == "recipe_python_cpu" for item in recipes.get("items", [])):
         print(f"unexpected recipes: {recipes}", file=sys.stderr)
         return 1
 

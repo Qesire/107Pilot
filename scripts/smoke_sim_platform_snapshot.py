@@ -67,8 +67,7 @@ def main() -> int:
         )
 
         command_names = {
-            str(command["name"])
-            for command in record.payload.get("command_results", [])
+            str(command["name"]) for command in record.payload.get("command_results", [])
         }
         required_commands = {
             "hostname",
@@ -84,8 +83,7 @@ def main() -> int:
         if not required_commands.issubset(command_names):
             raise RuntimeError(f"platform commands missing: {required_commands - command_names}")
         partition_names = {
-            str(partition["name"])
-            for partition in record.payload.get("partitions", [])
+            str(partition["name"]) for partition in record.payload.get("partitions", [])
         }
         if "Students" not in partition_names:
             raise RuntimeError(f"Students partition missing: {sorted(partition_names)}")
@@ -107,9 +105,7 @@ def main() -> int:
         if entitlement.payload.get("default_account") != "students":
             raise RuntimeError(f"unexpected default account: {entitlement.payload}")
         association_qos = {
-            qos
-            for association in entitlement.payload["associations"]
-            for qos in association["qos"]
+            qos for association in entitlement.payload["associations"] for qos in association["qos"]
         }
         if "qos_stu_medium_2gpu" not in association_qos:
             raise RuntimeError(f"student QoS missing from entitlement: {association_qos}")
@@ -138,11 +134,7 @@ def main() -> int:
         if detail.status != 200:
             raise RuntimeError(f"unexpected platform detail response: {detail.payload}")
         safe_commands = detail.payload["snapshot"]["command_results"]
-        if any(
-            key in command
-            for command in safe_commands
-            for key in ("argv", "stdout", "stderr")
-        ):
+        if any(key in command for command in safe_commands for key in ("argv", "stdout", "stderr")):
             raise RuntimeError("safe platform API exposed command argv or output")
         if forbidden.status != 404:
             raise RuntimeError(f"cross-owner detail did not return 404: {forbidden.payload}")

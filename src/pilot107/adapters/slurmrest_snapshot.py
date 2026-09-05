@@ -5,6 +5,7 @@ this collector queries slurmrestd directly over HTTP. It is suitable for the
 API container, which has ``read_only: true`` and ``cap_drop: ALL`` and cannot
 shell out to Slurm CLI tools, but does have network access to slurmrestd.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

@@ -89,10 +89,7 @@ class FakeDockerExecutor:
             case "squeue":
                 return CommandResult(
                     0,
-                    (
-                        "123|alice|PENDING|Resources|Students|pilot107|1|1G|"
-                        "gres/gpu:1\n"
-                    ),
+                    ("123|alice|PENDING|Resources|Students|pilot107|1|1G|gres/gpu:1\n"),
                     "",
                 )
             case "scontrol":
@@ -110,8 +107,7 @@ class FakeDockerExecutor:
                     return CommandResult(1, "", "missing")
                 return CommandResult(
                     0,
-                    "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-                    "  file\n",
+                    "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  file\n",
                     "",
                 )
             case _:
@@ -215,33 +211,41 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue((run_root / "outputs" / "inventory.json").exists())
         self.assertTrue((run_root / "derived" / "result_summary.v1.json").exists())
         self.assertTrue((run_root / "manifest" / "manifest.json").exists())
-        self.assertEqual({artifact.logical_path for artifact in accounting.artifacts}, {
-            "slurm/accounting.json",
-            "slurm/job_detail.json",
-            "manifest/manifest.json",
-        })
-        self.assertIn("submission/slurm_submit_response.json", {
-            artifact.logical_path for artifact in submission.artifacts
-        })
+        self.assertEqual(
+            {artifact.logical_path for artifact in accounting.artifacts},
+            {
+                "slurm/accounting.json",
+                "slurm/job_detail.json",
+                "manifest/manifest.json",
+            },
+        )
+        self.assertIn(
+            "submission/slurm_submit_response.json",
+            {artifact.logical_path for artifact in submission.artifacts},
+        )
         self.assertEqual(
             {artifact.logical_path for artifact in runtime.artifacts},
             {"slurm/runtime_status.json", "manifest/manifest.json"},
         )
-        self.assertIn("environment/summary.json", {
-            artifact.logical_path for artifact in environment.artifacts
-        })
-        self.assertIn("outputs/inventory.json", {
-            artifact.logical_path for artifact in outputs.artifacts
-        })
-        self.assertIn("derived/result_summary.v1.json", {
-            artifact.logical_path for artifact in summary.artifacts
-        })
-        self.assertIn("run/request/resource-plan.json", {
-            artifact.logical_path for artifact in submission.artifacts
-        })
-        self.assertIn("run/environment/basic.json", {
-            artifact.logical_path for artifact in environment.artifacts
-        })
+        self.assertIn(
+            "environment/summary.json",
+            {artifact.logical_path for artifact in environment.artifacts},
+        )
+        self.assertIn(
+            "outputs/inventory.json", {artifact.logical_path for artifact in outputs.artifacts}
+        )
+        self.assertIn(
+            "derived/result_summary.v1.json",
+            {artifact.logical_path for artifact in summary.artifacts},
+        )
+        self.assertIn(
+            "run/request/resource-plan.json",
+            {artifact.logical_path for artifact in submission.artifacts},
+        )
+        self.assertIn(
+            "run/environment/basic.json",
+            {artifact.logical_path for artifact in environment.artifacts},
+        )
         self.assertIn("stderr log missing", logs.warnings)
         env_payload = (run_root / "environment" / "summary.json").read_text(encoding="utf-8")
         self.assertIn("USER=alice", env_payload)

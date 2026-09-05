@@ -15,11 +15,11 @@ import os
 import stat
 import tempfile
 import uuid
-from collections.abc import Callable, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator
+from typing import Any
 
 from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.workspace import (
@@ -181,16 +181,12 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                 self._crash("after_journal_prepared")
                 root = Path(workspace.local_root).resolve(strict=True)
                 for item in prepared:
-                    lease = self.live_store.renew_writer(
-                        lease, lease_seconds=self.lease_seconds
-                    )
+                    lease = self.live_store.renew_writer(lease, lease_seconds=self.lease_seconds)
                     _apply_prepared(item, root)
                     self._crash(f"after_file:{item.path}")
                 observed_after, _ = _capture_manifest(workspace)
                 if observed_after != expected_after:
-                    raise WorkspaceLiveConflict(
-                        "Workspace changed outside the controlled mutation"
-                    )
+                    raise WorkspaceLiveConflict("Workspace changed outside the controlled mutation")
                 journal = self.journal_store.mark_files_applied(
                     journal.mutation_id,
                     owner=owner,
@@ -211,10 +207,8 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                     self._rollback_exception(workspace, journal)
                 raise
             finally:
-                try:
+                with suppress(WorkspaceLiveConflict, KeyError):
                     self.live_store.release_writer(lease)
-                except (WorkspaceLiveConflict, KeyError):
-                    pass
 
     def recover_workspace(self, workspace_id: str, owner: str) -> WorkspaceRecoveryReport:
         workspace = self.store.get_workspace(workspace_id, owner=owner)
@@ -226,9 +220,7 @@ class DurableWorkspaceEditor(WorkspaceEditor):
         committed: list[str] = []
         rolled_back: list[str] = []
         conflicted: list[str] = []
-        for journal in self.journal_store.list_open(
-            workspace.workspace_id, owner=workspace.owner
-        ):
+        for journal in self.journal_store.list_open(workspace.workspace_id, owner=workspace.owner):
             observed, _ = _capture_manifest(workspace)
             if journal.state is WorkspaceMutationState.PREPARED:
                 if observed == journal.from_digest:
@@ -260,9 +252,7 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                 continue
             if journal.state is WorkspaceMutationState.FILES_APPLIED:
                 if journal.to_digest is not None and observed == journal.to_digest:
-                    head = self.live_store.get_head(
-                        workspace.workspace_id, owner=workspace.owner
-                    )
+                    head = self.live_store.get_head(workspace.workspace_id, owner=workspace.owner)
                     if (
                         head.live_revision == journal.from_revision
                         and head.live_digest == journal.from_digest
@@ -271,9 +261,7 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                             lease = self.live_store.claim_writer(
                                 workspace.workspace_id,
                                 owner=workspace.owner,
-                                writer_id=(
-                                    f"workspace-recovery:{os.getpid()}:{uuid.uuid4().hex}"
-                                ),
+                                writer_id=(f"workspace-recovery:{os.getpid()}:{uuid.uuid4().hex}"),
                                 lease_seconds=self.lease_seconds,
                             )
                         except WorkspaceLiveConflict:
@@ -288,10 +276,8 @@ class DurableWorkspaceEditor(WorkspaceEditor):
                                 lease=lease,
                             )
                         finally:
-                            try:
+                            with suppress(WorkspaceLiveConflict):
                                 self.live_store.release_writer(lease)
-                            except WorkspaceLiveConflict:
-                                pass
                         _remove_tree(Path(journal.backup_ref))
                         committed.append(journal.mutation_id)
                         continue
@@ -393,7 +379,9 @@ class DurableWorkspaceEditor(WorkspaceEditor):
             total_diff_bytes += len(unified.encode())
             if total_diff_bytes > self.max_diff_bytes:
                 raise WorkspacePolicyError("Workspace diff exceeds the output limit")
-            after_digest = None if patch.operation == "delete" else hashlib.sha256(after).hexdigest()
+            after_digest = (
+                None if patch.operation == "delete" else hashlib.sha256(after).hexdigest()
+            )
             change = WorkspaceFileChange(
                 path=relative,
                 operation=patch.operation,
@@ -441,9 +429,7 @@ class DurableWorkspaceEditor(WorkspaceEditor):
 
     @contextmanager
     def _workspace_lock(self, workspace: AgentWorkspaceRecord) -> Iterator[None]:
-        name = hashlib.sha256(
-            f"{workspace.owner}\0{workspace.workspace_id}".encode()
-        ).hexdigest()
+        name = hashlib.sha256(f"{workspace.owner}\0{workspace.workspace_id}".encode()).hexdigest()
         path = self.lock_root / f"{name}.lock"
         with path.open("a+b") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
@@ -484,7 +470,9 @@ def _capture_manifest(
                     relative, "file", mode, item.st_size, _file_sha256(path)
                 )
             else:
-                raise WorkspaceLiveConflict("Workspace live manifest contains unsupported file type")
+                raise WorkspaceLiveConflict(
+                    "Workspace live manifest contains unsupported file type"
+                )
             if len(entries) > 10_000:
                 raise WorkspaceLiveConflict("Workspace live manifest exceeds entry limit")
     return _manifest_digest(entries), entries

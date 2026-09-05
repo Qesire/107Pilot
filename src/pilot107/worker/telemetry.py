@@ -159,9 +159,7 @@ def load_worker_metrics(root: Path) -> list[dict[str, Any]]:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise WorkerTelemetryError(
-                f"worker metrics entry is unreadable: {path.name}"
-            ) from exc
+            raise WorkerTelemetryError(f"worker metrics entry is unreadable: {path.name}") from exc
         worker_id = payload.get("worker_id") if isinstance(payload, dict) else None
         if not isinstance(worker_id, str):
             raise WorkerTelemetryError(f"worker metrics identity is invalid: {path.name}")
@@ -201,9 +199,7 @@ def _validate_payload(payload: object, *, worker_id: str) -> None:
         raise WorkerTelemetryError("worker metrics active flag is invalid")
     stopped_at = payload.get("stopped_at_unix")
     if stopped_at is not None and (
-        not isinstance(stopped_at, (int, float))
-        or isinstance(stopped_at, bool)
-        or stopped_at < 0
+        not isinstance(stopped_at, (int, float)) or isinstance(stopped_at, bool) or stopped_at < 0
     ):
         raise WorkerTelemetryError("worker metrics stopped_at_unix is invalid")
 

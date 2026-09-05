@@ -123,8 +123,8 @@ class AgentTurnWorker:
         self._clock = clock or (lambda: int(time.time()))
         self._publish_event_hint = publish_event_hint or (lambda _session, _sequence: None)
         self.phase_aware_builder = phase_aware_builder
-        self.checkpoint_rebuilder = (
-            checkpoint_rebuilder or build_tool_receipt_checkpoint_rebuilder(store)
+        self.checkpoint_rebuilder = checkpoint_rebuilder or build_tool_receipt_checkpoint_rebuilder(
+            store
         )
 
     def dispatch_due(self, *, limit: int) -> AgentTurnDispatchResult:
@@ -317,9 +317,10 @@ class AgentTurnWorker:
         else:
             error = _object_or_empty(terminal.payload.get("error"))
             error_code = error.get("code")
-            cancelled = error_code == "aborted" or self.store.get_turn(
-                claim.turn_id, owner=claim.owner
-            ).cancel_requested
+            cancelled = (
+                error_code == "aborted"
+                or self.store.get_turn(claim.turn_id, owner=claim.owner).cancel_requested
+            )
             usage = {}
             outcome = {
                 "status": "aborted" if cancelled else "failed",
@@ -441,9 +442,7 @@ class AgentTurnWorker:
                 project_id=project_id if isinstance(project_id, str) else None,
                 workspace_id=workspace_id if isinstance(workspace_id, str) else None,
                 operations=(
-                    frozenset({"read", "write", "validate"})
-                    if project_profile
-                    else frozenset()
+                    frozenset({"read", "write", "validate"}) if project_profile else frozenset()
                 ),
                 max_commands=64 if project_profile else 0,
             )

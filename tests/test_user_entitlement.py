@@ -142,8 +142,7 @@ class UserEntitlementTests(unittest.TestCase):
     def test_store_applies_global_platform_migrations_in_order(self) -> None:
         with sqlite3.connect(self.store.db_path) as conn:
             rows = conn.execute(
-                "SELECT migration_id, checksum FROM schema_migrations "
-                "ORDER BY migration_id"
+                "SELECT migration_id, checksum FROM schema_migrations ORDER BY migration_id"
             ).fetchall()
             tables = {
                 row[0]

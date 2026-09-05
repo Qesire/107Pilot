@@ -154,16 +154,12 @@ class WebServerTests(unittest.TestCase):
         # tus PATCH streams ``application/offset+octet-stream``; DELETE/OPTIONS
         # carry no body, so an absent Content-Type must pass the CSRF gate.
         self.assertIsNone(
-            mutating_request_error(
-                config, {"Content-Type": "application/offset+octet-stream"}
-            )
+            mutating_request_error(config, {"Content-Type": "application/offset+octet-stream"})
         )
         self.assertIsNone(mutating_request_error(config, {}))
         # Browser-auto-submittable form encodings stay rejected.
         self.assertEqual(
-            mutating_request_error(
-                config, {"Content-Type": "application/x-www-form-urlencoded"}
-            ),
+            mutating_request_error(config, {"Content-Type": "application/x-www-form-urlencoded"}),
             "CSRF.JSON_REQUIRED",
         )
 
@@ -179,14 +175,10 @@ class WebServerTests(unittest.TestCase):
             "Host": "pilot107-web:3000",
         }
         self.assertIsNone(
-            mutating_request_error(
-                config, {**base, "Origin": "https://pilot.example.edu:8443"}
-            )
+            mutating_request_error(config, {**base, "Origin": "https://pilot.example.edu:8443"})
         )
         self.assertEqual(
-            mutating_request_error(
-                config, {**base, "Origin": "http://pilot.example.edu:8443"}
-            ),
+            mutating_request_error(config, {**base, "Origin": "http://pilot.example.edu:8443"}),
             "CSRF.ORIGIN_DENIED",
         )
 
@@ -333,17 +325,13 @@ class TusProxyTests(unittest.TestCase):
             auth_required=True,
         )
         self._api_server = ThreadingHTTPServer(("127.0.0.1", 0), make_api_handler(api))
-        self._api_thread = threading.Thread(
-            target=self._api_server.serve_forever, daemon=True
-        )
+        self._api_thread = threading.Thread(target=self._api_server.serve_forever, daemon=True)
         self._api_thread.start()
         api_base = f"http://127.0.0.1:{self._api_server.server_port}"
 
         config = WebConfig(api_base_url=api_base, public_origin=None)
         self._bff_server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(config))
-        self._bff_thread = threading.Thread(
-            target=self._bff_server.serve_forever, daemon=True
-        )
+        self._bff_thread = threading.Thread(target=self._bff_server.serve_forever, daemon=True)
         self._bff_thread.start()
         self.base = f"http://127.0.0.1:{self._bff_server.server_port}"
         self.tus = f"{self.base}/api/v1/files/tus"
@@ -396,9 +384,7 @@ class TusProxyTests(unittest.TestCase):
             headers={
                 **user,
                 "Upload-Length": str(len(payload)),
-                "Upload-Metadata": self._metadata(
-                    filename="proxied.bin", target_path=self.target
-                ),
+                "Upload-Metadata": self._metadata(filename="proxied.bin", target_path=self.target),
             },
         )
         self.assertEqual(created.status, 201)

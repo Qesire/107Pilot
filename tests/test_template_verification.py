@@ -462,9 +462,7 @@ class TemplateVerificationTests(unittest.TestCase):
                         "sha256": artifact.sha256,
                         "size_bytes": artifact.size_bytes,
                         "content_type": artifact.content_type,
-                        "evidence_ref": (
-                            f"evidence://runs/{run.run_id}/{artifact.logical_path}"
-                        ),
+                        "evidence_ref": (f"evidence://runs/{run.run_id}/{artifact.logical_path}"),
                     }
                     for artifact in (accounting, summary)
                 ],

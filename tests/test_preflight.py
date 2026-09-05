@@ -182,8 +182,7 @@ class PreflightWorkdirPathsTests(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                f.code == "WORKDIR_SHARED_UNKNOWN"
-                and f.severity == PreflightSeverity.WARN
+                f.code == "WORKDIR_SHARED_UNKNOWN" and f.severity == PreflightSeverity.WARN
                 for f in findings
             )
         )
@@ -297,8 +296,7 @@ class PreflightWorkdirFsTests(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                f.code == "WORKDIR_WILL_BE_CREATED"
-                and f.severity == PreflightSeverity.WARN
+                f.code == "WORKDIR_WILL_BE_CREATED" and f.severity == PreflightSeverity.WARN
                 for f in findings
             )
         )
@@ -389,8 +387,7 @@ class PreflightWorkdirFsTests(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                f.code == "WORKDIR_OUTPUT_WILL_BE_CREATED"
-                and f.severity == PreflightSeverity.WARN
+                f.code == "WORKDIR_OUTPUT_WILL_BE_CREATED" and f.severity == PreflightSeverity.WARN
                 for f in findings
             )
         )

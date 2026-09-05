@@ -106,9 +106,7 @@ class GatewayBackedFauxAgentd:
                 {"model_profile_id": request.model_profile_id, "task_kind": "interactive"},
             )
             run_id = next(
-                ref.removeprefix("run:")
-                for ref in request.context_refs
-                if ref.startswith("run:")
+                ref.removeprefix("run:") for ref in request.context_refs if ref.startswith("run:")
             )
             arguments = (
                 {"run_id": run_id},
@@ -321,9 +319,7 @@ def _stack(tmp_path: Path, *, clock: MutableClock | None = None):
                     store=run_store,
                     evidence_store=evidence_store,
                 ),
-                workspace_reader=LocalWorkspaceReader(
-                    allowed_roots=(tmp_path / "workspaces",)
-                ),
+                workspace_reader=LocalWorkspaceReader(allowed_roots=(tmp_path / "workspaces",)),
                 workspace_root_templates=(str(tmp_path / "workspaces" / "{user}"),),
             )
         ),
@@ -493,9 +489,7 @@ def test_fault_after_one_tool_result_replays_idempotently(tmp_path: Path) -> Non
 
 
 def test_100_idle_and_10_active_turns_stay_within_resource_budgets(tmp_path: Path) -> None:
-    agent_store, control, run_store, evidence_store, signer, gateway, service, _ = _stack(
-        tmp_path
-    )
+    agent_store, control, run_store, evidence_store, signer, gateway, service, _ = _stack(tmp_path)
     for index in range(100):
         service.create_session(
             owner=f"idle{index}",

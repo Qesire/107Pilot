@@ -69,21 +69,15 @@ def test_workspace_handlers_enforce_roots_traversal_symlinks_and_bounds(
         "linked.txt",
     }
     assert all("target" not in item for item in listed.result["items"])
-    read = handlers["workspace_read"](
-        "alice", {"workspace": str(workspace), "path": "large.txt"}
-    )
+    read = handlers["workspace_read"]("alice", {"workspace": str(workspace), "path": "large.txt"})
     assert len(read.result["content"].encode()) == 64 * 1024
     assert read.result["truncated"] is True
 
     for path in ("../outside", ".git/private-token", "linked.txt"):
         with pytest.raises(error_type):
-            handlers["workspace_read"](
-                "alice", {"workspace": str(workspace), "path": path}
-            )
+            handlers["workspace_read"]("alice", {"workspace": str(workspace), "path": path})
     with pytest.raises(error_type):
-        handlers["workspace_read"](
-            "bob", {"workspace": str(workspace), "path": "README.md"}
-        )
+        handlers["workspace_read"]("bob", {"workspace": str(workspace), "path": "README.md"})
 
 
 def test_workspace_search_returns_bounded_snippets(tmp_path: Path) -> None:
@@ -94,9 +88,7 @@ def test_workspace_search_returns_bounded_snippets(tmp_path: Path) -> None:
         "alice", {"workspace": str(workspace), "query": "needle"}
     )
 
-    assert result.result["matches"] == [
-        {"path": "README.md", "line": 2, "snippet": "needle here"}
-    ]
+    assert result.result["matches"] == [{"path": "README.md", "line": 2, "snippet": "needle here"}]
     assert result.evidence_refs == (f"workspace:{workspace}:README.md:2",)
 
 
@@ -129,9 +121,7 @@ def test_workspace_list_reports_truncation_only_when_more_paths_exist(
         workspace_root_templates=context.workspace_root_templates,
     )
 
-    result = build_handlers(context)["workspace_list"](
-        "alice", {"workspace": str(workspace)}
-    )
+    result = build_handlers(context)["workspace_list"]("alice", {"workspace": str(workspace)})
 
     assert len(result.result["items"]) == min(count, 500)
     assert result.result["truncated"] is truncated
@@ -200,12 +190,8 @@ def test_observation_handlers_derive_owner_and_return_evidence_refs(
     observations = _FakeObservabilityService()
     handlers = build_handlers(replace(context, observability_service=observations))
 
-    platform = handlers["platform_observation_get"](
-        "alice", {"connection_id": "connection1"}
-    )
-    account = handlers["account_observation_get"](
-        "alice", {"connection_id": "connection1"}
-    )
+    platform = handlers["platform_observation_get"]("alice", {"connection_id": "connection1"})
+    account = handlers["account_observation_get"]("alice", {"connection_id": "connection1"})
     run = handlers["run_resources_get"]("alice", {"run_id": "run1"})
 
     assert platform.evidence_refs == ("observation:platform1",)
@@ -217,9 +203,7 @@ def test_observation_handlers_derive_owner_and_return_evidence_refs(
         ("run", "run1", "alice"),
     ]
     with pytest.raises(error_type):
-        handlers["account_observation_get"](
-            "mallory", {"connection_id": "connection1"}
-        )
+        handlers["account_observation_get"]("mallory", {"connection_id": "connection1"})
 
 
 class _ListingReader:

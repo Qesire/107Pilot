@@ -82,8 +82,7 @@ class TokenValidity:
 class TokenValidityProbe(Protocol):
     """Read-only probe of Slurm REST token validity for readiness."""
 
-    def validity(self) -> TokenValidity:
-        ...
+    def validity(self) -> TokenValidity: ...
 
 
 @dataclass
@@ -238,7 +237,7 @@ def _parse_slurm_jwt(stdout: str) -> str | None:
     for line in stdout.splitlines():
         stripped = line.strip()
         if stripped.startswith("SLURM_JWT="):
-            value = stripped[len("SLURM_JWT="):].strip()
+            value = stripped[len("SLURM_JWT=") :].strip()
             if value:
                 return value
     return None

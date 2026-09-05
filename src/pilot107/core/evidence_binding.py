@@ -422,8 +422,7 @@ class EvidenceBinder:
         )
         typed_paths = tuple(item.logical_path for item in typed_objects)
         before_fingerprints = {
-            path: _stable_file_fingerprint(objects[path].store_path)
-            for path in typed_paths
+            path: _stable_file_fingerprint(objects[path].store_path) for path in typed_paths
         }
         verified_at = utc_now_iso()
         digest = self.store.mark_evidence_integrity_checked(
@@ -576,8 +575,10 @@ def _workspace_boundary_values(
             raise EvidenceBindingError("workspace_revision_invalid")
     if legacy is None:
         raise EvidenceBindingError("workspace_boundary_legacy_marker_missing")
-    if not isinstance(legacy, bool) or (revision is None and not legacy) or (
-        revision is not None and legacy
+    if (
+        not isinstance(legacy, bool)
+        or (revision is None and not legacy)
+        or (revision is not None and legacy)
     ):
         raise EvidenceBindingError("workspace_boundary_invalid")
     return {
@@ -1002,11 +1003,7 @@ def _write_seal_marker(evidence_root: Path, run_id: str, content: bytes) -> None
         try:
             descriptor = os.open(
                 temporary_name,
-                os.O_WRONLY
-                | os.O_CREAT
-                | os.O_EXCL
-                | os.O_NOFOLLOW
-                | os.O_CLOEXEC,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
                 0o600,
                 dir_fd=run_fd,
             )

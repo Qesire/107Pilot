@@ -93,22 +93,23 @@ class WebConfig:
         if self.identity_mode == WebIdentityMode.FIXED_USER and (
             self.fixed_user is None or not is_safe_demo_user(self.fixed_user)
         ):
-            raise ValueError(
-                "PILOT107_WEB_FIXED_USER is required and must be a safe username"
-            )
+            raise ValueError("PILOT107_WEB_FIXED_USER is required and must be a safe username")
         if self.terminal_deep_link is not None and not is_safe_terminal_deep_link(
             self.terminal_deep_link
         ):
             raise ValueError("PILOT107_WEB_TERMINAL_DEEP_LINK must be an absolute HTTP(S) URL")
         if self.public_origin is not None and normalize_origin(self.public_origin) is None:
             raise ValueError("PILOT107_WEB_PUBLIC_ORIGIN must be an HTTP(S) origin")
-        if min(
-            self.max_request_body_bytes,
-            self.max_response_body_bytes,
-            self.upstream_timeout_seconds,
-            self.rate_limit_requests,
-            self.rate_limit_window_seconds,
-        ) <= 0:
+        if (
+            min(
+                self.max_request_body_bytes,
+                self.max_response_body_bytes,
+                self.upstream_timeout_seconds,
+                self.rate_limit_requests,
+                self.rate_limit_window_seconds,
+            )
+            <= 0
+        ):
             raise ValueError("Web size and rate limits must be positive")
 
 
@@ -135,13 +136,9 @@ def config_from_env(env: Mapping[str, str] | None = None) -> WebConfig:
         max_response_body_bytes=int(
             values.get("PILOT107_WEB_MAX_RESPONSE_BODY_BYTES", str(8 * 1024 * 1024))
         ),
-        upstream_timeout_seconds=int(
-            values.get("PILOT107_WEB_UPSTREAM_TIMEOUT_SECONDS", "600")
-        ),
+        upstream_timeout_seconds=int(values.get("PILOT107_WEB_UPSTREAM_TIMEOUT_SECONDS", "600")),
         rate_limit_requests=int(values.get("PILOT107_WEB_RATE_LIMIT_REQUESTS", "300")),
-        rate_limit_window_seconds=int(
-            values.get("PILOT107_WEB_RATE_LIMIT_WINDOW_SECONDS", "60")
-        ),
+        rate_limit_window_seconds=int(values.get("PILOT107_WEB_RATE_LIMIT_WINDOW_SECONDS", "60")),
     )
 
 
@@ -237,15 +234,18 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
                     "application/json; charset=utf-8",
                 )
                 return
-            payload = json.dumps(
-                {
-                    "identity_mode": config.identity_mode.value,
-                    "user": user,
-                    "switchable": config.identity_mode == WebIdentityMode.DEMO,
-                    "terminal_deep_link": config.terminal_deep_link,
-                },
-                ensure_ascii=False,
-            ).encode("utf-8") + b"\n"
+            payload = (
+                json.dumps(
+                    {
+                        "identity_mode": config.identity_mode.value,
+                        "user": user,
+                        "switchable": config.identity_mode == WebIdentityMode.DEMO,
+                        "terminal_deep_link": config.terminal_deep_link,
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                + b"\n"
+            )
             self._send_bytes(200, payload, "application/json; charset=utf-8")
 
         def _serve_static(self, *, send_body: bool = True) -> None:
@@ -344,15 +344,18 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
                     extra_headers=_tus_response_headers(exc.headers),
                 )
             except OSError as exc:
-                payload = json.dumps(
-                    {
-                        "error": {
-                            "code": "WEB.UPSTREAM_UNAVAILABLE",
-                            "message": str(exc),
-                        }
-                    },
-                    ensure_ascii=False,
-                ).encode("utf-8") + b"\n"
+                payload = (
+                    json.dumps(
+                        {
+                            "error": {
+                                "code": "WEB.UPSTREAM_UNAVAILABLE",
+                                "message": str(exc),
+                            }
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                    + b"\n"
+                )
                 self._send_bytes(502, payload, "application/json; charset=utf-8")
 
         def _streamable_download(self) -> bool:
@@ -467,9 +470,9 @@ def make_handler(config: WebConfig) -> type[BaseHTTPRequestHandler]:
             return self.rfile.read(length) if length else None, None
 
         def _send_error(self, status: int, code: str) -> None:
-            payload = json.dumps({"error": {"code": code}}, separators=(",", ":")).encode(
-                "utf-8"
-            ) + b"\n"
+            payload = (
+                json.dumps({"error": {"code": code}}, separators=(",", ":")).encode("utf-8") + b"\n"
+            )
             self._send_bytes(status, payload, "application/json; charset=utf-8")
 
     return Handler

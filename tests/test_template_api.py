@@ -165,9 +165,7 @@ class TemplateApiTests(unittest.TestCase):
             body=_json(
                 {
                     "expected_version": started_application.payload["version"],
-                    "confirmation_digest": started_application.payload[
-                        "confirmation_digest"
-                    ],
+                    "confirmation_digest": started_application.payload["confirmation_digest"],
                     "request_key": "bob-adopts-public",
                 }
             ),
@@ -178,9 +176,7 @@ class TemplateApiTests(unittest.TestCase):
             body=_json(
                 {
                     "expected_version": adopted.payload["version"],
-                    "confirmation_digest": started_application.payload[
-                        "confirmation_digest"
-                    ],
+                    "confirmation_digest": started_application.payload["confirmation_digest"],
                     "request_key": "bob-adopts-public",
                 }
             ),
@@ -325,9 +321,7 @@ class TemplateApiTests(unittest.TestCase):
             ),
             headers=self._headers("alice"),
         )
-        target = (
-            f"/api/v1/templates/{published.payload['template_id']}/releases/1.0.0"
-        )
+        target = f"/api/v1/templates/{published.payload['template_id']}/releases/1.0.0"
 
         denied = self.api.handle_get(target, headers=self._headers("carol"))
         visible = self.api.handle_get(target, headers=self._headers("bob"))
@@ -367,8 +361,7 @@ class TemplateApiTests(unittest.TestCase):
 
     def test_draft_list_uses_owner_bound_keyset_cursor(self) -> None:
         created_ids = {
-            self._create_draft(visibility="private").payload["draft_id"]
-            for _ in range(3)
+            self._create_draft(visibility="private").payload["draft_id"] for _ in range(3)
         }
 
         first = self.api.handle_get(
@@ -376,13 +369,11 @@ class TemplateApiTests(unittest.TestCase):
             headers=self._headers("alice"),
         )
         second = self.api.handle_get(
-            "/api/v1/template-drafts?limit=2&cursor="
-            + first.payload["page"]["next_cursor"],
+            "/api/v1/template-drafts?limit=2&cursor=" + first.payload["page"]["next_cursor"],
             headers=self._headers("alice"),
         )
         cross_owner = self.api.handle_get(
-            "/api/v1/template-drafts?limit=1&cursor="
-            + first.payload["page"]["next_cursor"],
+            "/api/v1/template-drafts?limit=1&cursor=" + first.payload["page"]["next_cursor"],
             headers=self._headers("bob"),
         )
 
@@ -452,8 +443,7 @@ class TemplateApiTests(unittest.TestCase):
             headers=self._headers("alice"),
         )
         diff = self.api.handle_get(
-            f"/api/v1/templates/{first.payload['template_id']}/diff"
-            "?from=1.0.0&to=1.1.0",
+            f"/api/v1/templates/{first.payload['template_id']}/diff?from=1.0.0&to=1.1.0",
             headers=self._headers("bob"),
         )
         first_again = self.api.handle_get(
@@ -510,9 +500,7 @@ class TemplateApiTests(unittest.TestCase):
                     "cpus_per_task": 1,
                     "time_limit": "00:05:00",
                 },
-                "extensions": {
-                    "advanced": {"raw_sbatch": "#SBATCH --exclusive"}
-                },
+                "extensions": {"advanced": {"raw_sbatch": "#SBATCH --exclusive"}},
             },
             "compatibility": {"partitions": ["debug"], "gpu": False},
             "publication": {

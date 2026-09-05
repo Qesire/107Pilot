@@ -113,9 +113,7 @@ class ObservabilityCollector:
             targets = self.store.list_run_targets(connection_id)
             terminal = tuple(target for target, state in targets if _terminal(state))
             active = tuple(
-                target
-                for target, state in targets
-                if state in {"RUNNING", "COMPLETING"}
+                target for target, state in targets if state in {"RUNNING", "COMPLETING"}
             )
             owners = tuple(sorted({target.owner for target, _state in targets}))
 
@@ -422,19 +420,11 @@ def _terminal_digest(item: object) -> str:
             "attempt": item.target.attempt,
         },
         "used": {
-            name: {
-                key: value
-                for key, value in measure.__dict__.items()
-                if key != "captured_at"
-            }
+            name: {key: value for key, value in measure.__dict__.items() if key != "captured_at"}
             for name, measure in item.measures.as_dict().items()
         },
         "allocated": {
-            name: {
-                key: value
-                for key, value in measure.__dict__.items()
-                if key != "captured_at"
-            }
+            name: {key: value for key, value in measure.__dict__.items() if key != "captured_at"}
             for name, measure in (item.allocated or item.measures.__class__()).as_dict().items()
         },
     }
@@ -454,7 +444,4 @@ def _terminal_ready(item: object) -> bool:
         item.measures.elapsed,
         None if allocated is None else allocated.allocated_cpus,
     )
-    return all(
-        measure is not None and measure.availability == "available"
-        for measure in required
-    )
+    return all(measure is not None and measure.availability == "available" for measure in required)

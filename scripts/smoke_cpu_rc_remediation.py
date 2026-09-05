@@ -168,10 +168,9 @@ def main() -> int:
                 "submit": True,
             },
         )
-        derived_run_id = (
-            exec_payload.get("execution", {}).get("derived_run_id")
-            or exec_payload.get("derived_run_id")
-        )
+        derived_run_id = exec_payload.get("execution", {}).get(
+            "derived_run_id"
+        ) or exec_payload.get("derived_run_id")
         execution_id = exec_payload.get("execution_id")
         if not derived_run_id:
             detail = _get(f"/remediation-sessions/{session_id}")
@@ -281,8 +280,7 @@ def main() -> int:
         matching = [
             ev
             for ev in evaluations
-            if ev.get("derived_run_id") == derived_run_id
-            and ev.get("execution_id") == execution_id
+            if ev.get("derived_run_id") == derived_run_id and ev.get("execution_id") == execution_id
         ]
         if not matching:
             print(
@@ -344,13 +342,11 @@ def main() -> int:
                 return 1
         checks = evaluation.get("checks") or []
         if not any(
-            c.get("name") == "expected_outputs_verified"
-            and c.get("status") == "passed"
+            c.get("name") == "expected_outputs_verified" and c.get("status") == "passed"
             for c in checks
         ):
             print(
-                f"remediation smoke failed: expected_outputs_verified check not "
-                f"passed: {checks}",
+                f"remediation smoke failed: expected_outputs_verified check not passed: {checks}",
                 file=sys.stderr,
             )
             return 1
@@ -446,9 +442,7 @@ def _contract(command: str) -> dict:
 
 
 def _get(path: str) -> dict:
-    request = urllib.request.Request(
-        url=f"{BASE_URL}{path}", headers={"X-Pilot107-User": "alice"}
-    )
+    request = urllib.request.Request(url=f"{BASE_URL}{path}", headers={"X-Pilot107-User": "alice"})
     with urllib.request.urlopen(request, timeout=30, context=SSL_CONTEXT) as response:
         return json.loads(response.read().decode("utf-8"))
 

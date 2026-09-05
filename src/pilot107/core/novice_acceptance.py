@@ -117,9 +117,7 @@ def evaluate_novice_acceptance(payload: Mapping[str, Any]) -> NoviceAcceptanceRe
             for task in REQUIRED_TASKS:
                 if tasks.get(task) is not True:
                     issues.append(f"{prefix}.tasks.{task} must be true")
-        contract_id, success_run_id = _require_traceability(
-            raw, prefix=prefix, issues=issues
-        )
+        contract_id, success_run_id = _require_traceability(raw, prefix=prefix, issues=issues)
         if contract_id in contract_ids:
             issues.append(f"{prefix}.contract_id must be unique")
         contract_ids.add(contract_id)
@@ -135,9 +133,7 @@ def evaluate_novice_acceptance(payload: Mapping[str, Any]) -> NoviceAcceptanceRe
     structurally_valid = not issues
     if recorded < MIN_PARTICIPANTS and structurally_valid:
         status = "pending"
-        issues.append(
-            f"need at least {MIN_PARTICIPANTS} participants; recorded {recorded}"
-        )
+        issues.append(f"need at least {MIN_PARTICIPANTS} participants; recorded {recorded}")
     elif not structurally_valid:
         status = "failed"
     elif len(durations) != recorded:
@@ -146,8 +142,7 @@ def evaluate_novice_acceptance(payload: Mapping[str, Any]) -> NoviceAcceptanceRe
     elif median_seconds is None or median_seconds > MAX_MEDIAN_FIRST_SUCCESS_SECONDS:
         status = "failed"
         issues.append(
-            "median first-success duration exceeds "
-            f"{MAX_MEDIAN_FIRST_SUCCESS_SECONDS:.0f} seconds"
+            f"median first-success duration exceeds {MAX_MEDIAN_FIRST_SUCCESS_SECONDS:.0f} seconds"
         )
     else:
         status = "passed"
@@ -211,8 +206,7 @@ def evaluate_novice_study_readiness(
         issues.append("failure Run diagnosis must be succeeded")
 
     evidence_paths = {
-        str(item.get("logical_path"))
-        for item in _mapping_items(failure_evidence.get("objects"))
+        str(item.get("logical_path")) for item in _mapping_items(failure_evidence.get("objects"))
     }
     if not {"logs/stdout.tail.json", "logs/stderr.tail.json"} & evidence_paths:
         issues.append("failure Run must expose a bounded log Evidence object")
@@ -284,9 +278,7 @@ def _duration_seconds(
     issues: list[str],
 ) -> float | None:
     started = _timestamp(payload.get("started_at"), f"{prefix}.started_at", issues)
-    succeeded = _timestamp(
-        payload.get("first_success_at"), f"{prefix}.first_success_at", issues
-    )
+    succeeded = _timestamp(payload.get("first_success_at"), f"{prefix}.first_success_at", issues)
     if started is None or succeeded is None:
         return None
     duration = (succeeded - started).total_seconds()
@@ -324,8 +316,7 @@ def _require_traceability(
         issues.append(f"{prefix}.success_run_id must differ from failure_run_id")
     evidence_refs = payload.get("evidence_refs")
     if not isinstance(evidence_refs, list) or not all(
-        isinstance(item, str) and item.startswith("evidence://runs/")
-        for item in evidence_refs
+        isinstance(item, str) and item.startswith("evidence://runs/") for item in evidence_refs
     ):
         issues.append(f"{prefix}.evidence_refs must contain Evidence URIs")
         return contract_id, success_run_id
@@ -333,9 +324,7 @@ def _require_traceability(
     failure_prefix = f"evidence://runs/{failure_run_id}/"
     if not any(item.startswith(success_prefix) and "/logs/" in item for item in evidence_refs):
         issues.append(f"{prefix}.evidence_refs must include a success Run log object")
-    if not any(
-        item.startswith(success_prefix) and "/outputs/" in item for item in evidence_refs
-    ):
+    if not any(item.startswith(success_prefix) and "/outputs/" in item for item in evidence_refs):
         issues.append(f"{prefix}.evidence_refs must include a success Run output object")
     if not any(item.startswith(failure_prefix) and "/logs/" in item for item in evidence_refs):
         issues.append(f"{prefix}.evidence_refs must include a failure Run log object")

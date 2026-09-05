@@ -276,8 +276,7 @@ class DockerSimulatorCommandBackendTests(unittest.TestCase):
     def test_get_job_aggregates_array_task_rows_under_parent_job_id(self) -> None:
         executor = FakeDockerExecutor()
         executor.squeue_output = (
-            "9001_0|alice|RUNNING|anode16\n"
-            "9001_[1-3]|alice|PENDING|Dependency\n"
+            "9001_0|alice|RUNNING|anode16\n9001_[1-3]|alice|PENDING|Dependency\n"
         )
         backend = DockerSimulatorCommandBackend(
             executor=executor,  # type: ignore[arg-type]
@@ -292,10 +291,7 @@ class DockerSimulatorCommandBackendTests(unittest.TestCase):
 
     def test_get_finished_job_aggregates_array_accounting_rows(self) -> None:
         executor = FakeDockerExecutor()
-        executor.sacct_output = (
-            "9001_0|alice|COMPLETED|0:0\n"
-            "9001_1|alice|COMPLETED|0:0\n"
-        )
+        executor.sacct_output = "9001_0|alice|COMPLETED|0:0\n9001_1|alice|COMPLETED|0:0\n"
         backend = DockerSimulatorCommandBackend(
             executor=executor,  # type: ignore[arg-type]
             allowed_roots=["/public/home/alice"],

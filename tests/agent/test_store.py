@@ -146,17 +146,12 @@ def test_claim_reclaim_and_stale_writer_fencing(tmp_path: Path) -> None:
     first_claim = store.claim_turn(turn.turn_id, worker_id="worker-1", lease_seconds=30)
     assert first_claim is not None
     assert first_claim.turn_id == turn.turn_id
-    assert (
-        store.claim_turn(turn.turn_id, worker_id="worker-2", lease_seconds=30)
-        is None
-    )
+    assert store.claim_turn(turn.turn_id, worker_id="worker-2", lease_seconds=30) is None
 
     renewed = store.renew_turn(first_claim, lease_seconds=30)
     assert renewed.fencing_token == first_claim.fencing_token
     clock.advance(31)
-    second_claim = store.claim_turn(
-        turn.turn_id, worker_id="worker-2", lease_seconds=30
-    )
+    second_claim = store.claim_turn(turn.turn_id, worker_id="worker-2", lease_seconds=30)
     assert second_claim is not None
     assert second_claim.fencing_token == first_claim.fencing_token + 1
 
@@ -282,9 +277,7 @@ def test_partial_unique_index_allows_only_one_running_turn_per_owner(
 ) -> None:
     clock = MutableClock()
     store = _new_store(tmp_path / "agent.db", clock)
-    alice_turn_one = _create_turn(
-        store, _create_session(store, request_key="alice-session-1")
-    )
+    alice_turn_one = _create_turn(store, _create_session(store, request_key="alice-session-1"))
     alice_turn_two = _create_turn(
         store,
         _create_session(store, request_key="alice-session-2"),
@@ -296,20 +289,11 @@ def test_partial_unique_index_allows_only_one_running_turn_per_owner(
         request_key="bob-turn-1",
     )
 
-    alice_claim = store.claim_turn(
-        alice_turn_one.turn_id, worker_id="worker-1", lease_seconds=30
-    )
+    alice_claim = store.claim_turn(alice_turn_one.turn_id, worker_id="worker-1", lease_seconds=30)
     assert alice_claim is not None
     assert alice_claim.owner == "alice"
-    assert (
-        store.claim_turn(
-            alice_turn_two.turn_id, worker_id="worker-2", lease_seconds=30
-        )
-        is None
-    )
-    bob_claim = store.claim_turn(
-        bob_turn.turn_id, worker_id="worker-2", lease_seconds=30
-    )
+    assert store.claim_turn(alice_turn_two.turn_id, worker_id="worker-2", lease_seconds=30) is None
+    bob_claim = store.claim_turn(bob_turn.turn_id, worker_id="worker-2", lease_seconds=30)
     assert bob_claim is not None
     assert bob_claim.owner == "bob"
 
@@ -379,9 +363,7 @@ def test_tool_invocation_replay_conflict_usage_and_stale_fence(tmp_path: Path) -
     assert usage.bytes_returned == 5
 
     clock.advance(31)
-    new_claim = store.claim_turn(
-        claim.turn_id, worker_id="worker-2", lease_seconds=30
-    )
+    new_claim = store.claim_turn(claim.turn_id, worker_id="worker-2", lease_seconds=30)
     assert new_claim is not None
     with pytest.raises(_store_api().AgentSessionConflict):
         store.reserve_tool_invocation(
@@ -404,9 +386,7 @@ def test_list_sessions_has_stable_descending_cursor(tmp_path: Path) -> None:
     clock.advance(1)
     second = _create_session(store, request_key="session-2")
 
-    first_page, cursor = store.list_sessions_page(
-        owner="alice", states=None, before=None, limit=1
-    )
+    first_page, cursor = store.list_sessions_page(owner="alice", states=None, before=None, limit=1)
     assert first_page == [second]
     assert cursor is not None
     second_page, cursor = store.list_sessions_page(

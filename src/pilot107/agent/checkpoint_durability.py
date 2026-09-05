@@ -17,9 +17,7 @@ from typing import Any
 from pilot107.core.postgres_control_repository import PostgresDriverUnavailable
 
 POSTGRES_CHECKPOINT_POINTER_MIGRATION_ID = "006a.002.agent_checkpoint_pointer"
-POSTGRES_CHECKPOINT_POINTER_IDENTITY_MIGRATION_ID = (
-    "006a.003.agent_checkpoint_pointer_identity"
-)
+POSTGRES_CHECKPOINT_POINTER_IDENTITY_MIGRATION_ID = "006a.003.agent_checkpoint_pointer_identity"
 
 # Frozen after 006a.002 shipped. Do not alter these statements: deployed
 # databases verify this checksum before any later durability migration runs.

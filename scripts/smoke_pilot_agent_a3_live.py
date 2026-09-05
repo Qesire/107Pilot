@@ -41,7 +41,7 @@ def _request(*, digest: str, sleep_seconds: int, name: str) -> AgentTaskRequest:
         payload={
             "script": (
                 "#!/bin/bash\n"
-                "test \"$(python3 marker.py)\" = snapshot-ok\n"
+                'test "$(python3 marker.py)" = snapshot-ok\n'
                 f"sleep {sleep_seconds}\n"
                 "printf 'validation-complete\\n'\n"
             ),
@@ -266,9 +266,7 @@ def main() -> int:
             envelope=_envelope(digest=digest),
         )
         worker.tick()
-        cancel_running = SQLiteAgentTaskStore(database).get_task(
-            cancel_task.task_id, owner="alice"
-        )
+        cancel_running = SQLiteAgentTaskStore(database).get_task(cancel_task.task_id, owner="alice")
         if cancel_running.linked_run_id is None:
             raise RuntimeError("D1 cancellation fixture did not create a linked Run")
         task_service.request_cancel(
@@ -279,9 +277,7 @@ def main() -> int:
         cancellation_deadline = time.monotonic() + 30
         while time.monotonic() < cancellation_deadline:
             worker.tick()
-            cancelled = SQLiteAgentTaskStore(database).get_task(
-                cancel_task.task_id, owner="alice"
-            )
+            cancelled = SQLiteAgentTaskStore(database).get_task(cancel_task.task_id, owner="alice")
             if cancelled.state is AgentTaskState.CANCELLED:
                 break
             time.sleep(0.25)

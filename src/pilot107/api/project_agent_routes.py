@@ -85,9 +85,7 @@ class ProjectAgentRoutes:
                 _no_params(params)
                 return ApiResponse(
                     status=200,
-                    payload=project_view_payload(
-                        self.service.get_project(parts[1], owner=owner)
-                    ),
+                    payload=project_view_payload(self.service.get_project(parts[1], owner=owner)),
                 )
             if len(parts) == 3 and parts[0] == "agent-changesets" and parts[2] == "diff":
                 _exact_params(params, {"project_id", "workspace_id"})
@@ -240,11 +238,7 @@ class ProjectAgentRoutes:
                     approved_digest=_required_string(payload, "approved_digest"),
                     target_root=_optional_string(payload.get("target_root")),
                 )
-                status = (
-                    409
-                    if publication.state is WorkspacePublicationState.CONFLICTED
-                    else 200
-                )
+                status = 409 if publication.state is WorkspacePublicationState.CONFLICTED else 200
                 response = publication_payload(publication)
                 if status == 409:
                     response["error"] = {
@@ -322,9 +316,7 @@ class ProjectAgentRoutes:
                 project_id = _required_string(payload, "project_id")
                 workspace_id = _required_string(payload, "workspace_id")
                 session_id = _required_string(payload, "session_id")
-                validation_contract_id = _required_string(
-                    payload, "validation_contract_id"
-                )
+                validation_contract_id = _required_string(payload, "validation_contract_id")
                 validation_run_id = _required_string(payload, "validation_run_id")
                 evidence_refs = tuple(raw_refs)
                 contract_value = dict(raw_contract)
@@ -340,9 +332,7 @@ class ProjectAgentRoutes:
                         validation_evidence_refs=evidence_refs,
                         formal_contract_payload=contract_value,
                     )
-                    return ApiResponse(
-                        status=200, payload=formal_run_approval_payload(approval)
-                    )
+                    return ApiResponse(status=200, payload=formal_run_approval_payload(approval))
                 if self.formal_run_observer is not None:
                     self.formal_run_observer.preflight_formal_project_run(
                         project_id=project_id,

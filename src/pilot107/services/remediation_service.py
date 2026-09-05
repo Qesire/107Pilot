@@ -152,9 +152,9 @@ class RemediationService:
                 code="AUTH.FORBIDDEN",
             )
         diagnosis_digest, evidence_digest = self._source_digests(run)
-        session_id = "remsession_" + hashlib.sha256(
-            f"{owner}\0{normalized_key}".encode()
-        ).hexdigest()[:32]
+        session_id = (
+            "remsession_" + hashlib.sha256(f"{owner}\0{normalized_key}".encode()).hexdigest()[:32]
+        )
         return self.remediation_store.create_session(
             session_id=session_id,
             owner=owner,
@@ -694,8 +694,7 @@ class RemediationService:
         proposals = [
             item
             for item in self.remediation_store.list_proposals(session.session_id)
-            if item.proposal_id in approved_ids
-            and item.action_type == "create_repair_ticket"
+            if item.proposal_id in approved_ids and item.action_type == "create_repair_ticket"
         ]
         if len(proposals) != 1:
             raise RemediationServiceError(
@@ -703,9 +702,12 @@ class RemediationService:
                 code="REMEDIATION.CODE_REPAIR_NOT_APPROVED",
             )
         proposal = proposals[0]
-        execution_id = "remexec_" + hashlib.sha256(
-            f"{session.session_id}\0{proposal.proposal_id}".encode()
-        ).hexdigest()[:32]
+        execution_id = (
+            "remexec_"
+            + hashlib.sha256(f"{session.session_id}\0{proposal.proposal_id}".encode()).hexdigest()[
+                :32
+            ]
+        )
         try:
             existing = self.remediation_store.get_execution(execution_id)
         except KeyError:
@@ -864,8 +866,7 @@ class RemediationService:
         proposals = [
             item
             for item in self.remediation_store.list_proposals(session.session_id)
-            if item.proposal_id in approved_ids
-            and item.action_type == "create_repair_ticket"
+            if item.proposal_id in approved_ids and item.action_type == "create_repair_ticket"
         ]
         if len(proposals) != 1:
             raise RemediationServiceError(
@@ -873,9 +874,12 @@ class RemediationService:
                 code="REMEDIATION.CODE_REPAIR_NOT_APPROVED",
             )
         proposal = proposals[0]
-        execution_id = "remexec_" + hashlib.sha256(
-            f"{session.session_id}\0{proposal.proposal_id}".encode()
-        ).hexdigest()[:32]
+        execution_id = (
+            "remexec_"
+            + hashlib.sha256(f"{session.session_id}\0{proposal.proposal_id}".encode()).hexdigest()[
+                :32
+            ]
+        )
         try:
             existing = self.remediation_store.get_execution(execution_id)
         except KeyError:
@@ -1014,9 +1018,10 @@ class RemediationService:
             idempotency_key=f"{session.session_id}:turn:{turn_index}",
         )
         advice = advice_result.record
-        turn_id = "remturn_" + hashlib.sha256(
-            f"{session.session_id}\0{turn_index}".encode()
-        ).hexdigest()[:32]
+        turn_id = (
+            "remturn_"
+            + hashlib.sha256(f"{session.session_id}\0{turn_index}".encode()).hexdigest()[:32]
+        )
         turn = self.remediation_store.append_turn(
             turn_id=turn_id,
             session_id=session.session_id,
@@ -1038,9 +1043,10 @@ class RemediationService:
             action_id = str(action.get("action_id") or "")
             if not action_id:
                 continue
-            proposal_id = "remproposal_" + hashlib.sha256(
-                f"{turn.turn_id}\0{action_id}".encode()
-            ).hexdigest()[:32]
+            proposal_id = (
+                "remproposal_"
+                + hashlib.sha256(f"{turn.turn_id}\0{action_id}".encode()).hexdigest()[:32]
+            )
             proposal = self.remediation_store.append_proposal(
                 proposal_id=proposal_id,
                 session_id=session.session_id,
@@ -1227,9 +1233,12 @@ def _evaluate_run(
         for item in evidence
         if item.collection_status == "collected" and item.finalized_at is not None
     )
-    evaluation_id = "remeval_" + hashlib.sha256(
-        f"{session.session_id}\0{execution.execution_id}".encode()
-    ).hexdigest()[:32]
+    evaluation_id = (
+        "remeval_"
+        + hashlib.sha256(f"{session.session_id}\0{execution.execution_id}".encode()).hexdigest()[
+            :32
+        ]
+    )
     comparison: dict[str, Any] = {
         "source_run_id": session.source_run_id,
         "derived_run_id": run.run_id,
@@ -1371,9 +1380,7 @@ def _verify_expected_outputs(
         entries.append(
             {
                 "path": path,
-                "baseline_sha256": (
-                    None if item is None else item.get("baseline_sha256")
-                ),
+                "baseline_sha256": (None if item is None else item.get("baseline_sha256")),
                 "final_sha256": None if item is None else item.get("final_sha256"),
                 "status": status,
             }

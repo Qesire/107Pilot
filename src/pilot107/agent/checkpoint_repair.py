@@ -240,8 +240,10 @@ def _build_repairs(
         stored_result = _json_object(row["result_json"])
         result = stored_result.get("result")
         evidence_refs = stored_result.get("evidence_refs")
-        if not isinstance(result, Mapping) or not isinstance(evidence_refs, list) or not all(
-            isinstance(reference, str) for reference in evidence_refs
+        if (
+            not isinstance(result, Mapping)
+            or not isinstance(evidence_refs, list)
+            or not all(isinstance(reference, str) for reference in evidence_refs)
         ):
             break
         public_result = _finite_json_object(result, "tool result")
@@ -350,7 +352,7 @@ def _bound_arguments(
 
 
 def _invocation_id(turn_id: str, tool_call_id: str) -> str:
-    digest = hashlib.sha256(f"{turn_id}\0{tool_call_id}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{turn_id}\0{tool_call_id}".encode()).hexdigest()
     return f"inv-{digest}"
 
 

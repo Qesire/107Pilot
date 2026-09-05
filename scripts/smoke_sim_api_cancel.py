@@ -46,11 +46,7 @@ def main() -> int:
             owner="alice",
             workdir=Path("/public/home/alice"),
             script=(
-                "#!/bin/bash\n"
-                "hostname\n"
-                "echo api-cancel-started\n"
-                "sleep 60\n"
-                "echo should-not-print\n"
+                "#!/bin/bash\nhostname\necho api-cancel-started\nsleep 60\necho should-not-print\n"
             ),
             resource_plan=ResourcePlan(
                 partition="Students",

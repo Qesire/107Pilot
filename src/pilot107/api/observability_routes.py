@@ -23,13 +23,10 @@ class ResourceObservationRoutes:
         params: Mapping[str, list[str]],
         identity: UserIdentity | None,
     ) -> ApiResponse | None:
-        recognized = (
-            (len(parts) >= 2 and parts[0] == "observability")
-            or (
-                len(parts) >= 3
-                and parts[0] == "runs"
-                and parts[2] in {"resources", "resource-evaluations"}
-            )
+        recognized = (len(parts) >= 2 and parts[0] == "observability") or (
+            len(parts) >= 3
+            and parts[0] == "runs"
+            and parts[2] in {"resources", "resource-evaluations"}
         )
         if not recognized:
             return None
@@ -54,23 +51,24 @@ class ResourceObservationRoutes:
                 if parts[3:5] == ["account", "latest"]:
                     return ApiResponse(
                         status=200,
-                        payload=self.service.latest_account(
-                            connection_id, owner=identity.username
-                        ),
+                        payload=self.service.latest_account(connection_id, owner=identity.username),
                     )
             if len(parts) == 3 and parts[0] == "runs" and parts[2] == "resources":
                 if params:
                     raise ValueError("query parameters are not supported")
                 return ApiResponse(
                     status=200,
-                    payload=self.service.run_resources(
-                        _safe_id(parts[1]), owner=identity.username
-                    ),
+                    payload=self.service.run_resources(_safe_id(parts[1]), owner=identity.username),
                 )
-            if parts[:1] == ["runs"] and len(parts) == 4 and parts[2:] == [
-                "resources",
-                "series",
-            ]:
+            if (
+                parts[:1] == ["runs"]
+                and len(parts) == 4
+                and parts[2:]
+                == [
+                    "resources",
+                    "series",
+                ]
+            ):
                 if set(params) - {"step", "limit"}:
                     raise ValueError("query parameters are invalid")
                 step = _one(params, "step", default="raw")
@@ -88,11 +86,7 @@ class ResourceObservationRoutes:
                         limit=limit,
                     ),
                 )
-            if (
-                len(parts) == 3
-                and parts[0] == "runs"
-                and parts[2] == "resource-evaluations"
-            ):
+            if len(parts) == 3 and parts[0] == "runs" and parts[2] == "resource-evaluations":
                 if params:
                     raise ValueError("query parameters are not supported")
                 return ApiResponse(
@@ -102,19 +96,13 @@ class ResourceObservationRoutes:
                     ),
                 )
         except KeyError:
-            return _error(
-                404, "OBSERVABILITY.NOT_FOUND", "resource observation was not found"
-            )
+            return _error(404, "OBSERVABILITY.NOT_FOUND", "resource observation was not found")
         except (TypeError, ValueError):
-            return _error(
-                400, "OBSERVABILITY.INVALID_REQUEST", "resource request is invalid"
-            )
+            return _error(400, "OBSERVABILITY.INVALID_REQUEST", "resource request is invalid")
         return None
 
 
-def _one(
-    params: Mapping[str, list[str]], key: str, *, default: str | None = None
-) -> str:
+def _one(params: Mapping[str, list[str]], key: str, *, default: str | None = None) -> str:
     values = params.get(key)
     if values is None:
         if default is None:

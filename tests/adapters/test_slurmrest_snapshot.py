@@ -1,4 +1,5 @@
 """SlurmrestSnapshotCollector: query slurmrestd REST, build PlatformSnapshot."""
+
 from __future__ import annotations
 
 import pytest
@@ -72,9 +73,7 @@ def test_collect_queries_partitions_and_nodes(partitions_payload, nodes_payload,
     transport = FakeHttpTransport(
         partitions_payload=partitions_payload, nodes_payload=nodes_payload
     )
-    collector = SlurmrestSnapshotCollector(
-        transport=transport, api_version="v0.0.41"
-    )
+    collector = SlurmrestSnapshotCollector(transport=transport, api_version="v0.0.41")
     snapshot = collector.collect(captured_at=captured_at)
     assert ("GET", "/slurm/v0.0.41/partitions") in transport.calls
     assert ("GET", "/slurm/v0.0.41/nodes") in transport.calls

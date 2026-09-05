@@ -62,9 +62,7 @@ class ContractV2Tests(unittest.TestCase):
         duplicate = _legacy_contract()
         duplicate["workflow"] = {"dependencies": ["run_parent", "run_parent"]}
         excessive_backoff = _legacy_contract()
-        excessive_backoff["workflow"] = {
-            "retry": {"max_attempts": 2, "backoff_seconds": 86401}
-        }
+        excessive_backoff["workflow"] = {"retry": {"max_attempts": 2, "backoff_seconds": 86401}}
 
         with self.assertRaises(ContractV2Error) as duplicate_error:
             normalize_contract(duplicate)

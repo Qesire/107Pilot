@@ -86,7 +86,7 @@ from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalo
 from pilot107.core.control_repository import ControlRepository
 from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.evidence_binding import EvidenceBinder
-from pilot107.core.file_uploads import FileUploadService, UploadSessionStore
+from pilot107.core.file_uploads import FileUploadService
 from pilot107.core.identity import is_safe_username
 from pilot107.core.path_policy import resolve_owner_roots
 from pilot107.core.platform import (
@@ -97,7 +97,6 @@ from pilot107.core.platform import (
 from pilot107.core.platform_snapshot import ObservationSourceType
 from pilot107.core.platform_snapshot_store import (
     VM_SLURM_SOURCE_NAME,
-    PlatformSnapshotStore,
 )
 from pilot107.core.postgres_domain_stores import (
     PostgresContractStore,
@@ -113,13 +112,9 @@ from pilot107.core.postgres_domain_stores import (
 )
 from pilot107.core.preflight import LocalPathChecker
 from pilot107.core.proxy_auth import load_proxy_hmac_secret
-from pilot107.core.remediation_store import RemediationStore
-from pilot107.core.repair_ticket_store import RepairTicketStore
-from pilot107.core.run_publications import RunPublicationStore
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
-from pilot107.core.ssh_connections import SshConnectionService, SshConnectionStore
-from pilot107.core.template_market import TemplateMarketStore
+from pilot107.core.ssh_connections import SshConnectionService
 from pilot107.core.template_market_seed import seed_preset_recipes
 from pilot107.core.template_policy import (
     TemplatePublicationGate,
@@ -127,13 +122,10 @@ from pilot107.core.template_policy import (
 )
 from pilot107.core.template_verification import TemplateVerificationService
 from pilot107.core.terminal import TerminalCommandService
-from pilot107.core.user_entitlement_store import UserEntitlementStore
 from pilot107.observability.postgres_store import PostgresObservabilityStore
 from pilot107.observability.service import ObservabilityService
-from pilot107.observability.store import SQLiteObservabilityStore
 from pilot107.runtime_watch.postgres_store import PostgresRuntimeWatchStore
 from pilot107.runtime_watch.service import RuntimeWatchRegistrar
-from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.services.agent_task_service import (
     AgentTaskService,
@@ -155,7 +147,7 @@ class ApiServiceConfig:
     db_path: Path
     evidence_root: Path
     capsule_root: Path
-    database_mode: DatabaseMode = DatabaseMode.SQLITE
+    database_mode: DatabaseMode = DatabaseMode.POSTGRES
     control_postgres_dsn: str | None = field(default=None, repr=False)
     postgres_dsn: str | None = field(default=None, repr=False)
     backend: str = "none"
@@ -408,14 +400,13 @@ def _build_file_routes(
     if not owner_roots:
         return None
     staging_root = config.upload_staging_root or (config.db_path.parent / "upload-staging")
-    upload_store: UploadSessionStore
-    if selection.is_postgres:
-        assert selection.postgres_dsn is not None
-        upload_store = PostgresUploadSessionStore(
-            selection.postgres_dsn, compatibility_path=selection.sqlite_path
-        )
-    else:
-        upload_store = UploadSessionStore(selection.sqlite_path)
+    postgres_dsn = selection.postgres_dsn
+    if postgres_dsn is None:
+        raise RuntimeError("PostgreSQL durable-store selection lost its DSN")
+    upload_store = PostgresUploadSessionStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
+    )
     upload_service = FileUploadService(
         executor=executor,
         owner_roots=owner_roots,
@@ -434,38 +425,31 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         postgres_dsn=config.postgres_dsn,
         control_postgres_dsn=config.control_postgres_dsn,
     )
-    postgres_dsn = selection.postgres_dsn or ""
+    postgres_dsn = selection.postgres_dsn
+    if postgres_dsn is None:
+        raise RuntimeError("PostgreSQL durable-store selection lost its DSN")
     agent_capability_secret = _load_agent_capability_secret(config)
-    if not selection.is_postgres:
-        store = RunStore(selection.sqlite_path)
-        contract_store = ContractStore(selection.sqlite_path)
-        platform_snapshot_store = PlatformSnapshotStore(selection.sqlite_path)
-        user_entitlement_store = UserEntitlementStore(selection.sqlite_path)
-        remediation_store = RemediationStore(selection.sqlite_path)
-        repair_ticket_store = RepairTicketStore(selection.sqlite_path)
-    else:
-        assert postgres_dsn is not None
-        store = PostgresRunStore(postgres_dsn, compatibility_path=selection.sqlite_path)
-        contract_store = PostgresContractStore(
-            postgres_dsn,
-            compatibility_path=selection.sqlite_path,
-        )
-        platform_snapshot_store = PostgresPlatformSnapshotStore(
-            postgres_dsn,
-            compatibility_path=selection.sqlite_path,
-        )
-        user_entitlement_store = PostgresUserEntitlementStore(
-            postgres_dsn,
-            compatibility_path=selection.sqlite_path,
-        )
-        remediation_store = PostgresRemediationStore(
-            postgres_dsn,
-            compatibility_path=selection.sqlite_path,
-        )
-        repair_ticket_store = PostgresRepairTicketStore(
-            postgres_dsn,
-            compatibility_path=selection.sqlite_path,
-        )
+    store = PostgresRunStore(postgres_dsn, compatibility_path=selection.sqlite_path)
+    contract_store = PostgresContractStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
+    )
+    platform_snapshot_store = PostgresPlatformSnapshotStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
+    )
+    user_entitlement_store = PostgresUserEntitlementStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
+    )
+    remediation_store = PostgresRemediationStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
+    )
+    repair_ticket_store = PostgresRepairTicketStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
+    )
     control_repository = build_control_repository(
         sqlite_path=selection.sqlite_path,
         postgres_dsn=selection.control_postgres_dsn,
@@ -504,32 +488,18 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         contract_service,
         verified_container_digests=config.template_verified_container_digests,
     )
-    if not selection.is_postgres:
-        template_market_store = TemplateMarketStore(
-            config.db_path,
-            publication_gate=publication_gate,
-            contract_service=contract_service,
-        )
-    else:
-        template_market_store = PostgresTemplateMarketStore(
-            postgres_dsn,
-            compatibility_path=selection.sqlite_path,
-            publication_gate=publication_gate,
-            contract_service=contract_service,
-        )
-    if not selection.is_postgres:
-        run_publication_store = RunPublicationStore(
-            config.db_path,
-            run_store=store,
-            contract_service=contract_service,
-        )
-    else:
-        run_publication_store = PostgresRunPublicationStore(
-            postgres_dsn,
-            compatibility_path=selection.sqlite_path,
-            run_store=store,
-            contract_service=contract_service,
-        )
+    template_market_store = PostgresTemplateMarketStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
+        publication_gate=publication_gate,
+        contract_service=contract_service,
+    )
+    run_publication_store = PostgresRunPublicationStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
+        run_store=store,
+        contract_service=contract_service,
+    )
     template_role_directory = TemplateRoleDirectory(
         reviewers=config.template_reviewers,
         admins=config.template_admins,
@@ -721,25 +691,14 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
         evidence_store=shared_evidence_store,
     )
     workspace_reader = _build_workspace_reader(config)
-    observation_store = (
-        SQLiteObservabilityStore(config.db_path)
-        if not selection.is_postgres
-        else PostgresObservabilityStore(
-            postgres_dsn,
-            compatibility_path=selection.sqlite_path,
-        )
+    observation_store = PostgresObservabilityStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
     )
     observability_service = ObservabilityService(store=observation_store)
-    runtime_watch_store = (
-        SQLiteRuntimeWatchStore(
-            config.db_path,
-            segment_root=config.evidence_root / "runtime-watch-segments",
-        )
-        if not selection.is_postgres
-        else PostgresRuntimeWatchStore(
-            postgres_dsn,
-            segment_root=config.evidence_root / "runtime-watch-segments",
-        )
+    runtime_watch_store = PostgresRuntimeWatchStore(
+        postgres_dsn,
+        segment_root=config.evidence_root / "runtime-watch-segments",
     )
     agent_tool_routes: AgentToolRoutes | None = None
     agent_session_service: AgentSessionService | None = None
@@ -957,13 +916,9 @@ def build_api_service(config: ApiServiceConfig) -> Pilot107HttpApi:
             else SshConnectionService(
                 config=ssh_relay_client.config,
                 client=ssh_relay_client,
-                store=(
-                    PostgresSshConnectionStore(
-                        postgres_dsn,
-                        compatibility_path=selection.sqlite_path,
-                    )
-                    if selection.is_postgres
-                    else SshConnectionStore(selection.sqlite_path)
+                store=PostgresSshConnectionStore(
+                    postgres_dsn,
+                    compatibility_path=selection.sqlite_path,
                 ),
             )
         ),
@@ -1450,12 +1405,13 @@ def _path(values: Mapping[str, str], name: str, default: Path) -> Path:
 
 
 def _database_mode(values: Mapping[str, str], *, postgres_dsn: str | None) -> DatabaseMode:
-    configured = values.get("PILOT107_DATABASE_MODE")
-    inferred = "postgres" if postgres_dsn else "sqlite"
-    try:
-        return DatabaseMode(configured or inferred)
-    except ValueError as exc:
-        raise ValueError("PILOT107_DATABASE_MODE must be sqlite or postgres") from exc
+    del postgres_dsn
+    configured = (values.get("PILOT107_DATABASE_MODE") or "postgres").strip().lower()
+    if configured == "sqlite":
+        raise ValueError("SQLite runtime authority has been retired; configure PostgreSQL")
+    if configured != "postgres":
+        raise ValueError("PILOT107_DATABASE_MODE must be postgres")
+    return DatabaseMode.POSTGRES
 
 
 def _load_postgres_dsn(values: Mapping[str, str]) -> str | None:

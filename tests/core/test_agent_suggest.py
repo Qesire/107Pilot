@@ -367,9 +367,7 @@ class ParseContractPatchJsonTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "invalid_schema_object")
 
     def test_typed_result_happy_path(self) -> None:
-        result = _parse_contract_patch_json(
-            self._patch_payload({"resources.cpus_per_task": 4})
-        )
+        result = _parse_contract_patch_json(self._patch_payload({"resources.cpus_per_task": 4}))
         self.assertEqual(result["suggested_patch"], {"resources.cpus_per_task": 4})
 
     def test_rejects_additional_result_fields(self) -> None:
@@ -381,9 +379,7 @@ class ParseContractPatchJsonTests(unittest.TestCase):
 
     def test_rejects_proto_pollution_field(self) -> None:
         with self.assertRaises(AgentProviderError) as raised:
-            _parse_contract_patch_json(
-                self._patch_payload({"__proto__.polluted": True})
-            )
+            _parse_contract_patch_json(self._patch_payload({"__proto__.polluted": True}))
         self.assertEqual(raised.exception.code, "invalid_schema_patch_field")
 
     def test_rejects_constructor_field(self) -> None:
@@ -410,9 +406,7 @@ class ParseContractPatchJsonTests(unittest.TestCase):
         result = _parse_contract_patch_json(
             self._patch_payload({"project.workdir": "/public/home/alice/work"})
         )
-        self.assertEqual(
-            result["suggested_patch"], {"project.workdir": "/public/home/alice/work"}
-        )
+        self.assertEqual(result["suggested_patch"], {"project.workdir": "/public/home/alice/work"})
 
     def test_allowed_fields_match_advice_patchable_fields(self) -> None:
         # Drift detector: the agent whitelist must mirror advice._PATCHABLE_FIELDS

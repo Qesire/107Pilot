@@ -69,9 +69,7 @@ _METADATA_SUFFIXES = frozenset(
         ".zip",
     }
 )
-_EXCLUDED_DIRECTORIES = frozenset(
-    {".git", ".hg", ".svn", ".venv", "__pycache__", "node_modules"}
-)
+_EXCLUDED_DIRECTORIES = frozenset({".git", ".hg", ".svn", ".venv", "__pycache__", "node_modules"})
 
 
 class WorkspacePolicyError(ValueError):
@@ -83,9 +81,7 @@ class WorkspaceConflict(RuntimeError):
 
 
 class WorkspaceSourceReader(Protocol):
-    def stat_path(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> FileStat: ...
+    def stat_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> FileStat: ...
 
     def list_dir(
         self, *, path: str, owner: str, timeout_seconds: float = 30.0
@@ -101,9 +97,7 @@ class WorkspaceSourceReader(Protocol):
         timeout_seconds: float = 30.0,
     ) -> tuple[str, int]: ...
 
-    def file_sha256(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> str: ...
+    def file_sha256(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -309,39 +303,29 @@ class WorkspaceEditor:
             if existing:
                 resolved = target.resolve(strict=True)
                 if not resolved.is_relative_to(root) or not resolved.is_file():
-                    raise WorkspacePolicyError(
-                        "Workspace patch target is not a contained file"
-                    )
+                    raise WorkspacePolicyError("Workspace patch target is not a contained file")
                 before = resolved.read_bytes()
             else:
                 before = b""
             before_digest = hashlib.sha256(before).hexdigest() if existing else None
             if patch.operation == "create":
                 if existing or expected_source_digest is not None:
-                    raise WorkspaceConflict(
-                        "create patch no longer matches an absent source"
-                    )
+                    raise WorkspaceConflict("create patch no longer matches an absent source")
             else:
                 if not existing:
                     raise WorkspaceConflict("patch source file no longer exists")
                 if expected_source_digest != before_digest:
                     raise WorkspaceConflict("patch source digest no longer matches")
             if not _editable_path(relative):
-                raise WorkspacePolicyError(
-                    "Workspace patch target is not an editable file type"
-                )
-            after = (
-                b"" if patch.operation == "delete" else (patch.content or "").encode()
-            )
+                raise WorkspacePolicyError("Workspace patch target is not an editable file type")
+            after = b"" if patch.operation == "delete" else (patch.content or "").encode()
             if len(after) > self.max_file_bytes:
                 raise WorkspacePolicyError("Workspace patch exceeds the file size limit")
             try:
                 before_text = before.decode("utf-8")
                 after_text = after.decode("utf-8")
             except UnicodeDecodeError as exc:
-                raise WorkspacePolicyError(
-                    "Workspace patches require UTF-8 text files"
-                ) from exc
+                raise WorkspacePolicyError("Workspace patches require UTF-8 text files") from exc
             unified = "".join(
                 difflib.unified_diff(
                     before_text.splitlines(keepends=True),
@@ -355,9 +339,7 @@ class WorkspaceEditor:
             if total_diff_bytes > self.max_diff_bytes:
                 raise WorkspacePolicyError("Workspace diff exceeds the output limit")
             after_digest = (
-                None
-                if patch.operation == "delete"
-                else hashlib.sha256(after).hexdigest()
+                None if patch.operation == "delete" else hashlib.sha256(after).hexdigest()
             )
             prepared.append(
                 _PreparedWorkspacePatch(
@@ -476,9 +458,9 @@ class WorkspaceImporter:
 
         manifest = self._scan(source, owner=project.owner)
         digest = _snapshot_digest(source, manifest)
-        workspace_digest = hashlib.sha256(
-            f"{project.project_id}\0{digest}".encode()
-        ).hexdigest()[:24]
+        workspace_digest = hashlib.sha256(f"{project.project_id}\0{digest}".encode()).hexdigest()[
+            :24
+        ]
         workspace_id = f"workspace-{workspace_digest}"
         final_entries = tuple(
             replace(
@@ -518,9 +500,7 @@ class WorkspaceImporter:
 
     def _scan(self, source: str, *, owner: str) -> tuple[WorkspaceEntry, ...]:
         entries: list[WorkspaceEntry] = []
-        stack: list[tuple[str, PurePosixPath, int]] = [
-            (source, PurePosixPath("."), 0)
-        ]
+        stack: list[tuple[str, PurePosixPath, int]] = [(source, PurePosixPath("."), 0)]
         while stack:
             remote_directory, relative_directory, depth = stack.pop()
             if depth > self.max_depth:
@@ -769,9 +749,7 @@ def change_set_from_payload(value: Mapping[str, Any]) -> WorkspaceChangeSet:
         approval_value = _object(raw_approval, "approval")
         approval = WorkspaceApproval(
             actor=_text(approval_value.get("actor"), "approval actor"),
-            approved_digest=_text(
-                approval_value.get("approved_digest"), "approved_digest"
-            ),
+            approved_digest=_text(approval_value.get("approved_digest"), "approved_digest"),
             approved_at=_text(approval_value.get("approved_at"), "approved_at"),
         )
     return WorkspaceChangeSet(
@@ -779,9 +757,7 @@ def change_set_from_payload(value: Mapping[str, Any]) -> WorkspaceChangeSet:
         project_id=_text(value.get("project_id"), "project_id"),
         workspace_id=_text(value.get("workspace_id"), "workspace_id"),
         owner=_text(value.get("owner"), "owner"),
-        base_snapshot_digest=_text(
-            value.get("base_snapshot_digest"), "base_snapshot_digest"
-        ),
+        base_snapshot_digest=_text(value.get("base_snapshot_digest"), "base_snapshot_digest"),
         digest=_text(value.get("digest"), "digest"),
         state=WorkspaceChangeSetState(_text(value.get("state"), "state")),
         version=_integer(value.get("version"), "version"),
@@ -800,8 +776,7 @@ def change_set_from_payload(value: Mapping[str, Any]) -> WorkspaceChangeSet:
             SandboxResultRecord(
                 result_id=_text(item.get("result_id"), "result_id"),
                 argv=tuple(
-                    _text(argument, "argument")
-                    for argument in _array(item.get("argv"), "argv")
+                    _text(argument, "argument") for argument in _array(item.get("argv"), "argv")
                 ),
                 status=_text(item.get("status"), "status"),  # type: ignore[arg-type]
                 exit_code=_optional_integer(item.get("exit_code"), "exit_code"),
@@ -815,6 +790,8 @@ def change_set_from_payload(value: Mapping[str, Any]) -> WorkspaceChangeSet:
         updated_at=_text(value.get("updated_at"), "updated_at"),
         schema_version=_text(value.get("schema_version"), "schema_version"),
     )
+
+
 def _snapshot_digest(source: str, entries: tuple[WorkspaceEntry, ...]) -> str:
     payload = {
         "source_ref": source,

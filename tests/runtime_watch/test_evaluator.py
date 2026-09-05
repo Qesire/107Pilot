@@ -29,9 +29,7 @@ def test_cuda_oom_is_detected_across_segment_boundary() -> None:
         created_at="2026-08-19T00:00:01Z",
     )
 
-    assert [(item.code, item.severity) for item in alerts] == [
-        ("CUDA.OOM", "critical")
-    ]
+    assert [(item.code, item.severity) for item in alerts] == [("CUDA.OOM", "critical")]
     assert alerts[0].offset == 0
 
 

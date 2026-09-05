@@ -151,8 +151,7 @@ def main() -> int:
     inventory_paths = {item["relative_path"] for item in inventory["files"]}
     if "pilot107-smoke-output/result.txt" not in inventory_paths:
         print(
-            "inventory missing generated output: "
-            f"inventory_paths={sorted(inventory_paths)}",
+            f"inventory missing generated output: inventory_paths={sorted(inventory_paths)}",
             file=sys.stderr,
         )
         return 1
@@ -177,9 +176,7 @@ def main() -> int:
     ):
         print(f"unexpected runtime status: {runtime_status}", file=sys.stderr)
         return 1
-    accounting = json.loads(
-        (run_root / "slurm" / "accounting.json").read_text(encoding="utf-8")
-    )
+    accounting = json.loads((run_root / "slurm" / "accounting.json").read_text(encoding="utf-8"))
     records = accounting.get("records") or []
     if (
         not records

@@ -48,9 +48,7 @@ class PagedWorkspaceSourceReader:
         while True:
             remaining = self.max_directory_entries - len(entries)
             if remaining <= 0:
-                raise SlurmSubmissionRejected(
-                    "workspace source directory exceeds maximum entries"
-                )
+                raise SlurmSubmissionRejected("workspace source directory exceeds maximum entries")
             page = self.executor.list_dir(
                 path=path,
                 owner=owner,
@@ -61,16 +59,12 @@ class PagedWorkspaceSourceReader:
             if revision is None:
                 revision = page.directory_revision
             elif page.directory_revision != revision:
-                raise SlurmTransportError(
-                    "workspace source directory changed during paged listing"
-                )
+                raise SlurmTransportError("workspace source directory changed during paged listing")
             entries.extend(page.entries)
             if not page.has_more:
                 return entries
             if not page.next_cursor:
-                raise SlurmTransportError(
-                    "paged directory listing omitted the continuation cursor"
-                )
+                raise SlurmTransportError("paged directory listing omitted the continuation cursor")
             cursor = page.next_cursor
 
     def stat_path(

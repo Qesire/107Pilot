@@ -326,8 +326,7 @@ def _validate_runtime(runtime: dict[str, Any]) -> None:
         )
     environment = runtime.get("environment")
     if not isinstance(environment, dict) or not all(
-        isinstance(key, str) and isinstance(value, str)
-        for key, value in environment.items()
+        isinstance(key, str) and isinstance(value, str) for key, value in environment.items()
     ):
         raise ContractV2Error(
             "runtime.environment must contain string keys and values",

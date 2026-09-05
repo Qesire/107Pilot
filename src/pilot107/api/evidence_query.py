@@ -98,11 +98,7 @@ class EvidenceQueryService:
         if max_bytes <= 0:
             raise ValueError("max_bytes must be positive")
         selected = next(
-            (
-                obj
-                for obj in self.store.list_evidence_objects(run_id)
-                if obj.object_id == object_id
-            ),
+            (obj for obj in self.store.list_evidence_objects(run_id) if obj.object_id == object_id),
             None,
         )
         if selected is None:
@@ -149,9 +145,7 @@ class EvidenceQueryService:
         integrity = "not_checked"
         if not truncated and selected.sha256:
             integrity = (
-                "verified"
-                if hashlib.sha256(visible).hexdigest() == selected.sha256
-                else "mismatch"
+                "verified" if hashlib.sha256(visible).hexdigest() == selected.sha256 else "mismatch"
             )
         return {
             **metadata,

@@ -104,8 +104,7 @@ class ResourceMeasureSet:
         result = {
             item.name: value
             for item in fields(self)
-            if item.name != "extras"
-            and (value := getattr(self, item.name)) is not None
+            if item.name != "extras" and (value := getattr(self, item.name)) is not None
         }
         result.update(self.extras)
         return result

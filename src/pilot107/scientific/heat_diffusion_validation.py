@@ -147,16 +147,19 @@ def _raw_row(row: Mapping[str, str | None]) -> _RawRow:
         l2_error=_csv_float(row, "l2_error"),
         elapsed_seconds=_csv_float(row, "elapsed_seconds"),
     )
-    if min(
-        result.grid,
-        result.threads,
-        result.alpha,
-        result.t_final,
-        result.dt,
-        result.steps,
-        result.l2_error,
-        result.elapsed_seconds,
-    ) <= 0:
+    if (
+        min(
+            result.grid,
+            result.threads,
+            result.alpha,
+            result.t_final,
+            result.dt,
+            result.steps,
+            result.l2_error,
+            result.elapsed_seconds,
+        )
+        <= 0
+    ):
         raise ValueError("raw result numeric values must be positive")
     return result
 
@@ -186,9 +189,7 @@ def _audit_convergence(
         raise ValueError("convergence.json shape or scheme is invalid")
     grids = _integer_sequence(payload.get("grids"), "convergence grids")
     errors = _number_sequence(payload.get("errors"), "convergence errors")
-    reported_orders = _number_sequence(
-        payload.get("observed_orders"), "observed orders"
-    )
+    reported_orders = _number_sequence(payload.get("observed_orders"), "observed orders")
     if grids != _GRIDS or len(errors) != 3 or len(reported_orders) != 2:
         raise ValueError("convergence grid or metric count is invalid")
     if any(error <= 0 for error in errors) or not all(
@@ -217,9 +218,7 @@ def _audit_convergence(
     return grids, min(orders)
 
 
-def _audit_scaling(
-    rows: Sequence[_RawRow], payload: Mapping[str, object]
-) -> tuple[int, ...]:
+def _audit_scaling(rows: Sequence[_RawRow], payload: Mapping[str, object]) -> tuple[int, ...]:
     expected_fields = {"threads", "elapsed_seconds", "speedup", "efficiency"}
     if set(payload) != expected_fields:
         raise ValueError("scaling.json shape is invalid")
@@ -265,8 +264,7 @@ def _audit_svg(path: Path, *, required_terms: tuple[str, str]) -> None:
         (
             element
             for element in root.iter()
-            if element.tag.rsplit("}", 1)[-1].lower() == "title"
-            and (element.text or "").strip()
+            if element.tag.rsplit("}", 1)[-1].lower() == "title" and (element.text or "").strip()
         ),
         None,
     )
@@ -326,9 +324,7 @@ def _require_close(actual: float, expected: float, label: str) -> None:
         raise ValueError(f"reported {label} is inconsistent with raw data")
 
 
-def _require_close_sequence(
-    actual: Sequence[float], expected: Sequence[float], label: str
-) -> None:
+def _require_close_sequence(actual: Sequence[float], expected: Sequence[float], label: str) -> None:
     if len(actual) != len(expected):
         raise ValueError(f"reported {label} count is inconsistent with raw data")
     for actual_value, expected_value in zip(actual, expected, strict=True):

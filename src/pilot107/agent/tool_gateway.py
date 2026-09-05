@@ -88,13 +88,10 @@ class AgentToolGateway:
             self.operation_ledger,
             clock=self._clock,
         )
-        self.operation_attempt_store = (
-            operation_attempt_store
-            or (
-                build_agent_operation_attempt_store(store, clock=self._clock)
-                if self.operation_ledger is not None
-                else None
-            )
+        self.operation_attempt_store = operation_attempt_store or (
+            build_agent_operation_attempt_store(store, clock=self._clock)
+            if self.operation_ledger is not None
+            else None
         )
 
     def invoke(self, token: str, invocation: ToolInvocation) -> ToolResult:
@@ -161,9 +158,7 @@ class AgentToolGateway:
                 code="AGENT.TOOL.UNAVAILABLE",
                 message="Agent tool is unavailable",
             )
-            raise AgentToolGatewayError(
-                "Agent tool is unavailable", code="AGENT.TOOL.UNAVAILABLE"
-            )
+            raise AgentToolGatewayError("Agent tool is unavailable", code="AGENT.TOOL.UNAVAILABLE")
 
         operation_intent = self._operation_intent(
             invocation,
@@ -324,9 +319,7 @@ class AgentToolGateway:
         claims: AgentCapabilityClaims,
         operation_intent: AgentOperationIntent | None,
     ) -> AgentReadResult:
-        operation_key = (
-            None if operation_intent is None else operation_intent.operation_key
-        )
+        operation_key = None if operation_intent is None else operation_intent.operation_key
 
         def call_handler() -> AgentReadResult:
             with bind_agent_operation_key(operation_key):
@@ -692,9 +685,7 @@ class AgentToolGateway:
         except AgentCapabilityError as exc:
             raise AgentToolGatewayError(str(exc), code=exc.code) from None
 
-    def _validate_binding(
-        self, claims: AgentCapabilityClaims, invocation: ToolInvocation
-    ) -> None:
+    def _validate_binding(self, claims: AgentCapabilityClaims, invocation: ToolInvocation) -> None:
         if (
             invocation.owner != claims.owner
             or invocation.session_id != claims.session_id
@@ -737,8 +728,7 @@ class AgentToolGateway:
                     and (
                         invocation.arguments.get("session_id") != invocation.session_id
                         or (
-                            invocation.tool_name
-                            in {"validation_schedule", "builder_build_submit"}
+                            invocation.tool_name in {"validation_schedule", "builder_build_submit"}
                             and invocation.arguments.get("turn_id") != invocation.turn_id
                         )
                     )

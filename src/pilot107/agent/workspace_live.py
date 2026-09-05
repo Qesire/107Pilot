@@ -514,7 +514,9 @@ def capture_workspace_live_digest(
                 stack.append(path)
                 continue
             if not stat.S_ISREG(info.st_mode):
-                raise WorkspaceLiveConflict("Workspace live manifest contains unsupported file type")
+                raise WorkspaceLiveConflict(
+                    "Workspace live manifest contains unsupported file type"
+                )
             digest = _file_sha256(path)
             manifest.append(
                 {

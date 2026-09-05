@@ -465,5 +465,7 @@ class CapturingLLMObserver:
 
     def observe_llm_call(self, **values: object) -> None:
         self.calls.append(values)
+
+
 if __name__ == "__main__":
     unittest.main()

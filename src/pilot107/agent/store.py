@@ -76,9 +76,7 @@ class AgentSessionStore(Protocol):
         self, turn_id: str, *, worker_id: str, lease_seconds: int
     ) -> AgentTurnLease | None: ...
 
-    def renew_turn(
-        self, claim: AgentTurnLease, *, lease_seconds: int
-    ) -> AgentTurnLease: ...
+    def renew_turn(self, claim: AgentTurnLease, *, lease_seconds: int) -> AgentTurnLease: ...
 
     def append_event(
         self,
@@ -311,9 +309,7 @@ class SQLiteAgentSessionStore:
                     or record.input_digest != input_digest
                     or record.message != message
                 ):
-                    raise AgentSessionConflict(
-                        "request_key refers to different Turn content"
-                    )
+                    raise AgentSessionConflict("request_key refers to different Turn content")
                 return record, False
             session_row = conn.execute(
                 "SELECT * FROM agent_sessions WHERE session_id = ? AND owner = ?",
@@ -349,9 +345,7 @@ class SQLiteAgentSessionStore:
                 """,
                 (turn_id, session_id, owner, request_key, input_digest, message, now),
             )
-            row = conn.execute(
-                "SELECT * FROM agent_turns WHERE turn_id = ?", (turn_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM agent_turns WHERE turn_id = ?", (turn_id,)).fetchone()
         if row is None:
             raise RuntimeError("turn insert did not produce a row")
         return _row_to_turn(row), True
@@ -372,9 +366,7 @@ class SQLiteAgentSessionStore:
         """Read a Turn from the trusted worker path without weakening owner APIs."""
         _key(turn_id, "turn_id")
         with self.connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM agent_turns WHERE turn_id = ?", (turn_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM agent_turns WHERE turn_id = ?", (turn_id,)).fetchone()
         if row is None:
             raise KeyError(turn_id)
         return _row_to_turn(row)
@@ -458,9 +450,7 @@ class SQLiteAgentSessionStore:
             raise RuntimeError("claimed Turn disappeared")
         return _row_to_lease(current)
 
-    def renew_turn(
-        self, claim: AgentTurnLease, *, lease_seconds: int
-    ) -> AgentTurnLease:
+    def renew_turn(self, claim: AgentTurnLease, *, lease_seconds: int) -> AgentTurnLease:
         _positive(lease_seconds, "lease_seconds")
         now = self._now()
         expires_at = self._after(lease_seconds)
@@ -590,9 +580,7 @@ class SQLiteAgentSessionStore:
             )
             if updated.rowcount != 1:
                 raise AgentSessionConflict("Turn changed while requesting cancel")
-            row = conn.execute(
-                "SELECT * FROM agent_turns WHERE turn_id = ?", (turn_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM agent_turns WHERE turn_id = ?", (turn_id,)).fetchone()
         if row is None:
             raise RuntimeError("cancelled Turn disappeared")
         return _row_to_turn(row)
@@ -670,9 +658,7 @@ class SQLiteAgentSessionStore:
             )
             if session_update.rowcount != 1:
                 raise AgentSessionConflict("Session changed during terminal Turn write")
-            row = conn.execute(
-                "SELECT * FROM agent_turns WHERE turn_id = ?", (turn_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM agent_turns WHERE turn_id = ?", (turn_id,)).fetchone()
         if row is None:
             raise RuntimeError("completed Turn disappeared")
         return _row_to_turn(row)
@@ -737,9 +723,7 @@ class SQLiteAgentSessionStore:
             )
             if session_update.rowcount != 1:
                 raise AgentSessionConflict("Session changed while interrupting Turn")
-            row = conn.execute(
-                "SELECT * FROM agent_turns WHERE turn_id = ?", (turn_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM agent_turns WHERE turn_id = ?", (turn_id,)).fetchone()
         if row is None:
             raise RuntimeError("interrupted Turn disappeared")
         return _row_to_turn(row)
@@ -1020,11 +1004,8 @@ def _row_to_session(row: sqlite3.Row) -> AgentSessionRecord:
         source=_load_object(row["source_json"], "source_json") or {},
         state=AgentSessionState(str(row["state"])),
         state_version=int(row["state_version"]),
-        context_checkpoint=_load_object(
-            row["context_checkpoint_json"], "context_checkpoint_json"
-        ),
-        resource_usage=_load_object(row["resource_usage_json"], "resource_usage_json")
-        or {},
+        context_checkpoint=_load_object(row["context_checkpoint_json"], "context_checkpoint_json"),
+        resource_usage=_load_object(row["resource_usage_json"], "resource_usage_json") or {},
         outcome=_load_object(row["outcome_json"], "outcome_json"),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
@@ -1044,21 +1025,15 @@ def _row_to_turn(row: sqlite3.Row) -> AgentTurnRecord:
         cancel_requested=bool(row["cancel_requested"]),
         lease_owner=str(row["lease_owner"]) if row["lease_owner"] is not None else None,
         lease_expires_at=(
-            str(row["lease_expires_at"])
-            if row["lease_expires_at"] is not None
-            else None
+            str(row["lease_expires_at"]) if row["lease_expires_at"] is not None else None
         ),
         fencing_token=int(row["fencing_token"]),
         event_sequence=int(row["event_sequence"]),
-        final_checkpoint=_load_object(
-            row["final_checkpoint_json"], "final_checkpoint_json"
-        ),
+        final_checkpoint=_load_object(row["final_checkpoint_json"], "final_checkpoint_json"),
         error=_load_object(row["error_json"], "error_json"),
         created_at=str(row["created_at"]),
         started_at=str(row["started_at"]) if row["started_at"] is not None else None,
-        finished_at=(
-            str(row["finished_at"]) if row["finished_at"] is not None else None
-        ),
+        finished_at=(str(row["finished_at"]) if row["finished_at"] is not None else None),
     )
 
 

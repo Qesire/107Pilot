@@ -210,9 +210,7 @@ class BuilderWorkflowService:
             "builder_build_submit": self.submit,
         }
 
-    def submit(
-        self, owner: str, arguments: Mapping[str, object]
-    ) -> AgentReadResult:
+    def submit(self, owner: str, arguments: Mapping[str, object]) -> AgentReadResult:
         try:
             request = _parse_build_request(arguments)
             return self._submit(owner, request)
@@ -240,9 +238,7 @@ class BuilderWorkflowService:
         view = self._bound_view(owner, request)
         envelope = self._bound_envelope(owner, request)
         sandbox_validation, _ = _validations(request.blueprint)
-        existing = self.store.get_builder_submission_by_request_key(
-            owner, request.request_key
-        )
+        existing = self.store.get_builder_submission_by_request_key(owner, request.request_key)
         if existing is not None:
             if existing.input_digest != request.input_digest:
                 raise BuilderSubmissionConflict("Builder request content changed")
@@ -273,9 +269,7 @@ class BuilderWorkflowService:
                 and latest.receipt is None
                 and request.base_change_set_id == latest.base_change_set_id
             )
-            if latest is not None and not (
-                continuing_repair or recovering_unfinished_draft
-            ):
+            if latest is not None and not (continuing_repair or recovering_unfinished_draft):
                 raise _error(
                     "Builder submission does not continue the latest phase",
                     "AGENT.BUILDER.NO_PROGRESS",
@@ -285,17 +279,13 @@ class BuilderWorkflowService:
                     "Builder Project version is stale",
                     "AGENT.BUILDER.NO_PROGRESS",
                 )
-            if not _patches_make_progress(
-                Path(view.workspace.local_root), request.patches
-            ):
+            if not _patches_make_progress(Path(view.workspace.local_root), request.patches):
                 raise _error(
                     "Builder patches do not change the Workspace",
                     "AGENT.BUILDER.NO_PROGRESS",
                 )
             now = self._now()
-            digest = hashlib.sha256(
-                f"{owner}\0{request.request_key}".encode()
-            ).hexdigest()
+            digest = hashlib.sha256(f"{owner}\0{request.request_key}".encode()).hexdigest()
             record = self.store.create_builder_submission(
                 BuilderSubmissionRecord(
                     submission_id=f"builder-submission-{digest[:24]}",
@@ -357,9 +347,7 @@ class BuilderWorkflowService:
         else:
             change_set = self.store.get_change_set(record.change_set_id, owner=owner)
 
-        sandbox_result = _persisted_sandbox_result(
-            record, change_set, sandbox_validation.argv
-        )
+        sandbox_result = _persisted_sandbox_result(record, change_set, sandbox_validation.argv)
         if sandbox_result is None:
             sandbox_result = self.project_service.execute_sandbox(
                 project_id=request.project_id,
@@ -496,9 +484,7 @@ class BuilderWorkflowService:
             )
         return view
 
-    def _bound_envelope(
-        self, owner: str, request: _BuildRequest
-    ) -> AgentResourceEnvelope:
+    def _bound_envelope(self, owner: str, request: _BuildRequest) -> AgentResourceEnvelope:
         try:
             envelope = self.envelope_resolver(owner, request.session_id)
         except (KeyError, TypeError, ValueError):
@@ -508,10 +494,8 @@ class BuilderWorkflowService:
             ) from None
         if (
             envelope.approved_by != owner
-            or envelope.workspace_snapshot_digest
-            != request.expected_workspace_snapshot_digest
-            or parse_timestamp(envelope.expires_at, "expires_at")
-            <= self._clock().astimezone(UTC)
+            or envelope.workspace_snapshot_digest != request.expected_workspace_snapshot_digest
+            or parse_timestamp(envelope.expires_at, "expires_at") <= self._clock().astimezone(UTC)
         ):
             raise _error(
                 "Builder resource envelope is unavailable",
@@ -529,9 +513,7 @@ class BuilderWorkflowService:
         turn_id: str | None = None,
     ) -> None:
         try:
-            session = self.agent_task_service.session_store.get_session(
-                session_id, owner=owner
-            )
+            session = self.agent_task_service.session_store.get_session(session_id, owner=owner)
             turn = (
                 None
                 if turn_id is None
@@ -562,9 +544,7 @@ class BuilderWorkflowService:
             raise ValueError("Builder workflow clock must be timezone-aware")
         return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
-    def _tool_context_get(
-        self, owner: str, arguments: Mapping[str, object]
-    ) -> AgentReadResult:
+    def _tool_context_get(self, owner: str, arguments: Mapping[str, object]) -> AgentReadResult:
         required = {"project_id", "workspace_id", "session_id"}
         if set(arguments) != required:
             raise _error("Builder context fields are invalid", "AGENT.TOOL.INVALID")
@@ -718,9 +698,7 @@ def _matching_change_set(
         for path, _, operation, content in patches
     )
     for candidate in candidates:
-        actual = tuple(
-            (item.path, item.operation, item.after_sha256) for item in candidate.files
-        )
+        actual = tuple((item.path, item.operation, item.after_sha256) for item in candidate.files)
         if actual == expected:
             return candidate
     return None
@@ -758,10 +736,7 @@ def _persisted_sandbox_result(
     for result in reversed(change_set.sandbox_results):
         if result.argv != expected_argv:
             continue
-        if (
-            record.sandbox_result_id is not None
-            and result.result_id != record.sandbox_result_id
-        ):
+        if record.sandbox_result_id is not None and result.result_id != record.sandbox_result_id:
             continue
         return SandboxExecutionResult(
             result_id=result.result_id,
@@ -851,9 +826,7 @@ def _live_manifest(root: Path) -> dict[str, object]:
     items: list[dict[str, object]] = []
     truncated = False
     for directory, names, files in os.walk(resolved_root, followlinks=False):
-        names[:] = sorted(
-            name for name in names if not Path(directory, name).is_symlink()
-        )
+        names[:] = sorted(name for name in names if not Path(directory, name).is_symlink())
         for name in sorted(files):
             candidate = Path(directory, name)
             if candidate.is_symlink() or not candidate.is_file():

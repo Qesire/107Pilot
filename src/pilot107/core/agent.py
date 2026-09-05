@@ -42,6 +42,7 @@ _CONTRACT_PATCH_FORBIDDEN_SEGMENTS: frozenset[str] = frozenset(
 
 _CONTRACT_PATCH_FALLBACK_EXPLANATION_ZH = "LLM 未配置，请手动编辑 Contract 字段。"
 
+
 @dataclass(frozen=True)
 class AgentFact:
     fact_id: str
@@ -104,9 +105,7 @@ class AgentExplanation:
             "citations": [citation.to_payload() for citation in self.citations],
             "warnings": list(self.warnings),
             "evidence_bundle_sha256": self.evidence_bundle_sha256,
-            "code_context": (
-                None if self.code_context is None else self.code_context.to_payload()
-            ),
+            "code_context": (None if self.code_context is None else self.code_context.to_payload()),
             "created_at": self.created_at,
         }
 
@@ -446,9 +445,7 @@ _AGENTD_PROVIDER_ERROR_CODES = {
 def _agent_provider_error(error: AgentdClientError) -> AgentProviderError:
     if error.code in {"provider_auth", "unauthorized"}:
         code = (
-            f"http_{error.provider_status}"
-            if error.provider_status in {401, 403}
-            else "http_401"
+            f"http_{error.provider_status}" if error.provider_status in {401, 403} else "http_401"
         )
     else:
         code = _AGENTD_PROVIDER_ERROR_CODES.get(error.code, "provider_error")
@@ -802,9 +799,8 @@ def _parse_contract_patch_json(content: object) -> dict[str, Any]:
             )
         dot_path = key.strip()
         segments = dot_path.split(".")
-        if (
-            dot_path not in _CONTRACT_PATCH_ALLOWED_FIELDS
-            or any(segment in _CONTRACT_PATCH_FORBIDDEN_SEGMENTS for segment in segments)
+        if dot_path not in _CONTRACT_PATCH_ALLOWED_FIELDS or any(
+            segment in _CONTRACT_PATCH_FORBIDDEN_SEGMENTS for segment in segments
         ):
             raise AgentProviderError(
                 f"local llm patch targets a non-whitelisted field: {dot_path}",

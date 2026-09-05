@@ -353,8 +353,7 @@ class TemplateMarketStore:
         ]
         if cursor is not None:
             conditions.append(
-                "(reviews.created_at > ? OR "
-                "(reviews.created_at = ? AND reviews.review_id > ?))"
+                "(reviews.created_at > ? OR (reviews.created_at = ? AND reviews.review_id > ?))"
             )
             values.extend([cursor.primary, cursor.primary, cursor.secondary])
         with self.connect() as conn:
@@ -494,13 +493,10 @@ class TemplateMarketStore:
                 raise TemplateMarketError(
                     "draft failed the publication gate",
                     code="TEMPLATE.PUBLICATION_BLOCKED",
-                    findings=tuple(
-                        finding.as_payload() for finding in gate_result.findings
-                    ),
+                    findings=tuple(finding.as_payload() for finding in gate_result.findings),
                 )
             conn.execute(
-                "UPDATE template_drafts SET state = 'submitted', updated_at = ? "
-                "WHERE draft_id = ?",
+                "UPDATE template_drafts SET state = 'submitted', updated_at = ? WHERE draft_id = ?",
                 (now, draft_id),
             )
             conn.execute(
@@ -577,9 +573,7 @@ class TemplateMarketStore:
                     principal=principal,
                     requester=str(row["requester"]),
                     visibility=str(row["visibility"]),
-                    scope_key=(
-                        None if row["scope_key"] is None else str(row["scope_key"])
-                    ),
+                    scope_key=(None if row["scope_key"] is None else str(row["scope_key"])),
                 )
             except PermissionError as exc:
                 raise TemplateMarketError(
@@ -709,9 +703,7 @@ class TemplateMarketStore:
                 raise TemplateMarketError(
                     "approved draft no longer passes the publication gate",
                     code="TEMPLATE.PUBLICATION_BLOCKED",
-                    findings=tuple(
-                        finding.as_payload() for finding in current_gate.findings
-                    ),
+                    findings=tuple(finding.as_payload() for finding in current_gate.findings),
                 )
             publication_payload = json.loads(str(draft["publication_json"]))
             release_template_id = publication_payload.get("template_family_id")
@@ -761,8 +753,7 @@ class TemplateMarketStore:
                     code="TEMPLATE.RELEASE_CONFLICT",
                 ) from exc
             conn.execute(
-                "UPDATE template_drafts SET state = 'published', updated_at = ? "
-                "WHERE draft_id = ?",
+                "UPDATE template_drafts SET state = 'published', updated_at = ? WHERE draft_id = ?",
                 (now, str(draft["draft_id"])),
             )
         return self.get_release(resolved_release_id)
@@ -988,9 +979,7 @@ class TemplateMarketStore:
                         verification_passed=int(row["verification_passed"]),
                         verification_failed=int(row["verification_failed"]),
                         verification_expired=int(row["verification_expired"]),
-                        latest_verification=_latest_verification(
-                            conn, str(row["release_id"])
-                        ),
+                        latest_verification=_latest_verification(conn, str(row["release_id"])),
                     ),
                 )
                 for row in selected
@@ -1219,8 +1208,7 @@ class TemplateMarketStore:
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
-                "SELECT * FROM template_verifications "
-                "WHERE verified_by = ? AND request_key = ?",
+                "SELECT * FROM template_verifications WHERE verified_by = ? AND request_key = ?",
                 (verified_by, request_key),
             ).fetchone()
             if existing is not None:
@@ -1364,9 +1352,7 @@ class TemplateMarketStore:
                 raise TemplateMarketError(
                     "release no longer passes the current adoption gate",
                     code="TEMPLATE.PUBLICATION_BLOCKED",
-                    findings=tuple(
-                        finding.as_payload() for finding in current_gate.findings
-                    ),
+                    findings=tuple(finding.as_payload() for finding in current_gate.findings),
                 )
             payload = (
                 _rebase_adopter_workdir(release.payload, adopter=adopter)
@@ -1787,13 +1773,9 @@ def _row_to_review(row: sqlite3.Row) -> TemplateReviewRecord:
         draft_id=str(row["draft_id"]),
         requester=str(row["requester"]),
         reviewer=None if row["reviewer"] is None else str(row["reviewer"]),
-        reviewer_role=(
-            None if row["reviewer_role"] is None else str(row["reviewer_role"])
-        ),
+        reviewer_role=(None if row["reviewer_role"] is None else str(row["reviewer_role"])),
         reviewer_scope_key=(
-            None
-            if row["reviewer_scope_key"] is None
-            else str(row["reviewer_scope_key"])
+            None if row["reviewer_scope_key"] is None else str(row["reviewer_scope_key"])
         ),
         state=TemplateReviewState(str(row["state"])),
         version=int(row["version"]),
@@ -1801,9 +1783,7 @@ def _row_to_review(row: sqlite3.Row) -> TemplateReviewRecord:
         content_sha256=str(row["content_sha256"]),
         note=None if row["note"] is None else str(row["note"]),
         gate_report=json.loads(str(row["gate_report_json"])),
-        validated_at=(
-            None if row["validated_at"] is None else str(row["validated_at"])
-        ),
+        validated_at=(None if row["validated_at"] is None else str(row["validated_at"])),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
         decided_at=None if row["decided_at"] is None else str(row["decided_at"]),
@@ -1815,9 +1795,7 @@ def _row_to_review_queue(row: sqlite3.Row) -> TemplateReviewQueueRecord:
         review=_row_to_review(row),
         draft_title=str(row["draft_title"]),
         visibility=TemplateVisibility(str(row["draft_visibility"])),
-        scope_key=(
-            None if row["draft_scope_key"] is None else str(row["draft_scope_key"])
-        ),
+        scope_key=(None if row["draft_scope_key"] is None else str(row["draft_scope_key"])),
     )
 
 
@@ -1841,9 +1819,7 @@ def _row_to_release(row: sqlite3.Row) -> TemplateReleaseRecord:
         gate_report=json.loads(str(row["gate_report_json"])),
         content_sha256=str(row["content_sha256"]),
         published_at=str(row["published_at"]),
-        withdrawn_at=(
-            None if row["withdrawn_at"] is None else str(row["withdrawn_at"])
-        ),
+        withdrawn_at=(None if row["withdrawn_at"] is None else str(row["withdrawn_at"])),
         withdrawal_actor=(
             None if row["withdrawal_actor"] is None else str(row["withdrawal_actor"])
         ),
@@ -1862,9 +1838,7 @@ def _row_to_adoption(row: sqlite3.Row) -> TemplateAdoptionRecord:
         target_template_id=str(row["target_template_id"]),
         target_draft_id=str(row["target_draft_id"]),
         target_contract_id=(
-            None
-            if row["target_contract_id"] is None
-            else str(row["target_contract_id"])
+            None if row["target_contract_id"] is None else str(row["target_contract_id"])
         ),
         created_at=str(row["created_at"]),
     )
@@ -1877,20 +1851,10 @@ def _row_to_verification(row: sqlite3.Row) -> TemplateVerificationRecord:
         run_id=None if row["run_id"] is None else str(row["run_id"]),
         environment=str(row["environment"]),
         status=str(row["status"]),
-        evidence_ref=(
-            None if row["evidence_ref"] is None else str(row["evidence_ref"])
-        ),
-        evidence_sha256=(
-            None
-            if row["evidence_sha256"] is None
-            else str(row["evidence_sha256"])
-        ),
-        verified_by=(
-            None if row["verified_by"] is None else str(row["verified_by"])
-        ),
-        request_key=(
-            None if row["request_key"] is None else str(row["request_key"])
-        ),
+        evidence_ref=(None if row["evidence_ref"] is None else str(row["evidence_ref"])),
+        evidence_sha256=(None if row["evidence_sha256"] is None else str(row["evidence_sha256"])),
+        verified_by=(None if row["verified_by"] is None else str(row["verified_by"])),
+        request_key=(None if row["request_key"] is None else str(row["request_key"])),
         detail=json.loads(str(row["detail_json"])),
         verified_at=str(row["verified_at"]),
     )

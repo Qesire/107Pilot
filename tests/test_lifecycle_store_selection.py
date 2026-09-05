@@ -19,7 +19,6 @@ from pilot107.core.postgres_domain_schema import domain_table_names
 from pilot107.worker.service import WorkerServiceConfig, build_worker_service
 from pilot107.worker.service import config_from_env as worker_config_from_env
 
-
 SQLITE_RETIRED = "SQLite runtime authority has been retired"
 
 

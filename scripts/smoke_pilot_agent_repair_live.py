@@ -56,9 +56,7 @@ from pilot107.worker.evidence import EvidenceStore
 class ComposeWorkspaceRelay(ComposePublicationRelay):
     """Add bounded read primitives needed by WorkspaceImporter."""
 
-    def stat_path(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> FileStat:
+    def stat_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> FileStat:
         program = (
             "import json,pathlib,sys;"
             "p=pathlib.Path(sys.argv[1]);s=p.lstat();"
@@ -80,9 +78,7 @@ class ComposeWorkspaceRelay(ComposePublicationRelay):
             mtime=int(value["mtime"]),
         )
 
-    def list_dir(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> list[FileEntry]:
+    def list_dir(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> list[FileEntry]:
         program = """
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -141,9 +137,7 @@ print(json.dumps(items))
         )
         return str(value["data"]), int(value["size"])
 
-    def file_sha256(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> str:
+    def file_sha256(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> str:
         return _run_checked(
             self.executor,
             ["sha256sum", path],
@@ -399,9 +393,7 @@ def main() -> int:
                 owner="alice",
                 payload=_contract_payload(source_root, name="repair-d1-source"),
             )
-            source_run = run_service.submit(
-                contract_service.to_submit_request(source_contract)
-            )
+            source_run = run_service.submit(contract_service.to_submit_request(source_contract))
             source_run = _wait_run(run_service, source_run.run_id)
             if source_run.state is not RunState.FAILED or source_run.exit_code != "42:0":
                 raise RuntimeError(
@@ -496,9 +488,7 @@ def main() -> int:
                 request_key="repair-d1-project",
             )
             train_entry = next(
-                item
-                for item in repair.workspace.snapshot.entries
-                if item.path == "train.py"
+                item for item in repair.workspace.snapshot.entries if item.path == "train.py"
             )
             change_set = project_service.apply_patch(
                 project_id=repair.project.project_id,
@@ -524,10 +514,9 @@ def main() -> int:
             if sandbox.status != "succeeded":
                 raise RuntimeError(f"D1 repair Sandbox failed: {sandbox.status}")
             reviewable = project_store.get_change_set(change_set.change_set_id, owner="alice")
-            if (
-                reviewable.state is not WorkspaceChangeSetState.REVIEWABLE
-                or [item.path for item in reviewable.files] != ["train.py"]
-            ):
+            if reviewable.state is not WorkspaceChangeSetState.REVIEWABLE or [
+                item.path for item in reviewable.files
+            ] != ["train.py"]:
                 raise RuntimeError("D1 repair did not produce one reviewable train.py ChangeSet")
             current_source_digest = relay.file_sha256(
                 path=f"{source_root}/train.py",
@@ -581,9 +570,7 @@ def main() -> int:
                     "workspace_id": repair.workspace.workspace_id,
                     "run_id": source_run.run_id,
                     "remediation_session_id": created.session_id,
-                    "resource_envelope": _validation_envelope(
-                        repair.workspace.snapshot.digest
-                    ),
+                    "resource_envelope": _validation_envelope(repair.workspace.snapshot.digest),
                 },
             )
             formal_payload = _contract_payload(source_root, name="repair-d1-formal")

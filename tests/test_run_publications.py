@@ -133,9 +133,7 @@ class SuccessfulRunPublicationTests(unittest.TestCase):
             body=_json(
                 {
                     "expected_version": started_application.payload["version"],
-                    "confirmation_digest": started_application.payload[
-                        "confirmation_digest"
-                    ],
+                    "confirmation_digest": started_application.payload["confirmation_digest"],
                     "request_key": "bob-adopts-preprocess",
                 }
             ),
@@ -168,9 +166,7 @@ class SuccessfulRunPublicationTests(unittest.TestCase):
         self.assertNotIn("source_contract_id", detailed.payload)
         self.assertNotIn("workdir", unified_detail.payload)
         self.assertNotIn("contract_payload", unified_detail.payload)
-        self.assertTrue(
-            unified_detail.payload["share_manifest"]["contract_for_adaptation"]
-        )
+        self.assertTrue(unified_detail.payload["share_manifest"]["contract_for_adaptation"])
         self.assertEqual(
             unified_detail.payload["share_manifest_digest"],
             published.payload["share_manifest_digest"],

@@ -611,8 +611,12 @@ class SQLiteAgentOperationLedger:
         _nonempty(owner, "owner")
         _positive(expected_state_version, "expected_state_version")
         _positive(expected_fencing_token, "expected_fencing_token")
-        result_json = None if result is None else json.dumps(result, ensure_ascii=False, sort_keys=True)
-        error_json = None if error is None else json.dumps(error, ensure_ascii=False, sort_keys=True)
+        result_json = (
+            None if result is None else json.dumps(result, ensure_ascii=False, sort_keys=True)
+        )
+        error_json = (
+            None if error is None else json.dumps(error, ensure_ascii=False, sort_keys=True)
+        )
         now = self._now_text()
         with self.connect() as conn:
             updated = conn.execute(

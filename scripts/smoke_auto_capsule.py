@@ -87,10 +87,7 @@ def _wait_run(run_id: str, *, expected_state: str) -> dict:
     last: dict = {}
     for _ in range(240):
         last = _get(f"/runs/{run_id}")
-        if (
-            last.get("state") == expected_state
-            and last.get("collection_state") == "succeeded"
-        ):
+        if last.get("state") == expected_state and last.get("collection_state") == "succeeded":
             return last
         time.sleep(1)
     raise RuntimeError(f"run {run_id} did not reach {expected_state}/succeeded: {last}")
@@ -116,9 +113,7 @@ def _contract(command: str) -> dict:
 
 
 def _get(path: str) -> dict:
-    request = urllib.request.Request(
-        url=f"{BASE_URL}{path}", headers={"X-Pilot107-User": "alice"}
-    )
+    request = urllib.request.Request(url=f"{BASE_URL}{path}", headers={"X-Pilot107-User": "alice"})
     with urllib.request.urlopen(request, timeout=30, context=SSL_CONTEXT) as response:
         return json.loads(response.read().decode("utf-8"))
 

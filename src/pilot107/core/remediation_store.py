@@ -155,9 +155,7 @@ class RemediationStore:
     def _normalize_provider(provider: str) -> str:
         normalized = (provider or "none").strip().lower()
         if normalized not in {"none", "local", "campus"}:
-            raise RemediationInvariantError(
-                f"unsupported remediation provider: {provider}"
-            )
+            raise RemediationInvariantError(f"unsupported remediation provider: {provider}")
         return normalized
 
     def get_session(self, session_id: str) -> RemediationSession:
@@ -578,10 +576,7 @@ class RemediationStore:
                     created_at=execution.created_at,
                 )
         stored = self.get_execution(execution.execution_id)
-        if (
-            stored.session_id != execution.session_id
-            or stored.proposal_id != execution.proposal_id
-        ):
+        if stored.session_id != execution.session_id or stored.proposal_id != execution.proposal_id:
             raise RemediationConflict("remediation execution id conflicts with another record")
         return stored
 
@@ -771,9 +766,7 @@ def _row_to_session(row: sqlite3.Row) -> RemediationSession:
         budget=RemediationBudget.from_payload(budget_raw),
         usage=RemediationUsage(**{key: int(value) for key, value in usage_raw.items()}),
         stop_reason=None if row["stop_reason"] is None else str(row["stop_reason"]),
-        takeover_reason=(
-            None if row["takeover_reason"] is None else str(row["takeover_reason"])
-        ),
+        takeover_reason=(None if row["takeover_reason"] is None else str(row["takeover_reason"])),
         lease_owner=None if row["lease_owner"] is None else str(row["lease_owner"]),
         lease_expires_at=(
             None if row["lease_expires_at"] is None else str(row["lease_expires_at"])

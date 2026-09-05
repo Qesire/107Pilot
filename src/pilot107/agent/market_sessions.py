@@ -217,8 +217,7 @@ class SQLiteMarketSessionStore:
     ) -> TemplatePublicationSession | None:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM template_publication_sessions "
-                "WHERE owner = ? AND request_key = ?",
+                "SELECT * FROM template_publication_sessions WHERE owner = ? AND request_key = ?",
                 (owner, request_key),
             ).fetchone()
         return None if row is None else _template_publication_from_row(row)
@@ -231,8 +230,7 @@ class SQLiteMarketSessionStore:
     ) -> TemplatePublicationSession:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM template_publication_sessions "
-                "WHERE session_id = ? AND owner = ?",
+                "SELECT * FROM template_publication_sessions WHERE session_id = ? AND owner = ?",
                 (session_id, owner),
             ).fetchone()
         if row is None:
@@ -255,8 +253,7 @@ class SQLiteMarketSessionStore:
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT * FROM template_publication_sessions "
-                "WHERE owner = ? AND request_key = ?",
+                "SELECT * FROM template_publication_sessions WHERE owner = ? AND request_key = ?",
                 (owner, request_key),
             ).fetchone()
             if existing is not None:
@@ -329,8 +326,7 @@ class SQLiteMarketSessionStore:
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT * FROM template_publication_sessions "
-                "WHERE owner = ? AND request_key = ?",
+                "SELECT * FROM template_publication_sessions WHERE owner = ? AND request_key = ?",
                 (owner, request_key),
             ).fetchone()
             if existing is not None:
@@ -531,8 +527,7 @@ class SQLiteMarketSessionStore:
     ) -> MarketApplicationSession:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM market_application_sessions "
-                "WHERE session_id = ? AND owner = ?",
+                "SELECT * FROM market_application_sessions WHERE session_id = ? AND owner = ?",
                 (session_id, owner),
             ).fetchone()
         if row is None:
@@ -559,8 +554,7 @@ class SQLiteMarketSessionStore:
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT * FROM market_application_sessions "
-                "WHERE owner = ? AND request_key = ?",
+                "SELECT * FROM market_application_sessions WHERE owner = ? AND request_key = ?",
                 (owner, request_key),
             ).fetchone()
             if existing is not None:
@@ -658,8 +652,7 @@ class SQLiteMarketSessionStore:
             )
             if result.rowcount != 1:
                 current = connection.execute(
-                    "SELECT * FROM market_application_sessions "
-                    "WHERE session_id = ? AND owner = ?",
+                    "SELECT * FROM market_application_sessions WHERE session_id = ? AND owner = ?",
                     (session_id, owner),
                 ).fetchone()
                 if current is None:
@@ -735,14 +728,12 @@ class MarketApplicationService:
                 "shared Contract cannot be adapted under current policy",
                 code="MARKET.SOURCE_NOT_ADAPTABLE",
             )
-        project_id, workspace_id, change_set_id, change_set_digest = (
-            self._application_project(
-                owner=owner,
-                source_item_id=publication.publication_id,
-                user_intent=user_intent,
-                request_key=request_key,
-                target_payload=target_payload,
-            )
+        project_id, workspace_id, change_set_id, change_set_digest = self._application_project(
+            owner=owner,
+            source_item_id=publication.publication_id,
+            user_intent=user_intent,
+            request_key=request_key,
+            target_payload=target_payload,
         )
         session_id = _market_session_id(owner=owner, request_key=request_key)
         plan_digest = _digest(
@@ -837,14 +828,12 @@ class MarketApplicationService:
                 code="MARKET.SOURCE_NOT_ADAPTABLE",
             )
         source_digest = release.content_sha256
-        project_id, workspace_id, change_set_id, change_set_digest = (
-            self._application_project(
-                owner=owner,
-                source_item_id=release.release_id,
-                user_intent=user_intent,
-                request_key=request_key,
-                target_payload=target_payload,
-            )
+        project_id, workspace_id, change_set_id, change_set_digest = self._application_project(
+            owner=owner,
+            source_item_id=release.release_id,
+            user_intent=user_intent,
+            request_key=request_key,
+            target_payload=target_payload,
         )
         session_id = _market_session_id(owner=owner, request_key=request_key)
         plan_digest = _digest(
@@ -1232,9 +1221,7 @@ class TemplatePublicationService:
             "bundle_digest": bundle_digest,
         }
         if base_release is not None:
-            release_publication_metadata["supersedes_release_id"] = (
-                base_release.release_id
-            )
+            release_publication_metadata["supersedes_release_id"] = base_release.release_id
             release_publication_metadata["template_family_id"] = base_release.template_id
         draft = self.template_market.create_draft(
             owner=owner,
@@ -1417,12 +1404,8 @@ def _template_publication_from_row(row: sqlite3.Row) -> TemplatePublicationSessi
         ),
         review_id=None if row["review_id"] is None else str(row["review_id"]),
         release_id=None if row["release_id"] is None else str(row["release_id"]),
-        release_version=(
-            None if row["release_version"] is None else str(row["release_version"])
-        ),
-        verification_id=(
-            None if row["verification_id"] is None else str(row["verification_id"])
-        ),
+        release_version=(None if row["release_version"] is None else str(row["release_version"])),
+        verification_id=(None if row["verification_id"] is None else str(row["verification_id"])),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -1485,15 +1468,11 @@ def _validate_reproduction_evidence(
 
 
 def _market_session_id(*, owner: str, request_key: str) -> str:
-    return "marketsession_" + hashlib.sha256(
-        f"{owner}\0{request_key}".encode()
-    ).hexdigest()[:32]
+    return "marketsession_" + hashlib.sha256(f"{owner}\0{request_key}".encode()).hexdigest()[:32]
 
 
 def _template_publication_session_id(*, owner: str, request_key: str) -> str:
-    return "templatepub_" + hashlib.sha256(
-        f"{owner}\0{request_key}".encode()
-    ).hexdigest()[:32]
+    return "templatepub_" + hashlib.sha256(f"{owner}\0{request_key}".encode()).hexdigest()[:32]
 
 
 def _sanitize_template_value(
@@ -1579,9 +1558,7 @@ def _reference_session(
         plan_digest=str(detail["plan_digest"]),
         confirmation_digest=str(detail["confirmation_digest"]),
         change_set_digest=(
-            None
-            if detail.get("change_set_digest") is None
-            else str(detail["change_set_digest"])
+            None if detail.get("change_set_digest") is None else str(detail["change_set_digest"])
         ),
     )
 
@@ -1603,8 +1580,6 @@ def _template_session(
         plan_digest=str(detail["plan_digest"]),
         confirmation_digest=str(detail["confirmation_digest"]),
         change_set_digest=(
-            None
-            if detail.get("change_set_digest") is None
-            else str(detail["change_set_digest"])
+            None if detail.get("change_set_digest") is None else str(detail["change_set_digest"])
         ),
     )

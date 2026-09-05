@@ -195,7 +195,7 @@ class RepairTicketStore:
         params.append(limit + 1)
         with self.connect() as conn:
             rows = conn.execute(query, params).fetchall()
-        tickets = [_ticket_from_row(row) for row in rows[: limit]]
+        tickets = [_ticket_from_row(row) for row in rows[:limit]]
         next_position: tuple[str, str] | None = None
         if len(rows) > limit:
             last = tickets[-1]
@@ -239,9 +239,7 @@ class RepairTicketStore:
                 ),
             )
             if cursor.rowcount == 0:
-                raise RepairTicketConflict(
-                    f"repair ticket {ticket_id} state changed concurrently"
-                )
+                raise RepairTicketConflict(f"repair ticket {ticket_id} state changed concurrently")
         return self.get_ticket(ticket_id)
 
     def list_tickets_for_session(self, session_id: str) -> list[RepairTicket]:

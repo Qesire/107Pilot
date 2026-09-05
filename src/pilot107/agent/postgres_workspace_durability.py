@@ -126,9 +126,7 @@ class PostgresWorkspaceDurabilitySchema:
             ).fetchone()
             if existing is not None:
                 if str(existing["checksum"]) != checksum:
-                    raise RuntimeError(
-                        f"migration checksum changed: {_POSTGRES_MIGRATION_ID}"
-                    )
+                    raise RuntimeError(f"migration checksum changed: {_POSTGRES_MIGRATION_ID}")
                 return
             for statement in _POSTGRES_STATEMENTS:
                 connection.execute(statement)
@@ -912,14 +910,10 @@ def _row_to_journal(row: Mapping[str, object]) -> WorkspaceMutationJournal:
                 path=str(item["path"]),
                 operation=str(item["operation"]),  # type: ignore[arg-type]
                 before_sha256=(
-                    None
-                    if item.get("before_sha256") is None
-                    else str(item["before_sha256"])
+                    None if item.get("before_sha256") is None else str(item["before_sha256"])
                 ),
                 after_sha256=(
-                    None
-                    if item.get("after_sha256") is None
-                    else str(item["after_sha256"])
+                    None if item.get("after_sha256") is None else str(item["after_sha256"])
                 ),
             )
         )
@@ -1070,6 +1064,8 @@ def _datetime_value(value: object, label: str) -> datetime:
 
 
 def _timestamp_text(value: object) -> str:
-    return _datetime_value(value, "timestamp").isoformat(timespec="microseconds").replace(
-        "+00:00", "Z"
+    return (
+        _datetime_value(value, "timestamp")
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
     )

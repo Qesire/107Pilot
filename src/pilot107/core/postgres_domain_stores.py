@@ -267,8 +267,7 @@ def _translate_sql(query: str) -> str:
     # PostgreSQL instead of comparing JSON text ("true"/"false") to a
     # smallint-bound placeholder.
     normalized = _JSON_GPU.sub(
-        "CASE WHEN releases.compatibility_json::jsonb ->> 'gpu' = 'true' "
-        "THEN 1 ELSE 0 END",
+        "CASE WHEN releases.compatibility_json::jsonb ->> 'gpu' = 'true' THEN 1 ELSE 0 END",
         normalized,
     )
     return normalized.replace("?", "%s")

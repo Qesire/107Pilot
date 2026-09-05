@@ -44,7 +44,10 @@ USER = "alice"
 # Load the proxy HMAC secret (same file mounted into the API container).
 _SECRET_PATH = (
     Path(__file__).resolve().parent.parent
-    / "simulator" / "compose" / "secrets" / "proxy-hmac.local"
+    / "simulator"
+    / "compose"
+    / "secrets"
+    / "proxy-hmac.local"
 )
 _HMAC_SECRET: bytes | None = None
 if _SECRET_PATH.is_file():
@@ -91,8 +94,10 @@ def main() -> int:
             return 1
         chunks = code_context.get("chunks", [])
         evidence_snippets = code_context.get("evidence_snippets", [])
-        print(f"       code_context captured: {len(chunks)} chunk(s), "
-              f"{len(evidence_snippets)} evidence snippet(s)")
+        print(
+            f"       code_context captured: {len(chunks)} chunk(s), "
+            f"{len(evidence_snippets)} evidence snippet(s)"
+        )
         # Verify source code chunk contains the buggy file.
         chunk_paths = [c.get("path", "") for c in chunks]
         if not any("train.py" in p for p in chunk_paths):
@@ -102,8 +107,7 @@ def main() -> int:
         all_evidence = " ".join(evidence_snippets)
         if "FileNotFoundError" not in all_evidence and "missing_input.csv" not in all_evidence:
             print(
-                f"  FAIL: evidence_snippets missing error info. "
-                f"Snippets: {evidence_snippets[:2]}",
+                f"  FAIL: evidence_snippets missing error info. Snippets: {evidence_snippets[:2]}",
                 file=sys.stderr,
             )
             return 1
@@ -128,9 +132,16 @@ def main() -> int:
 
         print("       Advancing to awaiting_approval…")
         deadline = time.time() + 90
-        while session.get("state") in {
-            "waiting_evidence", "diagnosing", "planning", "preparing",
-        } and time.time() < deadline:
+        while (
+            session.get("state")
+            in {
+                "waiting_evidence",
+                "diagnosing",
+                "planning",
+                "preparing",
+            }
+            and time.time() < deadline
+        ):
             time.sleep(1)
             session = _post(
                 f"/remediation-sessions/{session_id}/advance",
@@ -143,13 +154,10 @@ def main() -> int:
         # ------------------------------------------------------------------
         detail = _get(f"/remediation-sessions/{session_id}")
         proposals = detail.get("proposals") or []
-        repair_proposals = [
-            p for p in proposals if p.get("action_type") == "create_repair_ticket"
-        ]
+        repair_proposals = [p for p in proposals if p.get("action_type") == "create_repair_ticket"]
         if repair_proposals:
             print(
-                f"[5/10] Found create_repair_ticket proposal: "
-                f"{repair_proposals[0]['proposal_id']}"
+                f"[5/10] Found create_repair_ticket proposal: {repair_proposals[0]['proposal_id']}"
             )
         else:
             print(
@@ -163,11 +171,14 @@ def main() -> int:
         # 6. Create RepairTicket via the M2 API.
         # ------------------------------------------------------------------
         print("[6/10] Creating repair ticket…")
-        ticket = _post("/repair-tickets", {
-            "session_id": session_id,
-            "request_key": f"ticket-{request_key}",
-            "requested_change": "Create missing_input.csv or fix the file path in load_data()",
-        })
+        ticket = _post(
+            "/repair-tickets",
+            {
+                "session_id": session_id,
+                "request_key": f"ticket-{request_key}",
+                "requested_change": "Create missing_input.csv or fix the file path in load_data()",
+            },
+        )
         ticket_id = ticket["ticket_id"]
         if ticket.get("state") != "open":
             print(f"  FAIL: ticket state={ticket.get('state')!r} != open", file=sys.stderr)
@@ -200,11 +211,14 @@ def main() -> int:
         # ------------------------------------------------------------------
         print("[8/10] Creating artifact manifest…")
         revision = _get_workspace_revision()
-        manifest = _post("/artifact-manifests", {
-            "revision": revision,
-            "local_test_summary": "repair-smoke: train.py runs without error",
-            "disclosure": "metadata_only",
-        })
+        manifest = _post(
+            "/artifact-manifests",
+            {
+                "revision": revision,
+                "local_test_summary": "repair-smoke: train.py runs without error",
+                "disclosure": "metadata_only",
+            },
+        )
         manifest_id = manifest["manifest_id"]
         print(f"       manifest={manifest_id} revision={revision[:12]}")
 
@@ -212,10 +226,13 @@ def main() -> int:
         # 9. Resolve the ticket.
         # ------------------------------------------------------------------
         print("[9/10] Resolving ticket…")
-        resolved = _post(f"/repair-tickets/{ticket_id}/resolve", {
-            "manifest_id": manifest_id,
-            "derived_run_id": derived_run_id,
-        })
+        resolved = _post(
+            f"/repair-tickets/{ticket_id}/resolve",
+            {
+                "manifest_id": manifest_id,
+                "derived_run_id": derived_run_id,
+            },
+        )
         if resolved.get("state") != "resolved":
             print(f"  FAIL: ticket state={resolved.get('state')!r} != resolved", file=sys.stderr)
             return 1
@@ -253,6 +270,7 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"repair-ticket smoke FAILED: {exc}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         return 1
 
@@ -262,9 +280,7 @@ def main() -> int:
 # ---------------------------------------------------------------------------
 
 
-def _create_submit_and_wait(
-    *, command: str, expected_state: str
-) -> dict:
+def _create_submit_and_wait(*, command: str, expected_state: str) -> dict:
     contract = _post("/contracts", _contract(command))
     prepared = _post("/runs/prepare", {"contract_id": contract["contract_id"]})
     _post(f"/runs/{prepared['run_id']}/submit", {})
@@ -328,12 +344,20 @@ def _fix_workspace() -> None:
     )
     subprocess.run(
         [
-            "docker", "compose",
-            "--project-name", project,
-            "--env-file", env_file,
-            "-f", os.path.join(compose_dir, "compose.yml"),
-            "exec", "-T", "login-node-sim",
-            "bash", "-c", fix_script,
+            "docker",
+            "compose",
+            "--project-name",
+            project,
+            "--env-file",
+            env_file,
+            "-f",
+            os.path.join(compose_dir, "compose.yml"),
+            "exec",
+            "-T",
+            "login-node-sim",
+            "bash",
+            "-c",
+            fix_script,
         ],
         check=True,
         capture_output=True,
@@ -342,12 +366,20 @@ def _fix_workspace() -> None:
     # Verify the file is visible from a worker container (shared volume check).
     verify = subprocess.run(
         [
-            "docker", "compose",
-            "--project-name", project,
-            "--env-file", env_file,
-            "-f", os.path.join(compose_dir, "compose.yml"),
-            "exec", "-T", "worker-1",
-            "test", "-f", f"{WORKDIR}/missing_input.csv",
+            "docker",
+            "compose",
+            "--project-name",
+            project,
+            "--env-file",
+            env_file,
+            "-f",
+            os.path.join(compose_dir, "compose.yml"),
+            "exec",
+            "-T",
+            "worker-1",
+            "test",
+            "-f",
+            f"{WORKDIR}/missing_input.csv",
         ],
         capture_output=True,
         text=True,
@@ -357,12 +389,20 @@ def _fix_workspace() -> None:
         time.sleep(5)
         subprocess.run(
             [
-                "docker", "compose",
-                "--project-name", project,
-                "--env-file", env_file,
-                "-f", os.path.join(compose_dir, "compose.yml"),
-                "exec", "-T", "worker-1",
-                "test", "-f", f"{WORKDIR}/missing_input.csv",
+                "docker",
+                "compose",
+                "--project-name",
+                project,
+                "--env-file",
+                env_file,
+                "-f",
+                os.path.join(compose_dir, "compose.yml"),
+                "exec",
+                "-T",
+                "worker-1",
+                "test",
+                "-f",
+                f"{WORKDIR}/missing_input.csv",
             ],
             check=True,
             capture_output=True,
@@ -381,12 +421,19 @@ def _get_workspace_revision() -> str:
     project = os.environ.get("COMPOSE_PROJECT_NAME", "pilot107-sim")
     result = subprocess.run(
         [
-            "docker", "compose",
-            "--project-name", project,
-            "--env-file", env_file,
-            "-f", os.path.join(compose_dir, "compose.yml"),
-            "exec", "-T", "login-node-sim",
-            "bash", "-c",
+            "docker",
+            "compose",
+            "--project-name",
+            project,
+            "--env-file",
+            env_file,
+            "-f",
+            os.path.join(compose_dir, "compose.yml"),
+            "exec",
+            "-T",
+            "login-node-sim",
+            "bash",
+            "-c",
             f"git config --global --add safe.directory {WORKDIR} && "
             f"git -C {WORKDIR} rev-parse HEAD",
         ],
@@ -428,15 +475,17 @@ def _signed_headers(method: str, path: str, body: bytes) -> dict[str, str]:
     timestamp = int(time.time())
     request_id = str(uuid4())
     body_hash = hashlib.sha256(body).hexdigest()
-    canonical = "\n".join((
-        "pilot107-proxy-v1",
-        str(timestamp),
-        method.upper(),
-        path,
-        USER,
-        body_hash,
-        request_id,
-    )).encode()
+    canonical = "\n".join(
+        (
+            "pilot107-proxy-v1",
+            str(timestamp),
+            method.upper(),
+            path,
+            USER,
+            body_hash,
+            request_id,
+        )
+    ).encode()
     signature = hmac_mod.new(_HMAC_SECRET, canonical, hashlib.sha256).hexdigest()
     headers["X-Pilot107-Proxy-Timestamp"] = str(timestamp)
     headers["X-Request-ID"] = request_id

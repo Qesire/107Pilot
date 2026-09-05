@@ -89,9 +89,10 @@ def _validate_result(terminal: AgentdTurnResult, expected_profile: str) -> None:
 
 
 def main() -> int:
-    if any(not os.environ.get(name, "").strip() for name in REQUIRED_ENV) or os.environ.get(
-        "PILOT107_AGENTD_MODEL_PROFILE"
-    ) == "faux-default":
+    if (
+        any(not os.environ.get(name, "").strip() for name in REQUIRED_ENV)
+        or os.environ.get("PILOT107_AGENTD_MODEL_PROFILE") == "faux-default"
+    ):
         print(SKIP_MESSAGE)
         return 0
 

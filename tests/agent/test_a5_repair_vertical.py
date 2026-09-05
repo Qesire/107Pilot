@@ -49,16 +49,12 @@ class RepairSource:
             "/public/home/alice/failed/config.yaml": b"epochs: 1\n",
         }
 
-    def stat_path(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> FileStat:
+    def stat_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> FileStat:
         del timeout_seconds
         assert (path, owner) == ("/public/home/alice/failed", "alice")
         return FileStat(path=path, type="dir", size=0, mtime=1)
 
-    def list_dir(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> list[FileEntry]:
+    def list_dir(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> list[FileEntry]:
         del timeout_seconds
         assert (path, owner) == ("/public/home/alice/failed", "alice")
         return [
@@ -85,9 +81,7 @@ class RepairSource:
         content = self.files[path]
         return base64.b64encode(content[offset : offset + length]).decode(), len(content)
 
-    def file_sha256(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> str:
+    def file_sha256(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> str:
         del timeout_seconds
         assert owner == "alice"
         return hashlib.sha256(self.files[path]).hexdigest()
@@ -184,6 +178,7 @@ class FormalSubmissionMustNotRun:
         del values
         raise AssertionError("formal Run submission occurred before Remediation preflight")
 
+
 def approved_repair(
     tmp_path: Path,
     *,
@@ -258,9 +253,7 @@ def approved_repair(
 
 
 def test_failed_run_repair_changes_code_in_workspace_not_source(tmp_path: Path) -> None:
-    service, _, projects, source, session, proposal, approved = approved_repair(
-        tmp_path
-    )
+    service, _, projects, source, session, proposal, approved = approved_repair(tmp_path)
     original = dict(source.files)
 
     repair = service.start_code_repair_project(
@@ -270,9 +263,7 @@ def test_failed_run_repair_changes_code_in_workspace_not_source(tmp_path: Path) 
         expected_version=approved.version,
         request_key="repair-project",
     )
-    digests = {
-        item.path: item.source_sha256 for item in repair.workspace.snapshot.entries
-    }
+    digests = {item.path: item.source_sha256 for item in repair.workspace.snapshot.entries}
     change_set = projects.apply_patch(
         project_id=repair.project.project_id,
         workspace_id=repair.workspace.workspace_id,
@@ -297,9 +288,10 @@ def test_failed_run_repair_changes_code_in_workspace_not_source(tmp_path: Path) 
     assert source.files == original
     assert [item.path for item in change_set.files] == ["train.py"]
     assert sandbox.status == "succeeded"
-    assert projects.get_project(
-        repair.project.project_id, owner="alice"
-    ).change_sets[0].state.value == "reviewable"
+    assert (
+        projects.get_project(repair.project.project_id, owner="alice").change_sets[0].state.value
+        == "reviewable"
+    )
     assert approved.state is RemediationState.READY
 
 
@@ -378,9 +370,7 @@ def test_repair_profile_persists_project_run_remediation_and_envelope(
 def test_formal_repair_run_rejoins_existing_remediation_evaluation(
     tmp_path: Path,
 ) -> None:
-    service, remediations, projects, _, session, proposal, approved = approved_repair(
-        tmp_path
-    )
+    service, remediations, projects, _, session, proposal, approved = approved_repair(tmp_path)
     repair = service.start_code_repair_project(
         session.session_id,
         proposal_id=proposal.proposal_id,
@@ -389,9 +379,7 @@ def test_formal_repair_run_rejoins_existing_remediation_evaluation(
         request_key="repair-project-formal",
     )
     source_digest = next(
-        item.source_sha256
-        for item in repair.workspace.snapshot.entries
-        if item.path == "train.py"
+        item.source_sha256 for item in repair.workspace.snapshot.entries if item.path == "train.py"
     )
     assert source_digest is not None
     draft = projects.apply_patch(
@@ -490,9 +478,10 @@ def test_formal_repair_run_rejoins_existing_remediation_evaluation(
         expected_state=RemediationState.READY,
         target_state=RemediationState.PREPARING,
     )
-    interrupted_execution_id = "remexec_" + hashlib.sha256(
-        f"{session.session_id}\0{proposal.proposal_id}".encode()
-    ).hexdigest()[:32]
+    interrupted_execution_id = (
+        "remexec_"
+        + hashlib.sha256(f"{session.session_id}\0{proposal.proposal_id}".encode()).hexdigest()[:32]
+    )
     interrupted_at = utc_now_iso()
     remediations.append_execution(
         ActionExecution(
@@ -578,9 +567,7 @@ def test_formal_repair_budget_is_checked_before_run_submission(tmp_path: Path) -
         request_key="repair-project-budget",
     )
     source_digest = next(
-        item.source_sha256
-        for item in repair.workspace.snapshot.entries
-        if item.path == "train.py"
+        item.source_sha256 for item in repair.workspace.snapshot.entries if item.path == "train.py"
     )
     draft = projects.apply_patch(
         project_id=repair.project.project_id,

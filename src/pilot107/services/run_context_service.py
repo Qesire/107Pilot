@@ -157,9 +157,7 @@ def _failure_summary(run: RunRecord) -> str:
 def _attention(run: RunRecord, diagnoses: list[DiagnosisRecord]) -> dict[str, str | None]:
     if diagnoses:
         primary = diagnoses[0]
-        severity = (
-            "critical" if primary.severity.lower() in {"error", "critical"} else "warning"
-        )
+        severity = "critical" if primary.severity.lower() in {"error", "critical"} else "warning"
         return {
             "severity": severity,
             "title": primary.summary,

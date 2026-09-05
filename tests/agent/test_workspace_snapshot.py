@@ -66,7 +66,7 @@ class ManifestExecutor:
     ) -> tuple[str, int]:
         self.read_paths.append(path)
         content = self.files[path]
-        return base64.b64encode(content[offset:offset + length]).decode(), len(content)
+        return base64.b64encode(content[offset : offset + length]).decode(), len(content)
 
     def file_sha256(self, *, path: str, owner: str, timeout_seconds: float = 30.0):
         if path.endswith("model.ckpt"):

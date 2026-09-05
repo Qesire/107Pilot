@@ -36,7 +36,7 @@ class ContractMaterializerTests(unittest.TestCase):
         self.assertIn("module load cuda/12.4", script)
         self.assertIn("export OMP_NUM_THREADS=4", script)
         self.assertIn("conda activate course-ml", script)
-        self.assertIn("echo materialized > \"${tmp}\"", script)
+        self.assertIn('echo materialized > "${tmp}"', script)
         self.assertNotIn("{{", script)
 
     def test_gpu_array_template_materializes_array_and_gpu_values(self) -> None:
@@ -77,7 +77,7 @@ class ContractMaterializerTests(unittest.TestCase):
         script = result.effective_request["script"]
         self.assertIn("#SBATCH --account=stu", script)
         self.assertIn("#SBATCH --mem=16G", script)
-        self.assertIn("--output \"$report_local\"", script)
+        self.assertIn('--output "$report_local"', script)
         self.assertIn("effective-contract.json", script)
         self.assertNotIn("{{", script)
         _assert_bash_syntax(script)

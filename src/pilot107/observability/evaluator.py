@@ -39,20 +39,16 @@ class ResourceEvaluator:
     WALLTIME_THRESHOLD = 0.20
     RULE_VERSION = "1"
 
-    def evaluate_queue_trend(
-        self, pulses: tuple[AccountPulse, ...]
-    ) -> ResourceEvaluation | None:
+    def evaluate_queue_trend(self, pulses: tuple[AccountPulse, ...]) -> ResourceEvaluation | None:
         if len(pulses) < 3:
             return None
         selected = pulses[-3:]
-        if (
-            len({(item.connection_id, item.owner) for item in selected}) != 1
-            or any(item.partial for item in selected)
+        if len({(item.connection_id, item.owner) for item in selected}) != 1 or any(
+            item.partial for item in selected
         ):
             return None
         pending = [
-            _number(item.measures.as_dict().get("jobs_pending"), unit="jobs")
-            for item in selected
+            _number(item.measures.as_dict().get("jobs_pending"), unit="jobs") for item in selected
         ]
         if (
             any(value is None for value in pending)
@@ -80,9 +76,7 @@ class ResourceEvaluator:
             ),
             measured_values={"pending_jobs": int(pending[-1])},
             thresholds={"minimum_pending_jobs": 3, "minimum_pulses": 3},
-            evidence_refs=tuple(
-                f"observation:{item.observation_id}" for item in selected
-            ),
+            evidence_refs=tuple(f"observation:{item.observation_id}" for item in selected),
             suggested_contract_patch={},
         )
 
@@ -107,9 +101,7 @@ class ResourceEvaluator:
     def _cpu(self, summary: RunResourceSummary) -> ResourceEvaluation | None:
         elapsed = _number(summary.used.elapsed, unit="seconds")
         total_cpu = _number(summary.used.total_cpu, unit="seconds")
-        cpu_time_raw = _number(
-            summary.used.cpu_time_raw, units={"cpu_seconds", "seconds"}
-        )
+        cpu_time_raw = _number(summary.used.cpu_time_raw, units={"cpu_seconds", "seconds"})
         allocated_cpus = _number(summary.allocated.allocated_cpus, unit="cpu")
         if (
             elapsed is None
@@ -131,8 +123,7 @@ class ResourceEvaluator:
             severity="warning",
             confidence="high",
             text=(
-                "CPU accounting indicates low utilization; review parallelism "
-                "before reducing CPUs."
+                "CPU accounting indicates low utilization; review parallelism before reducing CPUs."
             ),
             measured={
                 "cpu_efficiency": efficiency,
@@ -226,9 +217,8 @@ class ResourceEvaluator:
         comparable_ratios = [
             item for candidate in comparable if (item := _walltime_ratio(candidate)) is not None
         ]
-        repeated = (
-            len(comparable_ratios) + 1 >= 3
-            and all(item < self.WALLTIME_THRESHOLD for item in comparable_ratios)
+        repeated = len(comparable_ratios) + 1 >= 3 and all(
+            item < self.WALLTIME_THRESHOLD for item in comparable_ratios
         )
         elapsed = _number(summary.used.elapsed, unit="seconds")
         assert elapsed is not None
@@ -304,9 +294,7 @@ def _extra_number(
     return _number(measures.as_dict().get(name), unit=unit)
 
 
-def _extra_string(
-    summary: RunResourceSummary, *, allocated: bool, name: str
-) -> str | None:
+def _extra_string(summary: RunResourceSummary, *, allocated: bool, name: str) -> str | None:
     measures = summary.allocated if allocated else summary.used
     measure = measures.as_dict().get(name)
     if (
@@ -321,9 +309,7 @@ def _extra_string(
 
 def _walltime_ratio(summary: RunResourceSummary) -> float | None:
     elapsed = _number(summary.used.elapsed, unit="seconds")
-    requested = _extra_number(
-        summary, allocated=True, name="requested_walltime", unit="seconds"
-    )
+    requested = _extra_number(summary, allocated=True, name="requested_walltime", unit="seconds")
     if elapsed is None or requested is None or requested <= 0:
         return None
     return elapsed / requested

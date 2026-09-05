@@ -457,9 +457,7 @@ class RunStoreTests(unittest.TestCase):
             {task.task_type for task in self.store.list_due_collection_tasks()},
         )
 
-        self.assertTrue(
-            self.store.release_logs_finalize_after_runtime_watch(run.run_id)
-        )
+        self.assertTrue(self.store.release_logs_finalize_after_runtime_watch(run.run_id))
         due = {task.task_type for task in self.store.list_due_collection_tasks()}
         self.assertIn("logs_finalize", due)
 

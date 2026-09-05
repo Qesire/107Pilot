@@ -188,9 +188,7 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
         from pilot107.core.postgres_domain_schema import _MIGRATIONS
 
         migration_id, statements = next(
-            migration
-            for migration in _MIGRATIONS
-            if migration[0] == "004a.027.run_provenance"
+            migration for migration in _MIGRATIONS if migration[0] == "004a.027.run_provenance"
         )
         schema = "\n".join(statements)
 
@@ -225,9 +223,7 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
         from pilot107.core.postgres_domain_schema import _MIGRATIONS
 
         migration_id, statements = next(
-            migration
-            for migration in _MIGRATIONS
-            if migration[0] == "004a.030.evidence_seal_state"
+            migration for migration in _MIGRATIONS if migration[0] == "004a.030.evidence_seal_state"
         )
         schema = "\n".join(statements)
 
@@ -270,9 +266,7 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
         from pilot107.core.postgres_domain_schema import _MIGRATIONS
 
         migration_id, statements = next(
-            migration
-            for migration in _MIGRATIONS
-            if migration[0] == "004a.032.evidence_seal_claim"
+            migration for migration in _MIGRATIONS if migration[0] == "004a.032.evidence_seal_claim"
         )
         schema = "\n".join(statements)
 
@@ -291,9 +285,7 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
         from pilot107.core.postgres_domain_schema import _MIGRATIONS
 
         migration_id, statements = next(
-            migration
-            for migration in _MIGRATIONS
-            if migration[0] == "004a.033.capsule_build_fence"
+            migration for migration in _MIGRATIONS if migration[0] == "004a.033.capsule_build_fence"
         )
         schema = "\n".join(statements)
 
@@ -342,9 +334,7 @@ class PostgresAgentSessionSchemaTests(unittest.TestCase):
         from pilot107.core.postgres_domain_schema import _MIGRATIONS
 
         migration_id, statements = next(
-            migration
-            for migration in _MIGRATIONS
-            if migration[0] == "004a.007.agent_workspaces"
+            migration for migration in _MIGRATIONS if migration[0] == "004a.007.agent_workspaces"
         )
         schema = "\n".join(statements)
 

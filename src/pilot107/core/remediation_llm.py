@@ -403,9 +403,7 @@ def _validate_action_parameters(
                 code="invalid_parameters",
             )
     elif proposal.action_type in {"path_probe", "runtime_probe"}:
-        if set(parameters) != {"probe_kind"} or not isinstance(
-            parameters.get("probe_kind"), str
-        ):
+        if set(parameters) != {"probe_kind"} or not isinstance(parameters.get("probe_kind"), str):
             raise RemediationPlanError(
                 "probe requires a structured probe_kind",
                 code="invalid_parameters",

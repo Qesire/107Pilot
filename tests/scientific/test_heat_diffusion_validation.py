@@ -63,8 +63,7 @@ def _write_valid_outputs(root: Path) -> None:
         writer.writerows(rows)
 
     orders = [
-        math.log(errors[index] / errors[index + 1])
-        / math.log(grids[index + 1] / grids[index])
+        math.log(errors[index] / errors[index + 1]) / math.log(grids[index + 1] / grids[index])
         for index in range(2)
     ]
     (root / "convergence.json").write_text(
@@ -88,8 +87,7 @@ def _write_valid_outputs(root: Path) -> None:
                 "elapsed_seconds": scaling_times,
                 "speedup": speedup,
                 "efficiency": [
-                    value / threads
-                    for value, threads in zip(speedup, [1, 2, 4], strict=True)
+                    value / threads for value, threads in zip(speedup, [1, 2, 4], strict=True)
                 ],
             }
         ),
@@ -129,9 +127,7 @@ def test_accepts_consistent_second_order_outputs(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("missing", ["report.md", "convergence.svg", "scaling.svg"])
-def test_fails_when_required_presentation_output_is_missing(
-    tmp_path: Path, missing: str
-) -> None:
+def test_fails_when_required_presentation_output_is_missing(tmp_path: Path, missing: str) -> None:
     _write_valid_outputs(tmp_path)
     (tmp_path / missing).unlink()
 

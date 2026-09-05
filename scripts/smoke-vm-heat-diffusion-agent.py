@@ -196,8 +196,7 @@ def _poll_turn(
         "Agent Turn completion",
         lambda: _all_events(client, session_id),
         lambda items: any(
-            event.get("turn_id") == turn_id
-            and event.get("event_type") in _TERMINAL_TURN_EVENTS
+            event.get("turn_id") == turn_id and event.get("event_type") in _TERMINAL_TURN_EVENTS
             for event in items
         ),
         timeout_seconds=timeout_seconds,
@@ -206,8 +205,7 @@ def _poll_turn(
     terminal = next(
         event
         for event in reversed(events)
-        if event.get("turn_id") == turn_id
-        and event.get("event_type") in _TERMINAL_TURN_EVENTS
+        if event.get("turn_id") == turn_id and event.get("event_type") in _TERMINAL_TURN_EVENTS
     )
     payload = terminal.get("payload")
     if terminal.get("event_type") != "turn_completed" or not isinstance(payload, dict):
@@ -242,9 +240,7 @@ def _poll_turn(
     return payload, events
 
 
-def _audit_builder_events(
-    terminal: dict[str, Any], events: list[dict[str, Any]]
-) -> dict[str, Any]:
+def _audit_builder_events(terminal: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
     requested = [
         payload.get("tool_name")
         for event in events
@@ -390,9 +386,7 @@ def _evidence_preview_text(
     if not isinstance(selected, dict):
         raise RuntimeError(f"Evidence omitted {logical_path}")
     object_id = _required_string(selected, "object_id")
-    payload = client.get(
-        f"/runs/{_encoded(run_id)}/evidence/objects/{_encoded(object_id)}"
-    )
+    payload = client.get(f"/runs/{_encoded(run_id)}/evidence/objects/{_encoded(object_id)}")
     preview = payload.get("preview")
     if not isinstance(preview, dict) or preview.get("available") is not True:
         raise RuntimeError(f"Evidence preview is unavailable for {logical_path}")
@@ -472,9 +466,7 @@ def run_smoke(
         raise RuntimeError("Project Workspace omitted its snapshot")
     workspace_snapshot_digest = _required_string(snapshot, "digest")
 
-    expires_at = (datetime.now(UTC) + timedelta(minutes=30)).isoformat().replace(
-        "+00:00", "Z"
-    )
+    expires_at = (datetime.now(UTC) + timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
     session = client.post(
         "/agent-sessions",
         {
@@ -652,9 +644,7 @@ def run_smoke(
     }
     if not isinstance(lineage["validation_evidence_refs"], list):
         raise RuntimeError("formal candidate omitted validation Evidence")
-    approval = client.post(
-        f"/agent-changesets/{_encoded(change_set_id)}/formal-preview", lineage
-    )
+    approval = client.post(f"/agent-changesets/{_encoded(change_set_id)}/formal-preview", lineage)
     approved_digest = _required_string(approval, "approval_digest")
     formal = client.post(
         f"/agent-changesets/{_encoded(change_set_id)}/formal-submit",
@@ -713,9 +703,7 @@ def run_smoke(
         raise RuntimeError(f"scientific output audit failed: {audit.checks}")
 
     event_refs = [
-        str(event.get("event_id"))
-        for event in events
-        if event.get("event_id") is not None
+        str(event.get("event_id")) for event in events if event.get("event_id") is not None
     ]
     return {
         "status": "PASS",
@@ -749,21 +737,13 @@ def main() -> int:
         report = run_smoke(
             ApiClient(base_url, owner=owner),
             smoke_id=smoke_id,
-            model_profile_id=os.environ.get(
-                "PILOT107_AGENT_TASK_MODEL_PROFILE", "campus-default"
-            ),
-            expected_model=os.environ.get(
-                "PILOT107_EXPECTED_AGENT_MODEL", "deepseek-v4-flash"
-            ),
+            model_profile_id=os.environ.get("PILOT107_AGENT_TASK_MODEL_PROFILE", "campus-default"),
+            expected_model=os.environ.get("PILOT107_EXPECTED_AGENT_MODEL", "deepseek-v4-flash"),
             partition=os.environ.get("PILOT107_SMOKE_PARTITION", "CPU-RC"),
             qos=os.environ.get("PILOT107_SMOKE_QOS", "qos_cpu_rc"),
             auto_approve=os.environ.get("PILOT107_HEAT_SMOKE_AUTO_APPROVE") == "1",
-            timeout_seconds=float(
-                os.environ.get("PILOT107_HEAT_SMOKE_TIMEOUT_SECONDS", "1800")
-            ),
-            poll_interval_seconds=float(
-                os.environ.get("PILOT107_HEAT_SMOKE_POLL_SECONDS", "2")
-            ),
+            timeout_seconds=float(os.environ.get("PILOT107_HEAT_SMOKE_TIMEOUT_SECONDS", "1800")),
+            poll_interval_seconds=float(os.environ.get("PILOT107_HEAT_SMOKE_POLL_SECONDS", "2")),
         )
     except Exception as exc:
         print(json.dumps({"status": "FAIL", "error": str(exc)}, ensure_ascii=False))

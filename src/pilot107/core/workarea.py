@@ -382,7 +382,9 @@ class PostgresWorkAreaStore:
             ).fetchone()
             if existing is not None:
                 if str(existing["asset_kind"]) != asset_kind:
-                    raise WorkAreaConflict("Asset reference is already linked with a different kind")
+                    raise WorkAreaConflict(
+                        "Asset reference is already linked with a different kind"
+                    )
                 return
             connection.execute(
                 """

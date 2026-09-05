@@ -41,12 +41,8 @@ GOLDENS: dict[str, dict[str, Any]] = {
                 "recipe_version_id": "recipe_python_cpu@1.0.0",
                 "resource_hints": {"cpus_per_task": 1, "time_limit": "00:05:00"},
             },
-            "expected_outputs": [
-                {"path": "result.json", "kind": "json", "required": True}
-            ],
-            "dependencies": [
-                {"name": "python", "version": ">=3.12", "source": "runtime"}
-            ],
+            "expected_outputs": [{"path": "result.json", "kind": "json", "required": True}],
+            "dependencies": [{"name": "python", "version": ">=3.12", "source": "runtime"}],
             "open_questions": [],
         },
         "created_at": "2026-08-19T00:00:00Z",
@@ -282,9 +278,7 @@ def test_agent_task_schema_accepts_schedule_and_terminal_gate_receipts() -> None
             "legacy_gate_unverified": True,
         }
     )
-    schema = json.loads(
-        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
-    )
+    schema = json.loads((SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text())
 
     Draft202012Validator(schema).validate(payload)
 
@@ -347,9 +341,7 @@ def test_agent_task_schema_rejects_terminal_gate_receipt_without_integrity_times
             "legacy_gate_unverified": False,
         }
     )
-    schema = json.loads(
-        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
-    )
+    schema = json.loads((SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text())
 
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
@@ -361,9 +353,7 @@ def test_new_agent_task_payload_requires_all_gate_fields() -> None:
 
     payload = copy.deepcopy(GOLDENS["agent/v2/agent-task.schema.json"])
     payload["completion_policy"] = "evidence_required"
-    schema = json.loads(
-        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
-    )
+    schema = json.loads((SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text())
 
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
@@ -373,9 +363,7 @@ def test_agent_task_schema_restricts_terminal_gate_states() -> None:
     from jsonschema import Draft202012Validator
     from jsonschema.exceptions import ValidationError
 
-    schema = json.loads(
-        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
-    )
+    schema = json.loads((SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text())
     for field, invalid in (("evidence_state", "collected"), ("integrity_state", "pending")):
         payload = copy.deepcopy(GOLDENS["agent/v2/agent-task.schema.json"])
         payload.update(
@@ -435,9 +423,7 @@ def test_agent_task_schema_restricts_capsule_state_and_ref(
             "legacy_gate_unverified": False,
         }
     )
-    schema = json.loads(
-        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
-    )
+    schema = json.loads((SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text())
 
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
@@ -473,9 +459,7 @@ def test_agent_task_schema_accepts_each_wire_run_terminal_state(
             "legacy_gate_unverified": False,
         }
     )
-    schema = json.loads(
-        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
-    )
+    schema = json.loads((SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text())
     Draft202012Validator(schema).validate(payload)
 
 
@@ -508,9 +492,7 @@ def test_agent_task_schema_rejects_non_terminal_run_state(run_terminal_state: st
             "legacy_gate_unverified": False,
         }
     )
-    schema = json.loads(
-        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
-    )
+    schema = json.loads((SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text())
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
 
@@ -543,9 +525,7 @@ def test_agent_task_schema_requires_ready_capsule_for_capsule_policy() -> None:
             "legacy_gate_unverified": False,
         }
     )
-    schema = json.loads(
-        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
-    )
+    schema = json.loads((SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text())
 
     with pytest.raises(ValidationError):
         Draft202012Validator(schema).validate(payload)
@@ -578,8 +558,6 @@ def test_agent_task_schema_allows_evidence_policy_with_optional_capsule() -> Non
             "legacy_gate_unverified": False,
         }
     )
-    schema = json.loads(
-        (SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text()
-    )
+    schema = json.loads((SCHEMA_ROOT / "agent/v2/agent-task.schema.json").read_text())
 
     Draft202012Validator(schema).validate(payload)

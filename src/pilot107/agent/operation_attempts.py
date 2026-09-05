@@ -634,9 +634,7 @@ class PostgresAgentOperationAttemptStore:
             ).fetchone()
             if existing is not None:
                 if str(existing["checksum"]) != checksum:
-                    raise RuntimeError(
-                        f"migration checksum changed: {_POSTGRES_MIGRATION_ID}"
-                    )
+                    raise RuntimeError(f"migration checksum changed: {_POSTGRES_MIGRATION_ID}")
                 return
             for statement in _POSTGRES_STATEMENTS:
                 connection.execute(statement)

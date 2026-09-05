@@ -88,17 +88,13 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         self.assertFalse(restored.postgres_restored)
         self.assertEqual(manifest["backup_id"], result.backup_id)
         with sqlite3.connect(restore_root / "pilot107.db") as conn:
-            row = conn.execute(
-                "SELECT owner FROM runs WHERE run_id = 'run_backup'"
-            ).fetchone()
+            row = conn.execute("SELECT owner FROM runs WHERE run_id = 'run_backup'").fetchone()
         self.assertEqual(row, ("alice",))
         self.assertEqual(
             (restore_root / "evidence/runs/run_backup/logs/stdout.txt").read_text(),
             "backup evidence\n",
         )
-        self.assertTrue(
-            (restore_root / "capsules/runs/run_backup/raw/capsule.json").is_file()
-        )
+        self.assertTrue((restore_root / "capsules/runs/run_backup/raw/capsule.json").is_file())
 
     def test_sqlite_backup_includes_committed_wal_state(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
@@ -332,9 +328,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         )
 
         with (
-            patch(
-                "pilot107.core.recovery.subprocess.run", return_value=completed
-            ) as run,
+            patch("pilot107.core.recovery.subprocess.run", return_value=completed) as run,
             self.assertRaises(RecoveryError) as raised,
         ):
             adapter.dump(dsn=dsn, destination=self.root / "control.dump")

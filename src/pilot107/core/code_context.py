@@ -21,9 +21,7 @@ from typing import Protocol
 from pilot107.core.evidence_binding import redact_evidence_text
 from pilot107.core.run_store import RunRecord
 
-_TRACEBACK_LOCATION = re.compile(
-    r'''File ["'](?P<path>[^"'\n]+)["'], line (?P<line>[1-9][0-9]*)'''
-)
+_TRACEBACK_LOCATION = re.compile(r"""File ["'](?P<path>[^"'\n]+)["'], line (?P<line>[1-9][0-9]*)""")
 _COMPILER_LOCATION = re.compile(
     r"(?P<path>(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9_+.-]+)"
     r":(?P<line>[1-9][0-9]*)(?::[1-9][0-9]*)?"
@@ -359,9 +357,7 @@ class CodeContextService:
             }
         )
         locations = locate_error_locations(
-            evidence_texts=_prepare_evidence_for_location(
-                evidence_texts, owner=run.owner
-            ),
+            evidence_texts=_prepare_evidence_for_location(evidence_texts, owner=run.owner),
             workspace=workspace,
             max_locations=self.policy.max_chunks,
         )
@@ -421,9 +417,7 @@ class CodeContextService:
             dirty=bool(status),
             worktree_fingerprint=fingerprint,
             chunks=chunks,
-            evidence_snippets=tuple(
-                text for text in evidence_texts if text.strip()
-            ),
+            evidence_snippets=tuple(text for text in evidence_texts if text.strip()),
             warnings=tuple(dict.fromkeys(warnings)),
         )
 
@@ -575,8 +569,11 @@ def _unavailable_bundle(run: RunRecord, *, warning: str) -> CodeContextBundle:
 
 def _safe_relative_path(value: str) -> str:
     path = PurePosixPath(value)
-    if path.is_absolute() or not value or "\x00" in value or any(
-        part in {"", ".", ".."} for part in path.parts
+    if (
+        path.is_absolute()
+        or not value
+        or "\x00" in value
+        or any(part in {"", ".", ".."} for part in path.parts)
     ):
         raise CodeContextError("invalid_source_path")
     return path.as_posix()
@@ -609,9 +606,7 @@ def _excluded_source_path(path: str) -> bool:
         return True
     name = candidate.name.lower()
     return (
-        name == ".env"
-        or name.startswith(".env.")
-        or candidate.suffix.lower() in _EXCLUDED_SUFFIXES
+        name == ".env" or name.startswith(".env.") or candidate.suffix.lower() in _EXCLUDED_SUFFIXES
     )
 
 

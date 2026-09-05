@@ -70,9 +70,7 @@ def resolve_durable_store_selection(
         raise ConfigurationError("durable database mode must be postgres") from exc
 
     if mode is DatabaseMode.SQLITE:
-        raise ConfigurationError(
-            "SQLite runtime authority has been retired; configure PostgreSQL"
-        )
+        raise ConfigurationError("SQLite runtime authority has been retired; configure PostgreSQL")
     if runtime_watch_sqlite_path is not None or observation_sqlite_path is not None:
         raise ConfigurationError(
             "SQLite runtime authority has been retired; "
@@ -97,9 +95,7 @@ def resolve_durable_store_selection(
     )
 
 
-def build_market_session_store(
-    *, selection: DurableStoreSelection
-) -> PostgresMarketSessionStore:
+def build_market_session_store(*, selection: DurableStoreSelection) -> PostgresMarketSessionStore:
     dsn = _required_postgres_dsn(selection, component="market session")
     return PostgresMarketSessionStore(
         dsn,
@@ -107,9 +103,7 @@ def build_market_session_store(
     )
 
 
-def build_agent_session_store(
-    *, sqlite_path: Path, postgres_dsn: str | None
-) -> AgentSessionStore:
+def build_agent_session_store(*, sqlite_path: Path, postgres_dsn: str | None) -> AgentSessionStore:
     del sqlite_path
     dsn = _require_builder_dsn(postgres_dsn, component="Agent session")
     store = PostgresAgentSessionStore(dsn)
@@ -123,9 +117,7 @@ def build_project_store(*, sqlite_path: Path, postgres_dsn: str | None) -> Proje
     return PostgresProjectStore(dsn)
 
 
-def build_agent_task_store(
-    *, sqlite_path: Path, postgres_dsn: str | None
-) -> AgentTaskStore:
+def build_agent_task_store(*, sqlite_path: Path, postgres_dsn: str | None) -> AgentTaskStore:
     del sqlite_path
     dsn = _require_builder_dsn(postgres_dsn, component="Agent task")
     return PostgresAgentTaskStore(dsn)
@@ -138,8 +130,7 @@ def _required_postgres_dsn(
 ) -> str:
     if selection.mode is not DatabaseMode.POSTGRES or not selection.postgres_dsn:
         raise ConfigurationError(
-            f"{component} store requires PostgreSQL; "
-            "SQLite runtime authority has been retired"
+            f"{component} store requires PostgreSQL; SQLite runtime authority has been retired"
         )
     return selection.postgres_dsn
 
@@ -147,8 +138,7 @@ def _required_postgres_dsn(
 def _require_builder_dsn(value: str | None, *, component: str) -> str:
     if not value:
         raise ConfigurationError(
-            f"{component} store requires PostgreSQL; "
-            "SQLite runtime authority has been retired"
+            f"{component} store requires PostgreSQL; SQLite runtime authority has been retired"
         )
     return value
 
@@ -166,11 +156,7 @@ def _postgres_database_identity(dsn: str) -> tuple[str, str, str]:
         database = query.get("dbname", [unquote(parsed.path.lstrip("/"))])[-1]
     else:
         try:
-            values = dict(
-                item.split("=", 1)
-                for item in shlex.split(dsn)
-                if "=" in item
-            )
+            values = dict(item.split("=", 1) for item in shlex.split(dsn) if "=" in item)
         except ValueError as exc:
             raise ConfigurationError("PostgreSQL DSN is invalid") from exc
         host = values.get("host", "localhost")

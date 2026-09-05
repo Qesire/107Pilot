@@ -89,9 +89,7 @@ def _submit_success(
     )
     run = runs.submit(contracts.to_submit_request(contract))
     terminal = _wait_run(runs, run.run_id)
-    if terminal.state is not RunState.SUCCEEDED or not (terminal.exit_code or "").startswith(
-        "0:"
-    ):
+    if terminal.state is not RunState.SUCCEEDED or not (terminal.exit_code or "").startswith("0:"):
         raise RuntimeError(f"market D1 source Run failed: {terminal.state.value}")
     return terminal
 
@@ -254,10 +252,13 @@ def main() -> int:
                 workdir=workdir,
             )
             template_publications.observe_successful_run(first_run)
-            if publications.get_for_source_run(
-                source_run_id=first_run.run_id,
-                owner="alice",
-            ) is not None:
+            if (
+                publications.get_for_source_run(
+                    source_run_id=first_run.run_id,
+                    owner="alice",
+                )
+                is not None
+            ):
                 raise RuntimeError("successful Run was shared without a ShareManifest")
 
             first_evidence = _evidence(
@@ -348,9 +349,7 @@ def main() -> int:
                 confirmation_digest=curated.confirmation_digest,
                 request_key="bob-curated-contract-d1",
             )
-            curated_contract = contracts.get(
-                str(curated_completed.application.target_contract_id)
-            )
+            curated_contract = contracts.get(str(curated_completed.application.target_contract_id))
             curated_lineage = curated_contract.field_sources[0]
             curated_adoption = templates.get_adoption_for_contract(
                 release_id=release_v2_id,
@@ -363,8 +362,7 @@ def main() -> int:
                 or curated_lineage.get("market_application_session_id")
                 != curated.application.session_id
                 or curated_lineage.get("assurance") != "curated"
-                or curated_adoption.adoption_id
-                != curated_completed.application.adoption_id
+                or curated_adoption.adoption_id != curated_completed.application.adoption_id
             ):
                 raise RuntimeError("curated application isolation or lineage failed")
 

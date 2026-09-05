@@ -610,9 +610,7 @@ class SshRelayExecutor:
         runner = getattr(self.client, "run_file_shell", None)
         if runner is None:
             raise SshRelayPolicyError("SSH client lacks file transfer support")
-        result: CommandResult = runner(
-            shell_command, stdin=stdin, timeout_seconds=timeout_seconds
-        )
+        result: CommandResult = runner(shell_command, stdin=stdin, timeout_seconds=timeout_seconds)
         return result
 
     def _require_file_owner(self, owner: str) -> None:
@@ -642,9 +640,7 @@ class SshRelayExecutor:
                 "SSH relay writes sequentially; offset must be 0 or append(-1)"
             )
         shell_command = f"base64 -d {redirect} {quoted} && stat -c %s -- {quoted}"
-        result = self._file_shell(
-            shell_command, stdin=data_b64, timeout_seconds=timeout_seconds
-        )
+        result = self._file_shell(shell_command, stdin=data_b64, timeout_seconds=timeout_seconds)
         if result.returncode != 0:
             raise SlurmTransportError("SSH.WRITE_BYTES_FAILED")
         size_lines = [line for line in result.stdout.splitlines() if line.strip().isdigit()]
@@ -665,8 +661,7 @@ class SshRelayExecutor:
             raise SshRelayPolicyError("offset must be >= 0 and length positive")
         quoted = shlex.quote(safe_path)
         shell_command = (
-            f"head -c {int(length)} < {quoted} | base64 -w0; "
-            f"printf '\\n'; stat -c %s -- {quoted}"
+            f"head -c {int(length)} < {quoted} | base64 -w0; printf '\\n'; stat -c %s -- {quoted}"
         )
         if offset > 0:
             shell_command = (
@@ -683,9 +678,7 @@ class SshRelayExecutor:
         size = int(size_lines[-1]) if size_lines else 0
         return data_b64, size
 
-    def file_sha256(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> str:
+    def file_sha256(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> str:
         self._require_file_owner(owner)
         safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
         result = self.client.execute(
@@ -700,9 +693,7 @@ class SshRelayExecutor:
             raise SlurmTransportError("SSH.SHA256_INVALID")
         return digest
 
-    def path_sha256(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> str | None:
+    def path_sha256(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> str | None:
         """Return a regular file digest, distinguishing absence from failure."""
 
         self._require_file_owner(owner)
@@ -743,12 +734,8 @@ class SshRelayExecutor:
         """Atomically install a staged regular file when the target still matches."""
 
         self._require_file_owner(owner)
-        safe_staged = _validate_remote_path(
-            staged_path, roots=self.config.expanded_owner_roots()
-        )
-        safe_target = _validate_remote_path(
-            target_path, roots=self.config.expanded_owner_roots()
-        )
+        safe_staged = _validate_remote_path(staged_path, roots=self.config.expanded_owner_roots())
+        safe_target = _validate_remote_path(target_path, roots=self.config.expanded_owner_roots())
         expected = "-" if expected_sha256 is None else self._publication_digest(expected_sha256)
         desired = self._publication_digest(desired_sha256)
         script = (
@@ -781,9 +768,7 @@ class SshRelayExecutor:
         """Atomically decide and unlink a regular file with an expected digest."""
 
         self._require_file_owner(owner)
-        safe_target = _validate_remote_path(
-            target_path, roots=self.config.expanded_owner_roots()
-        )
+        safe_target = _validate_remote_path(target_path, roots=self.config.expanded_owner_roots())
         expected = self._publication_digest(expected_sha256)
         script = (
             "import hashlib,os,stat,sys;"
@@ -795,8 +780,7 @@ class SshRelayExecutor:
             "(print('conflict') if c!=e else (os.unlink(t),print('committed'))[-1])"
         )
         command = " ".join(
-            shlex.quote(token)
-            for token in ("python3", "-c", script, safe_target, expected)
+            shlex.quote(token) for token in ("python3", "-c", script, safe_target, expected)
         )
         result = self._file_shell(command, timeout_seconds=timeout_seconds)
         return self._publication_outcome(result)
@@ -847,9 +831,7 @@ class SshRelayExecutor:
                 or raw_binding.get("owner") != owner
                 or raw_binding.get("path") != safe_path
             ):
-                raise SlurmSubmissionRejected(
-                    "directory listing cursor does not match request"
-                )
+                raise SlurmSubmissionRejected("directory listing cursor does not match request")
             raw_after = state.get("after")
             if (
                 not isinstance(raw_after, list)
@@ -945,9 +927,7 @@ class SshRelayExecutor:
         timeout_seconds: float = 30.0,
     ) -> FileSearchPage:
         self._require_file_owner(owner)
-        safe_root = _validate_remote_path(
-            root, roots=self.config.expanded_owner_roots()
-        )
+        safe_root = _validate_remote_path(root, roots=self.config.expanded_owner_roots())
         normalized_query = q.strip().casefold()
         if kind not in {"file", "directory", "all"}:
             raise SlurmSubmissionRejected("kind must be file, directory, or all")
@@ -1082,9 +1062,7 @@ class SshRelayExecutor:
             warnings=tuple(str(item) for item in raw_warnings[:20]),
         )
 
-    def make_dir(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> None:
+    def make_dir(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> None:
         self._require_file_owner(owner)
         safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
         result = self.client.execute(
@@ -1095,9 +1073,7 @@ class SshRelayExecutor:
         if result.returncode != 0:
             raise SlurmTransportError("SSH.MKDIR_FAILED")
 
-    def remove_path(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> None:
+    def remove_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> None:
         self._require_file_owner(owner)
         safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
         result = self._file_shell(
@@ -1117,9 +1093,7 @@ class SshRelayExecutor:
     ) -> None:
         self._require_file_owner(owner)
         safe_src = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
-        safe_dst = _validate_remote_path(
-            new_path, roots=self.config.expanded_owner_roots()
-        )
+        safe_dst = _validate_remote_path(new_path, roots=self.config.expanded_owner_roots())
         if overwrite:
             command = f"mv -f -- {shlex.quote(safe_src)} {shlex.quote(safe_dst)}"
         else:
@@ -1144,16 +1118,11 @@ class SshRelayExecutor:
         self._require_file_owner(owner)
         if not paths:
             raise SshRelayPolicyError("paths must be a non-empty list")
-        safe_dest = _validate_remote_path(
-            dest_dir, roots=self.config.expanded_owner_roots()
-        )
+        safe_dest = _validate_remote_path(dest_dir, roots=self.config.expanded_owner_roots())
         safe_sources = [
-            _validate_remote_path(item, roots=self.config.expanded_owner_roots())
-            for item in paths
+            _validate_remote_path(item, roots=self.config.expanded_owner_roots()) for item in paths
         ]
-        quoted = " ".join(
-            shlex.quote(token) for token in [*safe_sources, safe_dest]
-        )
+        quoted = " ".join(shlex.quote(token) for token in [*safe_sources, safe_dest])
         result = self._file_shell(
             f"mkdir -p {shlex.quote(safe_dest)} && cp -a -- {quoted}",
             timeout_seconds=timeout_seconds,
@@ -1174,9 +1143,7 @@ class SshRelayExecutor:
         self._require_file_owner(owner)
         if not name or name in {".", ".."} or "/" in name or "\\" in name:
             raise SshRelayPolicyError(f"unsafe file name: {name}")
-        safe_dir = _validate_remote_path(
-            dir_path, roots=self.config.expanded_owner_roots()
-        )
+        safe_dir = _validate_remote_path(dir_path, roots=self.config.expanded_owner_roots())
         target = f"{safe_dir.rstrip('/')}/{name}"
         command = (
             f"test -e {shlex.quote(target)} && echo EXISTS && exit 1 || "
@@ -1189,9 +1156,7 @@ class SshRelayExecutor:
             raise SlurmTransportError("SSH.CREATE_FILE_FAILED")
         return target
 
-    def stat_path(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> FileStat:
+    def stat_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> FileStat:
         self._require_file_owner(owner)
         safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
         result = self.client.execute(
@@ -1212,9 +1177,7 @@ class SshRelayExecutor:
         }.get(raw_type, "other")
         return FileStat(path=safe_path, type=kind, size=int(size), mtime=int(mtime))
 
-    def disk_usage(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> DiskUsage:
+    def disk_usage(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> DiskUsage:
         self._require_file_owner(owner)
         safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
         script = (
@@ -1246,20 +1209,21 @@ class SshRelayExecutor:
         timeout_seconds: float = 120.0,
     ) -> int:
         self._require_file_owner(owner)
-        safe_archive = _validate_remote_path(
-            archive_path, roots=self.config.expanded_owner_roots()
-        )
-        safe_dest = _validate_remote_path(
-            dest_dir, roots=self.config.expanded_owner_roots()
-        )
+        safe_archive = _validate_remote_path(archive_path, roots=self.config.expanded_owner_roots())
+        safe_dest = _validate_remote_path(dest_dir, roots=self.config.expanded_owner_roots())
         script = (
-            'python3 -c "import sys,tarfile;a,d=sys.argv[1],sys.argv[2];t=tarfile.open(a);'
-            "ms=t.getmembers();"
-            "bad=any(m.name.startswith('/') or '..' in m.name.split('/') "
-            "or m.issym() or m.islnk() for m in ms);"
-            "sys.exit(2) if bad else t.extractall(d);"
-            'print(len(ms))" '
-        ) + shlex.quote(safe_archive) + " " + shlex.quote(safe_dest)
+            (
+                'python3 -c "import sys,tarfile;a,d=sys.argv[1],sys.argv[2];t=tarfile.open(a);'
+                "ms=t.getmembers();"
+                "bad=any(m.name.startswith('/') or '..' in m.name.split('/') "
+                "or m.issym() or m.islnk() for m in ms);"
+                "sys.exit(2) if bad else t.extractall(d);"
+                'print(len(ms))" '
+            )
+            + shlex.quote(safe_archive)
+            + " "
+            + shlex.quote(safe_dest)
+        )
         result = self._file_shell(
             f"mkdir -p {shlex.quote(safe_dest)} && {script}",
             timeout_seconds=timeout_seconds,
@@ -1283,12 +1247,9 @@ class SshRelayExecutor:
             raise SshRelayPolicyError(f"unsafe archive name: {archive_name}")
         if not paths:
             raise SshRelayPolicyError("paths must be a non-empty list")
-        safe_dest = _validate_remote_path(
-            dest_dir, roots=self.config.expanded_owner_roots()
-        )
+        safe_dest = _validate_remote_path(dest_dir, roots=self.config.expanded_owner_roots())
         safe_sources = [
-            _validate_remote_path(item, roots=self.config.expanded_owner_roots())
-            for item in paths
+            _validate_remote_path(item, roots=self.config.expanded_owner_roots()) for item in paths
         ]
         script = (
             'python3 -c "import sys,tarfile,os;d=sys.argv[1];n=sys.argv[2];'
@@ -1297,9 +1258,7 @@ class SshRelayExecutor:
             "[t.add(s,arcname=os.path.basename(s)) for s in srcs];t.close();"
             'print(p+chr(124)+str(os.path.getsize(p)))" '
         )
-        quoted = " ".join(
-            shlex.quote(token) for token in [safe_dest, archive_name, *safe_sources]
-        )
+        quoted = " ".join(shlex.quote(token) for token in [safe_dest, archive_name, *safe_sources])
         result = self._file_shell(
             f"mkdir -p {shlex.quote(safe_dest)} && {script}{quoted}",
             timeout_seconds=timeout_seconds,
@@ -1483,17 +1442,17 @@ def _validate_slurm_query_argv(argv: tuple[str, ...]) -> None:
             raise SshRelayPolicyError("invalid Slurm user")
         elif flag == "-o" and not _SAFE_FORMAT.fullmatch(value):
             raise SshRelayPolicyError("invalid Slurm output format")
-        elif flag == "-S" and (
-            len(value) > 40 or not re.fullmatch(r"[0-9T:+-]+", value)
-        ):
+        elif flag == "-S" and (len(value) > 40 or not re.fullmatch(r"[0-9T:+-]+", value)):
             raise SshRelayPolicyError("invalid Slurm time filter")
         index += 2
 
 
 def _safe_job_id_list(value: str) -> bool:
     job_ids = value.split(",")
-    return bool(job_ids) and len(job_ids) <= 1000 and all(
-        _SAFE_JOB_ID.fullmatch(job_id) is not None for job_id in job_ids
+    return (
+        bool(job_ids)
+        and len(job_ids) <= 1000
+        and all(_SAFE_JOB_ID.fullmatch(job_id) is not None for job_id in job_ids)
     )
 
 

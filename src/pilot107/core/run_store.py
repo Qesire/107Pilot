@@ -90,9 +90,7 @@ def _evidence_object_values(obj: dict[str, Any]) -> dict[str, Any]:
             None if obj.get("source_revision") is None else str(obj["source_revision"])
         ),
         "platform_snapshot_ref": (
-            None
-            if obj.get("platform_snapshot_ref") is None
-            else str(obj["platform_snapshot_ref"])
+            None if obj.get("platform_snapshot_ref") is None else str(obj["platform_snapshot_ref"])
         ),
     }
 
@@ -1058,8 +1056,11 @@ class RunStore:
                     "state": state.value,
                     "lease_owner": lease_owner,
                     "fencing_token": fencing_token,
-                    **({"failure_reason": _bounded_event_reason(failure_reason)}
-                       if failure_reason else {}),
+                    **(
+                        {"failure_reason": _bounded_event_reason(failure_reason)}
+                        if failure_reason
+                        else {}
+                    ),
                 },
             )
         return self.get_run(run_id)
@@ -1136,8 +1137,11 @@ class RunStore:
                 event_type=event_type,
                 payload={
                     "state": state.value,
-                    **({"failure_reason": _bounded_event_reason(failure_reason)}
-                       if failure_reason else {}),
+                    **(
+                        {"failure_reason": _bounded_event_reason(failure_reason)}
+                        if failure_reason
+                        else {}
+                    ),
                 },
             )
         return self.get_run(run_id)
@@ -1228,9 +1232,7 @@ class RunStore:
             if row is None:
                 raise KeyError(run_id)
             current_operation = (
-                None
-                if row["capsule_operation_key"] is None
-                else str(row["capsule_operation_key"])
+                None if row["capsule_operation_key"] is None else str(row["capsule_operation_key"])
             )
             current_fence = int(row["capsule_build_fencing_token"])
             current_state = CapsuleState(str(row["capsule_state"]))
@@ -1269,9 +1271,7 @@ class RunStore:
                 )
                 return CapsuleBuildClaim(run_id, operation_key, next_fence)
             if current_operation is not None and current_operation != operation_key:
-                raise CapsuleBuildFenceConflict(
-                    f"Capsule operation identity changed: {run_id}"
-                )
+                raise CapsuleBuildFenceConflict(f"Capsule operation identity changed: {run_id}")
             next_fence = current_fence + 1
             result = conn.execute(
                 "UPDATE runs SET capsule_state = ?, capsule_operation_key = ?, "
@@ -1291,9 +1291,7 @@ class RunStore:
                 ),
             )
             if result.rowcount != 1:
-                raise CapsuleBuildFenceConflict(
-                    f"Capsule build claim was not acquired: {run_id}"
-                )
+                raise CapsuleBuildFenceConflict(f"Capsule build claim was not acquired: {run_id}")
             self._append_event(
                 conn,
                 run_id=run_id,
@@ -2227,11 +2225,11 @@ class RunStore:
             run_id=str(row["run_id"]),
             state=EvidenceSealState(str(row["evidence_seal_state"])),
             digest=(
-                None if row["evidence_seal_digest"] is None
-                else str(row["evidence_seal_digest"])
+                None if row["evidence_seal_digest"] is None else str(row["evidence_seal_digest"])
             ),
             marker_ref=(
-                None if row["evidence_seal_marker_ref"] is None
+                None
+                if row["evidence_seal_marker_ref"] is None
                 else str(row["evidence_seal_marker_ref"])
             ),
             sealed_at=(
@@ -2483,8 +2481,7 @@ class RunStore:
                     (run_id, incoming["logical_path"]),
                 ).fetchone()
                 if finalized is not None and (
-                    existing is None
-                    or existing["integrity_checked_at"] is None
+                    existing is None or existing["integrity_checked_at"] is None
                 ):
                     raise ValueError(
                         "evidence object set is immutable after integrity finalization"
@@ -2664,9 +2661,7 @@ class RunStore:
             conn.execute(
                 "UPDATE evidence_objects SET integrity_checked_at = NULL, "
                 "integrity_object_set_digest = NULL, integrity_invalidated_at = ? "
-                "WHERE run_id = ? AND logical_path IN ("
-                + placeholders
-                + ")",
+                "WHERE run_id = ? AND logical_path IN (" + placeholders + ")",
                 (utc_now_iso(), run_id, *paths),
             )
 
@@ -3394,14 +3389,10 @@ def _row_to_run(row: sqlite3.Row) -> RunRecord:
         ),
         source_revision=(None if row["source_revision"] is None else str(row["source_revision"])),
         platform_snapshot_ref=(
-            None
-            if row["platform_snapshot_ref"] is None
-            else str(row["platform_snapshot_ref"])
+            None if row["platform_snapshot_ref"] is None else str(row["platform_snapshot_ref"])
         ),
         capsule_operation_key=(
-            None
-            if row["capsule_operation_key"] is None
-            else str(row["capsule_operation_key"])
+            None if row["capsule_operation_key"] is None else str(row["capsule_operation_key"])
         ),
         capsule_build_fencing_token=int(row["capsule_build_fencing_token"]),
     )
@@ -3523,18 +3514,12 @@ def _row_to_evidence_object(row: sqlite3.Row) -> EvidenceObjectRecord:
         workspace_digest=(
             None if row["workspace_digest"] is None else str(row["workspace_digest"])
         ),
-        source_revision=(
-            None if row["source_revision"] is None else str(row["source_revision"])
-        ),
+        source_revision=(None if row["source_revision"] is None else str(row["source_revision"])),
         platform_snapshot_ref=(
-            None
-            if row["platform_snapshot_ref"] is None
-            else str(row["platform_snapshot_ref"])
+            None if row["platform_snapshot_ref"] is None else str(row["platform_snapshot_ref"])
         ),
         integrity_checked_at=(
-            None
-            if row["integrity_checked_at"] is None
-            else str(row["integrity_checked_at"])
+            None if row["integrity_checked_at"] is None else str(row["integrity_checked_at"])
         ),
         integrity_object_set_digest=(
             None

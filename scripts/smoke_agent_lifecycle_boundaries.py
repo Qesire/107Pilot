@@ -114,9 +114,7 @@ def live_large_file() -> int:
 
 def live_model_unavailable() -> int:
     database = Path(os.environ.get("PILOT107_DB_PATH", "/var/lib/pilot107/pilot107.db"))
-    evidence_root = Path(
-        os.environ.get("PILOT107_EVIDENCE_ROOT", "/var/lib/pilot107/evidence")
-    )
+    evidence_root = Path(os.environ.get("PILOT107_EVIDENCE_ROOT", "/var/lib/pilot107/evidence"))
     project_store = SQLiteProjectStore(database)
     session_store = SQLiteAgentSessionStore(database)
     control = SQLiteControlRepository(database)

@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from pilot107.agent import durable_workspace as _dw
 from pilot107.agent.durable_workspace import WorkspaceRecoveryReport
@@ -75,9 +76,7 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
         )
         dsn = getattr(store, "dsn", None)
         if not isinstance(dsn, str) or not dsn:
-            raise TypeError(
-                "PostgresAtomicDurableWorkspaceEditor requires PostgreSQL ProjectStore"
-            )
+            raise TypeError("PostgresAtomicDurableWorkspaceEditor requires PostgreSQL ProjectStore")
         if isinstance(lease_seconds, bool) or not 1 <= lease_seconds <= 86_400:
             raise ValueError("lease_seconds must be between 1 and 86400")
         self.state_root = state_root.resolve()
@@ -170,22 +169,16 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 self._crash("after_journal_prepared")
                 root = Path(workspace.local_root).resolve(strict=True)
                 for item in prepared:
-                    lease = self.live_store.renew_writer(
-                        lease, lease_seconds=self.lease_seconds
-                    )
+                    lease = self.live_store.renew_writer(lease, lease_seconds=self.lease_seconds)
                     _dw._apply_prepared(item, root)
                     self._crash(f"after_file:{item.path}")
                 observed_after, _ = _dw._capture_manifest(workspace)
                 if observed_after != expected_after:
-                    raise WorkspaceLiveConflict(
-                        "Workspace changed outside the controlled mutation"
-                    )
+                    raise WorkspaceLiveConflict("Workspace changed outside the controlled mutation")
                 # Keep the journal PREPARED until all PostgreSQL authoritative
                 # facts can become visible together.
                 self._crash("after_files_applied")
-                lease = self.live_store.renew_writer(
-                    lease, lease_seconds=self.lease_seconds
-                )
+                lease = self.live_store.renew_writer(lease, lease_seconds=self.lease_seconds)
                 self._atomic_finalize(
                     journal=journal,
                     lease=lease,
@@ -205,10 +198,8 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                         _dw._remove_tree(backup)
                 raise
             finally:
-                try:
+                with suppress(WorkspaceLiveConflict, KeyError):
                     self.live_store.release_writer(lease)
-                except (WorkspaceLiveConflict, KeyError):
-                    pass
 
     def _atomic_finalize(
         self,
@@ -286,9 +277,7 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 expected_digest=journal.from_digest,
                 now=now,
             ):
-                raise WorkspaceLiveConflict(
-                    "Workspace live head changed before atomic finalize"
-                )
+                raise WorkspaceLiveConflict("Workspace live head changed before atomic finalize")
 
             existing = connection.execute(
                 """
@@ -367,9 +356,7 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
         committed: list[str] = []
         rolled_back: list[str] = []
         conflicted: list[str] = []
-        for journal in self.journal_store.list_open(
-            workspace.workspace_id, owner=workspace.owner
-        ):
+        for journal in self.journal_store.list_open(workspace.workspace_id, owner=workspace.owner):
             observed, _ = _dw._capture_manifest(workspace)
             if journal.state is WorkspaceMutationState.PREPARED:
                 if observed == journal.from_digest:
@@ -401,9 +388,7 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 continue
             if journal.state is WorkspaceMutationState.FILES_APPLIED:
                 if journal.to_digest is not None and observed == journal.to_digest:
-                    head = self.live_store.get_head(
-                        workspace.workspace_id, owner=workspace.owner
-                    )
+                    head = self.live_store.get_head(workspace.workspace_id, owner=workspace.owner)
                     if (
                         head.live_revision == journal.from_revision
                         and head.live_digest == journal.from_digest
@@ -412,9 +397,7 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                             lease = self.live_store.claim_writer(
                                 workspace.workspace_id,
                                 owner=workspace.owner,
-                                writer_id=(
-                                    f"workspace-recovery:{os.getpid()}:{uuid.uuid4().hex}"
-                                ),
+                                writer_id=(f"workspace-recovery:{os.getpid()}:{uuid.uuid4().hex}"),
                                 lease_seconds=self.lease_seconds,
                             )
                         except WorkspaceLiveConflict:
@@ -429,10 +412,8 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                                 lease=lease,
                             )
                         finally:
-                            try:
+                            with suppress(WorkspaceLiveConflict):
                                 self.live_store.release_writer(lease)
-                            except WorkspaceLiveConflict:
-                                pass
                         _dw._remove_tree(Path(journal.backup_ref))
                         committed.append(journal.mutation_id)
                         continue
@@ -472,9 +453,7 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 expected_digest=journal.from_digest,
                 now=now,
             ):
-                raise WorkspaceLiveConflict(
-                    "Workspace recovery lease is stale or head advanced"
-                )
+                raise WorkspaceLiveConflict("Workspace recovery lease is stale or head advanced")
             updated = connection.execute(
                 """
                 UPDATE agent_workspace_mutation_journal
@@ -493,9 +472,7 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 ),
             )
             if updated.rowcount != 1:
-                raise WorkspaceLiveConflict(
-                    "Workspace recovery journal could not be rebound"
-                )
+                raise WorkspaceLiveConflict("Workspace recovery journal could not be rebound")
 
     def _reclaim_workspace_backups(self, workspace: AgentWorkspaceRecord) -> None:
         root = self.backup_root / workspace.owner / workspace.workspace_id

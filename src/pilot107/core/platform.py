@@ -610,9 +610,7 @@ def _simulator_user_profiles() -> tuple[UserEntitlementProfile, ...]:
             home=str(item["home"]),
             allowed_roots=(str(item["home"]),),
             default_partition=str(item.get("default_partition") or ""),
-            default_qos=(
-                None if item.get("default_qos") is None else str(item.get("default_qos"))
-            ),
+            default_qos=(None if item.get("default_qos") is None else str(item.get("default_qos"))),
             source_authority=SourceAuthority.SIMULATOR_PROBE,
         )
         for item in users

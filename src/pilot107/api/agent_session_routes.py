@@ -68,11 +68,7 @@ class AgentSessionRoutes:
                     {"owner": owner, "states": sorted(state.value for state in states)},
                 )
                 position = _query_cursor(params, scope=scope)
-                before = (
-                    None
-                    if position is None
-                    else f"{position.primary}|{position.secondary}"
-                )
+                before = None if position is None else f"{position.primary}|{position.secondary}"
                 sessions, raw_next = self.service.store.list_sessions_page(
                     owner=owner,
                     states=states or None,
@@ -212,9 +208,7 @@ class AgentSessionRoutes:
                 cancelled = self.service.store.request_cancel(
                     turn.turn_id,
                     owner=owner,
-                    expected_state_version=_required_int(
-                        payload, "expected_state_version"
-                    ),
+                    expected_state_version=_required_int(payload, "expected_state_version"),
                 )
                 return ApiResponse(status=200, payload=_turn_payload(cancelled))
             except KeyError:
@@ -374,9 +368,7 @@ def _query_limit(params: Mapping[str, list[str]]) -> int:
     return value
 
 
-def _query_cursor(
-    params: Mapping[str, list[str]], *, scope: str
-) -> CursorPosition | None:
+def _query_cursor(params: Mapping[str, list[str]], *, scope: str) -> CursorPosition | None:
     values = params.get("cursor", [])
     if not values:
         return None

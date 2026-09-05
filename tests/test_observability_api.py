@@ -101,9 +101,7 @@ def _routes(tmp_path: Path) -> ResourceObservationRoutes:
             partial=False,
             warnings=(),
             fencing_token=1,
-            measures=ResourceMeasureSet(
-                extras=(("jobs_running", _measure(1, unit="jobs")),)
-            ),
+            measures=ResourceMeasureSet(extras=(("jobs_running", _measure(1, unit="jobs")),)),
         )
     )
     store.save_run_sample(

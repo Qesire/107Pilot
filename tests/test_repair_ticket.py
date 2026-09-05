@@ -136,8 +136,12 @@ class TestRepairTicketStore:
             session_id="sess_1",
             diagnosis_ids=("d1",),
             cited_facts=(
-                {"rule_id": "RUNTIME.NONZERO_EXIT", "severity": "error",
-                 "summary": "fail", "evidence_refs": []},
+                {
+                    "rule_id": "RUNTIME.NONZERO_EXIT",
+                    "severity": "error",
+                    "summary": "fail",
+                    "evidence_refs": [],
+                },
             ),
             requested_change="fix the bug",
             no_go_constraints=("no shell",),

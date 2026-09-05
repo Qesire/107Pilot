@@ -76,10 +76,13 @@ class EvidenceQueryTests(unittest.TestCase):
         self.assertEqual(payload["run_id"], run.run_id)
         self.assertEqual(payload["job_id"], "123")
         self.assertEqual(payload["collection_state"], "pending")
-        self.assertEqual({task["task_type"] for task in payload["tasks"]}, {
-            "submission_snapshot",
-            "runtime_status",
-        })
+        self.assertEqual(
+            {task["task_type"] for task in payload["tasks"]},
+            {
+                "submission_snapshot",
+                "runtime_status",
+            },
+        )
         root_children = {node["name"]: node for node in payload["tree"]["children"]}
         submission_children = {
             node["name"]: node for node in root_children["submission"]["children"]
