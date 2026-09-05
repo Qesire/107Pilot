@@ -21,7 +21,7 @@ from pilot107.worker.service import config_from_env as worker_config_from_env
 
 
 def test_environment_resolves_postgres_when_dsn_is_present(tmp_path: Path) -> None:
-    dsn = "postgresql://api:secret@db.internal:5432/pilot107"
+    dsn = "postgresql://api@db.internal:5432/pilot107"
     api = api_config_from_env(
         {"PILOT107_POSTGRES_DSN": dsn},
         project_root=tmp_path,
@@ -38,8 +38,7 @@ def test_environment_resolves_postgres_when_dsn_is_present(tmp_path: Path) -> No
 
 
 def test_postgres_dsn_file_is_shared_without_entering_config_repr(tmp_path: Path) -> None:
-    credential = "file-" + "credential"
-    dsn = f"postgresql://api:{credential}@db.internal:5432/pilot107"
+    dsn = "postgresql://api@db.internal:5432/pilot107"
     secret_file = tmp_path / "postgres-dsn"
     secret_file.write_text(dsn + "\n")
     environment = {"PILOT107_POSTGRES_DSN_FILE": str(secret_file)}
@@ -49,8 +48,8 @@ def test_postgres_dsn_file_is_shared_without_entering_config_repr(tmp_path: Path
 
     assert api.database_mode is worker.database_mode is DatabaseMode.POSTGRES
     assert api.postgres_dsn == worker.postgres_dsn == dsn
-    assert credential not in repr(api)
-    assert credential not in repr(worker)
+    assert dsn not in repr(api)
+    assert dsn not in repr(worker)
 
 
 def test_postgres_dsn_rejects_inline_and_file_sources(tmp_path: Path) -> None:
@@ -68,7 +67,10 @@ def test_postgres_dsn_rejects_inline_and_file_sources(tmp_path: Path) -> None:
 
 
 def test_sqlite_mode_is_a_rejected_deprecation_sentinel(tmp_path: Path) -> None:
-    with pytest.raises(ConfigurationError, match="SQLite runtime authority has been retired"):
+    with pytest.raises(
+        ConfigurationError,
+        match="SQLite runtime authority has been retired",
+    ):
         resolve_durable_store_selection(
             database_mode=DatabaseMode.SQLITE,
             sqlite_path=tmp_path / "pilot107.db",
@@ -78,7 +80,10 @@ def test_sqlite_mode_is_a_rejected_deprecation_sentinel(tmp_path: Path) -> None:
 
 
 def test_postgres_mode_rejects_sqlite_lifecycle_override(tmp_path: Path) -> None:
-    with pytest.raises(ConfigurationError, match="SQLite lifecycle store overrides are retired"):
+    with pytest.raises(
+        ConfigurationError,
+        match="SQLite lifecycle store overrides are retired",
+    ):
         resolve_durable_store_selection(
             database_mode=DatabaseMode.POSTGRES,
             sqlite_path=tmp_path / "pilot107.db",
@@ -103,8 +108,8 @@ def test_postgres_mode_rejects_different_database_identity(tmp_path: Path) -> No
         resolve_durable_store_selection(
             database_mode=DatabaseMode.POSTGRES,
             sqlite_path=tmp_path / "pilot107.db",
-            postgres_dsn="postgresql://domain:one@db.internal/pilot107",
-            control_postgres_dsn="postgresql://control:two@db.internal/control",
+            postgres_dsn="postgresql://domain@db.internal/pilot107",
+            control_postgres_dsn="postgresql://control@db.internal/control",
         )
 
 
@@ -152,9 +157,15 @@ def test_api_and_worker_fail_closed_without_postgres(tmp_path: Path) -> None:
         evidence_root=tmp_path / "worker-evidence",
     )
 
-    with pytest.raises(ConfigurationError, match="SQLite runtime authority has been retired"):
+    with pytest.raises(
+        ConfigurationError,
+        match="SQLite runtime authority has been retired",
+    ):
         build_api_service(api)
-    with pytest.raises(ConfigurationError, match="SQLite runtime authority has been retired"):
+    with pytest.raises(
+        ConfigurationError,
+        match="SQLite runtime authority has been retired",
+    ):
         build_worker_service(worker)
 
 
