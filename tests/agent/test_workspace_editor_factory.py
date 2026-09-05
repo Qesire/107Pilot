@@ -73,25 +73,34 @@ def test_gateway_policy_rejection_is_terminal_without_workspace_side_effect(tmp_
     assert store.list_change_sets(project.project_id, owner="alice") == []
 
 
-def test_postgres_like_project_store_reads_can_start_but_mutation_fails_closed(
+def test_postgres_project_store_shape_selects_postgres_atomic_editor(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    calls: list[tuple[object, Path]] = []
+
     class PostgresLikeStore:
         dsn = "postgresql://example.invalid/pilot107"
 
+    class SentinelPostgresEditor:
+        def __init__(self, *, store: object, state_root: Path) -> None:
+            calls.append((store, state_root))
+
+    monkeypatch.setattr(
+        "pilot107.agent.workspace_editor_factory.AuthoritativePostgresWorkspaceEditor",
+        SentinelPostgresEditor,
+    )
+    store = PostgresLikeStore()
+
     editor = build_authoritative_workspace_editor(
-        store=PostgresLikeStore(),  # type: ignore[arg-type]
+        store=store,  # type: ignore[arg-type]
         workspace_root=tmp_path / "agent-workspaces",
     )
 
-    with pytest.raises(WorkspaceDurabilityUnavailable, match="PostgreSQL") as caught:
-        editor.apply_patches(
-            "workspace-1",
-            "alice",
-            (("a.py", None, WorkspacePatch(operation="create", content="x = 1\n")),),
-        )
-    assert caught.value.code == "AGENT.TOOL.WORKSPACE_DURABILITY_UNAVAILABLE"
-    assert caught.value.retryable is False
+    assert isinstance(editor, SentinelPostgresEditor)
+    assert calls == [
+        (store, (tmp_path / "agent-workspace-state").resolve()),
+    ]
 
 
 def test_unknown_project_store_is_mutation_fail_closed(tmp_path: Path) -> None:
