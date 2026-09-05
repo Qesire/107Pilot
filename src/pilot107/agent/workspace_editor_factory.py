@@ -5,9 +5,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from pilot107.agent.durable_workspace_atomic import AtomicDurableWorkspaceEditor
+from pilot107.agent.operation_context import current_agent_operation_key
 from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.tool_gateway import AgentToolGatewayError
-from pilot107.agent.workspace import WorkspaceChangeSet, WorkspaceEditor, WorkspacePatch
+from pilot107.agent.workspace import (
+    WorkspaceChangeSet,
+    WorkspaceConflict,
+    WorkspaceEditor,
+    WorkspacePatch,
+    WorkspacePolicyError,
+)
 
 
 class WorkspaceDurabilityUnavailable(AgentToolGatewayError):
@@ -19,6 +26,35 @@ class WorkspaceDurabilityUnavailable(AgentToolGatewayError):
             code="AGENT.TOOL.WORKSPACE_DURABILITY_UNAVAILABLE",
             retryable=False,
         )
+
+
+class AuthoritativeSQLiteWorkspaceEditor(AtomicDurableWorkspaceEditor):
+    """Translate proven no-effect Workspace failures at the Gateway boundary."""
+
+    def apply_patches(
+        self,
+        workspace_id: str,
+        owner: str,
+        patches: tuple[tuple[str, str | None, WorkspacePatch], ...],
+    ) -> WorkspaceChangeSet:
+        try:
+            return super().apply_patches(workspace_id, owner, patches)
+        except WorkspacePolicyError:
+            if current_agent_operation_key() is None:
+                raise
+            raise AgentToolGatewayError(
+                "Workspace patch violates the mutation policy",
+                code="AGENT.TOOL.WORKSPACE_POLICY",
+                retryable=False,
+            ) from None
+        except WorkspaceConflict:
+            if current_agent_operation_key() is None:
+                raise
+            raise AgentToolGatewayError(
+                "Workspace content changed before the mutation could commit",
+                code="AGENT.TOOL.WORKSPACE_CONFLICT",
+                retryable=True,
+            ) from None
 
 
 class UnavailableWorkspaceEditor(WorkspaceEditor):
@@ -65,7 +101,7 @@ def build_authoritative_workspace_editor(
 
     db_path = getattr(store, "db_path", None)
     if isinstance(db_path, Path):
-        return AtomicDurableWorkspaceEditor(
+        return AuthoritativeSQLiteWorkspaceEditor(
             store=store,
             state_root=workspace_root.resolve().parent / "agent-workspace-state",
         )
