@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from pilot107.agent.durable_workspace import DurableWorkspaceEditor
+from pilot107.agent.durable_workspace_atomic import AtomicDurableWorkspaceEditor
 from pilot107.agent.project_store import SQLiteProjectStore
 from pilot107.agent.workspace import WorkspacePatch
 from pilot107.agent.workspace_editor_factory import (
@@ -13,7 +13,7 @@ from pilot107.agent.workspace_editor_factory import (
 )
 
 
-def test_sqlite_project_store_selects_durable_workspace_editor(tmp_path: Path) -> None:
+def test_sqlite_project_store_selects_atomic_durable_workspace_editor(tmp_path: Path) -> None:
     store = SQLiteProjectStore(tmp_path / "pilot107.db")
 
     editor = build_authoritative_workspace_editor(
@@ -21,7 +21,7 @@ def test_sqlite_project_store_selects_durable_workspace_editor(tmp_path: Path) -
         workspace_root=tmp_path / "agent-workspaces",
     )
 
-    assert isinstance(editor, DurableWorkspaceEditor)
+    assert isinstance(editor, AtomicDurableWorkspaceEditor)
 
 
 def test_postgres_like_project_store_reads_can_start_but_mutation_fails_closed(
