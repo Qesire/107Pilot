@@ -46,7 +46,7 @@ jobs:
           PY
       - name: Apply deterministic source cleanup
         run: python scripts/retire-sqlite-runtime-authority.py
-      - name: Finalize fail-closed constructor typing
+      - name: Finalize fail-closed constructor typing and formatting
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -65,6 +65,30 @@ jobs:
               "            remediation_store=cast(RemediationStore, remediation_store),\n",
               1,
           )
+          canonical_raises = {
+              '            raise ValueError("control_repository is required; SQLite runtime authority has been retired")\n': (
+                  '            raise ValueError(\n'
+                  '                "control_repository is required; "\n'
+                  '                "SQLite runtime authority has been retired"\n'
+                  '            )\n'
+              ),
+              '            raise ValueError("remediation_store is required; SQLite runtime authority has been retired")\n': (
+                  '            raise ValueError(\n'
+                  '                "remediation_store is required; "\n'
+                  '                "SQLite runtime authority has been retired"\n'
+                  '            )\n'
+              ),
+              '            raise ValueError("repair_ticket_store is required; SQLite runtime authority has been retired")\n': (
+                  '            raise ValueError(\n'
+                  '                "repair_ticket_store is required; "\n'
+                  '                "SQLite runtime authority has been retired"\n'
+                  '            )\n'
+              ),
+          }
+          for old, new in canonical_raises.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f"expected generated authority sentinel exactly once: {old.strip()}")
+              text = text.replace(old, new, 1)
           path.write_text(text, encoding="utf-8")
           PY
       - name: Install Python test environment
