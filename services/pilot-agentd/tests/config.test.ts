@@ -7,7 +7,7 @@ const campusEnv: NodeJS.ProcessEnv = {
   PILOT107_AGENTD_TOKEN: "internal-secret",
   PILOT107_AGENTD_MODEL_PROFILE: "campus-default",
   PILOT107_LLM_BASE_URL: "http://127.0.0.1:4111/v1",
-  PILOT107_LLM_API_KEY: "llm-secret",
+  PILOT107_LLM_API_KEY: "llm-secret", // secret-scan: allow — deterministic test fixture
   PILOT107_LLM_MODEL: "campus-model",
   PILOT107_LLM_TIMEOUT_SECONDS: "60",
   PILOT107_LLM_MAX_TOKENS: "1200",
@@ -104,7 +104,7 @@ describe("pilot-agentd configuration", () => {
 
   it.each([
     "ftp://pilot107-api/internal/v1/agent-tools/invoke",
-    "http://student:secret@pilot107-api/internal/v1/agent-tools/invoke",
+    "http://student:secret@pilot107-api/internal/v1/agent-tools/invoke", // secret-scan: allow — URL rejection fixture
     "http://pilot107-api/internal/v1/agent-tools/invoke#secret",
     "not-a-url",
   ])("rejects unsafe Tool Gateway URL without echoing %s", (toolGatewayUrl) => {
@@ -147,7 +147,7 @@ describe("pilot-agentd configuration", () => {
 
   it.each([
     "ftp://gateway.example.edu/v1",
-    "https://student:password@gateway.example.edu/v1",
+    "https://student:password@gateway.example.edu/v1", // secret-scan: allow — URL rejection fixture
   ])("rejects unsafe campus URL %s without disclosing it", (baseUrl) => {
     const invalid = { ...campusEnv, PILOT107_LLM_BASE_URL: baseUrl };
 
