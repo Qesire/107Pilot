@@ -10,12 +10,12 @@ Recovery authorities are deliberately narrow:
 * ``validation_schedule`` -> an AgentTask that has advanced beyond the raw
   ``pending/version=0`` creation boundary
 * ``workspace_patch`` -> a COMMITTED AC4 Workspace mutation journal bound to the
-  same durable operation id and file plan. Legacy ``workspace-edit:*`` journals
-  remain recoverable only when their matching receipt is globally unique.
+  exact same durable operation id and file plan
 
 A raw pending AgentTask is not enough evidence: the process may have crashed
-between ``create_task`` and initial outbox materialization. Likewise, a prepared
-or files-applied Workspace journal is not a committed Workspace mutation receipt.
+between ``create_task`` and initial outbox materialization. Likewise, a prepared,
+files-applied, or unbound Workspace journal is not a committed Agent operation
+receipt.
 """
 
 from __future__ import annotations
@@ -325,26 +325,14 @@ def _sqlite_workspace_patch_resolution(
     project_id, workspace_id, approval_summary_zh, expected_files = identity
     if record.target_ref != f"workspace:{workspace_id}":
         return None
-    files_json = _workspace_files_json(expected_files)
     rows = _workspace_receipt_rows(
         connection,
         owner=record.owner,
         project_id=project_id,
         workspace_id=workspace_id,
-        files_json=files_json,
-        request_key=record.operation_key,
-        legacy=False,
+        operation_key=record.operation_key,
+        files_json=_workspace_files_json(expected_files),
     )
-    if not rows:
-        rows = _workspace_receipt_rows(
-            connection,
-            owner=record.owner,
-            project_id=project_id,
-            workspace_id=workspace_id,
-            files_json=files_json,
-            request_key=None,
-            legacy=True,
-        )
     if len(rows) != 1:
         return None
     row = rows[0]
@@ -382,21 +370,11 @@ def _workspace_receipt_rows(
     owner: str,
     project_id: str,
     workspace_id: str,
+    operation_key: str,
     files_json: str,
-    request_key: str | None,
-    legacy: bool,
 ) -> list[sqlite3.Row]:
-    if legacy == (request_key is not None):
-        raise ValueError("Workspace receipt lookup mode is invalid")
-    request_clause = "j.request_key LIKE 'workspace-edit:%'" if legacy else "j.request_key = ?"
-    parameters: tuple[object, ...]
-    if legacy:
-        parameters = (owner, workspace_id, project_id, files_json)
-    else:
-        assert request_key is not None
-        parameters = (owner, workspace_id, project_id, request_key, files_json)
     return connection.execute(
-        f"""
+        """
         SELECT j.change_set_id, c.payload_json
         FROM agent_workspace_mutation_journal AS j
         JOIN agent_workspace_changesets AS c
@@ -406,10 +384,10 @@ def _workspace_receipt_rows(
          AND c.project_id = j.project_id
         WHERE j.owner = ? AND j.workspace_id = ? AND j.project_id = ?
           AND j.state = 'committed' AND j.change_set_id IS NOT NULL
-          AND {request_clause} AND j.files_json = ?
+          AND j.request_key = ? AND j.files_json = ?
         ORDER BY j.updated_at DESC, j.mutation_id DESC
         """,
-        parameters,
+        (owner, workspace_id, project_id, operation_key, files_json),
     ).fetchall()
 
 
