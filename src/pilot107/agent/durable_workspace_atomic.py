@@ -18,8 +18,12 @@ from dataclasses import replace
 from pathlib import Path
 
 from pilot107.agent import durable_workspace as _dw
-from pilot107.agent.durable_workspace import DurableWorkspaceEditor
+from pilot107.agent.durable_workspace import (
+    DurableWorkspaceEditor,
+    WorkspaceRecoveryReport,
+)
 from pilot107.agent.workspace import (
+    AgentWorkspaceRecord,
     WorkspaceChangeSet,
     WorkspaceConflict,
     WorkspacePatch,
@@ -133,6 +137,9 @@ class AtomicDurableWorkspaceEditor(DurableWorkspaceEditor):
                 # intentionally remains PREPARED until the transaction below
                 # publishes every authoritative database fact together.
                 self._crash("after_files_applied")
+                lease = self.live_store.renew_writer(
+                    lease, lease_seconds=self.lease_seconds
+                )
                 _atomic_finalize(
                     self,
                     journal=journal,
@@ -157,6 +164,11 @@ class AtomicDurableWorkspaceEditor(DurableWorkspaceEditor):
                     self.live_store.release_writer(lease)
                 except (WorkspaceLiveConflict, KeyError):
                     pass
+
+    def _recover_locked(self, workspace: AgentWorkspaceRecord) -> WorkspaceRecoveryReport:
+        report = super()._recover_locked(workspace)
+        _reclaim_workspace_backups(self, workspace)
+        return report
 
 
 def _bind_change_set_to_live_revision(
@@ -315,6 +327,42 @@ def _atomic_finalize(
         )
         if journal_update.rowcount != 1:
             raise WorkspaceLiveConflict("Workspace journal CAS failed during atomic finalize")
+
+
+def _reclaim_workspace_backups(
+    editor: AtomicDurableWorkspaceEditor,
+    workspace: AgentWorkspaceRecord,
+) -> None:
+    root = editor.backup_root / workspace.owner / workspace.workspace_id
+    if not root.exists():
+        return
+    root = root.resolve(strict=True)
+    retained: set[Path] = set()
+    with editor.journal_store.connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT state, backup_ref FROM agent_workspace_mutation_journal
+            WHERE workspace_id = ? AND owner = ?
+            """,
+            (workspace.workspace_id, workspace.owner),
+        ).fetchall()
+    for row in rows:
+        if str(row["state"]) not in {"prepared", "files_applied", "conflicted"}:
+            continue
+        candidate = Path(str(row["backup_ref"])).resolve(strict=False)
+        if candidate == root or candidate.is_relative_to(root):
+            retained.add(candidate)
+    for child in tuple(root.iterdir()):
+        resolved = child.resolve(strict=False)
+        if resolved in retained:
+            continue
+        with suppress(OSError):
+            if child.is_symlink() or not child.is_dir():
+                child.unlink(missing_ok=True)
+            else:
+                _dw._remove_tree(child)
+    with suppress(OSError):
+        root.rmdir()
 
 
 def _write_backup_atomically(
