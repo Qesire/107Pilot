@@ -10,7 +10,9 @@ class ObservabilityConfigTests(unittest.TestCase):
     def test_alert_rules_have_unique_names_thresholds_and_severity(self) -> None:
         repository = Path(__file__).resolve().parents[1]
         payload = yaml.safe_load(
-            (repository / "config/observability/pilot107-alerts.yml").read_text(encoding="utf-8")
+            (repository / "config/observability/pilot107-alerts.yml").read_text(
+                encoding="utf-8"
+            )
         )
         rules = [rule for group in payload["groups"] for rule in group["rules"]]
         names = [rule["alert"] for rule in rules]

@@ -96,7 +96,9 @@ class AgentAdviceTests(unittest.TestCase):
         """
         contract_service = service.contract_service
         assert contract_service is not None
-        contract = contract_service.create(owner="alice", payload=_cpu_rc_contract_payload())
+        contract = contract_service.create(
+            owner="alice", payload=_cpu_rc_contract_payload()
+        )
         self.store.create_run(
             run_id=run_id,
             contract_id=contract.contract_id,
@@ -263,7 +265,9 @@ class AgentAdviceTests(unittest.TestCase):
         )
         action_to = service.advise(run_to.run_id).record.payload["actions"][0]
         self.assertEqual(action_to["policy_status"], "allowed_preview")
-        self.assertEqual(action_to["proposed_patch"]["resources.time_limit"], "04:00:00")
+        self.assertEqual(
+            action_to["proposed_patch"]["resources.time_limit"], "04:00:00"
+        )
 
     def test_profile_does_not_resolve_command_or_conda_env(self) -> None:
         profile = load_capability_profile(CPU_RC_PROFILE_PATH)
@@ -285,7 +289,9 @@ class AgentAdviceTests(unittest.TestCase):
         )
         action_conda = service.advise(run_conda.run_id).record.payload["actions"][0]
         self.assertEqual(action_conda["policy_status"], "blocked")
-        self.assertEqual(action_conda["reasons"], ["field_not_patchable:runtime.conda_env"])
+        self.assertEqual(
+            action_conda["reasons"], ["field_not_patchable:runtime.conda_env"]
+        )
 
     def test_policy_uses_canonical_v2_memory_field(self) -> None:
         legacy = self._ready_run(
@@ -457,12 +463,14 @@ class AgentAdviceTests(unittest.TestCase):
             headers={"X-Pilot107-User": "alice"},
         )
         denied_execute = api.handle_post(
-            f"/api/v1/agent/advice/{created.payload['advice_id']}/actions/{action_id}/execute",
+            f"/api/v1/agent/advice/{created.payload['advice_id']}/actions/"
+            f"{action_id}/execute",
             body=b"{}",
             headers={"X-Pilot107-User": "bob"},
         )
         executed = api.handle_post(
-            f"/api/v1/agent/advice/{created.payload['advice_id']}/actions/{action_id}/execute",
+            f"/api/v1/agent/advice/{created.payload['advice_id']}/actions/"
+            f"{action_id}/execute",
             body=json.dumps({"submit": True}).encode(),
             headers={"X-Pilot107-User": "alice"},
         )

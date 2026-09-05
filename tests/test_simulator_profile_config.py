@@ -201,12 +201,15 @@ class SimulatorProfileConfigTests(unittest.TestCase):
         self.assertIn('command: ["slurmctld", "-D", "-i", "-vvv"]', compose)
         self.assertNotIn("SLURMRESTD_SECURITY", compose)
         self.assertIn(
-            'command: ["gosu", "pilot107", "slurmrestd", "-a", "rest_auth/jwt", "0.0.0.0:6820"]',
+            'command: ["gosu", "pilot107", "slurmrestd", "-a", "rest_auth/jwt", '
+            '"0.0.0.0:6820"]',
             compose,
         )
         self.assertIn(
             "exec gosu pilot107",
-            (ROOT / "simulator/images/slurm/docker-entrypoint.sh").read_text(encoding="utf-8"),
+            (ROOT / "simulator/images/slurm/docker-entrypoint.sh").read_text(
+                encoding="utf-8"
+            ),
         )
         # The entrypoint pre-creates /sys/fs/cgroup/system.slice for slurmd
         # under private cgroupns (commit 3b86ac9). This is best-effort and
@@ -225,7 +228,9 @@ class SimulatorProfileConfigTests(unittest.TestCase):
 
         for node in profile["nodes"]:
             for gres in node.get("gres", []):
-                expected = f"NodeName={node['name']} Name={gres['name']} Type={gres['type']}"
+                expected = (
+                    f"NodeName={node['name']} Name={gres['name']} Type={gres['type']}"
+                )
                 self.assertIn(expected, gres_conf)
                 self.assertIn(f"[0-{gres['count'] - 1}]", gres_conf)
 
@@ -236,10 +241,9 @@ class SimulatorProfileConfigTests(unittest.TestCase):
         self.assertIn(str(PROFILE_PATH.relative_to(ROOT)), script)
         self.assertIn('cluster_name="pilot107-sim"', script)
         self.assertIn('run_sacctmgr add cluster "$cluster_name"', script)
-        self.assertIn(
-            "AccountingStorageEnforce=associations,qos,limits",
-            (ROOT / "simulator/compose/slurm/slurm.conf").read_text(encoding="utf-8"),
-        )
+        self.assertIn("AccountingStorageEnforce=associations,qos,limits", (
+            ROOT / "simulator/compose/slurm/slurm.conf"
+        ).read_text(encoding="utf-8"))
 
         for account in profile["accounts"]:
             self.assertIn(f"run_sacctmgr add account {account['name']}", script)
@@ -303,8 +307,12 @@ class SimulatorProfileConfigTests(unittest.TestCase):
             encoding="utf-8"
         )
         check_script = (ROOT / "scripts/check-slurm-sim-image.sh").read_text(encoding="utf-8")
-        build_25_script = (ROOT / "scripts/build-slurm-sim-25-image.sh").read_text(encoding="utf-8")
-        check_25_script = (ROOT / "scripts/check-slurm-sim-25-image.sh").read_text(encoding="utf-8")
+        build_25_script = (ROOT / "scripts/build-slurm-sim-25-image.sh").read_text(
+            encoding="utf-8"
+        )
+        check_25_script = (ROOT / "scripts/check-slurm-sim-25-image.sh").read_text(
+            encoding="utf-8"
+        )
 
         self.assertEqual(
             manifest["target"]["slurm_version"],

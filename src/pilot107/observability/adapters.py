@@ -140,7 +140,9 @@ class FallbackObservationAdapter:
 class SlurmCliObservationAdapter:
     """CLI fallback using fixed argv and pipe-delimited Slurm output."""
 
-    _SSTAT_FIELDS = "JobID,NTasks,AllocTRES,AveCPU,MaxRSS,TRESUsageInTot,TRESUsageOutTot"
+    _SSTAT_FIELDS = (
+        "JobID,NTasks,AllocTRES,AveCPU,MaxRSS,TRESUsageInTot,TRESUsageOutTot"
+    )
     _SACCT_FIELDS = (
         "JobIDRaw,State,ExitCode,ElapsedRaw,TimelimitRaw,AllocTRES,"
         "AllocCPUS,NTasks,TotalCPU,CPUTimeRAW,MaxRSS"
@@ -198,7 +200,9 @@ class SlurmCliObservationAdapter:
                     else "capability:SCONTROL_FAILED"
                 ),
                 warnings=(
-                    "SCONTROL_PERMISSION_DENIED" if permission_denied else "SCONTROL_FAILED",
+                    "SCONTROL_PERMISSION_DENIED"
+                    if permission_denied
+                    else "SCONTROL_FAILED",
                 ),
             )
         config = _parse_scontrol_config(result.stdout)
@@ -228,7 +232,9 @@ class SlurmCliObservationAdapter:
         _validate_connection(connection_id)
         captured_at = _timestamp(self._now())
         unique_owners = tuple(sorted(set(owners)))
-        account_owners = tuple(owner for owner in unique_owners if owner == self.observation_owner)
+        account_owners = tuple(
+            owner for owner in unique_owners if owner == self.observation_owner
+        )
         sinfo_result = self.executor.run(
             ["sinfo", "-h", "-o", self._SINFO_FORMAT],
             user=self.slurm_user,
@@ -277,7 +283,9 @@ class SlurmCliObservationAdapter:
                 warnings.append("SINFO_PARTIAL")
         else:
             warnings.append(
-                "SINFO_PERMISSION_DENIED" if _permission_denied(sinfo_result) else "SINFO_FAILED"
+                "SINFO_PERMISSION_DENIED"
+                if _permission_denied(sinfo_result)
+                else "SINFO_FAILED"
             )
 
         if squeue_result is None:
@@ -301,13 +309,16 @@ class SlurmCliObservationAdapter:
                 )
             )
             account_observations = tuple(
-                SourceAccountObservation(owner=owner, measures=measures) for owner in account_owners
+                SourceAccountObservation(owner=owner, measures=measures)
+                for owner in account_owners
             )
             if malformed:
                 warnings.append("SQUEUE_PARTIAL")
         else:
             warnings.append(
-                "SQUEUE_PERMISSION_DENIED" if _permission_denied(squeue_result) else "SQUEUE_FAILED"
+                "SQUEUE_PERMISSION_DENIED"
+                if _permission_denied(squeue_result)
+                else "SQUEUE_FAILED"
             )
 
         if successful_commands == 0:
@@ -363,7 +374,9 @@ class SlurmCliObservationAdapter:
                         operation="sstat",
                         captured_at=captured_at,
                         availability=(
-                            "permission_denied" if permission_denied else "not_collected"
+                            "permission_denied"
+                            if permission_denied
+                            else "not_collected"
                         ),
                     )
                     for target in targets
@@ -376,14 +389,20 @@ class SlurmCliObservationAdapter:
                     if permission_denied
                     else "active_run:SSTAT_FAILED"
                 ),
-                warnings=("SSTAT_PERMISSION_DENIED" if permission_denied else "SSTAT_FAILED",),
+                warnings=(
+                    "SSTAT_PERMISSION_DENIED" if permission_denied else "SSTAT_FAILED",
+                ),
             )
         parsed = parse_sstat(result.stdout)
         observations: list[SourceRunObservation] = []
         for target in targets:
-            matching = [record for record in parsed.records if record.job_id == target.job_id]
+            matching = [
+                record for record in parsed.records if record.job_id == target.job_id
+            ]
             rss_values = [
-                record.max_rss_bytes for record in matching if record.max_rss_bytes is not None
+                record.max_rss_bytes
+                for record in matching
+                if record.max_rss_bytes is not None
             ]
             if not matching or not rss_values:
                 observations.append(
@@ -400,7 +419,7 @@ class SlurmCliObservationAdapter:
                             unit="bytes",
                             operation="sstat",
                             captured_at=captured_at,
-                        ),
+                        )
                     ),
                 )
             )
@@ -438,7 +457,9 @@ class SlurmCliObservationAdapter:
                         captured_at=captured_at,
                         terminal=True,
                         availability=(
-                            "permission_denied" if permission_denied else "not_collected"
+                            "permission_denied"
+                            if permission_denied
+                            else "not_collected"
                         ),
                     )
                     for target in targets
@@ -451,7 +472,9 @@ class SlurmCliObservationAdapter:
                     if permission_denied
                     else "terminal_accounting:SACCT_FAILED"
                 ),
-                warnings=("SACCT_PERMISSION_DENIED" if permission_denied else "SACCT_FAILED",),
+                warnings=(
+                    "SACCT_PERMISSION_DENIED" if permission_denied else "SACCT_FAILED",
+                ),
             )
         parsed = parse_sacct(result.stdout)
         observations: list[SourceRunObservation] = []
@@ -556,7 +579,9 @@ def _validate_connection(connection_id: str) -> None:
         raise ValueError("connection_id is invalid")
 
 
-def _validate_targets(connection_id: str, targets: tuple[RunObservationTarget, ...]) -> None:
+def _validate_targets(
+    connection_id: str, targets: tuple[RunObservationTarget, ...]
+) -> None:
     _validate_connection(connection_id)
     if any(target.connection_id != connection_id for target in targets):
         raise ValueError("target connection mismatch")
@@ -730,9 +755,13 @@ def _merge_collections(left: SourceCollection, right: SourceCollection) -> Sourc
             if account_existing is None
             else SourceAccountObservation(
                 owner=account_item.owner,
-                measures=_merge_measure_sets(account_existing.measures, account_item.measures),
+                measures=_merge_measure_sets(
+                    account_existing.measures, account_item.measures
+                ),
                 partial=account_existing.partial and account_item.partial,
-                warnings=tuple((*account_existing.warnings, *account_item.warnings)),
+                warnings=tuple(
+                    (*account_existing.warnings, *account_item.warnings)
+                ),
             )
         )
     runs = {item.target: item for item in left.run_observations}
@@ -743,13 +772,17 @@ def _merge_collections(left: SourceCollection, right: SourceCollection) -> Sourc
             if run_existing is None
             else SourceRunObservation(
                 target=run_item.target,
-                measures=_merge_measure_sets(run_existing.measures, run_item.measures),
+                measures=_merge_measure_sets(
+                    run_existing.measures, run_item.measures
+                ),
                 allocated=(
                     run_item.allocated
                     if run_existing.allocated is None
                     else run_existing.allocated
                     if run_item.allocated is None
-                    else _merge_measure_sets(run_existing.allocated, run_item.allocated)
+                    else _merge_measure_sets(
+                        run_existing.allocated, run_item.allocated
+                    )
                 ),
                 partial=run_existing.partial and run_item.partial,
                 warnings=tuple((*run_existing.warnings, *run_item.warnings)),
@@ -782,7 +815,11 @@ def _merge_measure_sets(left: ResourceMeasureSet, right: ResourceMeasureSet) -> 
             existing.availability != "available" and measure.availability == "available"
         ):
             values[name] = measure
-    known = {name for name in ResourceMeasureSet.__dataclass_fields__ if name != "extras"}
+    known = {
+        name
+        for name in ResourceMeasureSet.__dataclass_fields__
+        if name != "extras"
+    }
     return ResourceMeasureSet(
         **{name: value for name, value in values.items() if name in known},
         extras=tuple((name, value) for name, value in values.items() if name not in known),

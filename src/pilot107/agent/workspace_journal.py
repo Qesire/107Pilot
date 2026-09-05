@@ -673,7 +673,9 @@ def _row_to_journal(row: Mapping[str, object]) -> WorkspaceMutationJournal:
             before_sha256=(
                 None if item.get("before_sha256") is None else str(item["before_sha256"])
             ),
-            after_sha256=(None if item.get("after_sha256") is None else str(item["after_sha256"])),
+            after_sha256=(
+                None if item.get("after_sha256") is None else str(item["after_sha256"])
+            ),
         )
         for item in raw_files
         if isinstance(item, Mapping)

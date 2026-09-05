@@ -87,7 +87,7 @@ def main() -> int:
                     "python3 -c 'import time; "
                     "payload=bytearray(32*1024*1024); "
                     "end=time.time()+12; value=0; "
-                    'exec("while time.time() < end:\\n value += sum(range(20000))"); '
+                    "exec(\"while time.time() < end:\\n value += sum(range(20000))\"); "
                     "print(len(payload), value)'\n"
                 ),
                 resource_plan=ResourcePlan(

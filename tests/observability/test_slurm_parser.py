@@ -19,7 +19,9 @@ from pilot107.observability.slurm_parser import (
         ("1-02:03:04.5", 93784.5),
     ],
 )
-def test_parse_slurm_duration_accepts_fractional_and_day_formats(raw: str, expected: float) -> None:
+def test_parse_slurm_duration_accepts_fractional_and_day_formats(
+    raw: str, expected: float
+) -> None:
     assert parse_slurm_duration_seconds(raw) == expected
 
 

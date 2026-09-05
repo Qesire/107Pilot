@@ -72,7 +72,7 @@ def test_sstat_batches_targets_and_marks_missing_step_as_not_collected() -> None
                 "-j",
                 "101,102",
                 "-o",
-                "JobID,NTasks,AllocTRES,AveCPU,MaxRSS,TRESUsageInTot,TRESUsageOutTot",
+                    "JobID,NTasks,AllocTRES,AveCPU,MaxRSS,TRESUsageInTot,TRESUsageOutTot",
             ],
             "alice",
             7,
@@ -124,12 +124,14 @@ def test_platform_account_collects_partition_and_owner_job_counts() -> None:
         [
             CommandResult(
                 0,
-                "Students*|128|1024000|gpu:A100:8|idle\ndebug|128|1024000|gpu:A100:8|alloc\n",
+                "Students*|128|1024000|gpu:A100:8|idle\n"
+                "debug|128|1024000|gpu:A100:8|alloc\n",
                 "",
             ),
             CommandResult(
                 0,
-                "101|RUNNING|node1|Students|job-a\n102|PENDING|Resources|Students|job-b\n",
+                "101|RUNNING|node1|Students|job-a\n"
+                "102|PENDING|Resources|Students|job-b\n",
                 "",
             ),
         ]
@@ -291,7 +293,9 @@ class FixedActiveAdapter:
         )
 
 
-def _source_measure(value: int | None, *, adapter: str, availability: str) -> ObservedMeasure:
+def _source_measure(
+    value: int | None, *, adapter: str, availability: str
+) -> ObservedMeasure:
     return ObservedMeasure(
         value=value,
         unit="bytes",

@@ -302,7 +302,8 @@ def blueprint_from_payload(value: Mapping[str, Any]) -> ProjectBlueprint:
                 validation_id=_string(item.get("validation_id"), "validation_id"),
                 execution=_string(item.get("execution"), "validation execution"),  # type: ignore[arg-type]
                 argv=tuple(
-                    _string(argument, "validation argument") for argument in _list(item, "argv")
+                    _string(argument, "validation argument")
+                    for argument in _list(item, "argv")
                 ),
                 expected_outputs=tuple(
                     _string(output, "validation output")
@@ -377,7 +378,9 @@ def _bounded_items(value: tuple[Any, ...], label: str, *, maximum: int) -> None:
         raise ValueError(f"{label} must be a tuple with at most {maximum} items")
 
 
-def _typed_items(value: tuple[Any, ...], expected: type[Any], label: str, *, maximum: int) -> None:
+def _typed_items(
+    value: tuple[Any, ...], expected: type[Any], label: str, *, maximum: int
+) -> None:
     _bounded_items(value, label, maximum=maximum)
     if any(not isinstance(item, expected) for item in value):
         raise TypeError(f"{label} contains an invalid item")
@@ -420,6 +423,9 @@ def _boolean(value: object, label: str) -> bool:
 
 def _resource_hints(value: object) -> dict[str, str | int]:
     hints = _mapping(value, "resource_hints")
-    if any(not isinstance(item, (str, int)) or isinstance(item, bool) for item in hints.values()):
+    if any(
+        not isinstance(item, (str, int)) or isinstance(item, bool)
+        for item in hints.values()
+    ):
         raise TypeError("resource_hints contains an invalid value")
     return {key: item for key, item in hints.items() if isinstance(item, (str, int))}

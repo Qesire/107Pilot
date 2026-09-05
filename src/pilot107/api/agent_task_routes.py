@@ -86,8 +86,13 @@ class AgentTaskRoutes:
 
 
 def _matches_get(parts: list[str]) -> bool:
-    return (len(parts) == 2 and parts[0] == "agent-tasks") or (
-        len(parts) == 3 and parts[0] == "agent-sessions" and parts[2] == "tasks"
+    return (
+        (len(parts) == 2 and parts[0] == "agent-tasks")
+        or (
+            len(parts) == 3
+            and parts[0] == "agent-sessions"
+            and parts[2] == "tasks"
+        )
     )
 
 

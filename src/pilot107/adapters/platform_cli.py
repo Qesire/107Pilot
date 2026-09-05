@@ -249,7 +249,8 @@ def _is_allowlisted_argv(name: PlatformCommand, argv: tuple[str, ...]) -> bool:
             and argv[4].startswith("name=")
             and _USERNAME.fullmatch(argv[4][len("name=") :]) is not None
             and argv[5] == "WithAssoc"
-            and argv[6] == "format=User,DefaultAccount,Account,Partition,QOS,DefaultQOS"
+            and argv[6]
+            == "format=User,DefaultAccount,Account,Partition,QOS,DefaultQOS"
         )
     if name == PlatformCommand.DF_PUBLIC_HOME:
         return (

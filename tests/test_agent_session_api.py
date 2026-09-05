@@ -271,7 +271,10 @@ class AgentSessionApiTests(unittest.TestCase):
         session = self._create_session().payload
         turn = self._create_turn(session).payload
         body = _json({"expected_state_version": turn["state_version"]})
-        path = f"/api/v1/agent-sessions/{session['session_id']}/turns/{turn['turn_id']}/cancel"
+        path = (
+            f"/api/v1/agent-sessions/{session['session_id']}"
+            f"/turns/{turn['turn_id']}/cancel"
+        )
 
         bob = self.api.handle_post(path, body=body, headers=self.bob)
         cancelled = self.api.handle_post(path, body=body, headers=self.alice)

@@ -173,7 +173,11 @@ def validate_user_entitlement_resource_plan(
                 source_authority=authority,
             )
         ]
-    allowed_qos = {qos for association in candidates for qos in _association_qos(association)}
+    allowed_qos = {
+        qos
+        for association in candidates
+        for qos in _association_qos(association)
+    }
     if plan.qos is not None and plan.qos not in allowed_qos:
         return [
             PreflightFinding(

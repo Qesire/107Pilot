@@ -133,6 +133,7 @@ class WorkerTelemetryTests(unittest.TestCase):
             "<redacted>",
         )
 
+
     def test_stale_metrics_missing_new_counters_are_backfilled(self) -> None:
         """A metrics file from an older revision that lacks counters added
         later (e.g. capsule_*_total) must be upgraded on read, not rejected.

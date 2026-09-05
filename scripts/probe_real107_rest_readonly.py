@@ -83,7 +83,9 @@ def main() -> int:
         "summary": _summary(status, endpoints, openapi_digest),
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    )
     print("real107 rest readonly probe " + status)
     print("artifact=" + str(output_path))
     return 0
@@ -100,7 +102,9 @@ def _write_skipped(output_path: Path, url: str) -> int:
         "summary": {"reason": "PILOT107_REAL107_TOKEN not set; probe skipped"},
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    )
     print("real107 rest readonly probe skipped")
     print("artifact=" + str(output_path))
     return 0
@@ -130,7 +134,9 @@ def _probe_get(
             raw = response.read()
             status = response.status
             payload = _safe_json(raw)
-            body_digest = hashlib.sha256(raw).hexdigest()[:16] if capture_body else None
+            body_digest = (
+                hashlib.sha256(raw).hexdigest()[:16] if capture_body else None
+            )
             return _result(
                 status=status,
                 payload=payload,
@@ -231,7 +237,9 @@ def _aggregate_status(
 def _summary(status: str, endpoints: dict[str, Any], openapi_digest: str | None) -> dict[str, Any]:
     return {
         "status": status,
-        "endpoint_statuses": {name: e.get("http_status") for name, e in endpoints.items()},
+        "endpoint_statuses": {
+            name: e.get("http_status") for name, e in endpoints.items()
+        },
         "openapi_digest": openapi_digest,
         "read_only": True,
         "methods": ["GET"],

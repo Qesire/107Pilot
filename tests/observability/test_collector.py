@@ -124,7 +124,9 @@ class ScriptedAdapter:
                     target=target,
                     measures=ResourceMeasureSet(
                         total_cpu=self.terminal_total_cpu,
-                        cpu_time_raw=_measure(60, operation="sacct", unit="cpu_seconds"),
+                        cpu_time_raw=_measure(
+                            60, operation="sacct", unit="cpu_seconds"
+                        ),
                         elapsed=_measure(60, operation="sacct", unit="seconds"),
                     ),
                     allocated=ResourceMeasureSet(

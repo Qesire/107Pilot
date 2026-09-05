@@ -82,7 +82,7 @@ def mint_sim_token(
     for line in (result.stdout + "\n" + result.stderr).splitlines():
         stripped = line.strip()
         if stripped.startswith("SLURM_JWT="):
-            token = stripped[len("SLURM_JWT=") :].strip()
+            token = stripped[len("SLURM_JWT="):].strip()
             if token:
                 return token
     raise RuntimeError("scontrol token output did not contain SLURM_JWT=")

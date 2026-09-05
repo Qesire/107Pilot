@@ -870,6 +870,7 @@ class RuntimeReconcileWorker:
         capsule_stats.attempted += 1
         can_retry = message.attempts < self.collection_max_attempts
         try:
+
             with _OutboxHeartbeat(
                 repository=repository,
                 message=message,
@@ -880,7 +881,9 @@ class RuntimeReconcileWorker:
                     run_id,
                     operation_key=operation_key,
                     lease_assert=assert_outbox_lease,
-                    failure_state=(CapsuleState.PENDING if can_retry else CapsuleState.FAILED),
+                    failure_state=(
+                        CapsuleState.PENDING if can_retry else CapsuleState.FAILED
+                    ),
                 )
         except Exception as exc:
             self._finish_unclaimed_capsule_failure(

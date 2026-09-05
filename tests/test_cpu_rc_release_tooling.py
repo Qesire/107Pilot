@@ -37,7 +37,7 @@ def test_cpu_rc_export_refreshes_latest_bundle_pointer() -> None:
     exporter = (ROOT / "scripts/export-cpu-rc-bundle.sh").read_text()
 
     assert "LATEST_CPU_RC.txt" in exporter
-    assert "printf '%s\\n' \"$bundle_name\"" in exporter
+    assert 'printf \'%s\\n\' "$bundle_name"' in exporter
 
 
 def test_systemd_installer_exit_trap_expands_the_temp_path() -> None:
@@ -171,9 +171,9 @@ def test_vm_slurm_authority_is_a_strict_pre_agent_runtime_gate() -> None:
     assert acceptance.index("check_cpu_rc|step_check_cpu_rc") < acceptance.index(
         "vm_slurm_authority|step_vm_slurm_authority"
     )
-    assert acceptance.index("vm_slurm_authority|step_vm_slurm_authority") < acceptance.index(
-        "agent_task_lifecycle|step_agent_task_lifecycle"
-    )
+    assert acceptance.index(
+        "vm_slurm_authority|step_vm_slurm_authority"
+    ) < acceptance.index("agent_task_lifecycle|step_agent_task_lifecycle")
     assert 'KNOWN_SKIP_STEPS=""' in acceptance
     assert "exit 77" not in wrapper.read_text()
     assert "return 77" not in smoke.read_text()

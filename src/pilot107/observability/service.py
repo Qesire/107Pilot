@@ -37,7 +37,9 @@ class ObservabilityService:
         )
 
     def latest_platform(self, connection_id: str) -> dict[str, object]:
-        pulse = self.store.get_latest_platform_pulse(connection_id, lane="platform_account")
+        pulse = self.store.get_latest_platform_pulse(
+            connection_id, lane="platform_account"
+        )
         return _pulse_payload(
             pulse,
             kind="platform_pulse",
@@ -67,7 +69,9 @@ class ObservabilityService:
             latest = samples[-1]
             return _sample_payload(
                 latest,
-                freshness=_freshness(latest.captured_at, now=self._now(), fresh=75, stale=300),
+                freshness=_freshness(
+                    latest.captured_at, now=self._now(), fresh=75, stale=300
+                ),
             )
         payload = _summary_payload(summary)
         payload["evaluations"] = [
@@ -97,7 +101,9 @@ class ObservabilityService:
             "items": [
                 _sample_payload(
                     item,
-                    freshness=_freshness(item.captured_at, now=self._now(), fresh=75, stale=300),
+                    freshness=_freshness(
+                        item.captured_at, now=self._now(), fresh=75, stale=300
+                    ),
                 )
                 for item in selected
             ],
@@ -111,7 +117,9 @@ class ObservabilityService:
         return {
             "run_id": run_id,
             "summary_id": summary.observation_id,
-            "items": [_evaluation_payload(item) for item in self.evaluator.evaluate(summary)],
+            "items": [
+                _evaluation_payload(item) for item in self.evaluator.evaluate(summary)
+            ],
         }
 
     def _now(self) -> datetime:
@@ -195,7 +203,9 @@ def _evaluation_payload(value: ResourceEvaluation) -> dict[str, object]:
     }
 
 
-def _freshness(captured_at: str, *, now: datetime, fresh: int, stale: int) -> str:
+def _freshness(
+    captured_at: str, *, now: datetime, fresh: int, stale: int
+) -> str:
     captured = datetime.fromisoformat(captured_at.replace("Z", "+00:00")).astimezone(UTC)
     age = max(0.0, (now - captured).total_seconds())
     if age <= fresh:

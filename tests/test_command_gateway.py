@@ -47,7 +47,9 @@ class CommandGatewayTests(unittest.TestCase):
 
             with _mock_ownership():
                 self.assertIsNone(
-                    gateway._path_sha256({"path": str(target), "owner": "alice"}, config)["sha256"]
+                    gateway._path_sha256(
+                        {"path": str(target), "owner": "alice"}, config
+                    )["sha256"]
                 )
                 committed = gateway._compare_and_swap_file(
                     {
@@ -116,7 +118,9 @@ class CommandGatewayTests(unittest.TestCase):
                 target.unlink()
                 target.symlink_to(root / "elsewhere")
                 with self.assertRaisesRegex(gateway.GatewayError, "regular file"):
-                    gateway._path_sha256({"path": str(target), "owner": "alice"}, config)
+                    gateway._path_sha256(
+                        {"path": str(target), "owner": "alice"}, config
+                    )
 
             self.assertEqual(conflict["outcome"], "conflict")
             self.assertTrue(staged.exists())
@@ -154,7 +158,9 @@ class CommandGatewayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "alice"
             root.mkdir()
-            config = gateway.GatewayConfig(token="cursor-secret", allowed_roots=[str(root)])
+            config = gateway.GatewayConfig(
+                token="cursor-secret", allowed_roots=[str(root)]
+            )
 
             with self.assertRaisesRegex(gateway.GatewayError, "outside allowed roots"):
                 gateway._search_files(
@@ -182,7 +188,9 @@ class CommandGatewayTests(unittest.TestCase):
                 config,
             )
 
-            self.assertEqual([item["relative_path"] for item in page["items"]], ["ordinary.txt"])
+            self.assertEqual(
+                [item["relative_path"] for item in page["items"]], ["ordinary.txt"]
+            )
 
     def test_search_files_budget_returns_bound_cursor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -192,7 +200,9 @@ class CommandGatewayTests(unittest.TestCase):
                 (root / f"model-{index}.txt").write_text(str(index), encoding="utf-8")
             alternate_root = root / "z-alternate"
             alternate_root.mkdir()
-            config = gateway.GatewayConfig(token="cursor-secret", allowed_roots=[str(root)])
+            config = gateway.GatewayConfig(
+                token="cursor-secret", allowed_roots=[str(root)]
+            )
             request = {
                 "root": str(root),
                 "owner": "alice",
@@ -328,22 +338,18 @@ class CommandGatewayTests(unittest.TestCase):
 
         with _mock_ownership():
             for argv in rejected:
-                with (
-                    self.subTest(argv=argv),
-                    self.assertRaisesRegex(gateway.GatewayError, "arguments not allowed"),
+                with self.subTest(argv=argv), self.assertRaisesRegex(
+                    gateway.GatewayError, "arguments not allowed"
                 ):
                     gateway._run({"argv": argv, "user": "alice"}, config)
 
     def test_missing_optional_conda_is_a_127_observation(self) -> None:
         config = gateway.GatewayConfig(token=None, allowed_roots=["/public"])
 
-        with (
-            _mock_ownership(),
-            mock.patch.object(
-                gateway.subprocess,
-                "run",
-                side_effect=FileNotFoundError("conda"),
-            ),
+        with _mock_ownership(), mock.patch.object(
+            gateway.subprocess,
+            "run",
+            side_effect=FileNotFoundError("conda"),
         ):
             result = gateway._run(
                 {
@@ -381,9 +387,8 @@ class CommandGatewayTests(unittest.TestCase):
 
         self.assertEqual(result["returncode"], 0)
         self.assertEqual(fake_run.call_args.args[0], ["gosu", "alice", *argv])
-        with (
-            _mock_ownership(),
-            self.assertRaisesRegex(gateway.GatewayError, "arguments not allowed"),
+        with _mock_ownership(), self.assertRaisesRegex(
+            gateway.GatewayError, "arguments not allowed"
         ):
             gateway._run({"argv": ["sstat", "--help"], "user": "alice"}, config)
 
@@ -398,9 +403,8 @@ class CommandGatewayTests(unittest.TestCase):
             )
 
         self.assertEqual(result["returncode"], 0)
-        with (
-            _mock_ownership(),
-            self.assertRaisesRegex(gateway.GatewayError, "arguments not allowed"),
+        with _mock_ownership(), self.assertRaisesRegex(
+            gateway.GatewayError, "arguments not allowed"
         ):
             gateway._run(
                 {"argv": ["scontrol", "show", "secrets"], "user": "alice"},
@@ -654,9 +658,8 @@ class CommandGatewayTests(unittest.TestCase):
             archive = Path(tmp) / "evil.tar"
             archive.write_bytes(self._make_tar({"../evil.txt": b"x"}))
             dest = Path(tmp) / "out"
-            with (
-                _mock_ownership(),
-                self.assertRaisesRegex(gateway.GatewayError, "escapes destination"),
+            with _mock_ownership(), self.assertRaisesRegex(
+                gateway.GatewayError, "escapes destination"
             ):
                 gateway._extract_archive(
                     {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
@@ -669,7 +672,9 @@ class CommandGatewayTests(unittest.TestCase):
             archive = Path(tmp) / "link.tar"
             archive.write_bytes(self._make_tar({"ok.txt": b"x"}, symlink="/etc/passwd"))
             dest = Path(tmp) / "out"
-            with _mock_ownership(), self.assertRaisesRegex(gateway.GatewayError, "link members"):
+            with _mock_ownership(), self.assertRaisesRegex(
+                gateway.GatewayError, "link members"
+            ):
                 gateway._extract_archive(
                     {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
                     config,
@@ -716,9 +721,8 @@ class CommandGatewayTests(unittest.TestCase):
             archive = Path(tmp) / "evil.zip"
             archive.write_bytes(self._make_zip({"../evil.txt": b"x"}))
             dest = Path(tmp) / "out"
-            with (
-                _mock_ownership(),
-                self.assertRaisesRegex(gateway.GatewayError, "escapes destination"),
+            with _mock_ownership(), self.assertRaisesRegex(
+                gateway.GatewayError, "escapes destination"
             ):
                 gateway._extract_archive(
                     {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
@@ -738,10 +742,9 @@ class CommandGatewayTests(unittest.TestCase):
                     return SimpleNamespace(returncode=0, stdout="a.txt\n", stderr="")
                 return real_run(argv, *args, **kwargs)
 
-            with (
-                _mock_ownership(),
-                mock.patch.object(gateway.subprocess, "run", side_effect=fake_run) as patched_run,
-            ):
+            with _mock_ownership(), mock.patch.object(
+                gateway.subprocess, "run", side_effect=fake_run
+            ) as patched_run:
                 result = gateway._extract_archive(
                     {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
                     config,
@@ -752,7 +755,9 @@ class CommandGatewayTests(unittest.TestCase):
                 if call.args and call.args[0] and call.args[0][0] == "unar"
             ]
             self.assertEqual(len(unar_calls), 1)
-            self.assertEqual(unar_calls[0].args[0], ["unar", "-f", "-o", str(dest), str(archive)])
+            self.assertEqual(
+                unar_calls[0].args[0], ["unar", "-f", "-o", str(dest), str(archive)]
+            )
             self.assertEqual(unar_calls[0].kwargs.get("timeout"), 300)
             self.assertEqual(result["status"], "ok")
 
@@ -771,11 +776,9 @@ class CommandGatewayTests(unittest.TestCase):
                     )
                 return real_run(argv, *args, **kwargs)
 
-            with (
-                _mock_ownership(),
-                mock.patch.object(gateway.subprocess, "run", side_effect=fake_run),
-                self.assertRaisesRegex(gateway.GatewayError, "rar extraction failed"),
-            ):
+            with _mock_ownership(), mock.patch.object(
+                gateway.subprocess, "run", side_effect=fake_run
+            ), self.assertRaisesRegex(gateway.GatewayError, "rar extraction failed"):
                 gateway._extract_archive(
                     {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},
                     config,
@@ -787,9 +790,8 @@ class CommandGatewayTests(unittest.TestCase):
             archive = Path(tmp) / "notes.txt"
             archive.write_bytes(b"hello")
             dest = Path(tmp) / "out"
-            with (
-                _mock_ownership(),
-                self.assertRaisesRegex(gateway.GatewayError, "unsupported archive format"),
+            with _mock_ownership(), self.assertRaisesRegex(
+                gateway.GatewayError, "unsupported archive format"
             ):
                 gateway._extract_archive(
                     {"path": str(archive), "dest_dir": str(dest), "owner": "alice"},

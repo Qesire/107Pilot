@@ -234,15 +234,13 @@ class EvidenceBinderTests(unittest.TestCase):
             "legacy_boundary": True,
             "source_revision": boundary["source_revision"],
             "platform_snapshot_ref": boundary["platform_snapshot_ref"],
-            "artifacts": [
-                {
-                    "logical_path": "logs/stderr.tail.txt",
-                    "size_bytes": len(b"verified\n"),
-                    "sha256": self._sha(ref),
-                    "content_type": "text/plain",
-                    "evidence_ref": ref,
-                }
-            ],
+            "artifacts": [{
+                "logical_path": "logs/stderr.tail.txt",
+                "size_bytes": len(b"verified\n"),
+                "sha256": self._sha(ref),
+                "content_type": "text/plain",
+                "evidence_ref": ref,
+            }],
             "warnings": [],
         }
         manifest = self.evidence_store.write_json(
@@ -778,21 +776,19 @@ class EvidenceBinderTests(unittest.TestCase):
         )
         self.store.upsert_evidence_objects(
             self.run.run_id,
-            [
-                {
-                    "object_id": "ev_extra",
-                    "category": "logs",
-                    "logical_path": extra.logical_path,
-                    "store_path": str(extra.path),
-                    "source_uri": f"evidence://runs/{self.run.run_id}/{extra.logical_path}",
-                    "sha256": extra.sha256,
-                    "size_bytes": extra.size_bytes,
-                    "mime_type": extra.content_type,
-                    "collection_status": "collected",
-                    "finalized_at": "2026-08-31T00:00:00+00:00",
-                    **boundary,
-                }
-            ],
+            [{
+                "object_id": "ev_extra",
+                "category": "logs",
+                "logical_path": extra.logical_path,
+                "store_path": str(extra.path),
+                "source_uri": f"evidence://runs/{self.run.run_id}/{extra.logical_path}",
+                "sha256": extra.sha256,
+                "size_bytes": extra.size_bytes,
+                "mime_type": extra.content_type,
+                "collection_status": "collected",
+                "finalized_at": "2026-08-31T00:00:00+00:00",
+                **boundary,
+            }],
         )
 
         with self.assertRaisesRegex(Exception, "manifest|registered|object"):
@@ -839,16 +835,14 @@ class EvidenceBinderTests(unittest.TestCase):
             _verify_manifest_artifacts(
                 run_id=self.run.run_id,
                 manifest_payload={
-                    "artifacts": [
-                        {
-                            "logical_path": "logs/stderr.tail.txt",
-                            "evidence_ref": (
-                                f"evidence://runs/{self.run.run_id}/logs/stderr.tail.txt"
-                            ),
-                            "sha256": evidence_object.sha256,
-                            "size_bytes": "not-an-integer",
-                        }
-                    ],
+                    "artifacts": [{
+                        "logical_path": "logs/stderr.tail.txt",
+                        "evidence_ref": (
+                            f"evidence://runs/{self.run.run_id}/logs/stderr.tail.txt"
+                        ),
+                        "sha256": evidence_object.sha256,
+                        "size_bytes": "not-an-integer",
+                    }],
                 },
                 objects={evidence_object.logical_path: evidence_object},
                 refs=(ref,),
@@ -858,16 +852,14 @@ class EvidenceBinderTests(unittest.TestCase):
             _verify_manifest_artifacts(
                 run_id=self.run.run_id,
                 manifest_payload={
-                    "artifacts": [
-                        {
-                            "logical_path": "logs/stderr.tail.txt",
-                            "evidence_ref": (
-                                f"evidence://runs/{self.run.run_id}/logs/stderr.tail.txt"
-                            ),
-                            "sha256": evidence_object.sha256,
-                            "size_bytes": str(evidence_object.size_bytes),
-                        }
-                    ],
+                    "artifacts": [{
+                        "logical_path": "logs/stderr.tail.txt",
+                        "evidence_ref": (
+                            f"evidence://runs/{self.run.run_id}/logs/stderr.tail.txt"
+                        ),
+                        "sha256": evidence_object.sha256,
+                        "size_bytes": str(evidence_object.size_bytes),
+                    }],
                 },
                 objects={evidence_object.logical_path: evidence_object},
                 refs=(ref,),
@@ -928,7 +920,9 @@ class EvidenceBinderTests(unittest.TestCase):
             "platform_snapshot_ref": "snapshot:platform-1",
         }
 
-    def _register_manifest(self, ref: str, boundary: dict[str, object]) -> tuple[object, str]:
+    def _register_manifest(
+        self, ref: str, boundary: dict[str, object]
+    ) -> tuple[object, str]:
         manifest_payload = {
             "schema": "pilot107.evidence_manifest.v1",
             "run_id": self.run.run_id,
@@ -939,15 +933,13 @@ class EvidenceBinderTests(unittest.TestCase):
             "legacy_boundary": True,
             "source_revision": boundary["source_revision"],
             "platform_snapshot_ref": boundary["platform_snapshot_ref"],
-            "artifacts": [
-                {
-                    "logical_path": "logs/stderr.tail.txt",
-                    "size_bytes": len(b"verified\n"),
-                    "sha256": self._sha(ref),
-                    "content_type": "text/plain",
-                    "evidence_ref": ref,
-                }
-            ],
+            "artifacts": [{
+                "logical_path": "logs/stderr.tail.txt",
+                "size_bytes": len(b"verified\n"),
+                "sha256": self._sha(ref),
+                "content_type": "text/plain",
+                "evidence_ref": ref,
+            }],
             "warnings": [],
         }
         manifest = self.evidence_store.write_json(
@@ -958,21 +950,19 @@ class EvidenceBinderTests(unittest.TestCase):
         manifest_ref = f"evidence://runs/{self.run.run_id}/{manifest.logical_path}"
         self.store.upsert_evidence_objects(
             self.run.run_id,
-            [
-                {
-                    "object_id": "ev_manifest",
-                    "category": "manifest",
-                    "logical_path": manifest.logical_path,
-                    "store_path": str(manifest.path),
-                    "source_uri": manifest_ref,
-                    "sha256": manifest.sha256,
-                    "size_bytes": manifest.size_bytes,
-                    "mime_type": manifest.content_type,
-                    "collection_status": "collected",
-                    "finalized_at": "2026-08-31T00:00:00+00:00",
-                    **boundary,
-                }
-            ],
+            [{
+                "object_id": "ev_manifest",
+                "category": "manifest",
+                "logical_path": manifest.logical_path,
+                "store_path": str(manifest.path),
+                "source_uri": manifest_ref,
+                "sha256": manifest.sha256,
+                "size_bytes": manifest.size_bytes,
+                "mime_type": manifest.content_type,
+                "collection_status": "collected",
+                "finalized_at": "2026-08-31T00:00:00+00:00",
+                **boundary,
+            }],
         )
         return manifest, manifest_ref
 
@@ -1009,8 +999,7 @@ class EvidenceBinderTests(unittest.TestCase):
     def _sha(self, ref: str) -> str:
         logical_path = ref.rsplit("/", 1)[-1]
         obj = next(
-            item
-            for item in self.store.list_evidence_objects(self.run.run_id)
+            item for item in self.store.list_evidence_objects(self.run.run_id)
             if item.logical_path.endswith(logical_path)
         )
         assert obj.sha256 is not None

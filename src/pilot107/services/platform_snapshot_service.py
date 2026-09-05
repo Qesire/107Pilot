@@ -222,7 +222,9 @@ def redact_command_results(
         stderr, stderr_changed = _redact_text(result.stderr, username=username, home=home)
         if argv_changed or stdout_changed or stderr_changed:
             reports.append(f"{result.name}: username/home redacted")
-        redacted.append(replace(result, argv=tuple(argv), stdout=stdout, stderr=stderr))
+        redacted.append(
+            replace(result, argv=tuple(argv), stdout=stdout, stderr=stderr)
+        )
     return tuple(redacted), tuple(reports)
 
 

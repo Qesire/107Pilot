@@ -111,21 +111,33 @@ class ObservabilityStore(Protocol):
     def save_run_sample(self, value: RunResourceSample) -> RunResourceSample: ...
     def save_minute_aggregate(self, value: RunResourceSample) -> RunResourceSample: ...
     def save_summary(self, value: RunResourceSummary) -> RunResourceSummary: ...
-    def get_latest_platform_pulse(self, connection_id: str, *, lane: str) -> PlatformPulse: ...
-    def get_latest_account_pulse(self, connection_id: str, *, owner: str) -> AccountPulse: ...
+    def get_latest_platform_pulse(
+        self, connection_id: str, *, lane: str
+    ) -> PlatformPulse: ...
+    def get_latest_account_pulse(
+        self, connection_id: str, *, owner: str
+    ) -> AccountPulse: ...
     def list_account_pulses(
         self, connection_id: str, *, owner: str, limit: int
     ) -> list[AccountPulse]: ...
     def list_run_samples(self, run_id: str, *, owner: str) -> list[RunResourceSample]: ...
-    def list_minute_aggregates(self, run_id: str, *, owner: str) -> list[RunResourceSample]: ...
+    def list_minute_aggregates(
+        self, run_id: str, *, owner: str
+    ) -> list[RunResourceSample]: ...
     def get_summary(self, run_id: str, *, owner: str) -> RunResourceSummary: ...
     def save_cycle(self, value: ObservationCycle) -> ObservationCycle: ...
     def latest_cycle(self, connection_id: str, *, lane: str) -> ObservationCycle | None: ...
     def count_cycle_commands_since(self, connection_id: str, *, since: str) -> int: ...
-    def upsert_run_target(self, target: Any, *, state: str, observed_at: str) -> None: ...
+    def upsert_run_target(
+        self, target: Any, *, state: str, observed_at: str
+    ) -> None: ...
     def list_run_targets(self, connection_id: str) -> list[tuple[Any, str]]: ...
-    def mark_run_target_observed(self, run_id: str, *, owner: str, observed_at: str) -> None: ...
-    def mark_run_target_finalized(self, run_id: str, *, owner: str, observed_at: str) -> None: ...
+    def mark_run_target_observed(
+        self, run_id: str, *, owner: str, observed_at: str
+    ) -> None: ...
+    def mark_run_target_finalized(
+        self, run_id: str, *, owner: str, observed_at: str
+    ) -> None: ...
     def record_terminal_observation(
         self,
         run_id: str,
@@ -141,7 +153,9 @@ T = TypeVar("T", PlatformPulse, AccountPulse, RunResourceSample, RunResourceSumm
 
 
 class SQLiteObservabilityStore:
-    def __init__(self, db_path: Path, *, clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(
+        self, db_path: Path, *, clock: Callable[[], datetime] | None = None
+    ) -> None:
         self.db_path = db_path
         self._clock = clock or (lambda: datetime.now(UTC))
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -237,13 +251,8 @@ class SQLiteObservabilityStore:
         if not isinstance(target, RunObservationTarget):
             raise TypeError("target must be RunObservationTarget")
         terminal = state in {
-            "SUCCEEDED",
-            "FAILED",
-            "CANCELLED",
-            "SUBMIT_FAILED",
-            "COLLECTION_FAILED",
-            "AUTH_REQUIRED",
-            "ORPHANED",
+            "SUCCEEDED", "FAILED", "CANCELLED", "SUBMIT_FAILED",
+            "COLLECTION_FAILED", "AUTH_REQUIRED", "ORPHANED",
         }
         with self.connect() as connection:
             connection.execute(
@@ -307,7 +316,9 @@ class SQLiteObservabilityStore:
             for row in rows
         ]
 
-    def mark_run_target_observed(self, run_id: str, *, owner: str, observed_at: str) -> None:
+    def mark_run_target_observed(
+        self, run_id: str, *, owner: str, observed_at: str
+    ) -> None:
         with self.connect() as connection:
             connection.execute(
                 "UPDATE observation_run_targets SET last_observed_at = ?, updated_at = ? "
@@ -315,7 +326,9 @@ class SQLiteObservabilityStore:
                 (observed_at, observed_at, owner, run_id),
             )
 
-    def mark_run_target_finalized(self, run_id: str, *, owner: str, observed_at: str) -> None:
+    def mark_run_target_finalized(
+        self, run_id: str, *, owner: str, observed_at: str
+    ) -> None:
         with self.connect() as connection:
             connection.execute(
                 "UPDATE observation_run_targets SET finalized = 1, "
@@ -373,19 +386,9 @@ class SQLiteObservabilityStore:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT DO NOTHING",
                 (
-                    value.observation_id,
-                    kind,
-                    resolution,
-                    value.connection_id,
-                    value.owner,
-                    value.run_id,
-                    value.attempt,
-                    value.captured_at,
-                    expires,
-                    value.fencing_token,
-                    digest,
-                    encoded,
-                    now,
+                    value.observation_id, kind, resolution, value.connection_id,
+                    value.owner, value.run_id, value.attempt, value.captured_at, expires,
+                    value.fencing_token, digest, encoded, now,
                 ),
             )
             row = connection.execute(
@@ -403,7 +406,9 @@ class SQLiteObservabilityStore:
     def list_run_samples(self, run_id: str, *, owner: str) -> list[RunResourceSample]:
         return self._list_samples(run_id, owner=owner, resolution="raw")
 
-    def get_latest_platform_pulse(self, connection_id: str, *, lane: str) -> PlatformPulse:
+    def get_latest_platform_pulse(
+        self, connection_id: str, *, lane: str
+    ) -> PlatformPulse:
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM resource_observations "
@@ -414,14 +419,17 @@ class SQLiteObservabilityStore:
             for row in rows:
                 payload = json.loads(row["payload_json"])
                 match = connection.execute(
-                    "SELECT cycle_id FROM observation_cycles WHERE cycle_id = ? AND lane = ?",
+                    "SELECT cycle_id FROM observation_cycles "
+                    "WHERE cycle_id = ? AND lane = ?",
                     (payload["cycle_id"], lane),
                 ).fetchone()
                 if match is not None:
                     return _platform_from_payload(payload)
         raise KeyError(connection_id)
 
-    def get_latest_account_pulse(self, connection_id: str, *, owner: str) -> AccountPulse:
+    def get_latest_account_pulse(
+        self, connection_id: str, *, owner: str
+    ) -> AccountPulse:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT payload_json FROM resource_observations "
@@ -445,7 +453,10 @@ class SQLiteObservabilityStore:
                 "ORDER BY captured_at DESC, observation_id DESC LIMIT ?",
                 (connection_id, owner, limit),
             ).fetchall()
-        return [_account_from_payload(json.loads(row["payload_json"])) for row in reversed(rows)]
+        return [
+            _account_from_payload(json.loads(row["payload_json"]))
+            for row in reversed(rows)
+        ]
 
     def list_minute_aggregates(self, run_id: str, *, owner: str) -> list[RunResourceSample]:
         return self._list_samples(run_id, owner=owner, resolution="minute")
@@ -558,22 +569,10 @@ def _summary_from_payload(value: dict[str, Any]) -> RunResourceSummary:
 
 
 def _common(value: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value[key]
-        for key in (
-            "observation_id",
-            "connection_id",
-            "owner",
-            "run_id",
-            "attempt",
-            "cycle_id",
-            "captured_at",
-            "freshness",
-            "partial",
-            "warnings",
-            "fencing_token",
-        )
-    }
+    return {key: value[key] for key in (
+        "observation_id", "connection_id", "owner", "run_id", "attempt", "cycle_id",
+        "captured_at", "freshness", "partial", "warnings", "fencing_token"
+    )}
 
 
 def _cycle_from_row(row: sqlite3.Row) -> ObservationCycle:

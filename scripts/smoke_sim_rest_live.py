@@ -85,7 +85,9 @@ def main() -> int:
         auth_style=RestAuthStyle.SLURM_HEADERS,
         slurm_username=rest_user,
     )
-    backend = RestNativeSlurmBackend(transport=transport, api_version=api_version, token=token)
+    backend = RestNativeSlurmBackend(
+        transport=transport, api_version=api_version, token=token
+    )
 
     # ----- read-only smoke -----
     _read_only(transport=transport, api_version=api_version, token=token, record=record)
@@ -312,13 +314,9 @@ def _cancel_terminal_semantics(
     record(
         "cancel_already_terminal",
         first_ok,
-        {
-            "first_cancel_ok": first_ok,
-            "first_error": first_err,
-            "second_cancel_ok": second_ok,
-            "second_error": second_err,
-            "note": "adapter does not pre-read state; second cancel may error",
-        },
+        {"first_cancel_ok": first_ok, "first_error": first_err,
+         "second_cancel_ok": second_ok, "second_error": second_err,
+         "note": "adapter does not pre-read state; second cancel may error"},
     )
 
 
@@ -342,17 +340,11 @@ def _submit_invalid_workdir(
         # at run time. We treat a clean submit as a structured
         # non-failure for this smoke; the WorkDirPreflight enforcement is a
         # service-layer concern (Lane 4b-ii).
-        record(
-            "submit_invalid_workdir_structured_failure",
-            True,
-            {"note": "slurmrestd accepted; WorkDirPreflight is service-layer"},
-        )
+        record("submit_invalid_workdir_structured_failure", True,
+               {"note": "slurmrestd accepted; WorkDirPreflight is service-layer"})
     except (SlurmSubmissionRejected, SlurmTransportError) as exc:
-        record(
-            "submit_invalid_workdir_structured_failure",
-            True,
-            {"error_type": exc.__class__.__name__},
-        )
+        record("submit_invalid_workdir_structured_failure", True,
+               {"error_type": exc.__class__.__name__})
 
 
 def _submit_unwritable_output(
@@ -364,9 +356,9 @@ def _submit_unwritable_output(
 ) -> None:
     # Make the workdir unwritable by the user, then attempt submit.
     subprocess.run(
-        ["docker", "exec", "pilot107-sim-login-node-sim-1", "bash", "-lc", f"chmod 000 {workdir}"],
-        check=False,
-        timeout=10,
+        ["docker", "exec", "pilot107-sim-login-node-sim-1", "bash", "-lc",
+         f"chmod 000 {workdir}"],
+        check=False, timeout=10,
     )
     try:
         try:
@@ -381,25 +373,16 @@ def _submit_unwritable_output(
             )
             # If slurmrestd still accepts, the failure would surface at run
             # time. Smoke passes (adapter contract: forwarded, not enforced).
-            record(
-                "submit_unwritable_output_failure",
-                True,
-                {"note": "slurmrestd accepted; output enforcement is service-layer"},
-            )
+            record("submit_unwritable_output_failure", True,
+                   {"note": "slurmrestd accepted; output enforcement is service-layer"})
         except (SlurmSubmissionRejected, SlurmTransportError) as exc:
-            record("submit_unwritable_output_failure", True, {"error_type": exc.__class__.__name__})
+            record("submit_unwritable_output_failure", True,
+                   {"error_type": exc.__class__.__name__})
     finally:
         subprocess.run(
-            [
-                "docker",
-                "exec",
-                "pilot107-sim-login-node-sim-1",
-                "bash",
-                "-lc",
-                f"chmod 0750 {workdir}",
-            ],
-            check=False,
-            timeout=10,
+            ["docker", "exec", "pilot107-sim-login-node-sim-1", "bash", "-lc",
+             f"chmod 0750 {workdir}"],
+            check=False, timeout=10,
         )
 
 

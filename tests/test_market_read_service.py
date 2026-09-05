@@ -21,7 +21,9 @@ class MarketReadServiceTests(unittest.TestCase):
             _run("runpub_new", "2026-07-26T03:00:00+00:00"),
             _run("runpub_old", "2026-07-26T01:00:00+00:00"),
         )
-        template_records = (_template("release_middle", "2026-07-26T02:00:00+00:00"),)
+        template_records = (
+            _template("release_middle", "2026-07-26T02:00:00+00:00"),
+        )
         service = MarketReadService(
             run_publications=_RunStoreStub(run_records),
             templates=_TemplateStoreStub(template_records),

@@ -148,8 +148,12 @@ _AGENT_TOOLS = frozenset(
     }
 )
 _AGENT_TOOL_OUTCOMES = frozenset({"success", "error", "no_progress"})
-_BUILDER_SUBMISSION_OUTCOMES = frozenset({"scheduled", "repair_required", "error", "no_progress"})
-_BUILDER_PHASES = frozenset({"none", "drafting", "sandbox_failed", "validation_scheduled"})
+_BUILDER_SUBMISSION_OUTCOMES = frozenset(
+    {"scheduled", "repair_required", "error", "no_progress"}
+)
+_BUILDER_PHASES = frozenset(
+    {"none", "drafting", "sandbox_failed", "validation_scheduled"}
+)
 
 
 class ControlPlaneMetrics:
@@ -232,19 +236,9 @@ class ControlPlaneMetrics:
             self._sse_active += 1
 
     def observe_upload_event(self, *, outcome: str, size_bytes: int = 0) -> None:
-        normalized = (
-            outcome
-            if outcome
-            in {
-                "created",
-                "chunk",
-                "completed",
-                "aborted",
-                "failed",
-                "quota_rejected",
-            }
-            else "error"
-        )
+        normalized = outcome if outcome in {
+            "created", "chunk", "completed", "aborted", "failed", "quota_rejected",
+        } else "error"
         with self._lock:
             self._upload_events[normalized] += 1
             self._upload_bytes_total += max(0, size_bytes)
@@ -258,9 +252,13 @@ class ControlPlaneMetrics:
     ) -> None:
         normalized_profile = profile if profile in _AGENT_PROFILES else "other"
         normalized_tool = tool if tool in _AGENT_TOOLS else "other"
-        normalized_outcome = outcome if outcome in _AGENT_TOOL_OUTCOMES else "error"
+        normalized_outcome = (
+            outcome if outcome in _AGENT_TOOL_OUTCOMES else "error"
+        )
         with self._lock:
-            self._agent_tools[(normalized_profile, normalized_tool, normalized_outcome)] += 1
+            self._agent_tools[
+                (normalized_profile, normalized_tool, normalized_outcome)
+            ] += 1
             if normalized_outcome == "no_progress":
                 self._builder_no_progress[normalized_profile] += 1
 
@@ -270,7 +268,9 @@ class ControlPlaneMetrics:
         outcome: str,
         phase: str | None,
     ) -> None:
-        normalized_outcome = outcome if outcome in _BUILDER_SUBMISSION_OUTCOMES else "error"
+        normalized_outcome = (
+            outcome if outcome in _BUILDER_SUBMISSION_OUTCOMES else "error"
+        )
         normalized_phase = phase if phase in _BUILDER_PHASES else "none"
         with self._lock:
             self._builder_submissions[(normalized_outcome, normalized_phase)] += 1
@@ -457,7 +457,8 @@ class ControlPlaneMetrics:
         for (profile, phase), count in sorted(builder_step_count.items()):
             labels = _labels(profile=profile, phase=phase)
             lines.append(
-                f"pilot107_builder_pi_steps_sum{{{labels}}} {builder_step_sum[(profile, phase)]}"
+                f"pilot107_builder_pi_steps_sum{{{labels}}} "
+                f"{builder_step_sum[(profile, phase)]}"
             )
             lines.append(f"pilot107_builder_pi_steps_count{{{labels}}} {count}")
 

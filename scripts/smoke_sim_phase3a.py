@@ -121,7 +121,8 @@ def main() -> int:
             thread.join(timeout=5)
 
     print(
-        f"phase3a live read-model smoke passed run={run.run_id} job={run.job_id} workdir={workdir}"
+        f"phase3a live read-model smoke passed run={run.run_id} "
+        f"job={run.job_id} workdir={workdir}"
     )
     return 0
 

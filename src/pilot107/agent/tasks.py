@@ -291,7 +291,9 @@ class AgentTaskScheduleReceipt:
         if self.workspace_revision is not None:
             _non_negative_int(self.workspace_revision, "workspace_revision")
         if self.legacy_boundary is None:
-            object.__setattr__(self, "legacy_boundary", self.workspace_revision is None)
+            object.__setattr__(
+                self, "legacy_boundary", self.workspace_revision is None
+            )
         elif not isinstance(self.legacy_boundary, bool):
             raise TypeError("legacy_boundary must be boolean")
         if self.workspace_revision is None and self.legacy_boundary is not True:
@@ -472,7 +474,9 @@ class AgentTaskRecord:
             object.__setattr__(
                 self,
                 "lease_expires_at",
-                timestamp(parse_timestamp(self.lease_expires_at or "", "lease_expires_at")),
+                timestamp(
+                    parse_timestamp(self.lease_expires_at or "", "lease_expires_at")
+                ),
             )
         if self.state in TERMINAL_TASK_STATES and self.result is None:
             raise ValueError("terminal AgentTask requires a result")
@@ -501,7 +505,9 @@ class AgentTaskRecord:
                 raise ValueError("schedule receipt task_id does not match AgentTask")
             if self.linked_run_id is None:
                 if self.schedule_receipt.submit_state != "admitted":
-                    raise ValueError("schedule receipt must remain admitted before linked Run")
+                    raise ValueError(
+                        "schedule receipt must remain admitted before linked Run"
+                    )
             elif self.schedule_receipt.run_id != self.linked_run_id:
                 raise ValueError("schedule receipt Run does not match linked Run")
         if (
@@ -521,9 +527,12 @@ class AgentTaskRecord:
             if self.gate_receipt.run_id != self.linked_run_id:
                 raise ValueError("gate receipt Run does not match linked Run")
             if self.completion_policy.requires_capsule and (
-                self.gate_receipt.capsule_state != "READY" or self.gate_receipt.capsule_ref is None
+                self.gate_receipt.capsule_state != "READY"
+                or self.gate_receipt.capsule_ref is None
             ):
-                raise ValueError("Capsule-required AgentTask needs a READY Capsule reference")
+                raise ValueError(
+                    "Capsule-required AgentTask needs a READY Capsule reference"
+                )
         if not isinstance(self.legacy_gate_unverified, bool):
             raise TypeError("legacy_gate_unverified must be boolean")
         object.__setattr__(

@@ -104,7 +104,11 @@ class ApiHealthService:
         checks.append(self._worker_heartbeat_check())
         checks.append(self._platform_snapshot_freshness_check())
         checks.append(self._slurm_token_validity_check())
-        ready = all(check.status == HealthCheckStatus.OK for check in checks if check.required)
+        ready = all(
+            check.status == HealthCheckStatus.OK
+            for check in checks
+            if check.required
+        )
         return ready, {
             "status": "ready" if ready else "not_ready",
             "checks": [check.to_payload() for check in checks],

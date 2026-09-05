@@ -92,7 +92,11 @@ class RemediationRoutes:
                 return _error(404, "REMEDIATION.NOT_FOUND", "remediation session not found")
             except RemediationServiceError as exc:
                 return _service_error(exc)
-        if len(parts) == 3 and parts[0] == "remediation-sessions" and parts[2] == "events":
+        if (
+            len(parts) == 3
+            and parts[0] == "remediation-sessions"
+            and parts[2] == "events"
+        ):
             try:
                 _reject_unknown_params(params, {"limit", "after_event_id"})
                 session = self.service.remediation_store.get_session(parts[1])
@@ -126,7 +130,9 @@ class RemediationRoutes:
                             "limit": limit,
                             "has_more": next_event_id is not None,
                             "next_after_event_id": next_event_id,
-                            "last_event_id": (events[-1].event_id if events else after_event_id),
+                            "last_event_id": (
+                                events[-1].event_id if events else after_event_id
+                            ),
                         },
                     },
                 )

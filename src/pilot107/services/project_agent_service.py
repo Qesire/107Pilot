@@ -220,12 +220,16 @@ class ProjectAgentService:
         )
         existing = self.store.list_workspaces(project.project_id, owner=owner)
         workspace = (
-            existing[0] if existing else self.importer.create(project, source_ref=source_workdir)
+            existing[0]
+            if existing
+            else self.importer.create(project, source_ref=source_workdir)
         )
         return ProjectAgentView(
             project=project,
             workspace=workspace,
-            change_sets=tuple(self.store.list_change_sets(project.project_id, owner=owner)),
+            change_sets=tuple(
+                self.store.list_change_sets(project.project_id, owner=owner)
+            ),
             publish_available=self.publisher is not None,
         )
 
@@ -579,7 +583,9 @@ class ProjectAgentService:
     ) -> FormalRunCandidate:
         """Derive trusted validation lineage and formal defaults from one AgentTask."""
 
-        contract_service, run_service, _, session_service, evidence_binder = self._formal_services()
+        contract_service, run_service, _, session_service, evidence_binder = (
+            self._formal_services()
+        )
         if self.agent_task_store is None:
             raise RuntimeError("AgentTask store is unavailable")
         self._workspace(project_id, workspace_id, owner)

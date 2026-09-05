@@ -423,7 +423,10 @@ class SQLiteRuntimeWatchStore:
                 "ORDER BY stopped_at, watch_id LIMIT ?",
                 (limit,),
             ).fetchall()
-        return [self.get_watch(str(row["watch_id"]), owner=str(row["owner"])) for row in rows]
+        return [
+            self.get_watch(str(row["watch_id"]), owner=str(row["owner"]))
+            for row in rows
+        ]
 
     def renew_watch(self, lease: RuntimeWatchLease, *, lease_seconds: int) -> RuntimeWatchLease:
         _bounded_lease(lease_seconds)

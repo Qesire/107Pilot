@@ -48,7 +48,9 @@ def test_heat_smoke_is_high_level_model_driven_and_never_writes_solver_files() -
     for token in forbidden:
         assert token not in source
 
-    function_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    function_names = {
+        node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    }
     assert {
         "run_smoke",
         "_poll_turn",

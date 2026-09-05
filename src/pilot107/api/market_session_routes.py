@@ -66,7 +66,9 @@ class MarketSessionRoutes:
             if is_application_detail:
                 if self.applications is None:
                     return _unavailable("MARKET.APPLICATION_UNAVAILABLE")
-                application = self.applications.store.get_market_application(parts[2], owner=owner)
+                application = self.applications.store.get_market_application(
+                    parts[2], owner=owner
+                )
                 detail = self.applications.store.market_application_detail(
                     application.session_id, owner=owner
                 )
@@ -76,7 +78,9 @@ class MarketSessionRoutes:
                 )
             if self.publications is None:
                 return _unavailable("TEMPLATE.PUBLICATION_UNAVAILABLE")
-            session = self.publications.store.get_template_publication(parts[1], owner=owner)
+            session = self.publications.store.get_template_publication(
+                parts[1], owner=owner
+            )
             return ApiResponse(status=200, payload=_publication_payload(session))
         except KeyError:
             return _error(404, "MARKET.SESSION_NOT_FOUND", "market session was not found")
@@ -122,7 +126,9 @@ class MarketSessionRoutes:
                     payload,
                     {"source_kind", "source_item_id", "user_intent", "request_key"},
                 )
-                source_kind = MarketApplicationSourceKind(_required_string(payload, "source_kind"))
+                source_kind = MarketApplicationSourceKind(
+                    _required_string(payload, "source_kind")
+                )
                 user_intent = _required_string(payload, "user_intent")
                 request_key = _required_string(payload, "request_key")
                 if source_kind is MarketApplicationSourceKind.CURATED_TEMPLATE:
@@ -150,11 +156,16 @@ class MarketSessionRoutes:
                     payload,
                     {"expected_version", "confirmation_digest", "request_key"},
                 )
-                application = self.applications.store.get_market_application(parts[2], owner=owner)
+                application = self.applications.store.get_market_application(
+                    parts[2], owner=owner
+                )
                 expected_version = _required_integer(payload, "expected_version")
                 confirmation_digest = _required_string(payload, "confirmation_digest")
                 request_key = _required_string(payload, "request_key")
-                if application.source_kind is MarketApplicationSourceKind.CURATED_TEMPLATE:
+                if (
+                    application.source_kind
+                    is MarketApplicationSourceKind.CURATED_TEMPLATE
+                ):
                     branch = self.applications.finalize_template_application(
                         session_id=application.session_id,
                         owner=owner,
@@ -201,12 +212,18 @@ class MarketSessionRoutes:
                     request_key=_required_string(payload, "request_key"),
                     title=_required_string(payload, "title"),
                     description=_required_string(payload, "description"),
-                    visibility=TemplateVisibility(_required_string(payload, "visibility")),
+                    visibility=TemplateVisibility(
+                        _required_string(payload, "visibility")
+                    ),
                     scope_key=_optional_string(payload.get("scope_key")),
                     compatibility=dict(compatibility),
                     publication_metadata=dict(publication),
-                    source_evidence_ref=_optional_string(payload.get("source_evidence_ref")),
-                    source_evidence_digest=_optional_string(payload.get("source_evidence_digest")),
+                    source_evidence_ref=_optional_string(
+                        payload.get("source_evidence_ref")
+                    ),
+                    source_evidence_digest=_optional_string(
+                        payload.get("source_evidence_digest")
+                    ),
                     environment=_optional_string(payload.get("environment")) or "docker",
                     base_release_id=_optional_string(payload.get("base_release_id")),
                 )
@@ -244,7 +261,9 @@ class MarketSessionRoutes:
                     session_id=session_id,
                     owner=owner,
                     expected_version=_required_integer(payload, "expected_version"),
-                    confirmation_digest=_required_string(payload, "confirmation_digest"),
+                    confirmation_digest=_required_string(
+                        payload, "confirmation_digest"
+                    ),
                 )
             return ApiResponse(
                 status=200,

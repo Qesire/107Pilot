@@ -484,7 +484,9 @@ def result_from_terminal(event: AgentTurnEvent | None) -> AgentdTurnResult:
         tool_invocations=_optional_int(payload.get("tool_invocations")),
         build_submissions=_optional_int(payload.get("build_submissions")),
         repair_submissions=_optional_int(payload.get("repair_submissions")),
-        no_progress_rejections=_optional_int(payload.get("no_progress_rejections")),
+        no_progress_rejections=_optional_int(
+            payload.get("no_progress_rejections")
+        ),
         terminal_phase=(
             None
             if payload.get("terminal_phase") is None
@@ -678,7 +680,9 @@ def _validate_event_payload(event_type: str, raw_payload: dict[str, Any]) -> Non
             "no_progress_rejections",
         ):
             if name in payload:
-                _validate_integer(payload[name], name, minimum=0, maximum=(2**53) - 1)
+                _validate_integer(
+                    payload[name], name, minimum=0, maximum=(2**53) - 1
+                )
         if payload.get("terminal_phase") not in {
             None,
             "drafting",

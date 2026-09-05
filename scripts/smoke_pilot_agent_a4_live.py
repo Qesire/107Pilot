@@ -81,7 +81,9 @@ class ComposePublicationRelay:
     def __init__(self, executor: DockerComposeExecutor) -> None:
         self.executor = executor
 
-    def path_sha256(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> str | None:
+    def path_sha256(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> str | None:
         result = self.executor.run(
             ["sha256sum", path],
             user=owner,
@@ -91,7 +93,9 @@ class ComposePublicationRelay:
             return None
         return result.stdout.split()[0]
 
-    def make_dir(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> None:
+    def make_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
         _run_checked(
             self.executor,
             ["mkdir", "-p", path],
@@ -186,7 +190,9 @@ else: p.unlink(); print('committed')
             timeout=timeout_seconds,
         ).strip()
 
-    def remove_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> None:
+    def remove_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
         _run_checked(
             self.executor,
             ["rm", "-rf", path],
@@ -264,7 +270,9 @@ print(json.dumps({'size':s.st_size,'mtime':s.st_mtime,'identity':f'{s.st_dev}:{s
         del identity, run_id, policy
         raise NotImplementedError
 
-    def read_text_tail(self, identity: UserIdentity, path: SafePath, max_bytes: int) -> TextTail:
+    def read_text_tail(
+        self, identity: UserIdentity, path: SafePath, max_bytes: int
+    ) -> TextTail:
         del identity, path, max_bytes
         raise NotImplementedError
 

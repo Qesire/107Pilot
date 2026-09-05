@@ -115,7 +115,9 @@ class PlatformProfileTests(unittest.TestCase):
                                     "name": "Students",
                                     "nodes": {"configured": "anode[05-17]", "total": 13},
                                     "partition": {"state": ["UP"]},
-                                    "qos": {"allowed": "qos_stu_default,qos_stu_medium_2gpu"},
+                                    "qos": {
+                                        "allowed": "qos_stu_default,qos_stu_medium_2gpu"
+                                    },
                                 }
                             ],
                         },

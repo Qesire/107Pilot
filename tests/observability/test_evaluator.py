@@ -183,13 +183,17 @@ def test_queue_congestion_requires_three_non_decreasing_owner_pulses() -> None:
             partial=False,
             warnings=(),
             fencing_token=1,
-            measures=ResourceMeasureSet(extras=(("jobs_pending", _measure(pending, unit="jobs")),)),
+            measures=ResourceMeasureSet(
+                extras=(("jobs_pending", _measure(pending, unit="jobs")),)
+            ),
         )
 
     evaluator = ResourceEvaluator()
 
     assert evaluator.evaluate_queue_trend((pulse(1, 1), pulse(2, 2))) is None
-    result = evaluator.evaluate_queue_trend((pulse(1, 2), pulse(2, 3), pulse(3, 4)))
+    result = evaluator.evaluate_queue_trend(
+        (pulse(1, 2), pulse(2, 3), pulse(3, 4))
+    )
 
     assert result is not None
     assert result.rule_id == "QUEUE_CONGESTION"

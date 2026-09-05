@@ -129,7 +129,9 @@ class AgentdClient:
             method="POST",
         )
         try:
-            with self._opener(http_request, timeout=float(self.config.timeout_seconds)) as response:
+            with self._opener(
+                http_request, timeout=float(self.config.timeout_seconds)
+            ) as response:
                 if not _is_content_type(response, "application/x-ndjson"):
                     raise _protocol_error("Turn response content type is invalid")
                 for event in parse_event_lines(turn_id, _bounded_lines(response)):
@@ -271,7 +273,9 @@ def _build_durable_turn_request(
     )
     payload: dict[str, Any] = {
         "schema_version": (
-            DURABLE_REPAIR_TURN_PROTOCOL_VERSION if repairs else "pilot107.agent-turn-request/v2"
+            DURABLE_REPAIR_TURN_PROTOCOL_VERSION
+            if repairs
+            else "pilot107.agent-turn-request/v2"
         ),
         "session_id": request.session_id,
         "turn_id": request.turn_id,
@@ -294,7 +298,9 @@ def _build_durable_turn_request(
         "trace": {"correlation_id": request.turn_id},
     }
     if repairs:
-        payload["receipt_repairs"] = [serialize_receipt_repair(repair) for repair in repairs]
+        payload["receipt_repairs"] = [
+            serialize_receipt_repair(repair) for repair in repairs
+        ]
     try:
         if request.model_profile_id != config.model_profile_id:
             raise ValueError("model profile mismatch")

@@ -637,7 +637,9 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
         methods=["GET"],
         operation_id="get_template_publication_session",
         tags=["market"],
-        openapi_extra={"parameters": [_TEMPLATE_PUBLICATION_SESSION_PATH_PARAMETER]},
+        openapi_extra={
+            "parameters": [_TEMPLATE_PUBLICATION_SESSION_PATH_PARAMETER]
+        },
     )
     for action, operation_id in (
         ("responses", "record_template_publication_reproduction"),
@@ -649,7 +651,9 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
             methods=["POST"],
             operation_id=operation_id,
             tags=["market"],
-            openapi_extra={"parameters": [_TEMPLATE_PUBLICATION_SESSION_PATH_PARAMETER]},
+            openapi_extra={
+                "parameters": [_TEMPLATE_PUBLICATION_SESSION_PATH_PARAMETER]
+            },
         )
 
     app.add_api_route(
@@ -710,7 +714,9 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
         methods=["POST"],
         operation_id="cancel_agent_turn",
         tags=["agent"],
-        openapi_extra={"parameters": [_AGENT_SESSION_PATH_PARAMETER, _AGENT_TURN_PATH_PARAMETER]},
+        openapi_extra={
+            "parameters": [_AGENT_SESSION_PATH_PARAMETER, _AGENT_TURN_PATH_PARAMETER]
+        },
     )
     app.add_api_route(
         "/api/v1/agent-sessions/{session_id}/events",
@@ -980,14 +986,20 @@ def build_asgi_app(api: Pilot107HttpApi) -> FastAPI:
                 },
             )
         target = (
-            f"/api/v1/observability/connections/{quote(connection_id, safe='')}/platform/latest"
+            "/api/v1/observability/connections/"
+            f"{quote(connection_id, safe='')}/platform/latest"
         )
         response = api.handle_get(target, headers=dict(request.headers.items()))
         if response.status != 200:
             return _to_fastapi_response(response, api.max_response_body_bytes)
         encoded = json.dumps(response.payload, ensure_ascii=False, separators=(",", ":"))
         return StreamingResponse(
-            iter([f"event: observability.platform_pulse_available\ndata: {encoded}\n\n"]),
+            iter(
+                [
+                    "event: observability.platform_pulse_available\n"
+                    f"data: {encoded}\n\n"
+                ]
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )

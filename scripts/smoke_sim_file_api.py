@@ -118,14 +118,11 @@ def main() -> int:
     print(f"[ok] read content ({content['size']} bytes)")
 
     # 6. archive
-    archive_resp = _post(
-        "/files/archive",
-        {
-            "paths": [f"{test_dir}/smoke.txt"],
-            "dest_dir": test_dir,
-            "archive_name": "smoke-bundle.tar.gz",
-        },
-    )
+    archive_resp = _post("/files/archive", {
+        "paths": [f"{test_dir}/smoke.txt"],
+        "dest_dir": test_dir,
+        "archive_name": "smoke-bundle.tar.gz",
+    })
     if archive_resp.get("status") != "ok":
         print(f"[FAIL] archive: {archive_resp}", file=sys.stderr)
         return 1

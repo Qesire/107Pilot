@@ -101,7 +101,9 @@ class UserEntitlementService:
             snapshot=snapshot,
             source_type=source_type,
             source_name=source_name,
-            expires_at=(captured.astimezone(UTC) + timedelta(seconds=ttl_seconds)).isoformat(),
+            expires_at=(
+                captured.astimezone(UTC) + timedelta(seconds=ttl_seconds)
+            ).isoformat(),
         )
 
 

@@ -171,7 +171,7 @@ def _cross_run_query_case(runtime_dir: Path, evidence_store: EvidenceStore, suff
         run_a.run_id
     )
     encoded = str(payload)
-    if run_b.run_id in encoded or 'run":"b' in encoded:
+    if run_b.run_id in encoded or "run\":\"b" in encoded:
         raise RuntimeError("query for run A leaked run B evidence")
 
 

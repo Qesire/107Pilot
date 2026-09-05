@@ -204,11 +204,16 @@ def _public_message(code: str) -> str:
         ),
         "AGENT.BUILDER.SNAPSHOT_INVALID": "Builder Workspace snapshot is stale",
         "AGENT.BUILDER.BINDING_INVALID": "Builder Project binding is invalid",
-        "AGENT.BUILDER.ENVELOPE_UNAVAILABLE": ("Builder resource envelope is unavailable"),
-        "AGENT.BUILDER.VALIDATIONS_INVALID": (
-            "Builder Blueprint must declare exactly one sandbox validation and one Slurm validation"
+        "AGENT.BUILDER.ENVELOPE_UNAVAILABLE": (
+            "Builder resource envelope is unavailable"
         ),
-        "AGENT.TOOL.RESOURCE_ENVELOPE_EXCEEDED": ("Builder resources exceed the approved envelope"),
+        "AGENT.BUILDER.VALIDATIONS_INVALID": (
+            "Builder Blueprint must declare exactly one sandbox validation "
+            "and one Slurm validation"
+        ),
+        "AGENT.TOOL.RESOURCE_ENVELOPE_EXCEEDED": (
+            "Builder resources exceed the approved envelope"
+        ),
         "AGENT.TOOL.READ_FAILED": "Agent read tool failed",
     }
     return messages[code]

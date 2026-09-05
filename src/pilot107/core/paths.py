@@ -69,3 +69,4 @@ def reject_special_file(path: Path) -> None:
     if path.is_file() or path.is_dir() or path.is_symlink():
         return
     raise PathPolicyError(f"unsupported special file: {path}")
+

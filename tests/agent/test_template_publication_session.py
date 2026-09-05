@@ -73,20 +73,14 @@ def test_successful_run_creates_no_market_record_without_share_manifest(
     observed = service.observe_successful_run(run)
 
     assert observed is None
-    assert (
-        publications.get_for_source_run(
-            source_run_id=run.run_id,
-            owner="alice",
-        )
-        is None
-    )
-    assert (
-        sessions.list_template_publications(
-            owner="alice",
-            source_run_id=run.run_id,
-        )
-        == []
-    )
+    assert publications.get_for_source_run(
+        source_run_id=run.run_id,
+        owner="alice",
+    ) is None
+    assert sessions.list_template_publications(
+        owner="alice",
+        source_run_id=run.run_id,
+    ) == []
 
 
 def test_share_manifest_defaults_private_and_does_not_authorize_contract(
@@ -197,13 +191,10 @@ def test_share_manifest_rejects_forbidden_selected_script_before_persisting(
         )
 
     assert captured.value.code == "MARKET.SHARE_MANIFEST_FORBIDDEN"
-    assert (
-        publications.get_for_source_run(
-            source_run_id=run.run_id,
-            owner="alice",
-        )
-        is None
-    )
+    assert publications.get_for_source_run(
+        source_run_id=run.run_id,
+        owner="alice",
+    ) is None
 
 
 def test_template_publication_starts_from_sanitized_run_bound_bundle(
@@ -293,7 +284,9 @@ def test_template_publication_blocks_secret_before_draft_or_session(tmp_path: Pa
         store=ContractStore(database),
     )
     payload = _contract_payload("alice")
-    payload["runtime"] = {"environment": {"api_token": "ghp_12345678901234567890"}}
+    payload["runtime"] = {
+        "environment": {"api_token": "ghp_12345678901234567890"}
+    }
     contract = contracts.store.create_contract(
         owner="alice",
         recipe_version_id="recipe_python_cpu@1.0.0",

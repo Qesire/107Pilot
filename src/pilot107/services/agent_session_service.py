@@ -177,7 +177,10 @@ class AgentSessionService:
         ):
             raise ValueError("formal result handoff requires terminal formal lineage")
         binding = _formal_approval_binding(contract)
-        if binding["approved_by"] != run.owner or binding["validation_run_id"] != run.parent_run_id:
+        if (
+            binding["approved_by"] != run.owner
+            or binding["validation_run_id"] != run.parent_run_id
+        ):
             raise ValueError("formal result handoff lineage binding is invalid")
         return self.control_repository.enqueue(
             message_id=f"agent-formal-result:{run.run_id}",
@@ -303,7 +306,8 @@ def _formal_approval_binding(contract: ContractRecord) -> dict[str, str]:
     matches = [
         item
         for item in contract.field_sources
-        if item.get("source") == "agent_formal_approval" and item.get("field") == "formal_run"
+        if item.get("source") == "agent_formal_approval"
+        and item.get("field") == "formal_run"
     ]
     if len(matches) != 1:
         raise ValueError("formal Contract approval binding is missing")

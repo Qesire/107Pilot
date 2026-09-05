@@ -66,7 +66,9 @@ class FileUploadServiceTests(unittest.TestCase):
         offset = 0
         while offset < len(payload):
             chunk = payload[offset : offset + append_size]
-            new_offset = self.service.append_bytes(session.upload_id, self.owner, offset, chunk)
+            new_offset = self.service.append_bytes(
+                session.upload_id, self.owner, offset, chunk
+            )
             self.assertEqual(new_offset, offset + len(chunk))
             offset = new_offset
         return session
@@ -95,7 +97,9 @@ class FileUploadServiceTests(unittest.TestCase):
         self.assertEqual(session.received_bytes, 0)
         self.assertEqual(session.state, UploadState.INITIALIZED)
 
-        new_offset = self.service.append_bytes(session.upload_id, self.owner, 0, b"A" * _APPEND)
+        new_offset = self.service.append_bytes(
+            session.upload_id, self.owner, 0, b"A" * _APPEND
+        )
         self.assertEqual(new_offset, _APPEND)
         refreshed = self.service.get_session(session.upload_id, self.owner)
         self.assertEqual(refreshed.received_bytes, _APPEND)
@@ -112,9 +116,13 @@ class FileUploadServiceTests(unittest.TestCase):
         )
         self.service.append_bytes(session.upload_id, self.owner, 0, b"A" * _APPEND)
         # Retry the same range, then continue; the file must not double-count.
-        again = self.service.append_bytes(session.upload_id, self.owner, 0, b"A" * _APPEND)
+        again = self.service.append_bytes(
+            session.upload_id, self.owner, 0, b"A" * _APPEND
+        )
         self.assertEqual(again, _APPEND)
-        final = self.service.append_bytes(session.upload_id, self.owner, _APPEND, b"B" * _APPEND)
+        final = self.service.append_bytes(
+            session.upload_id, self.owner, _APPEND, b"B" * _APPEND
+        )
         self.assertEqual(final, len(payload))
 
         result = self.service.complete(session.upload_id, self.owner)
@@ -131,7 +139,9 @@ class FileUploadServiceTests(unittest.TestCase):
         self.service.append_bytes(session.upload_id, self.owner, 0, b"A" * _APPEND)
         with self.assertRaises(UploadError) as ctx:
             # Skip a range: offset 32 is ahead of the 16 bytes received.
-            self.service.append_bytes(session.upload_id, self.owner, _APPEND * 2, b"C" * _APPEND)
+            self.service.append_bytes(
+                session.upload_id, self.owner, _APPEND * 2, b"C" * _APPEND
+            )
         self.assertEqual(ctx.exception.code, "UPLOAD.OFFSET_MISMATCH")
         self.assertEqual(ctx.exception.status, 409)
 
@@ -197,7 +207,9 @@ class FileUploadServiceTests(unittest.TestCase):
 
         self.assertEqual(result.state, UploadState.EXTRACTED)
         self.assertEqual(result.extracted_members, 1)
-        self.assertEqual((self.cluster_root / "run.sh").read_bytes(), b"#!/bin/bash\necho hi\n")
+        self.assertEqual(
+            (self.cluster_root / "run.sh").read_bytes(), b"#!/bin/bash\necho hi\n"
+        )
 
     def test_abort_is_terminal(self) -> None:
         session = self._upload(b"E" * _APPEND)
@@ -209,7 +221,9 @@ class FileUploadServiceTests(unittest.TestCase):
 
     def test_cleanup_expired_removes_old_sessions(self) -> None:
         session = self._upload(b"F" * _APPEND)
-        future = datetime.now(UTC) + timedelta(seconds=self.service.session_ttl_seconds + 10)
+        future = datetime.now(UTC) + timedelta(
+            seconds=self.service.session_ttl_seconds + 10
+        )
         removed = self.service.cleanup_expired(now=future)
         self.assertEqual(removed, 1)
         with self.assertRaises(UploadNotFound):
@@ -387,10 +401,8 @@ class UploadSessionStoreTests(unittest.TestCase):
 
     def test_session_persisted_on_create(self) -> None:
         session = self.service.create_session(
-            owner=self.owner,
-            target_path=self.target,
-            filename="test.bin",
-            total_size=32,
+            owner=self.owner, target_path=self.target,
+            filename="test.bin", total_size=32,
         )
         row = self.store.get(session.upload_id)
         self.assertIsNotNone(row)
@@ -410,10 +422,8 @@ class UploadSessionStoreTests(unittest.TestCase):
     def test_session_survives_restart(self) -> None:
         """A new service instance reloads non-terminal sessions from the store."""
         session = self.service.create_session(
-            owner=self.owner,
-            target_path=self.target,
-            filename="restart.bin",
-            total_size=16,
+            owner=self.owner, target_path=self.target,
+            filename="restart.bin", total_size=16,
         )
         self.service.append_bytes(session.upload_id, self.owner, 0, b"A" * 8)
         # Simulate restart: new service with same store
@@ -431,10 +441,8 @@ class UploadSessionStoreTests(unittest.TestCase):
 
     def test_append_update_persisted(self) -> None:
         session = self.service.create_session(
-            owner=self.owner,
-            target_path=self.target,
-            filename="chunk.bin",
-            total_size=32,
+            owner=self.owner, target_path=self.target,
+            filename="chunk.bin", total_size=32,
         )
         self.service.append_bytes(session.upload_id, self.owner, 0, b"A" * _APPEND)
         row = self.store.get(session.upload_id)
@@ -446,11 +454,8 @@ class UploadSessionStoreTests(unittest.TestCase):
         payload = b"X" * 32
         sha = _digest(payload)
         session = self.service.create_session(
-            owner=self.owner,
-            target_path=self.target,
-            filename="done.bin",
-            total_size=32,
-            sha256_expected=sha,
+            owner=self.owner, target_path=self.target,
+            filename="done.bin", total_size=32, sha256_expected=sha,
         )
         self.service.append_bytes(session.upload_id, self.owner, 0, payload)
         self.service.complete(session.upload_id, self.owner)
@@ -461,12 +466,12 @@ class UploadSessionStoreTests(unittest.TestCase):
 
     def test_cleanup_removes_from_store(self) -> None:
         session = self.service.create_session(
-            owner=self.owner,
-            target_path=self.target,
-            filename="expire.bin",
-            total_size=16,
+            owner=self.owner, target_path=self.target,
+            filename="expire.bin", total_size=16,
         )
-        future = datetime.now(UTC) + timedelta(seconds=self.service.session_ttl_seconds + 10)
+        future = datetime.now(UTC) + timedelta(
+            seconds=self.service.session_ttl_seconds + 10
+        )
         self.service.cleanup_expired(now=future)
         self.assertIsNone(self.store.get(session.upload_id))
 
@@ -477,7 +482,8 @@ class UploadSessionStoreTests(unittest.TestCase):
 
         conn = sqlite3.connect(str(legacy))
         conn.execute(
-            "CREATE TABLE upload_sessions (upload_id TEXT PRIMARY KEY, received_chunks_json TEXT)"
+            "CREATE TABLE upload_sessions ("
+            "upload_id TEXT PRIMARY KEY, received_chunks_json TEXT)"
         )
         conn.commit()
         conn.close()
@@ -511,40 +517,30 @@ class UploadQuotaTests(unittest.TestCase):
 
     def test_concurrent_session_limit_enforced(self) -> None:
         self.service.create_session(
-            owner="alice",
-            target_path=self.target,
-            filename="a.bin",
-            total_size=100,
+            owner="alice", target_path=self.target,
+            filename="a.bin", total_size=100,
         )
         self.service.create_session(
-            owner="alice",
-            target_path=self.target,
-            filename="b.bin",
-            total_size=100,
+            owner="alice", target_path=self.target,
+            filename="b.bin", total_size=100,
         )
         with self.assertRaises(UploadError) as ctx:
             self.service.create_session(
-                owner="alice",
-                target_path=self.target,
-                filename="c.bin",
-                total_size=100,
+                owner="alice", target_path=self.target,
+                filename="c.bin", total_size=100,
             )
         self.assertEqual(ctx.exception.code, "UPLOAD.QUOTA_CONCURRENT")
         self.assertEqual(ctx.exception.status, 429)
 
     def test_byte_quota_enforced(self) -> None:
         self.service.create_session(
-            owner="alice",
-            target_path=self.target,
-            filename="big.bin",
-            total_size=900,
+            owner="alice", target_path=self.target,
+            filename="big.bin", total_size=900,
         )
         with self.assertRaises(UploadError) as ctx:
             self.service.create_session(
-                owner="alice",
-                target_path=self.target,
-                filename="extra.bin",
-                total_size=200,
+                owner="alice", target_path=self.target,
+                filename="extra.bin", total_size=200,
             )
         self.assertEqual(ctx.exception.code, "UPLOAD.QUOTA_BYTES")
         self.assertEqual(ctx.exception.status, 429)
@@ -552,16 +548,12 @@ class UploadQuotaTests(unittest.TestCase):
     def test_partial_counts_bytes_but_not_active(self) -> None:
         """Parallel partial buckets fill the byte cap, not the concurrency cap."""
         self.service.create_session(
-            owner="alice",
-            target_path=self.target,
-            filename="a.bin",
-            total_size=100,
+            owner="alice", target_path=self.target,
+            filename="a.bin", total_size=100,
         )
         self.service.create_session(
-            owner="alice",
-            target_path=self.target,
-            filename="b.bin",
-            total_size=100,
+            owner="alice", target_path=self.target,
+            filename="b.bin", total_size=100,
         )
         # Two whole sessions already hold both active slots, but a partial is
         # still admitted because partials skip the concurrency cap.
@@ -570,10 +562,8 @@ class UploadQuotaTests(unittest.TestCase):
         # A third whole session is still rejected by the concurrency cap.
         with self.assertRaises(UploadError) as ctx:
             self.service.create_session(
-                owner="alice",
-                target_path=self.target,
-                filename="c.bin",
-                total_size=100,
+                owner="alice", target_path=self.target,
+                filename="c.bin", total_size=100,
             )
         self.assertEqual(ctx.exception.code, "UPLOAD.QUOTA_CONCURRENT")
 
@@ -600,24 +590,18 @@ class UploadQuotaTests(unittest.TestCase):
 
     def test_terminal_sessions_free_quota(self) -> None:
         s1 = self.service.create_session(
-            owner="alice",
-            target_path=self.target,
-            filename="a.bin",
-            total_size=100,
+            owner="alice", target_path=self.target,
+            filename="a.bin", total_size=100,
         )
         self.service.create_session(
-            owner="alice",
-            target_path=self.target,
-            filename="b.bin",
-            total_size=100,
+            owner="alice", target_path=self.target,
+            filename="b.bin", total_size=100,
         )
         self.service.abort(s1.upload_id, "alice")
         # Now one slot is free
         s3 = self.service.create_session(
-            owner="alice",
-            target_path=self.target,
-            filename="c.bin",
-            total_size=100,
+            owner="alice", target_path=self.target,
+            filename="c.bin", total_size=100,
         )
         self.assertIsNotNone(s3.upload_id)
 
@@ -625,23 +609,17 @@ class UploadQuotaTests(unittest.TestCase):
         bob_target = str(Path(self._tmp.name) / "home" / "bob")
         Path(bob_target).mkdir(parents=True)
         self.service.create_session(
-            owner="alice",
-            target_path=self.target,
-            filename="a.bin",
-            total_size=100,
+            owner="alice", target_path=self.target,
+            filename="a.bin", total_size=100,
         )
         self.service.create_session(
-            owner="alice",
-            target_path=self.target,
-            filename="b.bin",
-            total_size=100,
+            owner="alice", target_path=self.target,
+            filename="b.bin", total_size=100,
         )
         # Bob still has quota
         session = self.service.create_session(
-            owner="bob",
-            target_path=bob_target,
-            filename="x.bin",
-            total_size=100,
+            owner="bob", target_path=bob_target,
+            filename="x.bin", total_size=100,
         )
         self.assertEqual(session.owner, "bob")
 

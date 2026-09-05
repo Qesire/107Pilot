@@ -48,7 +48,9 @@ class RepairTicketRoutes:
                             "limit": limit,
                             "has_more": next_position is not None,
                             "next_cursor": (
-                                f"{next_position[0]}|{next_position[1]}" if next_position else None
+                                f"{next_position[0]}|{next_position[1]}"
+                                if next_position
+                                else None
                             ),
                         },
                     },

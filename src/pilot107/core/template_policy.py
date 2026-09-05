@@ -164,7 +164,11 @@ class TemplatePublicationGate:
                 canonical = effective
             findings.extend(
                 TemplateGateFinding(
-                    severity=("block" if finding.severity == PreflightSeverity.BLOCK else "warn"),
+                    severity=(
+                        "block"
+                        if finding.severity == PreflightSeverity.BLOCK
+                        else "warn"
+                    ),
                     code=finding.code,
                     message=finding.message,
                     source="contract",
@@ -234,8 +238,12 @@ def authorize_template_review(
     raise PermissionError("template review requires reviewer or admin authority")
 
 
-def _scopes_for_actor(memberships: Mapping[str, frozenset[str]], actor: str) -> frozenset[str]:
-    return frozenset(scope for scope, actors in memberships.items() if actor in actors)
+def _scopes_for_actor(
+    memberships: Mapping[str, frozenset[str]], actor: str
+) -> frozenset[str]:
+    return frozenset(
+        scope for scope, actors in memberships.items() if actor in actors
+    )
 
 
 def _publication_findings(publication: dict[str, Any]) -> list[TemplateGateFinding]:
@@ -256,7 +264,9 @@ def _publication_findings(publication: dict[str, Any]) -> list[TemplateGateFindi
     ):
         value = publication.get(key)
         if not isinstance(value, str) or not value.strip():
-            findings.append(_block(code, f"publication.{key} is required", source="publication"))
+            findings.append(
+                _block(code, f"publication.{key} is required", source="publication")
+            )
     return findings
 
 

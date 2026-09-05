@@ -805,7 +805,9 @@ class SQLiteProjectStore:
             raise ProjectConflict("Publication version changed during update")
         return publication_from_payload(payload)
 
-    def create_builder_submission(self, record: BuilderSubmissionRecord) -> BuilderSubmissionRecord:
+    def create_builder_submission(
+        self, record: BuilderSubmissionRecord
+    ) -> BuilderSubmissionRecord:
         from pilot107.agent.builder_workflow import BuilderSubmissionRecord
 
         if not isinstance(record, BuilderSubmissionRecord):
@@ -813,7 +815,9 @@ class SQLiteProjectStore:
         workspace = self.get_workspace(record.workspace_id, owner=record.owner)
         if workspace.project_id != record.project_id:
             raise ProjectConflict("Builder submission Project does not own the Workspace")
-        receipt_json = None if record.receipt is None else _canonical_json(dict(record.receipt))
+        receipt_json = (
+            None if record.receipt is None else _canonical_json(dict(record.receipt))
+        )
         with self.connect() as connection:
             connection.execute(
                 """
@@ -827,7 +831,8 @@ class SQLiteProjectStore:
                 _builder_submission_values(record, receipt_json=receipt_json),
             )
             row = connection.execute(
-                "SELECT * FROM agent_builder_submissions WHERE owner = ? AND request_key = ?",
+                "SELECT * FROM agent_builder_submissions "
+                "WHERE owner = ? AND request_key = ?",
                 (record.owner, record.request_key),
             ).fetchone()
         if row is None:
@@ -836,12 +841,15 @@ class SQLiteProjectStore:
         _assert_builder_submission_replay(result, record)
         return result
 
-    def get_builder_submission(self, submission_id: str, *, owner: str) -> BuilderSubmissionRecord:
+    def get_builder_submission(
+        self, submission_id: str, *, owner: str
+    ) -> BuilderSubmissionRecord:
         _key(submission_id, "submission_id")
         _key(owner, "owner")
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM agent_builder_submissions WHERE submission_id = ? AND owner = ?",
+                "SELECT * FROM agent_builder_submissions "
+                "WHERE submission_id = ? AND owner = ?",
                 (submission_id, owner),
             ).fetchone()
         if row is None:
@@ -855,7 +863,8 @@ class SQLiteProjectStore:
         _key(request_key, "request_key")
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM agent_builder_submissions WHERE owner = ? AND request_key = ?",
+                "SELECT * FROM agent_builder_submissions "
+                "WHERE owner = ? AND request_key = ?",
                 (owner, request_key),
             ).fetchone()
         return None if row is None else _row_to_builder_submission(row)
@@ -883,7 +892,9 @@ class SQLiteProjectStore:
                 "ORDER BY updated_at DESC, submission_id DESC LIMIT 100",
                 (owner, session_id, project_id, workspace_id),
             ).fetchall()
-        return _latest_builder_submission([_row_to_builder_submission(row) for row in rows])
+        return _latest_builder_submission(
+            [_row_to_builder_submission(row) for row in rows]
+        )
 
     def list_builder_submissions(
         self,
@@ -927,7 +938,9 @@ class SQLiteProjectStore:
             raise ValueError("Builder submission version must advance by one")
         current = self.get_builder_submission(record.submission_id, owner=record.owner)
         _assert_builder_submission_identity(current, record)
-        receipt_json = None if record.receipt is None else _canonical_json(dict(record.receipt))
+        receipt_json = (
+            None if record.receipt is None else _canonical_json(dict(record.receipt))
+        )
         with self.connect() as connection:
             cursor = connection.execute(
                 """
@@ -953,7 +966,9 @@ class SQLiteProjectStore:
                 ),
             )
         if cursor.rowcount != 1:
-            raise BuilderSubmissionConflict("Builder submission version changed during update")
+            raise BuilderSubmissionConflict(
+                "Builder submission version changed during update"
+            )
         return record
 
     def _now(self) -> str:
@@ -1133,7 +1148,9 @@ def _latest_builder_submission(
     if not records:
         return None
     referenced = {
-        record.base_change_set_id for record in records if record.base_change_set_id is not None
+        record.base_change_set_id
+        for record in records
+        if record.base_change_set_id is not None
     }
     tips = [
         record

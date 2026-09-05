@@ -60,7 +60,10 @@ def test_live_schedule_receipt_boundary_is_not_legacy() -> None:
 
 def test_capsule_policy_is_explicit_not_inferred_from_vm_mode() -> None:
     assert AgentTaskCompletionPolicy("evidence_required").requires_capsule is False
-    assert AgentTaskCompletionPolicy("evidence_and_capsule_required").requires_capsule is True
+    assert (
+        AgentTaskCompletionPolicy("evidence_and_capsule_required").requires_capsule
+        is True
+    )
 
 
 def test_gate_receipt_carries_legacy_workspace_boundary_without_inventing_revision() -> None:
@@ -222,7 +225,9 @@ def test_gate_receipt_rejects_non_terminal_run_states(run_terminal_state: str) -
 def test_task_receipt_bindings_follow_linked_run_and_admitted_boundary(
     tmp_path: Path,
 ) -> None:
-    task, _ = _create(SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock()))
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
     admitted = AgentTaskScheduleReceipt(
         task_id=task.task_id,
         run_id="run-1",
@@ -239,7 +244,9 @@ def test_task_receipt_bindings_follow_linked_run_and_admitted_boundary(
 
 
 def test_task_gate_receipt_requires_task_and_linked_run(tmp_path: Path) -> None:
-    task, _ = _create(SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock()))
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
     gate = AgentTaskGateReceipt(
         task_id=task.task_id,
         run_id="run-1",
@@ -579,7 +586,9 @@ def test_finalize_requires_policy_compatible_ready_capsule(tmp_path: Path) -> No
         completion_policy=capsule_task.completion_policy,
     )
     refreshed = store.get_task(task.task_id, owner="alice")
-    renewed = store.renew_task(replace(lease, version=refreshed.version), lease_seconds=30)
+    renewed = store.renew_task(
+        replace(lease, version=refreshed.version), lease_seconds=30
+    )
     with pytest.raises(AgentTaskConflict, match="Capsule"):
         store.finalize_task(
             task.task_id,
@@ -939,17 +948,14 @@ def test_direct_schedule_finalize_replay_and_gate_key_conflict(tmp_path: Path) -
         causation_root_key="cause-direct",
         stage_operation_key="gate-direct",
     )
-    assert (
-        store.finalize_task(
-            task.task_id,
-            lease=finalize_lease,
-            gate_receipt=gate,
-            result=AgentTaskResult.succeeded(("evidence-1",)),
-            causation_root_key="cause-direct",
-            stage_operation_key="gate-direct",
-        )
-        == first
-    )
+    assert store.finalize_task(
+        task.task_id,
+        lease=finalize_lease,
+        gate_receipt=gate,
+        result=AgentTaskResult.succeeded(("evidence-1",)),
+        causation_root_key="cause-direct",
+        stage_operation_key="gate-direct",
+    ) == first
     with pytest.raises(AgentTaskConflict, match="identity"):
         store.finalize_task(
             task.task_id,
@@ -1000,7 +1006,9 @@ def test_input_required_is_not_a_progress_gate_target(tmp_path: Path) -> None:
 def test_capsule_required_policy_requires_ready_capsule_on_gate_receipt(
     tmp_path: Path,
 ) -> None:
-    task, _ = _create(SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock()))
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
     not_required = AgentTaskGateReceipt(
         task_id=task.task_id,
         run_id="run-1",
@@ -1033,7 +1041,9 @@ def test_capsule_required_policy_requires_ready_capsule_on_gate_receipt(
 
 
 def test_evidence_policy_allows_ready_capsule_as_an_extra_product(tmp_path: Path) -> None:
-    task, _ = _create(SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock()))
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
     ready = AgentTaskGateReceipt(
         task_id=task.task_id,
         run_id="run-1",
@@ -1130,7 +1140,9 @@ def test_live_boundary_is_required_when_revision_is_present(receipt_type: type) 
 
 
 def test_task_policy_must_match_schedule_receipt_policy(tmp_path: Path) -> None:
-    task, _ = _create(SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock()))
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
     receipt = AgentTaskScheduleReceipt(
         task_id=task.task_id,
         run_id="run-1",
@@ -1175,7 +1187,9 @@ def test_receipt_serializers_emit_schema_valid_full_receipts(tmp_path: Path) -> 
         capsule_state="READY",
         terminal_at="2026-08-19T00:05:00Z",
     )
-    task, _ = _create(SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock()))
+    task, _ = _create(
+        SQLiteAgentTaskStore(tmp_path / "tasks.db", clock=MutableClock())
+    )
     payload = agent_task_payload(task)
     payload.update(
         {
@@ -1190,7 +1204,11 @@ def test_receipt_serializers_emit_schema_valid_full_receipts(tmp_path: Path) -> 
     from jsonschema import Draft202012Validator
 
     schema_path = (
-        Path(__file__).resolve().parents[2] / "schemas" / "agent" / "v2" / "agent-task.schema.json"
+        Path(__file__).resolve().parents[2]
+        / "schemas"
+        / "agent"
+        / "v2"
+        / "agent-task.schema.json"
     )
     Draft202012Validator(json.loads(schema_path.read_text())).validate(payload)
     assert payload["schedule_receipt"]["workspace_revision"] == 1
@@ -1290,13 +1308,14 @@ def exercise_agent_task_store_contract(
     with pytest.raises(KeyError):
         store.get_task(task.task_id, owner="bob")
 
-    first = store.claim_task(task.task_id, owner="alice", worker_id="worker-a", lease_seconds=1)
+    first = store.claim_task(
+        task.task_id, owner="alice", worker_id="worker-a", lease_seconds=1
+    )
     assert first is not None
     assert first.fencing_token == 1
-    assert (
-        store.claim_task(task.task_id, owner="alice", worker_id="worker-b", lease_seconds=30)
-        is None
-    )
+    assert store.claim_task(
+        task.task_id, owner="alice", worker_id="worker-b", lease_seconds=30
+    ) is None
 
     linked = store.link_run(task.task_id, lease=first, run_id="run-1")
     assert linked.linked_run_id == "run-1"
@@ -1308,7 +1327,9 @@ def exercise_agent_task_store_contract(
     assert released.state is AgentTaskState.RUNNING
     assert released.lease_owner is None
     assert released.lease_expires_at is None
-    second = store.claim_task(task.task_id, owner="alice", worker_id="worker-b", lease_seconds=30)
+    second = store.claim_task(
+        task.task_id, owner="alice", worker_id="worker-b", lease_seconds=30
+    )
     assert second is not None
     assert second.fencing_token == 2
     with pytest.raises(AgentTaskConflict):
@@ -1348,10 +1369,9 @@ def exercise_agent_task_store_contract(
     )
     assert cancelled.state is AgentTaskState.CANCELLED
     assert cancelled.cancel_requested is True
-    assert (
-        store.request_cancel(cancellable.task_id, owner="alice", expected_version=cancelled.version)
-        == cancelled
-    )
+    assert store.request_cancel(
+        cancellable.task_id, owner="alice", expected_version=cancelled.version
+    ) == cancelled
 
     auth_task, _ = _create(store, request_key="validate-auth")
     auth_lease = store.claim_task(
@@ -1504,7 +1524,9 @@ def test_sqlite_agent_task_store_survives_reopen(tmp_path: Path) -> None:
     clock = MutableClock()
     task, _ = _create(SQLiteAgentTaskStore(database, clock=clock))
 
-    reopened = SQLiteAgentTaskStore(database, clock=clock).get_task(task.task_id, owner="alice")
+    reopened = SQLiteAgentTaskStore(database, clock=clock).get_task(
+        task.task_id, owner="alice"
+    )
 
     assert reopened == task
 
@@ -1541,7 +1563,11 @@ def test_agent_task_record_serializes_to_the_frozen_wire_schema(tmp_path: Path) 
     from jsonschema import Draft202012Validator
 
     schema_path = (
-        Path(__file__).resolve().parents[2] / "schemas" / "agent" / "v2" / "agent-task.schema.json"
+        Path(__file__).resolve().parents[2]
+        / "schemas"
+        / "agent"
+        / "v2"
+        / "agent-task.schema.json"
     )
     Draft202012Validator(json.loads(schema_path.read_text())).validate(payload)
     assert "request" not in payload

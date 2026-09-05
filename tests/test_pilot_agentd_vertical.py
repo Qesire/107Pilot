@@ -134,7 +134,9 @@ def test_faux_smoke_exercises_four_tasks_and_cancel_restore() -> None:
 
 def test_campus_smoke_safely_skips_without_agentd_configuration() -> None:
     environment = {
-        key: value for key, value in os.environ.items() if not key.startswith("PILOT107_AGENTD_")
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("PILOT107_AGENTD_")
     }
 
     completed = subprocess.run(

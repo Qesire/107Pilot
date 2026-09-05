@@ -82,7 +82,7 @@ class FakeExecutor:
 
             raise SlurmTransportError(f"not a regular file: {path}")
         buffer = self.files[path]
-        return _b64(bytes(buffer[offset : offset + length])), len(buffer)
+        return _b64(bytes(buffer[offset:offset + length])), len(buffer)
 
     def file_sha256(self, *, path, owner, timeout_seconds=30.0) -> str:
         self._check(path)
@@ -102,12 +102,13 @@ class FakeExecutor:
         names: dict[str, str] = {}
         for dir_path in self.dirs:
             if dir_path.startswith(prefix) and dir_path != path:
-                names[dir_path[len(prefix) :].split("/")[0]] = "dir"
+                names[dir_path[len(prefix):].split("/")[0]] = "dir"
         for file_path in self.files:
             if file_path.startswith(prefix):
-                names[file_path[len(prefix) :].split("/")[0]] = "file"
+                names[file_path[len(prefix):].split("/")[0]] = "file"
         entries = [
-            FileEntry(name=name, type=kind, size=0, mtime=0) for name, kind in sorted(names.items())
+            FileEntry(name=name, type=kind, size=0, mtime=0)
+            for name, kind in sorted(names.items())
         ]
         offset = int(cursor or "0")
         page_entries = entries[offset : offset + limit]
@@ -150,7 +151,9 @@ class FakeExecutor:
         self.files.pop(path, None)
         self.dirs.discard(path)
 
-    def rename_path(self, *, path, new_path, owner, overwrite=False, timeout_seconds=30.0) -> None:
+    def rename_path(
+        self, *, path, new_path, owner, overwrite=False, timeout_seconds=30.0
+    ) -> None:
         self._check(path)
         self._check(new_path)
         if path in self.files:
@@ -186,7 +189,9 @@ class FakeExecutor:
         self.extract_calls.append((archive_path, dest_dir))
         return 3
 
-    def create_archive(self, *, paths, dest_dir, archive_name, owner, timeout_seconds=120.0):
+    def create_archive(
+        self, *, paths, dest_dir, archive_name, owner, timeout_seconds=120.0
+    ):
         self._check(dest_dir)
         for item in paths:
             self._check(item)
@@ -212,7 +217,9 @@ class FileUploadApiTests(unittest.TestCase):
                 store=run_store,
                 evidence_store=EvidenceStore(root / "evidence"),
             ),
-            file_routes=FileRoutes(upload_service=upload_service, executor=self.executor),
+            file_routes=FileRoutes(
+                upload_service=upload_service, executor=self.executor
+            ),
             auth_required=True,
         )
 
@@ -458,7 +465,9 @@ class FileUploadApiTests(unittest.TestCase):
         self.assertEqual(response.status, 204)
         assert response.headers is not None
         self.assertEqual(response.headers["Tus-Version"], "1.0.0")
-        self.assertEqual(response.headers["Tus-Extension"], "creation,termination,concatenation")
+        self.assertEqual(
+            response.headers["Tus-Extension"], "creation,termination,concatenation"
+        )
         self.assertIn("Tus-Max-Size", response.headers)
 
     def test_tus_concat_merges_three_partials(self) -> None:
@@ -491,7 +500,9 @@ class FileUploadApiTests(unittest.TestCase):
         completed = self._complete(merged_id)
         self.assertEqual(completed.status, 200, completed.payload)
         self.assertEqual(completed.payload["state"], "written")
-        self.assertEqual(bytes(self.executor.files["/public/home/alice/merged.bin"]), payload)
+        self.assertEqual(
+            bytes(self.executor.files["/public/home/alice/merged.bin"]), payload
+        )
         # Partials are cleaned up after the merge.
         for partial_id in partial_ids:
             self.assertEqual(self._head(partial_id).status, 404)
@@ -570,7 +581,9 @@ class FileUploadApiTests(unittest.TestCase):
         self.assertEqual(fetched.payload["received_bytes"], 32)
         self.assertFalse(fetched.payload["is_partial"])
 
-        listed = self.api.handle_get("/api/v1/files/uploads", headers=self._headers("alice"))
+        listed = self.api.handle_get(
+            "/api/v1/files/uploads", headers=self._headers("alice")
+        )
         self.assertEqual(listed.status, 200)
         self.assertEqual(len(listed.payload["items"]), 1)
 
@@ -608,7 +621,9 @@ class FileUploadApiTests(unittest.TestCase):
     def test_usage_route_defaults_to_home(self) -> None:
         self.executor.files["/public/home/alice/a.txt"] = bytearray(b"12345")
         self.executor.files["/public/home/alice/sub/b.txt"] = bytearray(b"678")
-        response = self.api.handle_get("/api/v1/files/usage", headers=self._headers("alice"))
+        response = self.api.handle_get(
+            "/api/v1/files/usage", headers=self._headers("alice")
+        )
         self.assertEqual(response.status, 200)
         self.assertEqual(response.payload["home"], "/public/home/alice")
         self.assertEqual(response.payload["used_bytes"], 8)
@@ -665,7 +680,9 @@ class FileUploadApiTests(unittest.TestCase):
             headers=self._headers("alice"),
         )
         self.assertEqual(response.status, 201, response.payload)
-        self.assertEqual(response.payload["path"], "/public/home/alice/bundle.tar.gz")
+        self.assertEqual(
+            response.payload["path"], "/public/home/alice/bundle.tar.gz"
+        )
         self.assertIn("/public/home/alice/bundle.tar.gz", self.executor.files)
 
     def test_archive_requires_paths(self) -> None:
@@ -786,7 +803,9 @@ class FileUploadQuotaApiTests(unittest.TestCase):
                 store=run_store,
                 evidence_store=EvidenceStore(root / "evidence"),
             ),
-            file_routes=FileRoutes(upload_service=upload_service, executor=self.executor),
+            file_routes=FileRoutes(
+                upload_service=upload_service, executor=self.executor
+            ),
             auth_required=True,
         )
 

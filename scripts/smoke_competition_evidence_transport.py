@@ -21,9 +21,7 @@ ENV_FILE = Path(
 if not ENV_FILE.exists():
     ENV_FILE = COMPOSE_DIR / ".env.competition.example"
 
-BASE_URL = os.environ.get("PILOT107_COMPETITION_BASE_URL", "https://127.0.0.1:8443/api/v1").rstrip(
-    "/"
-)
+BASE_URL = os.environ.get("PILOT107_COMPETITION_BASE_URL", "https://127.0.0.1:8443/api/v1").rstrip("/")
 HEADERS = {"Content-Type": "application/json", "X-Pilot107-User": "alice"}
 SSL_CONTEXT = ssl._create_unverified_context() if BASE_URL.startswith("https://") else None
 EXPECTED_TRANSPORT = os.environ.get(

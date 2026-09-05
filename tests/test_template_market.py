@@ -144,7 +144,8 @@ class TemplateMarketStoreTests(unittest.TestCase):
                 str(row[1]) for row in conn.execute("PRAGMA table_info(template_adoptions)")
             }
             verification_columns = {
-                str(row[1]) for row in conn.execute("PRAGMA table_info(template_verifications)")
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(template_verifications)")
             }
             history = conn.execute(
                 "SELECT migration_id FROM schema_migrations WHERE migration_id = ?",
@@ -541,7 +542,9 @@ class TemplateMarketStoreTests(unittest.TestCase):
     def test_publication_gate_rejects_unsupported_raw_sbatch_directive(self) -> None:
         payload = self._contract()
         payload["extensions"] = {
-            "advanced": {"raw_sbatch": "#SBATCH --uid=0\n#SBATCH --exclusive=true"}
+            "advanced": {
+                "raw_sbatch": "#SBATCH --uid=0\n#SBATCH --exclusive=true"
+            }
         }
         draft = self.store.create_draft(
             owner="alice",
@@ -604,7 +607,9 @@ class TemplateMarketStoreTests(unittest.TestCase):
         self.store.decide_review(
             review.review_id,
             principal=self._reviewer(
-                course_scope=scope_key if visibility == TemplateVisibility.COURSE else None
+                course_scope=scope_key
+                if visibility == TemplateVisibility.COURSE
+                else None
             ),
             expected_version=1,
             approve=True,

@@ -25,7 +25,6 @@ _OWNER = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _SNAPSHOT_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 VM_SLURM_SOURCE_NAME = "vm-slurm"
 
-
 class PlatformSnapshotStoreError(ValueError):
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message)
@@ -321,7 +320,9 @@ class PlatformSnapshotStore:
         elif freshness == SnapshotFreshness.UNKNOWN:
             conditions.append("expires_at IS NULL")
         if cursor is not None:
-            conditions.append("(captured_at < ? OR (captured_at = ? AND snapshot_id < ?))")
+            conditions.append(
+                "(captured_at < ? OR (captured_at = ? AND snapshot_id < ?))"
+            )
             values.extend([cursor.primary, cursor.primary, cursor.secondary])
         with self.connect() as conn:
             rows = conn.execute(
@@ -408,7 +409,9 @@ def _parse_timestamp(value: str, *, field: str) -> datetime:
 
 def _validate_owner(owner: str) -> None:
     if not _OWNER.fullmatch(owner):
-        raise PlatformSnapshotStoreError("owner is invalid", code="PLATFORM_SNAPSHOT.OWNER_INVALID")
+        raise PlatformSnapshotStoreError(
+            "owner is invalid", code="PLATFORM_SNAPSHOT.OWNER_INVALID"
+        )
 
 
 def _validate_snapshot_id(snapshot_id: str) -> None:

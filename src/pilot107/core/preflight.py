@@ -165,7 +165,9 @@ def _detect_local_computer_path(
         )
     # ``/home`` is a legitimate shared root on some clusters, so only
     # block it when no shared root covers it.
-    if (text == "/home" or text.startswith("/home/")) and not _under_any(path, shared_roots):
+    if (text == "/home" or text.startswith("/home/")) and not _under_any(
+        path, shared_roots
+    ):
         return PreflightFinding(
             severity=_BLOCK,
             code="WORKDIR_LOCAL_PATH",
@@ -336,7 +338,9 @@ def _preflight_output_parent_paths(
             PreflightFinding(
                 severity=_BLOCK,
                 code="WORKDIR_OUTPUT_NOT_ABSOLUTE",
-                message=(f"output_parent {out_path!s} is not an absolute path"),
+                message=(
+                    f"output_parent {out_path!s} is not an absolute path"
+                ),
                 source_authority=_PREFLIGHT_AUTHORITY,
             )
         )
@@ -361,7 +365,10 @@ def _preflight_output_parent_paths(
             PreflightFinding(
                 severity=_BLOCK,
                 code="WORKDIR_OUTPUT_NOT_ALLOWED",
-                message=(f"output_parent {out_path!s} is outside the user's allowed_roots"),
+                message=(
+                    f"output_parent {out_path!s} is outside the user's "
+                    "allowed_roots"
+                ),
                 source_authority=_PREFLIGHT_AUTHORITY,
             )
         )
@@ -458,7 +465,9 @@ def preflight_workdir_fs(
             )
         )
 
-    output_path_blocked = any(f.severity == _BLOCK and "OUTPUT" in f.code for f in findings)
+    output_path_blocked = any(
+        f.severity == _BLOCK and "OUTPUT" in f.code for f in findings
+    )
     if output_parent is not None and not output_path_blocked:
         findings.extend(
             _preflight_output_parent_fs_checks(
@@ -575,7 +584,9 @@ def _preflight_output_parent_fs_checks(
                 PreflightFinding(
                     severity=_BLOCK,
                     code="WORKDIR_OUTPUT_NOT_DIRECTORY",
-                    message=(f"output_parent {out_path!s} exists but is not a directory"),
+                    message=(
+                        f"output_parent {out_path!s} exists but is not a directory"
+                    ),
                     source_authority=_PREFLIGHT_AUTHORITY,
                 )
             )

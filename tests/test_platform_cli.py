@@ -91,7 +91,9 @@ class PlatformCliTests(unittest.TestCase):
             max_output_chars=4,
         )
 
-        result = collector.run(PlatformCommandSpec(PlatformCommand.HOSTNAME, ("hostname",)))
+        result = collector.run(
+            PlatformCommandSpec(PlatformCommand.HOSTNAME, ("hostname",))
+        )
 
         self.assertEqual(executor.calls, [(["hostname"], "/public/home/alice", "alice", 10.0)])
         self.assertEqual(result.stdout, "logi")
@@ -105,7 +107,9 @@ class PlatformCliTests(unittest.TestCase):
             cwd="/public/home/alice",
         )
 
-        result = collector.run(PlatformCommandSpec(PlatformCommand.HOSTNAME, ("hostname",)))
+        result = collector.run(
+            PlatformCommandSpec(PlatformCommand.HOSTNAME, ("hostname",))
+        )
 
         self.assertEqual(result.returncode, 125)
         self.assertNotIn("secret", result.stderr)

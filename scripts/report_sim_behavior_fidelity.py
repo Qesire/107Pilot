@@ -145,7 +145,9 @@ def collect_observations(*, run_smoke: bool) -> dict[str, Any]:
         timeout_seconds=60,
     )
     observations["commands"].append(rest_result)
-    observations["rest_probe"] = load_json_if_exists(ROOT / "artifacts/probes/sim_rest_auth.json")
+    observations["rest_probe"] = load_json_if_exists(
+        ROOT / "artifacts/probes/sim_rest_auth.json"
+    )
     return observations
 
 

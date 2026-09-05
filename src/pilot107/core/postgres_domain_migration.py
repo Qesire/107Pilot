@@ -28,10 +28,14 @@ class DomainDataMigrationError(RuntimeError):
 
 _TIMESTAMPTZ_COLUMNS: dict[str, frozenset[str]] = {
     "control_leases": frozenset({"expires_at", "updated_at"}),
-    "control_outbox": frozenset({"available_at", "lease_expires_at", "created_at", "updated_at"}),
+    "control_outbox": frozenset(
+        {"available_at", "lease_expires_at", "created_at", "updated_at"}
+    ),
     "control_traces": frozenset({"created_at"}),
     "agent_sessions": frozenset({"created_at", "updated_at"}),
-    "agent_turns": frozenset({"lease_expires_at", "created_at", "started_at", "finished_at"}),
+    "agent_turns": frozenset(
+        {"lease_expires_at", "created_at", "started_at", "finished_at"}
+    ),
     "agent_turn_events": frozenset({"created_at"}),
     "agent_tool_invocations": frozenset({"created_at", "updated_at"}),
     "agent_experiment_projects": frozenset({"created_at", "updated_at"}),
@@ -63,7 +67,9 @@ _JSONB_COLUMNS: dict[str, frozenset[str]] = {
     "agent_workspace_changesets": frozenset({"payload_json"}),
     "agent_workspace_publications": frozenset({"payload_json"}),
     "agent_builder_submissions": frozenset({"receipt_json"}),
-    "agent_tasks": frozenset({"request_json", "resource_envelope_json", "result_json"}),
+    "agent_tasks": frozenset(
+        {"request_json", "resource_envelope_json", "result_json"}
+    ),
 }
 
 
@@ -327,7 +333,9 @@ def _canonical_row(table: str, row: dict[str, Any]) -> dict[str, Any]:
             try:
                 normalized[column] = json.loads(normalized[column])
             except json.JSONDecodeError as exc:
-                raise DomainDataMigrationError(f"{table}.{column} is invalid JSON") from exc
+                raise DomainDataMigrationError(
+                    f"{table}.{column} is invalid JSON"
+                ) from exc
     for column in _TIMESTAMPTZ_COLUMNS.get(table, frozenset()):
         if normalized.get(column) is not None:
             normalized[column] = _canonical_timestamptz(normalized[column], column=column)

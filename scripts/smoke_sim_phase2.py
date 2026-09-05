@@ -109,7 +109,10 @@ def _verify_real_dependency(
             owner="alice",
             workdir=Path(shared_workdir),
             script=(
-                "#!/bin/bash\nset -Eeuo pipefail\nsleep 4\nprintf parent-ready > parent.done\n"
+                "#!/bin/bash\n"
+                "set -Eeuo pipefail\n"
+                "sleep 4\n"
+                "printf parent-ready > parent.done\n"
             ),
             resource_plan=plan,
         )

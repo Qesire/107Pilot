@@ -669,7 +669,9 @@ class RawCapsuleTests(unittest.TestCase):
                         "size_bytes": artifact.size_bytes,
                         "sha256": artifact.sha256,
                         "content_type": artifact.content_type,
-                        "evidence_ref": (f"evidence://runs/{run_id}/{artifact.logical_path}"),
+                        "evidence_ref": (
+                            f"evidence://runs/{run_id}/{artifact.logical_path}"
+                        ),
                     }
                     for artifact in artifacts
                 ],

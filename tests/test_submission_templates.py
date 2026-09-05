@@ -56,4 +56,4 @@ def test_runbook_derived_templates_have_explicit_portable_resource_headers() -> 
 
     gpu = (TEMPLATE_DIR / "recipe_gpu_shard_array_atomic.yaml").read_text()
     assert "max_concurrency: 2" in gpu
-    assert 'CUDA_VISIBLE_DEVICES" != NoDevFiles' in gpu
+    assert "CUDA_VISIBLE_DEVICES\" != NoDevFiles" in gpu

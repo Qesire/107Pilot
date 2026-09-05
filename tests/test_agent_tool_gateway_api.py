@@ -182,7 +182,8 @@ def test_private_route_explains_invalid_builder_validations(tmp_path: Path) -> N
     assert response.payload["error"] == {
         "code": "AGENT.BUILDER.VALIDATIONS_INVALID",
         "message": (
-            "Builder Blueprint must declare exactly one sandbox validation and one Slurm validation"
+            "Builder Blueprint must declare exactly one sandbox validation "
+            "and one Slurm validation"
         ),
         "retryable": False,
     }
@@ -370,7 +371,9 @@ def _asgi_request(
             for message in messages
             if message["type"] == "http.response.body"
         )
-        response_headers = {key.decode().lower(): value.decode() for key, value in start["headers"]}
+        response_headers = {
+            key.decode().lower(): value.decode() for key, value in start["headers"]
+        }
         return start["status"], response_headers, response_body
 
     return asyncio.run(invoke())

@@ -49,7 +49,9 @@ def redact_sensitive_structure(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
             str(key): (
-                "<redacted>" if _is_sensitive_key(str(key)) else redact_sensitive_structure(item)
+                "<redacted>"
+                if _is_sensitive_key(str(key))
+                else redact_sensitive_structure(item)
             )
             for key, item in value.items()
         }

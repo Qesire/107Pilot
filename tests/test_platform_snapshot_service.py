@@ -193,7 +193,11 @@ class FakeCollector:
                 argv=spec.argv,
                 returncode=127 if spec.name.value == "conda_env_list_json" else 0,
                 stdout="",
-                stderr=("command unavailable" if spec.name.value == "conda_env_list_json" else ""),
+                stderr=(
+                    "command unavailable"
+                    if spec.name.value == "conda_env_list_json"
+                    else ""
+                ),
             )
             for spec in specs
         )

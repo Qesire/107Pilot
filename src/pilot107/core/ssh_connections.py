@@ -247,3 +247,4 @@ def _row_to_record(row: sqlite3.Row) -> SshConnectionRecord:
         checked_at=None if row["checked_at"] is None else str(row["checked_at"]),
         revision=int(row["revision"]),
     )
+

@@ -184,7 +184,9 @@ def run_smoke(
     ):
         raise RuntimeError(f"Sandbox did not make ChangeSet reviewable: {persisted_project}")
 
-    expires_at = (datetime.now(UTC) + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
+    expires_at = (datetime.now(UTC) + timedelta(minutes=15)).isoformat().replace(
+        "+00:00", "Z"
+    )
     session = client.post(
         "/agent-sessions",
         {
@@ -281,10 +283,8 @@ def run_smoke(
     if not isinstance(result, dict):
         raise RuntimeError(f"AgentTask has no terminal result: {task}")
     evidence_refs = result.get("evidence_refs")
-    if (
-        not isinstance(evidence_refs, list)
-        or not evidence_refs
-        or not all(isinstance(item, str) and item for item in evidence_refs)
+    if not isinstance(evidence_refs, list) or not evidence_refs or not all(
+        isinstance(item, str) and item for item in evidence_refs
     ):
         raise RuntimeError(f"AgentTask result has no Evidence references: {task}")
 
@@ -378,16 +378,24 @@ def main() -> int:
         print(json.dumps({"status": "error", "error": "PILOT107_COMPETITION_BASE_URL is required"}))
         return 2
     owner = os.environ.get("PILOT107_AGENT_TASK_OWNER", "alice")
-    smoke_id = os.environ.get("PILOT107_AGENT_TASK_SMOKE_ID", f"{int(time.time())}-{os.getpid()}")
+    smoke_id = os.environ.get(
+        "PILOT107_AGENT_TASK_SMOKE_ID", f"{int(time.time())}-{os.getpid()}"
+    )
     try:
         report = run_smoke(
             ApiClient(base_url, owner=owner),
             smoke_id=smoke_id,
-            model_profile_id=os.environ.get("PILOT107_AGENT_TASK_MODEL_PROFILE", "campus-default"),
+            model_profile_id=os.environ.get(
+                "PILOT107_AGENT_TASK_MODEL_PROFILE", "campus-default"
+            ),
             partition=os.environ.get("PILOT107_SMOKE_PARTITION", "CPU-RC"),
             qos=os.environ.get("PILOT107_SMOKE_QOS", "qos_cpu_rc"),
-            timeout_seconds=float(os.environ.get("PILOT107_AGENT_TASK_TIMEOUT_SECONDS", "360")),
-            poll_interval_seconds=float(os.environ.get("PILOT107_AGENT_TASK_POLL_SECONDS", "1")),
+            timeout_seconds=float(
+                os.environ.get("PILOT107_AGENT_TASK_TIMEOUT_SECONDS", "360")
+            ),
+            poll_interval_seconds=float(
+                os.environ.get("PILOT107_AGENT_TASK_POLL_SECONDS", "1")
+            ),
         )
     except Exception as exc:
         print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))

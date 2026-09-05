@@ -243,7 +243,9 @@ def _validate_claims(claims: AgentCapabilityClaims, *, now: int, signing: bool) 
             if scoped_id is None or _IDENTIFIER.fullmatch(scoped_id) is None:
                 raise ValueError("invalid builder capability binding")
         allowed_tools = (
-            _A2_TOOLS if claims.profile_id == "experiment_builder" else _PROJECT_WORKSPACE_TOOLS
+            _A2_TOOLS
+            if claims.profile_id == "experiment_builder"
+            else _PROJECT_WORKSPACE_TOOLS
         )
         if (
             not claims.tools
@@ -267,7 +269,8 @@ def _validate_claims(claims: AgentCapabilityClaims, *, now: int, signing: bool) 
         if "builder_context_get" in claims.tools and "read" not in claims.operations:
             raise ValueError("builder context tool lacks read operation")
         if "builder_build_submit" in claims.tools and (
-            not {"write", "validate"}.issubset(claims.operations) or claims.max_commands < 1
+            not {"write", "validate"}.issubset(claims.operations)
+            or claims.max_commands < 1
         ):
             raise ValueError("builder submission tool lacks write or validate scope")
     else:

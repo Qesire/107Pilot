@@ -151,7 +151,9 @@ class RefreshOpenapiDigestTests(unittest.TestCase):
         self.assertNotIn(_TOKEN, str(ctx.exception))
 
     def test_token_not_in_exception_message_on_http_error(self) -> None:
-        transport = _ScriptedTransport([HttpResponse(500, {"errors": [{"description": _TOKEN}]})])
+        transport = _ScriptedTransport(
+            [HttpResponse(500, {"errors": [{"description": _TOKEN}]})]
+        )
 
         with self.assertRaises(SlurmTransportError) as ctx:
             refresh_openapi_digest(transport, "v0.0.41", token=_TOKEN)
@@ -207,7 +209,9 @@ class RefreshSnapshotAndCapabilityTests(unittest.TestCase):
         self.assertEqual(updated.supports_submit, original.supports_submit)
         self.assertEqual(updated.supports_cancel, original.supports_cancel)
         self.assertEqual(updated.supports_accounting, original.supports_accounting)
-        self.assertEqual(updated.partial_payload_with_errors, original.partial_payload_with_errors)
+        self.assertEqual(
+            updated.partial_payload_with_errors, original.partial_payload_with_errors
+        )
         self.assertIsNone(original.openapi_digest)
 
     def test_snapshot_to_payload_roundtrips_refreshed_digest(self) -> None:

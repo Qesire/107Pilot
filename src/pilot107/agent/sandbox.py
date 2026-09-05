@@ -152,13 +152,17 @@ class SandboxExecutor:
             stdout_bytes = stdout_file.read(self.max_output_bytes)
             stderr_bytes = stderr_file.read(self.max_output_bytes)
 
-        overflow = stdout_size >= self.max_output_bytes or stderr_size >= self.max_output_bytes
+        overflow = (
+            stdout_size >= self.max_output_bytes or stderr_size >= self.max_output_bytes
+        )
         if timed_out:
-            status: Literal["succeeded", "failed", "timed_out", "cancelled"] = "timed_out"
-            exit_code = None
-            limit_reason: Literal["time_limit", "output_limit", "resource_limit"] | None = (
-                "time_limit"
+            status: Literal["succeeded", "failed", "timed_out", "cancelled"] = (
+                "timed_out"
             )
+            exit_code = None
+            limit_reason: Literal[
+                "time_limit", "output_limit", "resource_limit"
+            ] | None = "time_limit"
         elif overflow:
             status = "failed"
             exit_code = process.returncode
@@ -195,7 +199,10 @@ class SandboxExecutor:
         if not argv or len(argv) > 128:
             raise SandboxPolicyError("argv length exceeds the sandbox policy")
         if any(
-            not isinstance(item, str) or not item or "\0" in item or len(item.encode()) > 64 * 1024
+            not isinstance(item, str)
+            or not item
+            or "\0" in item
+            or len(item.encode()) > 64 * 1024
             for item in argv
         ):
             raise SandboxPolicyError("argv contains an invalid argument")
@@ -265,8 +272,12 @@ class SandboxExecutor:
     def _set_limits(self, timeout: float, process_limit: int) -> None:
         cpu_seconds = max(1, math.ceil(timeout))
         resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds + 1, cpu_seconds + 2))
-        resource.setrlimit(resource.RLIMIT_AS, (self.max_memory_bytes, self.max_memory_bytes))
-        resource.setrlimit(resource.RLIMIT_NPROC, (process_limit, process_limit))
+        resource.setrlimit(
+            resource.RLIMIT_AS, (self.max_memory_bytes, self.max_memory_bytes)
+        )
+        resource.setrlimit(
+            resource.RLIMIT_NPROC, (process_limit, process_limit)
+        )
         resource.setrlimit(
             resource.RLIMIT_FSIZE,
             (self.max_output_bytes, self.max_output_bytes),

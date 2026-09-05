@@ -790,7 +790,9 @@ class ContractService:
             if self.platform_snapshot_store is None
             else self.platform_snapshot_store.latest_usable(owner=contract.owner)
         )
-        platform_snapshot = None if platform_selection is None else platform_selection.record
+        platform_snapshot = (
+            None if platform_selection is None else platform_selection.record
+        )
         entitlement = (
             None
             if self.user_entitlement_store is None
@@ -816,7 +818,9 @@ class ContractService:
             effective_request=result.effective_request,
             risk_lint=result.risk_lint,
             platform_snapshot=(
-                None if platform_selection is None else platform_selection.summary_payload()
+                None
+                if platform_selection is None
+                else platform_selection.summary_payload()
             ),
         )
 

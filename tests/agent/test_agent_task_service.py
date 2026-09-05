@@ -759,7 +759,9 @@ def test_runtime_worker_builds_required_capsule_after_seal_before_ready_followup
         evidence_store=harness.evidence_store,
         capsule_root=tmp_path / "capsules",
     )
-    harness.service.capsule_authority_resolver = build_verified_capsule_authority(capsule_service)
+    harness.service.capsule_authority_resolver = build_verified_capsule_authority(
+        capsule_service
+    )
     task, _ = harness.schedule(
         completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
     )
@@ -826,7 +828,9 @@ def test_capsule_outbox_ack_crash_recovers_same_artifact_without_duplicate_follo
         evidence_store=harness.evidence_store,
         capsule_root=tmp_path / "capsules",
     )
-    harness.service.capsule_authority_resolver = build_verified_capsule_authority(capsule_service)
+    harness.service.capsule_authority_resolver = build_verified_capsule_authority(
+        capsule_service
+    )
     task, _ = harness.schedule(
         completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
     )
@@ -856,7 +860,9 @@ def test_capsule_outbox_ack_crash_recovers_same_artifact_without_duplicate_follo
     with pytest.raises(SimulatedProcessCrash):
         worker.tick()
     first = capsule_service.get_raw_capsule(running.linked_run_id)
-    first_fence = harness.run_store.get_run(running.linked_run_id).capsule_build_fencing_token
+    first_fence = harness.run_store.get_run(
+        running.linked_run_id
+    ).capsule_build_fencing_token
 
     monkeypatch.setattr(harness.control, "acknowledge", original_acknowledge)
     harness.clock.advance(31)
@@ -867,7 +873,8 @@ def test_capsule_outbox_ack_crash_recovers_same_artifact_without_duplicate_follo
     assert recovered.capsule_id == first.capsule_id
     assert recovered.manifest_sha256 == first.manifest_sha256
     assert (
-        harness.run_store.get_run(running.linked_run_id).capsule_build_fencing_token > first_fence
+        harness.run_store.get_run(running.linked_run_id).capsule_build_fencing_token
+        > first_fence
     )
     with harness.control.connect() as connection:
         rows = connection.execute(
@@ -922,7 +929,9 @@ def test_runtime_worker_lease_takeover_fences_old_builder_before_publish(
         evidence_store=harness.evidence_store,
         capsule_root=tmp_path / "capsules",
     )
-    harness.service.capsule_authority_resolver = build_verified_capsule_authority(capsule_service)
+    harness.service.capsule_authority_resolver = build_verified_capsule_authority(
+        capsule_service
+    )
     task, _ = harness.schedule(
         completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
     )
@@ -969,7 +978,10 @@ def test_runtime_worker_lease_takeover_fences_old_builder_before_publish(
     new_thread.start()
     assert new_entered_build.wait(timeout=5)
     for _ in range(100):
-        if harness.run_store.get_run(running.linked_run_id).capsule_build_fencing_token >= 2:
+        if (
+            harness.run_store.get_run(running.linked_run_id).capsule_build_fencing_token
+            >= 2
+        ):
             break
         threading.Event().wait(0.01)
     else:
@@ -1004,7 +1016,9 @@ def test_runtime_worker_lease_takeover_reuses_publish_but_rejects_old_ready(
         evidence_store=harness.evidence_store,
         capsule_root=tmp_path / "capsules",
     )
-    harness.service.capsule_authority_resolver = build_verified_capsule_authority(capsule_service)
+    harness.service.capsule_authority_resolver = build_verified_capsule_authority(
+        capsule_service
+    )
     task, _ = harness.schedule(
         completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
     )
@@ -1187,7 +1201,9 @@ def test_two_runtime_workers_publish_one_capsule_and_one_terminal_task(
         evidence_store=harness.evidence_store,
         capsule_root=tmp_path / "capsules",
     )
-    harness.service.capsule_authority_resolver = build_verified_capsule_authority(capsule_service)
+    harness.service.capsule_authority_resolver = build_verified_capsule_authority(
+        capsule_service
+    )
     task, _ = harness.schedule(
         completion_policy=AgentTaskCompletionPolicy.EVIDENCE_AND_CAPSULE_REQUIRED
     )

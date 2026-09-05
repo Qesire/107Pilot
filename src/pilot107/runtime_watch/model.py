@@ -434,7 +434,12 @@ def _non_negative_integer(value: object, label: str) -> int:
 
 
 def _bounded_text(value: object, label: str, *, maximum: int) -> str:
-    if not isinstance(value, str) or not value or len(value) > maximum or "\0" in value:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > maximum
+        or "\0" in value
+    ):
         raise ValueError(f"{label} is invalid")
     return value
 

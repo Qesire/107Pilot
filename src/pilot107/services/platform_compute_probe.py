@@ -22,7 +22,7 @@ _OUTPUT_PREFIX = "PILOT107_COMPUTE_PROBE_JSON="
 
 
 def compute_runtime_probe_script() -> str:
-    return r"""#!/bin/bash
+    return r'''#!/bin/bash
 set -eu
 python - <<'PY'
 import datetime
@@ -68,7 +68,7 @@ payload = {
 }
 print("PILOT107_COMPUTE_PROBE_JSON=" + json.dumps(payload, sort_keys=True, separators=(",", ":")))
 PY
-"""
+'''
 
 
 def parse_compute_runtime_probe_output(

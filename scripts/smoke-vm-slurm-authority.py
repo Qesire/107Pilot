@@ -248,7 +248,11 @@ def run_smoke(
 def main() -> int:
     base_url = os.environ.get("PILOT107_COMPETITION_BASE_URL", "").rstrip("/")
     if not base_url:
-        print(json.dumps({"status": "FAIL", "error": "PILOT107_COMPETITION_BASE_URL is required"}))
+        print(
+            json.dumps(
+                {"status": "FAIL", "error": "PILOT107_COMPETITION_BASE_URL is required"}
+            )
+        )
         return 2
     try:
         report = run_smoke(

@@ -57,10 +57,12 @@ class _RestInnerBackend(Protocol):
     token: str | None
 
     @property
-    def transport(self) -> Any: ...
+    def transport(self) -> Any:
+        ...
 
     @property
-    def api_version(self) -> str: ...
+    def api_version(self) -> str:
+        ...
 
     def submit(self, intent: SubmitIntent) -> SubmitReceipt: ...
 
@@ -134,7 +136,9 @@ class TokenMintingRestBackend:
             token=token,
         )
         if response.status >= 400:
-            raise SlurmTransportError(f"reconcile jobs query failed: HTTP {response.status}")
+            raise SlurmTransportError(
+                f"reconcile jobs query failed: HTTP {response.status}"
+            )
         return _filter_jobs_by_marker(
             response=response,
             user=user,

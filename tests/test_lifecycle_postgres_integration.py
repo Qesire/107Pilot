@@ -75,7 +75,9 @@ def postgres_runtime(tmp_path: Path):
     store = PostgresRunStore(dsn, compatibility_path=tmp_path / "compat.db")
     with store.connect() as connection:
         connection.execute(
-            "TRUNCATE " + ", ".join(reversed(persisted_table_names())) + " RESTART IDENTITY CASCADE"
+            "TRUNCATE "
+            + ", ".join(reversed(persisted_table_names()))
+            + " RESTART IDENTITY CASCADE"
         )
     return dsn, store
 
@@ -102,13 +104,10 @@ def test_migration_replay_and_market_session_restart(postgres_runtime, tmp_path:
     )
 
     restarted = build_market_session_store(selection=selection)
-    assert (
-        restarted.get_market_application(
-            created.session_id,
-            owner="alice",
-        )
-        == created
-    )
+    assert restarted.get_market_application(
+        created.session_id,
+        owner="alice",
+    ) == created
 
     successful = runs.create_run(
         run_id="run_postgres_share_manifest",
@@ -204,13 +203,10 @@ def test_migration_replay_and_market_session_restart(postgres_runtime, tmp_path:
             message="active",
         ),
     )
-    assert (
-        PostgresSshConnectionStore(
-            dsn,
-            compatibility_path=tmp_path / "compat.db",
-        ).get(ssh_record.connection_id)
-        == ssh_record
-    )
+    assert PostgresSshConnectionStore(
+        dsn,
+        compatibility_path=tmp_path / "compat.db",
+    ).get(ssh_record.connection_id) == ssh_record
 
 
 def test_four_workers_fence_stale_runtime_watch_and_replay_cursors(

@@ -144,7 +144,9 @@ def validate_resource_plan(
                 PreflightFinding(
                     severity=PreflightSeverity.BLOCK,
                     code="RESOURCE.GPU_TOTAL_CONFLICT",
-                    message=("gpus_total must equal nodes * gpus_per_node when both are provided"),
+                    message=(
+                        "gpus_total must equal nodes * gpus_per_node when both are provided"
+                    ),
                 )
             )
 
@@ -195,7 +197,8 @@ def validate_resource_plan(
                     severity=PreflightSeverity.WARN,
                     code="RESOURCE.QOS_LIMITS_UNKNOWN",
                     message=(
-                        f"QoS {plan.qos} has no numeric limit profile; live Slurm may still reject"
+                        f"QoS {plan.qos} has no numeric limit profile; "
+                        "live Slurm may still reject"
                     ),
                     source_authority="capability_profile",
                 )
@@ -245,7 +248,8 @@ def _validate_qos_limits(
                 severity=PreflightSeverity.BLOCK,
                 code="RESOURCE.QOS_MEMORY_LIMIT_EXCEEDED",
                 message=(
-                    f"requested {memory_gb:g}G memory exceeds QoS limit {limits.max_memory_gb}G"
+                    f"requested {memory_gb:g}G memory exceeds QoS limit "
+                    f"{limits.max_memory_gb}G"
                 ),
                 source_authority=source,
             )
@@ -262,7 +266,8 @@ def _validate_qos_limits(
                 severity=PreflightSeverity.BLOCK,
                 code="RESOURCE.QOS_WALLTIME_LIMIT_EXCEEDED",
                 message=(
-                    f"requested {wall_hours:g}h walltime exceeds QoS limit {limits.max_wall_hours}h"
+                    f"requested {wall_hours:g}h walltime exceeds QoS limit "
+                    f"{limits.max_wall_hours}h"
                 ),
                 source_authority=source,
             )

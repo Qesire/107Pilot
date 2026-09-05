@@ -72,7 +72,9 @@ class RepairTicketService:
                 "session belongs to another owner",
                 code="AUTH.FORBIDDEN",
             )
-        ticket_id = "rticket_" + hashlib.sha256(f"{owner}\0{request_key}".encode()).hexdigest()[:32]
+        ticket_id = "rticket_" + hashlib.sha256(
+            f"{owner}\0{request_key}".encode()
+        ).hexdigest()[:32]
         # Idempotency: return existing if already created.
         try:
             existing = self.repair_ticket_store.get_ticket(ticket_id)
@@ -209,7 +211,9 @@ class RepairTicketService:
                 "run belongs to another owner",
                 code="AUTH.FORBIDDEN",
             )
-        ticket_id = "rticket_" + hashlib.sha256(f"{owner}\0{request_key}".encode()).hexdigest()[:32]
+        ticket_id = "rticket_" + hashlib.sha256(
+            f"{owner}\0{request_key}".encode()
+        ).hexdigest()[:32]
         try:
             existing = self.repair_ticket_store.get_ticket(ticket_id)
             return existing, False
@@ -262,12 +266,9 @@ class RepairTicketService:
         local_test_summary: str | None = None,
         disclosure: str = "metadata_only",
     ) -> ArtifactManifest:
-        manifest_id = (
-            "manifest_"
-            + hashlib.sha256(
-                f"{owner}\0{revision}\0{run_id or ''}\0{datetime.now(UTC).isoformat()}".encode()
-            ).hexdigest()[:32]
-        )
+        manifest_id = "manifest_" + hashlib.sha256(
+            f"{owner}\0{revision}\0{run_id or ''}\0{datetime.now(UTC).isoformat()}".encode()
+        ).hexdigest()[:32]
         manifest = ArtifactManifest(
             manifest_id=manifest_id,
             owner=owner,
@@ -365,7 +366,9 @@ class RepairTicketService:
             )
         return ticket
 
-    def _build_comparison(self, source_run_id: str, derived_run_id: str) -> dict[str, Any]:
+    def _build_comparison(
+        self, source_run_id: str, derived_run_id: str
+    ) -> dict[str, Any]:
         """Compare source and derived runs for the resolution payload."""
         try:
             source_run = self.run_store.get_run(source_run_id)
@@ -390,8 +393,12 @@ class RepairTicketService:
         derived_diagnoses = self.run_store.list_diagnoses(derived_run_id)
         comparison["source_diagnosis_count"] = len(source_diagnoses)
         comparison["derived_diagnosis_count"] = len(derived_diagnoses)
-        comparison["source_diagnosis_rules"] = sorted({d.rule_id for d in source_diagnoses})
-        comparison["derived_diagnosis_rules"] = sorted({d.rule_id for d in derived_diagnoses})
+        comparison["source_diagnosis_rules"] = sorted(
+            {d.rule_id for d in source_diagnoses}
+        )
+        comparison["derived_diagnosis_rules"] = sorted(
+            {d.rule_id for d in derived_diagnoses}
+        )
         # Improvement signal.
         if source_run is not None and derived_run is not None:
             comparison["improved"] = (

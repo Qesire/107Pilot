@@ -67,8 +67,12 @@ class NoviceAcceptanceTests(unittest.TestCase):
 
     def test_duplicate_contract_or_success_run_cannot_count_twice(self) -> None:
         payload = self._study([300, 420, 480, 540, 600])
-        payload["participants"][1]["contract_id"] = payload["participants"][0]["contract_id"]
-        payload["participants"][2]["success_run_id"] = payload["participants"][0]["success_run_id"]
+        payload["participants"][1]["contract_id"] = payload["participants"][0][
+            "contract_id"
+        ]
+        payload["participants"][2]["success_run_id"] = payload["participants"][0][
+            "success_run_id"
+        ]
 
         report = evaluate_novice_acceptance(payload)
 

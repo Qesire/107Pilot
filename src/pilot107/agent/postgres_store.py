@@ -206,7 +206,9 @@ class PostgresAgentSessionStore:
                     or record.input_digest != digest
                     or record.message != message
                 ):
-                    raise AgentSessionConflict("request_key refers to different Turn content")
+                    raise AgentSessionConflict(
+                        "request_key refers to different Turn content"
+                    )
                 return record, False
             updated_session = conn.execute(
                 """
@@ -337,7 +339,9 @@ class PostgresAgentSessionStore:
             return None
         return _row_to_lease(row)
 
-    def renew_turn(self, claim: AgentTurnLease, *, lease_seconds: int) -> AgentTurnLease:
+    def renew_turn(
+        self, claim: AgentTurnLease, *, lease_seconds: int
+    ) -> AgentTurnLease:
         _positive(lease_seconds, "lease_seconds")
         now = self._now()
         expires_at = self._after(lease_seconds)
@@ -487,10 +491,8 @@ class PostgresAgentSessionStore:
         usage = _json_object(resource_usage, "resource_usage")
         outcome_value = _json_object(outcome, "outcome")
         status = str(outcome.get("status", "completed"))
-        state = (
-            "cancelled"
-            if status in {"cancelled", "aborted"}
-            else ("failed" if status == "failed" else "completed")
+        state = "cancelled" if status in {"cancelled", "aborted"} else (
+            "failed" if status == "failed" else "completed"
         )
         now = self._now()
         with self.connect() as conn:
@@ -893,7 +895,9 @@ def _row_to_session(row: Mapping[str, object]) -> AgentSessionRecord:
         source=_object(row["source_json"], "source_json") or {},
         state=AgentSessionState(str(row["state"])),
         state_version=int(str(row["state_version"])),
-        context_checkpoint=_object(row.get("context_checkpoint_json"), "context_checkpoint_json"),
+        context_checkpoint=_object(
+            row.get("context_checkpoint_json"), "context_checkpoint_json"
+        ),
         resource_usage=_object(row["resource_usage_json"], "resource_usage_json") or {},
         outcome=_object(row.get("outcome_json"), "outcome_json"),
         created_at=_iso(row["created_at"]),
@@ -916,7 +920,9 @@ def _row_to_turn(row: Mapping[str, object]) -> AgentTurnRecord:
         lease_expires_at=_iso_optional(row.get("lease_expires_at")),
         fencing_token=int(str(row["fencing_token"])),
         event_sequence=int(str(row["event_sequence"])),
-        final_checkpoint=_object(row.get("final_checkpoint_json"), "final_checkpoint_json"),
+        final_checkpoint=_object(
+            row.get("final_checkpoint_json"), "final_checkpoint_json"
+        ),
         error=_object(row.get("error_json"), "error_json"),
         created_at=_iso(row["created_at"]),
         started_at=_iso_optional(row.get("started_at")),
@@ -982,7 +988,9 @@ def _json_object(value: Mapping[str, object], label: str) -> dict[str, Any]:
     return parsed
 
 
-def _json_optional(value: Mapping[str, object] | None, label: str) -> dict[str, Any] | None:
+def _json_optional(
+    value: Mapping[str, object] | None, label: str
+) -> dict[str, Any] | None:
     return None if value is None else _json_object(value, label)
 
 

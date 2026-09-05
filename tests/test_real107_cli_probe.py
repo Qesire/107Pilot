@@ -11,7 +11,8 @@ from pilot107.core.platform_snapshot import (
 )
 
 _PROBE_PATH = (
-    Path(__file__).resolve().parents[1] / "scripts/real107_probe/probe_real107_cli_snapshot.py"
+    Path(__file__).resolve().parents[1]
+    / "scripts/real107_probe/probe_real107_cli_snapshot.py"
 )
 _SPEC = importlib.util.spec_from_file_location("pilot107_real107_cli_probe", _PROBE_PATH)
 assert _SPEC is not None
@@ -74,3 +75,4 @@ class Real107CliProbeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

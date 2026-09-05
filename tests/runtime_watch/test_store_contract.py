@@ -117,15 +117,12 @@ def exercise_store_contract(store: RuntimeWatchStore, clock: MutableClock) -> No
         lease_seconds=30,
     )
     assert lease is not None
-    assert (
-        store.claim_watch(
-            created.watch_id,
-            owner="alice",
-            worker_id="worker2",
-            lease_seconds=30,
-        )
-        is None
-    )
+    assert store.claim_watch(
+        created.watch_id,
+        owner="alice",
+        worker_id="worker2",
+        lease_seconds=30,
+    ) is None
 
     draft = _segment()
     next_cursor = _cursor(offset=len(draft.content), version=1)
@@ -259,13 +256,10 @@ def test_conflicting_content_cannot_replace_a_committed_segment_position(
             next_cursor=_cursor(offset=len(b"different\n"), version=1),
         )
 
-    assert (
-        store.read_segment_content(
-            store.list_segments("run1", owner="alice", stream="stdout")[0].segment_id,
-            owner="alice",
-        )
-        == original.content
-    )
+    assert store.read_segment_content(
+        store.list_segments("run1", owner="alice", stream="stdout")[0].segment_id,
+        owner="alice",
+    ) == original.content
 
 
 def test_rotation_advances_generation_and_resets_offset_atomically(tmp_path: Path) -> None:
@@ -398,7 +392,9 @@ def test_runtime_watch_payload_matches_the_frozen_schema(tmp_path: Path) -> None
         connection_id="connection1",
     )
     schema = json.loads(
-        Path("schemas/runtime-watch/v1/runtime-watch.schema.json").read_text(encoding="utf-8")
+        Path("schemas/runtime-watch/v1/runtime-watch.schema.json").read_text(
+            encoding="utf-8"
+        )
     )
 
     Draft202012Validator(schema).validate(runtime_watch_payload(record))

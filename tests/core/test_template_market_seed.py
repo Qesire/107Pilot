@@ -1,5 +1,4 @@
 """template_market_seed: publish preset recipes as market releases idempotently."""
-
 from __future__ import annotations
 
 import pytest
@@ -73,7 +72,9 @@ def test_seed_is_idempotent(recipe_catalog, template_store, role_directory):
     assert second.skipped == first.published
 
 
-def test_seed_records_gate_blocked_without_raising(recipe_catalog, template_store, role_directory):
+def test_seed_records_gate_blocked_without_raising(
+    recipe_catalog, template_store, role_directory
+):
     """If publication gate blocks a recipe, seed records it and continues."""
     report = seed_preset_recipes(
         catalog=recipe_catalog, store=template_store, role_directory=role_directory
@@ -84,9 +85,13 @@ def test_seed_records_gate_blocked_without_raising(recipe_catalog, template_stor
     assert report.gate_blocked >= 0
 
 
-def test_seed_uses_system_reviewer_not_self_review(recipe_catalog, template_store, role_directory):
+def test_seed_uses_system_reviewer_not_self_review(
+    recipe_catalog, template_store, role_directory
+):
     """Seed must use different actor for draft owner vs reviewer (no self-review)."""
-    seed_preset_recipes(catalog=recipe_catalog, store=template_store, role_directory=role_directory)
+    seed_preset_recipes(
+        catalog=recipe_catalog, store=template_store, role_directory=role_directory
+    )
     items, _ = template_store.list_market_page(actor="pilot107-system-author")
     assert len(items) >= 1
     for item in items:
@@ -108,7 +113,9 @@ def test_role_directory_system_reviewer_principal():
     assert TemplateReviewerRole.ADMIN in principal.roles
 
 
-def test_seed_injects_system_reviewer_into_role_directory(recipe_catalog, template_store):
+def test_seed_injects_system_reviewer_into_role_directory(
+    recipe_catalog, template_store
+):
     """Seed must publish even when the caller's role_directory does NOT contain
     the system reviewer (default config has only {'reviewer'})."""
     bare_directory = TemplateRoleDirectory(
@@ -130,7 +137,9 @@ def test_seed_injects_system_reviewer_into_role_directory(recipe_catalog, templa
         assert review.reviewer == "pilot107-system-reviewer"
 
 
-def test_seed_resumes_from_existing_editable_draft(recipe_catalog, template_store, role_directory):
+def test_seed_resumes_from_existing_editable_draft(
+    recipe_catalog, template_store, role_directory
+):
     """If a previous failed seed left an editable draft, seed resumes from it
     instead of hitting a UNIQUE constraint on template_drafts.template_id."""
     recipe = recipe_catalog.list_versions()[0]
@@ -169,12 +178,14 @@ def test_seed_resumes_from_existing_editable_draft(recipe_catalog, template_stor
         role_directory=role_directory,
     )
     assert report.published >= 1, f"seed should publish; errors={report.errors}"
-    assert all("UNIQUE constraint" not in e for e in report.errors), (
-        f"must not hit UNIQUE conflict; errors={report.errors}"
-    )
+    assert all(
+        "UNIQUE constraint" not in e for e in report.errors
+    ), f"must not hit UNIQUE conflict; errors={report.errors}"
 
 
-def test_seed_payload_passes_publication_gate(recipe_catalog, template_store, role_directory):
+def test_seed_payload_passes_publication_gate(
+    recipe_catalog, template_store, role_directory
+):
     """Seed-generated payload must pass the publication gate (no BLOCK findings).
 
     The fixture wires partition_qos=REAL107_SIM_PARTITION_QOS so the gate

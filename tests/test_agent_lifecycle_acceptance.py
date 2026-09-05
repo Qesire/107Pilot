@@ -86,7 +86,9 @@ def test_entrypoint_emits_revision_bound_manifest(
         f"accept-agent-lifecycle-{profile}.sh",
         artifact_dir=tmp_path / profile,
     )
-    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    revision = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
 
     assert payload["schema"] == SCHEMA
     assert payload["profile"] == profile

@@ -166,7 +166,11 @@ def test_blueprint_patch_diff_and_sandbox_form_reviewable_view(tmp_path: Path) -
     blueprint = ProjectBlueprint(
         goal="build an experiment",
         entrypoints=("main.py",),
-        files=(ProjectFile(path="main.py", purpose="entrypoint", classification="editable"),),
+        files=(
+            ProjectFile(
+                path="main.py", purpose="entrypoint", classification="editable"
+            ),
+        ),
         validations=(
             ProjectValidation(
                 validation_id="syntax",
@@ -175,7 +179,9 @@ def test_blueprint_patch_diff_and_sandbox_form_reviewable_view(tmp_path: Path) -
                 expected_outputs=(),
             ),
         ),
-        contract_intent=ProjectContractIntent(recipe_version_id=None, resource_hints={}),
+        contract_intent=ProjectContractIntent(
+            recipe_version_id=None, resource_hints={}
+        ),
         expected_outputs=(),
         dependencies=(),
         open_questions=(),
@@ -241,7 +247,9 @@ def test_patch_batch_is_prevalidated_before_any_file_is_mutated(tmp_path: Path) 
             ),
         )
 
-    assert not Path(created.workspace.local_root, "would-have-been-created.py").exists()
+    assert not Path(
+        created.workspace.local_root, "would-have-been-created.py"
+    ).exists()
     assert service.get_project(created.project.project_id, owner="alice").change_sets == ()
 
 
@@ -257,7 +265,9 @@ def test_existing_origin_produces_reviewable_multifile_copy_without_source_mutat
         request_key="existing",
         source_ref="/public/home/alice/exp",
     )
-    digests = {item.path: item.source_sha256 for item in created.workspace.snapshot.entries}
+    digests = {
+        item.path: item.source_sha256 for item in created.workspace.snapshot.entries
+    }
 
     change_set = service.apply_patches(
         project_id=created.project.project_id,
@@ -285,8 +295,12 @@ def test_existing_origin_produces_reviewable_multifile_copy_without_source_mutat
 
 def test_project_tool_handlers_reject_cross_project_workspace(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    first = service.create_project(owner="alice", origin="blank", goal="one", request_key="one")
-    second = service.create_project(owner="alice", origin="blank", goal="two", request_key="two")
+    first = service.create_project(
+        owner="alice", origin="blank", goal="one", request_key="one"
+    )
+    second = service.create_project(
+        owner="alice", origin="blank", goal="two", request_key="two"
+    )
     handler = service.build_tool_handlers()["workspace_read"]
 
     with pytest.raises(Exception, match="Workspace"):
@@ -314,7 +328,9 @@ def test_project_blueprint_tool_saves_typed_blueprint_and_enforces_binding(
         goal="Verify second-order heat diffusion convergence.",
         entrypoints=("scripts/run_experiment.sh",),
         files=(
-            ProjectFile(path="src/heat2d.c", purpose="OpenMP solver", classification="editable"),
+            ProjectFile(
+                path="src/heat2d.c", purpose="OpenMP solver", classification="editable"
+            ),
         ),
         validations=(
             ProjectValidation(
@@ -350,7 +366,9 @@ def test_project_blueprint_tool_saves_typed_blueprint_and_enforces_binding(
         },
     )
 
-    assert result.result["project"]["blueprint"]["entrypoints"] == ["scripts/run_experiment.sh"]
+    assert result.result["project"]["blueprint"]["entrypoints"] == [
+        "scripts/run_experiment.sh"
+    ]
     with pytest.raises(Exception, match="Workspace"):
         handler(
             "alice",
@@ -363,7 +381,9 @@ def test_project_blueprint_tool_saves_typed_blueprint_and_enforces_binding(
         )
 
 
-@pytest.mark.parametrize("profile_id", ["experiment_builder", "run_diagnosis_repair"])
+@pytest.mark.parametrize(
+    "profile_id", ["experiment_builder", "run_diagnosis_repair"]
+)
 def test_workspace_patch_requires_turn_bound_project_capability(
     tmp_path: Path, profile_id: str
 ) -> None:
@@ -396,12 +416,14 @@ def test_workspace_patch_requires_turn_bound_project_capability(
         profile_handlers={
             "experiment_builder": {
                 "workspace_patch": lambda owner, arguments: (
-                    called.append(owner) or AgentReadResult(result={"ok": True}, evidence_refs=())
+                    called.append(owner)
+                    or AgentReadResult(result={"ok": True}, evidence_refs=())
                 )
             },
             "run_diagnosis_repair": {
                 "workspace_patch": lambda owner, arguments: (
-                    called.append(owner) or AgentReadResult(result={"ok": True}, evidence_refs=())
+                    called.append(owner)
+                    or AgentReadResult(result={"ok": True}, evidence_refs=())
                 )
             },
         },

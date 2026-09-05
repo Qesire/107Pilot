@@ -36,7 +36,9 @@ class PostgresObservabilityStore(SQLiteObservabilityStore):
         initialize_postgres_domain_schema(dsn)
 
     def connect(self) -> Any:
-        return _PostgresConnection(self._psycopg.connect(self.dsn, row_factory=self._dict_row))
+        return _PostgresConnection(
+            self._psycopg.connect(self.dsn, row_factory=self._dict_row)
+        )
 
 
 class _PostgresConnection:

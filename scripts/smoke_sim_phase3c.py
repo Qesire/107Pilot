@@ -333,7 +333,9 @@ def _reset_test_postgres(store: PostgresRunStore) -> None:
 
     with store.connect() as conn:
         conn.execute(
-            "TRUNCATE " + ", ".join(reversed(persisted_table_names())) + " RESTART IDENTITY CASCADE"
+            "TRUNCATE "
+            + ", ".join(reversed(persisted_table_names()))
+            + " RESTART IDENTITY CASCADE"
         )
 
 

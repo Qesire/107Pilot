@@ -201,7 +201,9 @@ class AgentPolicyEngine:
                 "reasons": [f"contract_validation_error:{type(exc).__name__}"],
             }
         blockers = [
-            finding.code for finding in validation.findings if finding.severity.value == "BLOCK"
+            finding.code
+            for finding in validation.findings
+            if finding.severity.value == "BLOCK"
         ]
         if blockers:
             return {
@@ -280,11 +282,15 @@ class AgentAdviceService:
             "recommendations": list(explanation.recommendations),
             "warnings": list(explanation.warnings),
             "code_context": (
-                None if explanation.code_context is None else explanation.code_context.to_payload()
+                None
+                if explanation.code_context is None
+                else explanation.code_context.to_payload()
             ),
             "actions": list(actions),
         }
-        advice_id = "advice_" + hashlib.sha256(f"{run_id}\0{request_key}".encode()).hexdigest()[:32]
+        advice_id = "advice_" + hashlib.sha256(
+            f"{run_id}\0{request_key}".encode()
+        ).hexdigest()[:32]
         record, created = self.store.create_agent_advice(
             advice_id=advice_id,
             run_id=run_id,
@@ -618,9 +624,9 @@ class AgentAdviceService:
         )
         if action is None or action.get("policy_status") != "allowed_preview":
             raise AgentAdviceError("action is not executable", code="AGENT.POLICY_DENIED")
-        execution_id = (
-            "agentexec_" + hashlib.sha256(f"{advice_id}\0{action_id}".encode()).hexdigest()[:32]
-        )
+        execution_id = "agentexec_" + hashlib.sha256(
+            f"{advice_id}\0{action_id}".encode()
+        ).hexdigest()[:32]
         try:
             existing = self.store.get_agent_action_execution(execution_id)
         except KeyError:
@@ -670,9 +676,9 @@ class AgentAdviceService:
                     "approved action patch is invalid",
                     code="AGENT.CANDIDATE_MISSING",
                 )
-            derived_contract_id = (
-                "contract_agent_" + hashlib.sha256(execution_id.encode()).hexdigest()[:32]
-            )
+            derived_contract_id = "contract_agent_" + hashlib.sha256(
+                execution_id.encode()
+            ).hexdigest()[:32]
             derived = self.contract_service.create_derived(
                 source=source_contract,
                 payload=candidate["contract"],
@@ -687,7 +693,9 @@ class AgentAdviceService:
                 lineage_reason="agent_remediation",
                 remediation_plan_id=f"{advice.advice_id}:{action_id}",
             )
-            derived_run_id = "run_agent_" + hashlib.sha256(execution_id.encode()).hexdigest()[:32]
+            derived_run_id = "run_agent_" + hashlib.sha256(
+                execution_id.encode()
+            ).hexdigest()[:32]
             derived_run = self.run_service.prepare(
                 request,
                 run_id=derived_run_id,

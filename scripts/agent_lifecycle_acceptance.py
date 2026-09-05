@@ -103,7 +103,9 @@ class StepSpec:
 
 
 def _revision() -> str:
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
 
 
 def _artifact_dir() -> Path:
@@ -121,7 +123,9 @@ def _timestamp() -> str:
 
 
 def _tracked_worktree_clean() -> bool:
-    unstaged = subprocess.run(["git", "diff", "--quiet"], cwd=ROOT, check=False).returncode
+    unstaged = subprocess.run(
+        ["git", "diff", "--quiet"], cwd=ROOT, check=False
+    ).returncode
     staged = subprocess.run(
         ["git", "diff", "--cached", "--quiet"], cwd=ROOT, check=False
     ).returncode
@@ -209,11 +213,9 @@ def build_acceptance_report(
             case_results[case] = "FAIL"
         else:
             case_results[case] = "PASS"
-    passed = (
-        bool(step_results)
-        and all(status == "PASS" for status in case_results.values())
-        and all(step.status == "PASS" for step in step_results)
-    )
+    passed = bool(step_results) and all(
+        status == "PASS" for status in case_results.values()
+    ) and all(step.status == "PASS" for step in step_results)
     payload.update(
         {
             "mode": "acceptance",
@@ -503,7 +505,8 @@ def run_local_profile(profile: str) -> int:
             detail={"process_exit_code": 1},
         )
         print(
-            f"{profile} acceptance requires a clean tracked worktree: {report['release_revision']}",
+            f"{profile} acceptance requires a clean tracked worktree: "
+            f"{report['release_revision']}",
             file=sys.stderr,
         )
         return 1
@@ -522,7 +525,9 @@ def run_local_profile(profile: str) -> int:
             }
         )
     specs = _source_steps() if profile == "source" else _runtime_steps()
-    results = [_run_step(spec, steps_dir=steps_dir, environment=environment) for spec in specs]
+    results = [
+        _run_step(spec, steps_dir=steps_dir, environment=environment) for spec in specs
+    ]
     detail: dict[str, object] = {
         "tracked_worktree_clean": True,
         "untracked_files_status": _untracked_status(),
@@ -572,7 +577,8 @@ def verify_s1_host(bundle_dir: Path, revision: str) -> int:
     minimum_memory_kib = 14 * 1024 * 1024
     if cpu_count < 8 or mem_total_kib < minimum_memory_kib:
         print(
-            f"S1 host is below the 8C/16G envelope: cpu={cpu_count} memory_kib={mem_total_kib}",
+            f"S1 host is below the 8C/16G envelope: cpu={cpu_count} "
+            f"memory_kib={mem_total_kib}",
             file=sys.stderr,
         )
         return 1
@@ -655,7 +661,9 @@ def run_s1() -> int:
         ),
     )
     started_at = _timestamp()
-    results = [_run_step(spec, steps_dir=steps_dir, environment=environment) for spec in specs]
+    results = [
+        _run_step(spec, steps_dir=steps_dir, environment=environment) for spec in specs
+    ]
     report = build_acceptance_report(
         profile="s1",
         revision=revision,
@@ -858,7 +866,9 @@ def run_r1(arguments: list[str]) -> int:
         ),
     )
     started_at = _timestamp()
-    results = [_run_step(spec, steps_dir=steps_dir, environment=environment) for spec in specs]
+    results = [
+        _run_step(spec, steps_dir=steps_dir, environment=environment) for spec in specs
+    ]
     report = build_acceptance_report(
         profile="r1",
         revision=revision,

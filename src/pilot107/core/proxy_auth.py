@@ -29,7 +29,8 @@ def load_proxy_hmac_secret(
 
     if secret and secret_file:
         raise ProxyAuthConfigError(
-            "configure only one of PILOT107_PROXY_HMAC_SECRET or PILOT107_PROXY_HMAC_SECRET_FILE"
+            "configure only one of PILOT107_PROXY_HMAC_SECRET or "
+            "PILOT107_PROXY_HMAC_SECRET_FILE"
         )
     value = secret
     if secret_file:
@@ -121,7 +122,9 @@ class ProxyRequestAuthenticator:
         with self._lock:
             cutoff = now - self.max_age_seconds
             self._seen = {
-                seen_id: seen_at for seen_id, seen_at in self._seen.items() if seen_at >= cutoff
+                seen_id: seen_at
+                for seen_id, seen_at in self._seen.items()
+                if seen_at >= cutoff
             }
             if request_id in self._seen:
                 return False

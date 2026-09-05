@@ -92,7 +92,9 @@ def test_local_dev_overlay_pins_live_source_mounts_and_phase_aware_builder() -> 
         assert "../../src:/opt/pilot107/src:ro" in service["volumes"]
         assert _environment(service)["PILOT107_PHASE_AWARE_BUILDER"] == "1"
     agentd = services["pilot-agentd"]
-    assert "../../services/pilot-agentd/dist:/opt/pilot-agentd/dist:ro" in (agentd["volumes"])
+    assert "../../services/pilot-agentd/dist:/opt/pilot-agentd/dist:ro" in (
+        agentd["volumes"]
+    )
     assert _environment(agentd)["PILOT107_PHASE_AWARE_BUILDER"] == "1"
 
 
@@ -128,7 +130,8 @@ def test_python_services_receive_agent_capability_secret_file(
     )
     assert "pilot107-agent-capability-hmac" in service["secrets"]
     assert compose["secrets"]["pilot107-agent-capability-hmac"]["file"] == (
-        "${PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE:-./secrets/agent-capability-hmac.local}"
+        "${PILOT107_AGENT_CAPABILITY_HMAC_SECRET_FILE:-"
+        "./secrets/agent-capability-hmac.local}"
     )
 
 
@@ -210,7 +213,7 @@ def test_app_image_scripts_include_agentd(
     docker_log = tmp_path / "docker.log"
     fake_docker = binary_dir / "docker"
     fake_docker.write_text(
-        '#!/usr/bin/env sh\nprintf \'%s\\n\' "$*" >> "$PILOT107_TEST_DOCKER_LOG"\n',
+        "#!/usr/bin/env sh\nprintf '%s\\n' \"$*\" >> \"$PILOT107_TEST_DOCKER_LOG\"\n",
         encoding="utf-8",
     )
     fake_docker.chmod(0o755)

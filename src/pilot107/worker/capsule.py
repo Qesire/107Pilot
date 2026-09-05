@@ -126,12 +126,9 @@ class RawCapsuleService:
             raise CapsuleError("run evidence is not sealed")
 
         authority = self._resolve_sealed_authority(run_id)
-        effective_operation_key = (
-            operation_key
-            or hashlib.sha256(
-                f"raw-capsule\0{run_id}\0{authority.seal_digest}".encode()
-            ).hexdigest()
-        )
+        effective_operation_key = operation_key or hashlib.sha256(
+            f"raw-capsule\0{run_id}\0{authority.seal_digest}".encode()
+        ).hexdigest()
         if lease_assert is not None:
             lease_assert()
         claim = self.store.begin_capsule_build(
@@ -251,10 +248,9 @@ class RawCapsuleService:
         lease_assert: Callable[[], None] | None,
     ) -> CapsuleBuildResult:
         run = self.store.get_run(run_id)
-        capsule_id = (
-            "capsule_"
-            + hashlib.sha256(f"raw\0{run_id}\0{authority.seal_digest}".encode()).hexdigest()[:32]
-        )
+        capsule_id = "capsule_" + hashlib.sha256(
+            f"raw\0{run_id}\0{authority.seal_digest}".encode()
+        ).hexdigest()[:32]
         capsule_dir = _capsule_dir(self.capsule_root, run_id)
         if _path_exists_without_following(capsule_dir):
             return self._existing_build_result(
@@ -392,10 +388,9 @@ class RawCapsuleService:
         *,
         authority: CapsuleEvidenceAuthority,
     ) -> CapsuleBuildResult:
-        expected_capsule_id = (
-            "capsule_"
-            + hashlib.sha256(f"raw\0{run_id}\0{authority.seal_digest}".encode()).hexdigest()[:32]
-        )
+        expected_capsule_id = "capsule_" + hashlib.sha256(
+            f"raw\0{run_id}\0{authority.seal_digest}".encode()
+        ).hexdigest()[:32]
         verify = verify_raw_capsule(
             capsule_dir,
             store=self.store,
@@ -594,12 +589,9 @@ def verify_raw_capsule(
         }
         if manifest.get("source_evidence") != expected_source:
             errors.append("manifest source Evidence authority mismatch")
-        expected_capsule_id = (
-            "capsule_"
-            + hashlib.sha256(
-                f"raw\0{authority.run_id}\0{authority.seal_digest}".encode()
-            ).hexdigest()[:32]
-        )
+        expected_capsule_id = "capsule_" + hashlib.sha256(
+            f"raw\0{authority.run_id}\0{authority.seal_digest}".encode()
+        ).hexdigest()[:32]
         if capsule_id != expected_capsule_id:
             errors.append("capsule_id authority mismatch")
         provenance_file = snapshot.files.get("provenance.json")
@@ -617,7 +609,10 @@ def verify_raw_capsule(
                     "source_evidence_seal_digest": authority.seal_digest,
                     "source_evidence_seal_ref": authority.seal_ref,
                 }
-                if any(provenance.get(key) != value for key, value in expected_provenance.items()):
+                if any(
+                    provenance.get(key) != value
+                    for key, value in expected_provenance.items()
+                ):
                     errors.append("provenance source Evidence authority mismatch")
 
     return CapsuleVerifyResult(
@@ -775,7 +770,10 @@ def _snapshot_capsule_tree(capsule_dir: Path) -> _CapsuleTreeSnapshot:
                 try:
                     descriptor = os.open(
                         entry.name,
-                        os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                        os.O_RDONLY
+                        | os.O_NONBLOCK
+                        | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
                         dir_fd=directory_fd,
                     )
                     metadata = os.fstat(descriptor)
@@ -822,7 +820,10 @@ def _seal_capsule_tree(capsule_dir: Path) -> None:
                 try:
                     descriptor = os.open(
                         entry.name,
-                        os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                        os.O_RDONLY
+                        | os.O_NONBLOCK
+                        | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
                         dir_fd=directory_fd,
                     )
                     metadata = os.fstat(descriptor)
@@ -863,7 +864,10 @@ def _discard_private_temp(temp_dir: Path) -> None:
                 try:
                     descriptor = os.open(
                         entry.name,
-                        os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                        os.O_RDONLY
+                        | os.O_NONBLOCK
+                        | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
                         dir_fd=directory_fd,
                     )
                     metadata = os.fstat(descriptor)

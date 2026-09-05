@@ -31,7 +31,9 @@ _MAX_RUN_BYTES = 64 * 1024
 
 class ObservabilityReadService(Protocol):
     def latest_platform(self, connection_id: str) -> dict[str, object]: ...
-    def latest_account(self, connection_id: str, *, owner: str) -> dict[str, object]: ...
+    def latest_account(
+        self, connection_id: str, *, owner: str
+    ) -> dict[str, object]: ...
     def run_resources(self, run_id: str, *, owner: str) -> dict[str, object]: ...
 
 
@@ -50,19 +52,29 @@ def build_a1_read_handlers(context: AgentReadContext) -> dict[str, AgentReadHand
         "platform_get_snapshot": lambda owner, arguments: _platform_snapshot(
             context, owner, arguments
         ),
-        "workspace_list": lambda owner, arguments: _workspace_list(context, owner, arguments),
-        "workspace_search": lambda owner, arguments: _workspace_search(context, owner, arguments),
-        "workspace_read": lambda owner, arguments: _workspace_read(context, owner, arguments),
+        "workspace_list": lambda owner, arguments: _workspace_list(
+            context, owner, arguments
+        ),
+        "workspace_search": lambda owner, arguments: _workspace_search(
+            context, owner, arguments
+        ),
+        "workspace_read": lambda owner, arguments: _workspace_read(
+            context, owner, arguments
+        ),
         "run_get": lambda owner, arguments: _run_get(context, owner, arguments),
         "run_log_read": lambda owner, arguments: _run_log_read(context, owner, arguments),
-        "evidence_read": lambda owner, arguments: _evidence_read(context, owner, arguments),
+        "evidence_read": lambda owner, arguments: _evidence_read(
+            context, owner, arguments
+        ),
         "platform_observation_get": lambda owner, arguments: _platform_observation(
             context, owner, arguments
         ),
         "account_observation_get": lambda owner, arguments: _account_observation(
             context, owner, arguments
         ),
-        "run_resources_get": lambda owner, arguments: _run_resources(context, owner, arguments),
+        "run_resources_get": lambda owner, arguments: _run_resources(
+            context, owner, arguments
+        ),
     }
 
 
@@ -85,7 +97,9 @@ def _account_observation(
     _closed_arguments(arguments, {"connection_id"})
     service = _observability(context)
     try:
-        payload = service.latest_account(_required_string(arguments, "connection_id"), owner=owner)
+        payload = service.latest_account(
+            _required_string(arguments, "connection_id"), owner=owner
+        )
     except KeyError:
         raise _error("AGENT.TOOL.NOT_FOUND", "Account observation was not found") from None
     return _observation_result(payload, prefix="observation")
@@ -101,7 +115,9 @@ def _run_resources(
     except KeyError:
         raise _error("AGENT.TOOL.NOT_FOUND", "Run resources were not found") from None
     prefix = (
-        "resource-summary" if payload.get("kind") == "run_resource_summary" else "resource-sample"
+        "resource-summary"
+        if payload.get("kind") == "run_resource_summary"
+        else "resource-sample"
     )
     return _observation_result(payload, prefix=prefix)
 
@@ -281,7 +297,9 @@ def _evidence_read(
     object_id = _required_string(arguments, "object_id")
     _owned_run(context.run_store, owner, run_id)
     try:
-        preview = context.evidence_query.get_object_preview(run_id, object_id, max_bytes=56 * 1024)
+        preview = context.evidence_query.get_object_preview(
+            run_id, object_id, max_bytes=56 * 1024
+        )
     except (KeyError, EvidencePreviewUnavailable, OSError, ValueError):
         raise _error("AGENT.TOOL.NOT_FOUND", "Evidence object was not found") from None
     preview.pop("source_uri", None)
@@ -316,7 +334,9 @@ def _workspace(context: AgentReadContext, owner: str, requested: str) -> str:
     return resolved
 
 
-def _workspace_paths(context: AgentReadContext, workspace: str) -> tuple[list[str], bool]:
+def _workspace_paths(
+    context: AgentReadContext, workspace: str
+) -> tuple[list[str], bool]:
     reader = _reader(context)
     try:
         raw = reader.git(workspace, ("ls-files", "-z"))
@@ -376,7 +396,9 @@ def _safe_run_payload(run: RunRecord) -> dict[str, object]:
     }
 
 
-def _bound_evidence_path(query: EvidenceQueryService, run_id: str, store_path: str) -> Path:
+def _bound_evidence_path(
+    query: EvidenceQueryService, run_id: str, store_path: str
+) -> Path:
     root = query.evidence_store.run_root(run_id).resolve()
     path = Path(store_path)
     if path.is_symlink():

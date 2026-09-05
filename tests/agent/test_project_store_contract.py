@@ -39,8 +39,12 @@ BLUEPRINT = ProjectBlueprint(
         recipe_version_id="recipe_python_cpu@1.0.0",
         resource_hints={"partition": "Students", "cpus_per_task": 1},
     ),
-    expected_outputs=(ProjectExpectedOutput(path="results/sum.json", kind="json", required=True),),
-    dependencies=(ProjectDependency(name="python", version="3.12", source="runtime"),),
+    expected_outputs=(
+        ProjectExpectedOutput(path="results/sum.json", kind="json", required=True),
+    ),
+    dependencies=(
+        ProjectDependency(name="python", version="3.12", source="runtime"),
+    ),
     open_questions=("Should missing cells be ignored?",),
 )
 

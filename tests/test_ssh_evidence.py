@@ -121,3 +121,4 @@ def test_ssh_evidence_rejects_symlink_escape_and_wrong_identity(tmp_path: Path) 
         transport.stat(UserIdentity(username="alice"), safe(link, tmp_path))
     with pytest.raises(Exception, match="owner mismatch"):
         transport.stat(UserIdentity(username="bob"), safe(workdir, tmp_path))
+

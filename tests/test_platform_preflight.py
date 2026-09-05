@@ -33,7 +33,9 @@ class PlatformPreflightTests(unittest.TestCase):
     def setUp(self) -> None:
         self._temporary = tempfile.TemporaryDirectory()
         self.store = PlatformSnapshotStore(Path(self._temporary.name) / "pilot107.db")
-        self.entitlement_store = UserEntitlementStore(Path(self._temporary.name) / "pilot107.db")
+        self.entitlement_store = UserEntitlementStore(
+            Path(self._temporary.name) / "pilot107.db"
+        )
         self.plan = ResourcePlan(
             partition="Students",
             qos="qos_stu_default",
@@ -92,7 +94,8 @@ class PlatformPreflightTests(unittest.TestCase):
         self.assertTrue(all(item.severity == PreflightSeverity.WARN for item in findings))
         self.assertTrue(
             all(
-                item.source_authority == "platform_snapshot:snapshot_preflight" for item in findings
+                item.source_authority == "platform_snapshot:snapshot_preflight"
+                for item in findings
             )
         )
 

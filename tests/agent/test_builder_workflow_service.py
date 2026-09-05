@@ -64,7 +64,9 @@ class BuilderHarness:
             walltime_seconds=600,
             max_tasks=1,
             max_submissions=1,
-            workspace_snapshot_digest=(envelope_digest or self.workspace.snapshot.digest),
+            workspace_snapshot_digest=(
+                envelope_digest or self.workspace.snapshot.digest
+            ),
             expires_at="2026-08-30T00:00:00Z",
             approved_by="alice",
         )
@@ -107,7 +109,9 @@ class BuilderHarness:
                 clock=self.clock,
             ),
             control_repository=self.control,
-            workspace_resolver=lambda owner, workspace_id, digest: Path(self.workspace.local_root),
+            workspace_resolver=lambda owner, workspace_id, digest: Path(
+                self.workspace.local_root
+            ),
             worker_id="builder-task-worker",
         )
         self.workflow = BuilderWorkflowService(
@@ -455,7 +459,9 @@ def test_submit_returns_repair_receipt_and_does_not_schedule_on_sandbox_failure(
                 },
                 {
                     "path": "scripts/run_experiment.sh",
-                    "sha256": hashlib.sha256(b"#!/bin/bash\npython main.py\n").hexdigest(),
+                    "sha256": hashlib.sha256(
+                        b"#!/bin/bash\npython main.py\n"
+                    ).hexdigest(),
                     "content": "#!/bin/bash\npython main.py\n",
                     "truncated": False,
                 },
@@ -467,14 +473,18 @@ def test_submit_returns_repair_receipt_and_does_not_schedule_on_sandbox_failure(
     assert str(result.result["change_set_id"]).startswith("changeset-")
     assert result.result["diagnostics"]["exit_code"] == 1
     assert result.result["diagnostics"]["stderr"] == "compile failed\n"
-    assert harness.task_store.list_tasks(owner="alice", session_id=harness.session_id) == []
+    assert harness.task_store.list_tasks(
+        owner="alice", session_id=harness.session_id
+    ) == []
     context = harness.workflow.context(
         owner="alice",
         project_id=harness.project.project_id,
         workspace_id=harness.workspace.workspace_id,
         session_id=harness.session_id,
     )
-    assert context.result["repair_sources"] == result.result["next_submission"]["repair_sources"]
+    assert context.result["repair_sources"] == result.result["next_submission"][
+        "repair_sources"
+    ]
 
 
 def test_submit_derives_resources_and_schedules_once_after_sandbox_success(
@@ -518,7 +528,9 @@ def test_failed_submission_can_be_repaired_once_then_schedules(tmp_path: Path) -
     assert repaired.result["status"] == "scheduled"
     assert repaired.result["phase"] == "validation_scheduled"
     assert harness.sandbox.calls == 2
-    assert len(harness.task_store.list_tasks(owner="alice", session_id=harness.session_id)) == 1
+    assert len(
+        harness.task_store.list_tasks(owner="alice", session_id=harness.session_id)
+    ) == 1
 
 
 def test_failed_submission_continues_in_a_new_turn_from_authoritative_receipt(
@@ -575,7 +587,9 @@ def test_failed_submission_continues_in_a_new_turn_from_authoritative_receipt(
     assert repaired.result["approval_summary_zh"] == (
         "根据沙箱诊断修复 main.py，并重新验证同一实验。"
     )
-    [task] = harness.task_store.list_tasks(owner="alice", session_id=harness.session_id)
+    [task] = harness.task_store.list_tasks(
+        owner="alice", session_id=harness.session_id
+    )
     assert task.turn_id == next_turn.turn_id
 
 
@@ -695,7 +709,9 @@ def test_replay_recovers_after_task_creation_without_duplicate_work(
 
     assert replay.result["status"] == "scheduled"
     assert harness.sandbox.calls == 1
-    assert len(harness.task_store.list_tasks(owner="alice", session_id=harness.session_id)) == 1
+    assert len(
+        harness.task_store.list_tasks(owner="alice", session_id=harness.session_id)
+    ) == 1
 
 
 def test_new_request_recovers_after_patch_error_left_an_unfinished_draft(
@@ -729,7 +745,9 @@ def test_new_request_recovers_after_patch_error_left_an_unfinished_draft(
     recovered = harness.workflow.submit("alice", recovered_arguments)
 
     assert recovered.result["status"] == "scheduled"
-    assert len(harness.task_store.list_tasks(owner="alice", session_id=harness.session_id)) == 1
+    assert len(
+        harness.task_store.list_tasks(owner="alice", session_id=harness.session_id)
+    ) == 1
 
 
 def test_new_repair_recovers_after_patch_error_left_an_unfinished_repair(
@@ -762,7 +780,9 @@ def test_new_repair_recovers_after_patch_error_left_an_unfinished_repair(
         workspace_id=harness.workspace.workspace_id,
         session_id=harness.session_id,
     )
-    assert context.result["repair_sources"]["items"][0]["content"] == ("print('sandbox')\n")
+    assert context.result["repair_sources"]["items"][0]["content"] == (
+        "print('sandbox')\n"
+    )
 
     monkeypatch.setattr(harness.projects, "apply_patches", original_apply)
     harness.sandbox.exit_code = 0

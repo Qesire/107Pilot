@@ -86,7 +86,9 @@ def test_recover_pending_turns_recreates_only_missing_outbox_messages(
 
     assert service.recover_pending_turns(limit=10) == 1
     assert service.recover_pending_turns(limit=10) == 0
-    assert control.get_outbox(f"agent-turn:{turn.turn_id}").payload == {"turn_id": turn.turn_id}
+    assert control.get_outbox(f"agent-turn:{turn.turn_id}").payload == {
+        "turn_id": turn.turn_id
+    }
 
 
 def test_experiment_builder_persists_owner_approved_resource_envelope(

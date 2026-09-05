@@ -62,10 +62,14 @@ class ProxyAuthTests(unittest.TestCase):
         )
         authenticator = ProxyRequestAuthenticator(self.secret, clock=lambda: 1_020)
         self.assertTrue(
-            authenticator.verify(method="GET", target="/api/v1/runs", body=b"", headers=headers)
+            authenticator.verify(
+                method="GET", target="/api/v1/runs", body=b"", headers=headers
+            )
         )
         self.assertFalse(
-            authenticator.verify(method="GET", target="/api/v1/runs", body=b"", headers=headers)
+            authenticator.verify(
+                method="GET", target="/api/v1/runs", body=b"", headers=headers
+            )
         )
         self.assertFalse(
             ProxyRequestAuthenticator(self.secret, clock=lambda: 1_031).verify(

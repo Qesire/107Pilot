@@ -272,7 +272,9 @@ def restore_control_plane_backup(
                     "backup contains PostgreSQL data but no restore DSN was provided"
                 )
             if not postgres_allow_reset:
-                raise RecoveryError("PostgreSQL restore requires explicit postgres_allow_reset")
+                raise RecoveryError(
+                    "PostgreSQL restore requires explicit postgres_allow_reset"
+                )
             adapter = postgres_adapter or PgToolsBackupAdapter()
             adapter.restore(dsn=postgres_dsn, source=postgres_dump)
         if destination.exists():
@@ -363,7 +365,12 @@ def _safe_manifest_path(value: object) -> PurePosixPath:
     if not isinstance(value, str) or not value:
         raise RecoveryError("backup file path is invalid")
     path = PurePosixPath(value)
-    if not path.parts or path.is_absolute() or ".." in path.parts or path.parts[0] != "payload":
+    if (
+        not path.parts
+        or path.is_absolute()
+        or ".." in path.parts
+        or path.parts[0] != "payload"
+    ):
         raise RecoveryError(f"unsafe backup file path: {value}")
     return path
 

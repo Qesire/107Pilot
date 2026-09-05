@@ -10,7 +10,9 @@ from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 
 
 def _routes(tmp_path: Path) -> tuple[SQLiteRuntimeWatchStore, RuntimeWatchRoutes]:
-    store = SQLiteRuntimeWatchStore(tmp_path / "watch.db", segment_root=tmp_path / "segments")
+    store = SQLiteRuntimeWatchStore(
+        tmp_path / "watch.db", segment_root=tmp_path / "segments"
+    )
     watch = store.create_watch(run_id="run1", owner="alice", connection_id="c1")
     lease = store.claim_watch(
         watch.watch_id,
@@ -47,7 +49,9 @@ def test_owner_scoped_summary_and_opaque_log_cursor(tmp_path: Path) -> None:
     _, routes = _routes(tmp_path)
     identity = UserIdentity(username="alice")
 
-    summary = routes.handle_get(["runs", "run1", "runtime-watch"], params={}, identity=identity)
+    summary = routes.handle_get(
+        ["runs", "run1", "runtime-watch"], params={}, identity=identity
+    )
     first = routes.handle_get(
         ["runs", "run1", "runtime-watch", "logs"],
         params={"stream": ["stdout"], "max_bytes": ["8"]},

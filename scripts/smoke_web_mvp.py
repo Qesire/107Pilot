@@ -39,12 +39,16 @@ def main() -> int:
 
     with (
         _served(make_api_handler(api)) as api_url,
-        _served(make_web_handler(WebConfig(api_base_url=api_url, demo_user="alice"))) as web_url,
+        _served(
+            make_web_handler(WebConfig(api_base_url=api_url, demo_user="alice"))
+        ) as web_url,
     ):
         index = urllib.request.urlopen(f"{web_url}/", timeout=10).read().decode("utf-8")
         recipes = _get(f"{web_url}/api/v1/recipes")
         contract = _post(f"{web_url}/api/v1/contracts", _contract())
-        prepared = _post(f"{web_url}/api/v1/runs/prepare", {"contract_id": contract["contract_id"]})
+        prepared = _post(
+            f"{web_url}/api/v1/runs/prepare", {"contract_id": contract["contract_id"]}
+        )
         submitted = _post(f"{web_url}/api/v1/runs/{prepared['run_id']}/submit", {})
 
     assert "107Pilot" in index, index[:120]

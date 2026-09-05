@@ -32,9 +32,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_agentd_has_no_cluster_or_workspace_mount_contract(self) -> None:
-        dockerfile = (_PROJECT_ROOT / "services" / "pilot-agentd" / "Dockerfile").read_text(
-            encoding="utf-8"
-        )
+        dockerfile = (
+            _PROJECT_ROOT / "services" / "pilot-agentd" / "Dockerfile"
+        ).read_text(encoding="utf-8")
 
         self.assertNotIn("openssh", dockerfile.lower())
         self.assertNotIn("slurm", dockerfile.lower())

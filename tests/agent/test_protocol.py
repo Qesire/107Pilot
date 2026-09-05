@@ -189,7 +189,9 @@ def test_non_builder_project_profiles_reject_builder_only_tools(
     assert agent_protocol.parse_tool_invocation(workspace).tool_name == "workspace_patch"
 
 
-@pytest.mark.parametrize("tool_name", ["builder_context_get", "builder_build_submit"])
+@pytest.mark.parametrize(
+    "tool_name", ["builder_context_get", "builder_build_submit"]
+)
 def test_phase_aware_builder_tools_are_valid_only_for_project_profiles(
     tool_name: str,
 ) -> None:
@@ -372,7 +374,9 @@ def test_parse_event_stream_accepts_all_v1_event_payloads_and_arbitrary_json_res
         ("terminal_phase", "published"),
     ],
 )
-def test_turn_completed_rejects_invalid_builder_metrics(field: str, value: object) -> None:
+def test_turn_completed_rejects_invalid_builder_metrics(
+    field: str, value: object
+) -> None:
     payload = _completed_payload()
     payload[field] = value
 

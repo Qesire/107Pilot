@@ -91,3 +91,4 @@ def apply_schema_migrations(
             conn.rollback()
             raise
     return tuple(applied_now)
+

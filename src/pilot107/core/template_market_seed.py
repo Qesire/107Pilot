@@ -5,7 +5,6 @@ Walks ``RecipeCatalog.list_versions()`` and publishes each recipe through
 already published recipe+version pairs are skipped. Fault-tolerant:
 gate-blocked recipes are recorded and do not abort the seed.
 """
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
@@ -114,7 +113,9 @@ def _draft_compatibility_from_recipe(recipe: RecipeVersion) -> dict[str, Any]:
     return {"partitions": [partition], "gpu": requires_gpu}
 
 
-def _already_published(store: TemplateMarketStore, recipe: RecipeVersion) -> bool:
+def _already_published(
+    store: TemplateMarketStore, recipe: RecipeVersion
+) -> bool:
     """Return True if a release for this recipe+version already exists."""
     try:
         items, _ = store.list_market_page(actor=_SEED_AUTHOR, limit=100)
@@ -179,13 +180,17 @@ def seed_preset_recipes(
             continue
         try:
             template_id = f"seed-{recipe.recipe_id}"
-            existing_draft = _find_draft_by_template_id(store, template_id, owner=_SEED_AUTHOR)
+            existing_draft = _find_draft_by_template_id(
+                store, template_id, owner=_SEED_AUTHOR
+            )
             if existing_draft is not None:
                 draft = existing_draft
                 if str(draft.state) != "editable":
                     # submitted/approved/published/rejected/archived: cannot
                     # safely resume without a review lookup; record and skip.
-                    raise RuntimeError(f"existing draft in state {draft.state}, cannot resume")
+                    raise RuntimeError(
+                        f"existing draft in state {draft.state}, cannot resume"
+                    )
                 # Refresh the stale draft's content with current recipe-derived
                 # values. Pre-fix seed runs may have left drafts with payloads
                 # that no longer pass the publication gate (e.g. qos='normal'
@@ -205,7 +210,9 @@ def seed_preset_recipes(
                 draft = store.create_draft(
                     owner=_SEED_AUTHOR,
                     title=recipe.title,
-                    description=(f"Seed preset recipe {recipe.recipe_version_id}"),
+                    description=(
+                        f"Seed preset recipe {recipe.recipe_version_id}"
+                    ),
                     visibility=TemplateVisibility.PUBLIC,
                     payload=_draft_payload_from_recipe(recipe),
                     compatibility=_draft_compatibility_from_recipe(recipe),
@@ -234,7 +241,11 @@ def seed_preset_recipes(
             upper = message.upper()
             if "GATE" in upper or "BLOCK" in upper or "OCI" in upper:
                 report.gate_blocked += 1
-                report.errors.append(f"{recipe.recipe_version_id}: gate-blocked")
+                report.errors.append(
+                    f"{recipe.recipe_version_id}: gate-blocked"
+                )
             else:
-                report.errors.append(f"{recipe.recipe_version_id}: {message}")
+                report.errors.append(
+                    f"{recipe.recipe_version_id}: {message}"
+                )
     return report

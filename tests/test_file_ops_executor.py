@@ -37,7 +37,9 @@ class LocalFileOpsExecutorTests(unittest.TestCase):
             {"outcome": "already_committed"},
         ]
         with mock.patch.object(executor, "_request", side_effect=responses) as request:
-            self.assertIsNone(executor.path_sha256(path="/work/target", owner="alice"))
+            self.assertIsNone(
+                executor.path_sha256(path="/work/target", owner="alice")
+            )
             self.assertEqual(
                 executor.compare_and_swap_file(
                     staged_path="/work/stage",
@@ -90,13 +92,17 @@ class LocalFileOpsExecutorTests(unittest.TestCase):
         self.assertEqual(total, len(payload))
         self.assertEqual(base64.b64decode(data_b64), payload)
 
-        self.assertEqual(self.executor.file_sha256(path=str(target), owner="alice"), expected)
+        self.assertEqual(
+            self.executor.file_sha256(path=str(target), owner="alice"), expected
+        )
 
     def test_search_files_matches_relative_path_and_filters_kind_and_size(self) -> None:
         (self.root / "Models").mkdir()
         (self.root / "Models" / "tiny.bin").write_bytes(b"1")
         (self.root / "Models" / "weights.bin").write_bytes(b"12345")
-        (self.root / "model-link").symlink_to(self.root / "Models", target_is_directory=True)
+        (self.root / "model-link").symlink_to(
+            self.root / "Models", target_is_directory=True
+        )
 
         page = self.executor.search_files(
             root=str(self.root),
@@ -113,7 +119,9 @@ class LocalFileOpsExecutorTests(unittest.TestCase):
             owner="alice",
         )
 
-        self.assertEqual([item.relative_path for item in page.items], ["Models/weights.bin"])
+        self.assertEqual(
+            [item.relative_path for item in page.items], ["Models/weights.bin"]
+        )
         self.assertFalse(page.incomplete)
         self.assertIsNone(page.next_cursor)
 
@@ -211,7 +219,9 @@ class LocalFileOpsExecutorTests(unittest.TestCase):
         for name in ["b.txt", "A.txt", "c.txt"]:
             (self.root / name).write_text(name, encoding="utf-8")
 
-        first = self.executor.list_dir(path=str(self.root), owner="alice", limit=3)
+        first = self.executor.list_dir(
+            path=str(self.root), owner="alice", limit=3
+        )
         self.assertEqual([entry.name for entry in first.entries], ["a-dir", "z-dir", "A.txt"])
         self.assertTrue(first.has_more)
         self.assertIsNotNone(first.next_cursor)
@@ -227,7 +237,9 @@ class LocalFileOpsExecutorTests(unittest.TestCase):
     def test_list_dir_rejects_stale_cursor_after_membership_change(self) -> None:
         for index in range(3):
             (self.root / f"{index}.txt").write_text(str(index), encoding="utf-8")
-        first = self.executor.list_dir(path=str(self.root), owner="alice", limit=1)
+        first = self.executor.list_dir(
+            path=str(self.root), owner="alice", limit=1
+        )
         self.assertIsNotNone(first.next_cursor)
         (self.root / "new.txt").write_text("new", encoding="utf-8")
         with self.assertRaisesRegex(SlurmSubmissionRejected, "cursor is stale"):
@@ -299,7 +311,9 @@ class LocalFileOpsExecutorTests(unittest.TestCase):
         return archive_path
 
     def test_extract_valid_archive(self) -> None:
-        archive = self._make_tar({"run.sh": b"#!/bin/bash\n", "config/app.env": b"KEY=1\n"})
+        archive = self._make_tar(
+            {"run.sh": b"#!/bin/bash\n", "config/app.env": b"KEY=1\n"}
+        )
         dest = self.root / "extracted"
         count = self.executor.extract_archive(
             archive_path=str(archive), dest_dir=str(dest), owner="alice"

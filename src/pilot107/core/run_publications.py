@@ -263,7 +263,11 @@ class RunPublicationStore:
                 (
                     publication_id,
                     source_run_id,
-                    (source_run.contract_id if manifest.contract_for_adaptation else None),
+                    (
+                        source_run.contract_id
+                        if manifest.contract_for_adaptation
+                        else None
+                    ),
                     owner,
                     title.strip(),
                     description.strip(),
@@ -910,7 +914,9 @@ def _first_forbidden_share_path(value: object, *, path: str = "shared") -> str |
             if finding is not None:
                 return finding
         return None
-    if isinstance(value, str) and any(pattern.search(value) for pattern in _FORBIDDEN_SHARE_TEXT):
+    if isinstance(value, str) and any(
+        pattern.search(value) for pattern in _FORBIDDEN_SHARE_TEXT
+    ):
         return path
     return None
 

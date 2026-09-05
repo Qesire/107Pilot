@@ -443,7 +443,9 @@ class FileOpsExecutor(Protocol):
     ) -> tuple[str, int]:
         """Read up to ``length`` bytes; return ``(data_b64, total_size)``."""
 
-    def file_sha256(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> str:
+    def file_sha256(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> str:
         """Return the hex sha256 of a remote file."""
 
     def list_dir(
@@ -476,10 +478,14 @@ class FileOpsExecutor(Protocol):
     ) -> FileSearchPage:
         """Search names and relative paths within an authorized bounded root."""
 
-    def make_dir(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> None:
+    def make_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
         """Create a directory (and parents)."""
 
-    def remove_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> None:
+    def remove_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
         """Remove a file or directory tree."""
 
     def rename_path(
@@ -517,10 +523,14 @@ class FileOpsExecutor(Protocol):
     ) -> str:
         """Create an empty file; reject when the name is already taken."""
 
-    def stat_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> FileStat:
+    def stat_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> FileStat:
         """Return metadata for a path."""
 
-    def disk_usage(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> DiskUsage:
+    def disk_usage(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> DiskUsage:
         """Return recursive used bytes for ``path`` plus filesystem total."""
 
     def extract_archive(
@@ -659,7 +669,9 @@ class HttpCommandGatewayExecutor:
         )
         return str(payload.get("data_b64", "")), int(payload.get("size", 0))
 
-    def file_sha256(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> str:
+    def file_sha256(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> str:
         payload = self._request(
             "/sha256",
             {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
@@ -670,7 +682,9 @@ class HttpCommandGatewayExecutor:
             raise SlurmTransportError("gateway sha256 response missing digest")
         return value
 
-    def path_sha256(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> str | None:
+    def path_sha256(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> str | None:
         payload = self._request(
             "/path_sha256",
             {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
@@ -827,10 +841,14 @@ class HttpCommandGatewayExecutor:
             raise SlurmTransportError("gateway search_files response missing items")
         raw_warnings = payload.get("warnings", [])
         if not isinstance(raw_warnings, list):
-            raise SlurmTransportError("gateway search_files response has invalid warnings")
+            raise SlurmTransportError(
+                "gateway search_files response has invalid warnings"
+            )
         raw_cursor = payload.get("next_cursor")
         if raw_cursor is not None and not isinstance(raw_cursor, str):
-            raise SlurmTransportError("gateway search_files response has invalid cursor")
+            raise SlurmTransportError(
+                "gateway search_files response has invalid cursor"
+            )
         return FileSearchPage(
             items=tuple(
                 FileSearchEntry(
@@ -848,14 +866,18 @@ class HttpCommandGatewayExecutor:
             warnings=tuple(str(item) for item in raw_warnings),
         )
 
-    def make_dir(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> None:
+    def make_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
         self._request(
             "/mkdir",
             {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
             timeout_seconds=timeout_seconds,
         )
 
-    def remove_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> None:
+    def remove_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
         self._request(
             "/remove",
             {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
@@ -924,7 +946,9 @@ class HttpCommandGatewayExecutor:
         )
         return str(payload.get("path", ""))
 
-    def stat_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> FileStat:
+    def stat_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> FileStat:
         payload = self._request(
             "/stat",
             {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
@@ -937,7 +961,9 @@ class HttpCommandGatewayExecutor:
             mtime=int(payload.get("mtime", 0)),
         )
 
-    def disk_usage(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> DiskUsage:
+    def disk_usage(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> DiskUsage:
         payload = self._request(
             "/disk_usage",
             {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
@@ -1083,7 +1109,9 @@ def _decode_local_search_cursor(cursor: str, key: bytes) -> dict[str, Any]:
     try:
         body_text, signature_text = cursor.split(".", 1)
         body = body_text.encode("ascii")
-        signature = base64.urlsafe_b64decode(signature_text + "=" * (-len(signature_text) % 4))
+        signature = base64.urlsafe_b64decode(
+            signature_text + "=" * (-len(signature_text) % 4)
+        )
         expected = hmac.new(key, body, hashlib.sha256).digest()
         if not hmac.compare_digest(signature, expected):
             raise ValueError("signature mismatch")
@@ -1131,7 +1159,9 @@ class LocalFileOpsExecutor:
         resolved = Path(path).resolve()
         for root in self.allowed_roots:
             resolved_root = Path(root).resolve()
-            if resolved == resolved_root or str(resolved).startswith(f"{resolved_root}/"):
+            if resolved == resolved_root or str(resolved).startswith(
+                f"{resolved_root}/"
+            ):
                 return resolved
         raise SlurmSubmissionRejected(f"path outside allowed roots: {path}")
 
@@ -1147,7 +1177,9 @@ class LocalFileOpsExecutor:
         target = self._authorize(path)
         data = base64.b64decode(data_b64, validate=True)
         if not target.parent.exists():
-            raise SlurmTransportError(f"parent directory does not exist: {target.parent}")
+            raise SlurmTransportError(
+                f"parent directory does not exist: {target.parent}"
+            )
         if offset < 0:
             mode = "ab"
         elif offset == 0:
@@ -1187,7 +1219,9 @@ class LocalFileOpsExecutor:
             data = handle.read(length)
         return base64.b64encode(data).decode("ascii"), size
 
-    def file_sha256(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> str:
+    def file_sha256(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> str:
         target = self._authorize(path)
         if not target.is_file():
             raise SlurmTransportError(f"not a regular file: {path}")
@@ -1218,8 +1252,9 @@ class LocalFileOpsExecutor:
         if cursor:
             state = _decode_local_search_cursor(cursor, self._search_cursor_key)
             if state.get("binding") != binding:
-                if isinstance(state.get("binding"), dict) and state["binding"].get("path") == str(
-                    target
+                if (
+                    isinstance(state.get("binding"), dict)
+                    and state["binding"].get("path") == str(target)
                 ):
                     raise SlurmSubmissionRejected("directory listing cursor is stale")
                 raise SlurmSubmissionRejected("directory listing cursor does not match request")
@@ -1341,7 +1376,10 @@ class LocalFileOpsExecutor:
         items: list[FileSearchEntry] = []
         warnings: list[str] = []
         while stack and len(items) < limit:
-            if scanned >= scan_limit or (time.monotonic() - started) * 1000 >= time_limit_ms:
+            if (
+                scanned >= scan_limit
+                or (time.monotonic() - started) * 1000 >= time_limit_ms
+            ):
                 break
             frame = stack[-1]
             relative_dir = str(frame["relative_dir"])
@@ -1350,7 +1388,9 @@ class LocalFileOpsExecutor:
                 with os.scandir(directory) as handle:
                     entries = sorted(handle, key=lambda entry: entry.name)
             except OSError:
-                warnings.append("unreadable directory: " + (relative_dir if relative_dir else "."))
+                warnings.append(
+                    "unreadable directory: " + (relative_dir if relative_dir else ".")
+                )
                 stack.pop()
                 continue
             index = int(frame["index"])
@@ -1368,7 +1408,9 @@ class LocalFileOpsExecutor:
                 continue
             if not is_directory and not is_file:
                 continue
-            relative_path = posixpath.join(relative_dir, entry.name) if relative_dir else entry.name
+            relative_path = (
+                posixpath.join(relative_dir, entry.name) if relative_dir else entry.name
+            )
             entry_kind = "directory" if is_directory else "file"
             if is_directory:
                 stack.append({"relative_dir": relative_path, "index": 0})
@@ -1412,10 +1454,14 @@ class LocalFileOpsExecutor:
             warnings=tuple(warnings),
         )
 
-    def make_dir(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> None:
+    def make_dir(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
         self._authorize(path).mkdir(parents=True, exist_ok=True)
 
-    def remove_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> None:
+    def remove_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> None:
         target = self._authorize(path)
         if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
@@ -1469,7 +1515,9 @@ class LocalFileOpsExecutor:
                 if dest_resolved == source_resolved or str(dest_resolved).startswith(
                     f"{source_resolved}/"
                 ):
-                    raise SlurmSubmissionRejected(f"cannot copy a directory into itself: {item}")
+                    raise SlurmSubmissionRejected(
+                        f"cannot copy a directory into itself: {item}"
+                    )
             target = destination / source.name
             if target.exists() or target.is_symlink():
                 if target.is_dir() and not target.is_symlink():
@@ -1504,7 +1552,9 @@ class LocalFileOpsExecutor:
             raise SlurmSubmissionRejected(f"file already exists: {target}") from exc
         return str(target)
 
-    def stat_path(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> FileStat:
+    def stat_path(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> FileStat:
         target = self._authorize(path)
         if not target.exists():
             raise SlurmTransportError(f"path does not exist: {path}")
@@ -1517,9 +1567,13 @@ class LocalFileOpsExecutor:
             kind = "file"
         else:
             kind = "other"
-        return FileStat(path=str(target), type=kind, size=info.st_size, mtime=int(info.st_mtime))
+        return FileStat(
+            path=str(target), type=kind, size=info.st_size, mtime=int(info.st_mtime)
+        )
 
-    def disk_usage(self, *, path: str, owner: str, timeout_seconds: float = 30.0) -> DiskUsage:
+    def disk_usage(
+        self, *, path: str, owner: str, timeout_seconds: float = 30.0
+    ) -> DiskUsage:
         target = self._authorize(path)
         if not target.exists():
             raise SlurmTransportError(f"path does not exist: {path}")
@@ -2474,7 +2528,9 @@ def _aggregate_command_job_rows(
         raise ValueError("command job row source is invalid")
     rows: list[tuple[str, RunState, list[str], str]] = []
     for line in output.strip().splitlines():
-        found_job_id, owner, raw_state, detail = _split_command_row(line, expected_fields=4)
+        found_job_id, owner, raw_state, detail = _split_command_row(
+            line, expected_fields=4
+        )
         if not _is_job_or_array_element(found_job_id, parent_job_id=job_id):
             raise SlurmTransportError(f"{source} returned mismatched job_id")
         _require_accounting_owner(owner=owner, user=user)
@@ -2520,7 +2576,9 @@ def _is_job_or_array_element(found_job_id: str, *, parent_job_id: str) -> bool:
 
 
 def _split_command_row(line: str, *, expected_fields: int) -> list[str]:
-    fields = [field.strip() for field in line.split("|")] if "|" in line else line.split()
+    fields = (
+        [field.strip() for field in line.split("|")] if "|" in line else line.split()
+    )
     if len(fields) < expected_fields:
         raise SlurmTransportError(f"unexpected command output row: {line!r}")
     return fields[:expected_fields]

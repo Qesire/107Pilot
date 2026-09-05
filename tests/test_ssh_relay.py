@@ -107,7 +107,9 @@ def test_subprocess_relay_allows_only_batched_readonly_sstat_shape(tmp_path: Pat
             portal_owner="alice",
         )
 
-    assert run.call_args_list[1].args[0][-1] == ("sstat -nP --allsteps -j 101,102 -o " + fields)
+    assert run.call_args_list[1].args[0][-1] == (
+        "sstat -nP --allsteps -j 101,102 -o " + fields
+    )
     with pytest.raises(SshRelayPolicyError, match="unsupported sstat flag"):
         client.execute(("sstat", "--help"), portal_owner="alice")
 
@@ -296,25 +298,21 @@ def test_ssh_publication_relay_exposes_typed_digest_and_compare_swap(tmp_path: P
     )
     relay = SshRelayExecutor(client)
 
-    assert relay.path_sha256(path="/public/home/alice/project/new.py", owner="alice") is None
-    assert (
-        relay.compare_and_swap_file(
-            staged_path="/public/home/alice/project/.107pilot/publish/c/new.py",
-            target_path="/public/home/alice/project/new.py",
-            expected_sha256=None,
-            desired_sha256="a" * 64,
-            owner="alice",
-        )
-        == "committed"
-    )
-    assert (
-        relay.compare_and_delete_file(
-            target_path="/public/home/alice/project/old.py",
-            expected_sha256="b" * 64,
-            owner="alice",
-        )
-        == "already_committed"
-    )
+    assert relay.path_sha256(
+        path="/public/home/alice/project/new.py", owner="alice"
+    ) is None
+    assert relay.compare_and_swap_file(
+        staged_path="/public/home/alice/project/.107pilot/publish/c/new.py",
+        target_path="/public/home/alice/project/new.py",
+        expected_sha256=None,
+        desired_sha256="a" * 64,
+        owner="alice",
+    ) == "committed"
+    assert relay.compare_and_delete_file(
+        target_path="/public/home/alice/project/old.py",
+        expected_sha256="b" * 64,
+        owner="alice",
+    ) == "already_committed"
 
     for command in client.file_shell_commands:
         tokens = shlex.split(command)
@@ -465,7 +463,9 @@ def test_ssh_slurm_backend_materializes_private_run_directory_and_reconciles(
     )
 
     assert receipt.job_id == "321"
-    assert client.writes[0][0].endswith("/.107pilot/runs/run_abc/submission.sbatch")
+    assert client.writes[0][0].endswith(
+        "/.107pilot/runs/run_abc/submission.sbatch"
+    )
     marker = json.loads(client.writes[1][1])
     assert marker["idempotency_key"] == "run_abc:submit"
     assert "script_sha256" in marker
