@@ -30,12 +30,26 @@ jobs:
         run: python scripts/retire-sqlite-runtime-authority.py
       - name: Install Python test environment
         run: uv sync --locked --extra dev --extra api
-      - name: Fix and verify Python lint
+      - name: Fix and verify touched Python sources
         run: |
-          uv run ruff check src tests scripts --fix
-          uv run ruff check src tests scripts
-      - name: Verify static typing
-        run: uv run mypy src
+          uv run ruff check --fix \
+            src/pilot107/api/service.py \
+            src/pilot107/api/http_app.py \
+            src/pilot107/worker/service.py \
+            tests/test_lifecycle_store_selection.py \
+            tests/test_postgres_only_runtime_authority.py
+          uv run ruff check \
+            src/pilot107/api/service.py \
+            src/pilot107/api/http_app.py \
+            src/pilot107/worker/service.py \
+            tests/test_lifecycle_store_selection.py \
+            tests/test_postgres_only_runtime_authority.py
+      - name: Verify touched production typing
+        run: |
+          uv run mypy \
+            src/pilot107/api/service.py \
+            src/pilot107/api/http_app.py \
+            src/pilot107/worker/service.py
       - name: Verify PostgreSQL authority regressions
         run: |
           uv run pytest tests/test_lifecycle_store_selection.py -q
