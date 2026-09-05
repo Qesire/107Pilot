@@ -76,12 +76,12 @@ class AgentOperationIntent:
             (self.tool_name, "tool_name"),
         ):
             _nonempty(value, label)
-        for value, label in (
+        for optional_value, label in (
             (self.target_ref, "target_ref"),
             (self.target_revision, "target_revision"),
         ):
-            if value is not None:
-                _nonempty(value, label)
+            if optional_value is not None:
+                _nonempty(optional_value, label)
 
 
 @dataclass(frozen=True)
