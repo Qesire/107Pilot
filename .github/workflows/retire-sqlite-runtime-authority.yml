@@ -7,6 +7,7 @@ on:
     paths:
       - scripts/retire-sqlite-runtime-authority.py
       - .github/workflows/retire-sqlite-runtime-authority.yml
+      - src/pilot107/agent/store_factory.py
       - src/pilot107/api/run_workspace_routes.py
       - tests/test_postgres_only_runtime_authority.py
 
