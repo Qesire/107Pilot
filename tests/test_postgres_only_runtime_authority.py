@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -87,8 +86,14 @@ def test_workarea_is_the_only_live_research_boundary_source() -> None:
 
     assert "class PostgresWorkAreaStore" in source
     assert "SQLite is not given a second production" in source
-    assert "remediation" in source
-    assert "are not duplicated here" in source
+    assert "contract_ids: tuple[str, ...]" in source
+    assert "run_ids: tuple[str, ...]" in source
+    assert "agent_project_ids: tuple[str, ...]" in source
+    assert "assets: tuple[WorkAreaAssetRef, ...]" in source
+    assert "remediation_session_ids" not in source
+    assert "agent_session_ids" not in source
+    assert "Evidence, diagnosis and repair facts are reached through Run/AgentProject" in source
+    assert "provenance and are not duplicated here" in source
 
 
 def test_workarea_historical_migration_ids_remain_frozen() -> None:
