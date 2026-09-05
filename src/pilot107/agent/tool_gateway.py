@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, NoReturn
@@ -666,7 +667,9 @@ class AgentToolGateway:
         message: str,
     ) -> None:
         assert self.operation_ledger is not None
-        try:
+        # A running record is safer than guessing a terminal outcome. A
+        # reconciler must resolve it before any later execution can proceed.
+        with suppress(AgentOperationConflict):
             self.operation_ledger.mark_unknown(
                 intent.operation_key,
                 owner=invocation.owner,
@@ -674,10 +677,6 @@ class AgentToolGateway:
                 expected_fencing_token=claims.fencing_token,
                 error={"code": code, "message": message, "retryable": False},
             )
-        except AgentOperationConflict:
-            # A running record is safer than guessing a terminal outcome. A
-            # reconciler must resolve it before any later execution can proceed.
-            pass
 
     def _verify(self, token: str) -> AgentCapabilityClaims:
         try:
