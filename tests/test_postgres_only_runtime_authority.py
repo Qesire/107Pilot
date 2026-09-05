@@ -21,6 +21,46 @@ def test_legacy_research_workspace_authority_is_absent() -> None:
     assert all(not (ROOT / path).exists() for path in retired)
 
 
+def test_live_production_composition_has_no_research_workspace_bridge() -> None:
+    sources = (
+        "src/pilot107/api/run_workspace_routes.py",
+        "src/pilot107/api/service.py",
+        "src/pilot107/api/http_app.py",
+        "src/pilot107/worker/service.py",
+    )
+    forbidden = (
+        "research_workspace",
+        "research-workspaces",
+        "ResearchWorkspace",
+    )
+
+    for relative in sources:
+        source = _source(relative)
+        assert all(marker not in source for marker in forbidden), relative
+
+
+def test_production_composition_cannot_construct_sqlite_runtime_authority() -> None:
+    sources = (
+        "src/pilot107/api/service.py",
+        "src/pilot107/api/http_app.py",
+        "src/pilot107/worker/service.py",
+        "src/pilot107/api/run_workspace_routes.py",
+    )
+    forbidden = (
+        "DatabaseMode.SQLITE",
+        "SQLiteObservabilityStore",
+        "SQLiteRuntimeWatchStore",
+        "SQLiteControlRepository",
+        "SQLiteAgentSessionStore",
+        "SQLiteResearchWorkspaceStore",
+        "if not selection.is_postgres",
+    )
+
+    for relative in sources:
+        source = _source(relative)
+        assert all(marker not in source for marker in forbidden), relative
+
+
 def test_durable_store_factory_cannot_construct_sqlite_runtime_stores() -> None:
     source = _source("src/pilot107/agent/store_factory.py")
 
@@ -49,3 +89,14 @@ def test_workarea_is_the_only_live_research_boundary_source() -> None:
     assert "SQLite is not given a second production" in source
     assert "remediation" in source
     assert "are not duplicated here" in source
+
+
+def test_workarea_historical_migration_ids_remain_frozen() -> None:
+    source = _source("src/pilot107/core/workarea.py")
+    frozen_ids = (
+        '_MIGRATION_002_ID = "006c.002.research_workspace_boundary"',
+        '_MIGRATION_003_ID = "006c.003.research_workspace_run_edge_normalization"',
+        '_MIGRATION_004_ID = "006c.004.workarea_terminology"',
+    )
+
+    assert all(migration_id in source for migration_id in frozen_ids)

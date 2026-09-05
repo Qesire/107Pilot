@@ -1,36 +1,19 @@
-"""HTTP routes for Run workspaces and user-selected Research Workspaces."""
+"""HTTP route for the read-only Run context projection."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
 from pilot107.api.http_types import ApiResponse
-from pilot107.api.research_workspace_routes import ResearchWorkspaceRoutes
 from pilot107.core.identity import UserIdentity
-from pilot107.core.postgres_research_workspace import PostgresResearchWorkspaceStore
-from pilot107.core.research_workspace import SQLiteResearchWorkspaceStore
-from pilot107.services.research_workspace_service import ResearchWorkspaceService
 from pilot107.services.run_workspace_service import RunWorkspaceService
 
 
 class RunWorkspaceRoutes:
-    """Existing Run route plus a compatibility composition point for workspace APIs.
+    """Compatibility route for the read-only Run context projection."""
 
-    ``Pilot107HttpApi`` already delegates GET routing to this object.  Until the
-    larger HTTP composition root is refactored, the Research Workspace API is
-    attached here without changing Run semantics.  The active RunStore selects
-    the same durable backend for Research Workspace bindings; PostgreSQL never
-    falls back to its compatibility SQLite path.
-    """
-
-    def __init__(
-        self,
-        service: RunWorkspaceService,
-        *,
-        research_routes: ResearchWorkspaceRoutes | None = None,
-    ) -> None:
+    def __init__(self, service: RunWorkspaceService) -> None:
         self.service = service
-        self.research_routes = research_routes or _research_routes(service)
 
     def handle_get(
         self,
@@ -39,17 +22,6 @@ class RunWorkspaceRoutes:
         params: Mapping[str, list[str]],
         identity: UserIdentity | None,
     ) -> ApiResponse | None:
-        if parts and parts[0] == "research-workspaces":
-            if self.research_routes is None:
-                return _research_store_unavailable()
-            response = self.research_routes.handle_get(
-                parts,
-                params=params,
-                identity=identity,
-            )
-            if response is not None:
-                return response
-
         # GET /api/v1/runs/{run_id}/workspace
         if len(parts) != 3 or parts[0] != "runs" or parts[2] != "workspace":
             return None
@@ -67,63 +39,6 @@ class RunWorkspaceRoutes:
         except PermissionError:
             return _error(403, "RUN_WORKSPACE.FORBIDDEN", "run is owned by another user")
         return ApiResponse(status=200, payload=payload)
-
-    def handle_post(
-        self,
-        parts: list[str],
-        *,
-        body: bytes,
-        identity: UserIdentity | None,
-    ) -> ApiResponse | None:
-        """Delegate Research Workspace writes once the composition root calls us.
-
-        The method is intentionally inert for all non-workspace paths.  Adding
-        this method does not itself expose writes; ``Pilot107HttpApi._handle_post``
-        must explicitly delegate to it, which is kept as a separate landing step.
-        """
-
-        if not parts or parts[0] != "research-workspaces":
-            return None
-        if self.research_routes is None:
-            return _research_store_unavailable()
-        return self.research_routes.handle_post(
-            parts,
-            body=body,
-            identity=identity,
-        )
-
-
-def _research_routes(
-    service: RunWorkspaceService,
-) -> ResearchWorkspaceRoutes | None:
-    db_path = getattr(service.store, "db_path", None)
-    dsn = getattr(service.store, "dsn", None)
-    if dsn is not None:
-        if db_path is None:
-            return None
-        try:
-            store = PostgresResearchWorkspaceStore(
-                str(dsn),
-                compatibility_path=db_path,
-            )
-        except (TypeError, ValueError):
-            return None
-        return ResearchWorkspaceRoutes(ResearchWorkspaceService(store))
-    if db_path is None:
-        return None
-    try:
-        store = SQLiteResearchWorkspaceStore(db_path)
-    except (TypeError, ValueError):
-        return None
-    return ResearchWorkspaceRoutes(ResearchWorkspaceService(store))
-
-
-def _research_store_unavailable() -> ApiResponse:
-    return _error(
-        503,
-        "RESEARCH_WORKSPACE.STORE_UNAVAILABLE",
-        "Research Workspace storage is not configured for this backend",
-    )
 
 
 def _error(status: int, code: str, message: str) -> ApiResponse:

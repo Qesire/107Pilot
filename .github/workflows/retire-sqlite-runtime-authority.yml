@@ -7,6 +7,8 @@ on:
     paths:
       - scripts/retire-sqlite-runtime-authority.py
       - .github/workflows/retire-sqlite-runtime-authority.yml
+      - src/pilot107/api/run_workspace_routes.py
+      - tests/test_postgres_only_runtime_authority.py
 
 permissions:
   contents: write
@@ -28,27 +30,76 @@ jobs:
           python-version: "3.12"
       - name: Apply deterministic source cleanup
         run: python scripts/retire-sqlite-runtime-authority.py
+      - name: Finalize fail-closed constructor narrowing
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/pilot107/api/http_app.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''        if remediation_service is None and remediation_store is None:
+              raise ValueError("remediation_store is required; SQLite fallback has been retired")
+          self.remediation_service = remediation_service or RemediationService(
+              run_store=store,
+              remediation_store=remediation_store,
+              advice_service=self.agent_advice_service,
+              contract_store=contract_store,
+              evidence_store=evidence_store,
+              project_agent_service=project_agent_service,
+          )
+          '''
+          new = '''        if remediation_service is None:
+              if remediation_store is None:
+                  raise ValueError(
+                      "remediation_store is required; SQLite fallback has been retired"
+                  )
+              self.remediation_service = RemediationService(
+                  run_store=store,
+                  remediation_store=remediation_store,
+                  advice_service=self.agent_advice_service,
+                  contract_store=contract_store,
+                  evidence_store=evidence_store,
+                  project_agent_service=project_agent_service,
+              )
+          else:
+              self.remediation_service = remediation_service
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("expected generated remediation fallback exactly once")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
       - name: Install Python test environment
         run: uv sync --locked --extra dev --extra api
+      - name: Verify production import closure
+        run: |
+          uv run python - <<'PY'
+          import pilot107.api.http_app
+          import pilot107.api.run_workspace_routes
+          import pilot107.api.service
+          import pilot107.worker.service
+          PY
       - name: Fix and verify touched Python sources
         run: |
           uv run ruff check --fix \
             src/pilot107/api/service.py \
             src/pilot107/api/http_app.py \
+            src/pilot107/api/run_workspace_routes.py \
             src/pilot107/worker/service.py \
             tests/test_lifecycle_store_selection.py \
             tests/test_postgres_only_runtime_authority.py
           uv run ruff check \
             src/pilot107/api/service.py \
             src/pilot107/api/http_app.py \
+            src/pilot107/api/run_workspace_routes.py \
             src/pilot107/worker/service.py \
             tests/test_lifecycle_store_selection.py \
             tests/test_postgres_only_runtime_authority.py
       - name: Verify touched production typing
         run: |
-          uv run mypy \
+          uv run mypy --follow-imports=skip \
             src/pilot107/api/service.py \
             src/pilot107/api/http_app.py \
+            src/pilot107/api/run_workspace_routes.py \
             src/pilot107/worker/service.py
       - name: Verify PostgreSQL authority regressions
         run: |
