@@ -216,7 +216,7 @@ class PostgresAgentOperationReconciler:
             ).fetchone()
             if valid is None:
                 return None
-            resolution = self._resolution(connection, record)
+            resolution = self._resolution(connection, record, invocation)
             if resolution is None:
                 _postgres_note_unresolved(
                     connection,
@@ -242,6 +242,7 @@ class PostgresAgentOperationReconciler:
         self,
         connection: Any,
         record: AgentOperationRecord,
+        invocation: ToolInvocation,
     ) -> tuple[dict[str, Any], str | None] | None:
         if record.tool_name == "builder_build_submit":
             row = connection.execute(
@@ -263,9 +264,13 @@ class PostgresAgentOperationReconciler:
                 (record.owner, record.request_key),
             ).fetchone()
             return _task_resolution(row)
-        # AC4 PostgreSQL Workspace mutation is deliberately fail-closed until
-        # live-head/journal parity exists, so there is no PostgreSQL Workspace
-        # side-effect receipt to reconcile here.
+        if record.tool_name == "workspace_patch":
+            return _postgres_workspace_patch_resolution(
+                connection,
+                record=record,
+                invocation=invocation,
+                jsonb=self._jsonb,
+            )
         return None
 
 
@@ -333,6 +338,68 @@ def _sqlite_workspace_patch_resolution(
         operation_key=record.operation_key,
         files_json=_workspace_files_json(expected_files),
     )
+    return _workspace_patch_result(
+        rows,
+        record=record,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        approval_summary_zh=approval_summary_zh,
+    )
+
+
+def _postgres_workspace_patch_resolution(
+    connection: Any,
+    *,
+    record: AgentOperationRecord,
+    invocation: ToolInvocation,
+    jsonb: Any,
+) -> tuple[dict[str, Any], str | None] | None:
+    identity = _workspace_patch_identity(invocation.arguments)
+    if identity is None:
+        return None
+    project_id, workspace_id, approval_summary_zh, expected_files = identity
+    if record.target_ref != f"workspace:{workspace_id}":
+        return None
+    expected_payload = json.loads(_workspace_files_json(expected_files))
+    rows = connection.execute(
+        """
+        SELECT j.change_set_id, c.payload_json
+        FROM agent_workspace_mutation_journal AS j
+        JOIN agent_workspace_changesets AS c
+          ON c.change_set_id = j.change_set_id
+         AND c.owner = j.owner
+         AND c.workspace_id = j.workspace_id
+         AND c.project_id = j.project_id
+        WHERE j.owner = %s AND j.workspace_id = %s AND j.project_id = %s
+          AND j.state = 'committed' AND j.change_set_id IS NOT NULL
+          AND j.request_key = %s AND j.files_json = %s
+        ORDER BY j.updated_at DESC, j.mutation_id DESC
+        """,
+        (
+            record.owner,
+            workspace_id,
+            project_id,
+            record.operation_key,
+            jsonb(expected_payload),
+        ),
+    ).fetchall()
+    return _workspace_patch_result(
+        rows,
+        record=record,
+        project_id=project_id,
+        workspace_id=workspace_id,
+        approval_summary_zh=approval_summary_zh,
+    )
+
+
+def _workspace_patch_result(
+    rows: list[Any],
+    *,
+    record: AgentOperationRecord,
+    project_id: str,
+    workspace_id: str,
+    approval_summary_zh: str,
+) -> tuple[dict[str, Any], str | None] | None:
     if len(rows) != 1:
         return None
     row = rows[0]
