@@ -132,9 +132,15 @@ _MIGRATION_004_STATEMENTS = (
     "ALTER TABLE workarea_agent_projects RENAME COLUMN research_workspace_id TO workarea_id",
     "ALTER TABLE workarea_assets RENAME COLUMN research_workspace_id TO workarea_id",
     "ALTER INDEX idx_research_workspaces_owner_updated RENAME TO idx_workareas_owner_updated",
-    "ALTER INDEX idx_research_workspace_contracts_contract RENAME TO idx_workarea_contracts_contract",
+    (
+        "ALTER INDEX idx_research_workspace_contracts_contract "
+        "RENAME TO idx_workarea_contracts_contract"
+    ),
     "ALTER INDEX idx_research_workspace_runs_workspace RENAME TO idx_workarea_runs_workarea",
-    "ALTER INDEX idx_research_workspace_agent_projects_workspace RENAME TO idx_workarea_agent_projects_workarea",
+    (
+        "ALTER INDEX idx_research_workspace_agent_projects_workspace "
+        "RENAME TO idx_workarea_agent_projects_workarea"
+    ),
     "ALTER INDEX idx_research_workspace_assets_ref RENAME TO idx_workarea_assets_ref",
 )
 
