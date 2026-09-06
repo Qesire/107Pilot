@@ -3,24 +3,25 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --bg-canvas: #f6f7f9;
+  --bg-canvas: #f5f6f8;
   --bg-surface: #ffffff;
-  --bg-subtle: #f1f3f6;
+  --bg-subtle: #f0f2f5;
   --bg-raised: #ffffff;
-  --bg-inverse: #15181d;
+  --bg-inverse: #15191e;
 
-  --text-primary: #20242c;
-  --text-secondary: #616975;
-  --text-tertiary: #858d98;
-  --text-disabled: #a8afb8;
-  --text-inverse: #eef0f3;
+  --text-primary: #1b2028;
+  --text-secondary: #555e6b;
+  --text-tertiary: #77818d;
+  --text-disabled: #a5adb7;
+  --text-inverse: #eef1f4;
 
-  --border-default: #dee2e8;
-  --border-strong: #c7cdd6;
+  --border-default: #dbe0e6;
+  --border-strong: #c4cbd4;
 
-  --accent-primary: #5966a8;
-  --accent-hover: #4b5796;
-  --accent-soft: #eef0f8;
+  /* Product accent: restrained research blue, not indigo/purple. */
+  --accent-primary: #356889;
+  --accent-hover: #2b5673;
+  --accent-soft: #e9f0f5;
 
   --state-success: #2f7667;
   --state-success-soft: #eaf4f1;
@@ -31,31 +32,32 @@
   --state-info: #3f6f9f;
   --state-info-soft: #ebf2f8;
 
-  --agent-fg: #716a91;
-  --agent-bg: #f2f0f7;
-  --agent-border: #ddd9e8;
+  /* Agent is differentiated by iconography/provenance, not AI-purple chrome. */
+  --agent-fg: #586776;
+  --agent-bg: #eef1f4;
+  --agent-border: #d8dee5;
 
-  --focus-ring: rgba(89, 102, 168, .28);
-  --shadow-focus: 0 1px 2px rgba(32, 36, 44, .06);
-  --shadow-popover: 0 8px 24px rgba(32, 36, 44, .12);
-  --shadow-dialog: 0 12px 32px rgba(32, 36, 44, .16);
+  --focus-ring: rgba(53, 104, 137, .24);
+  --shadow-focus: 0 1px 2px rgba(27, 32, 40, .05);
+  --shadow-popover: 0 8px 24px rgba(27, 32, 40, .12);
+  --shadow-dialog: 0 12px 32px rgba(27, 32, 40, .16);
 
-  --log-bg: #15181d;
-  --log-fg: #d8dce3;
-  --log-muted: #8f98a5;
+  --log-bg: #15191e;
+  --log-fg: #d8dde4;
+  --log-muted: #8d97a3;
 
   /* Compatibility aliases while legacy pages migrate. */
   --canvas: var(--bg-canvas);
   --surface: var(--bg-surface);
   --surface-soft: var(--bg-subtle);
-  --surface-strong: #e7eaf0;
+  --surface-strong: #e6e9ee;
   --ink: var(--text-primary);
   --ink-soft: var(--text-secondary);
   --ink-faint: var(--text-tertiary);
   --line: var(--border-default);
   --line-strong: var(--border-strong);
-  --nav: #f1f3f6;
-  --nav-soft: #e8ebf0;
+  --nav: #eef1f4;
+  --nav-soft: #e5e9ee;
   --teal: var(--state-success);
   --teal-soft: var(--state-success-soft);
   --blue: var(--state-info);
@@ -73,24 +75,24 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --bg-canvas: #121418;
-  --bg-surface: #181b20;
-  --bg-subtle: #1e2228;
-  --bg-raised: #252a31;
-  --bg-inverse: #eef0f3;
+  --bg-canvas: #111519;
+  --bg-surface: #181c21;
+  --bg-subtle: #1e2329;
+  --bg-raised: #252b32;
+  --bg-inverse: #eef1f4;
 
-  --text-primary: #eef0f3;
-  --text-secondary: #a4abb5;
-  --text-tertiary: #7e8792;
-  --text-disabled: #5f6670;
-  --text-inverse: #20242c;
+  --text-primary: #eef1f4;
+  --text-secondary: #a8b0ba;
+  --text-tertiary: #7f8994;
+  --text-disabled: #5f6872;
+  --text-inverse: #1b2028;
 
-  --border-default: #30353e;
-  --border-strong: #434a54;
+  --border-default: #303740;
+  --border-strong: #444d57;
 
-  --accent-primary: #8e99db;
-  --accent-hover: #a1abe4;
-  --accent-soft: #242a46;
+  --accent-primary: #77a6c5;
+  --accent-hover: #8bb5d0;
+  --accent-soft: #1c3040;
 
   --state-success: #63ad9a;
   --state-success-soft: #1d302b;
@@ -101,18 +103,18 @@
   --state-info: #78a7d0;
   --state-info-soft: #1f2d3a;
 
-  --agent-fg: #aaa3ca;
-  --agent-bg: #24222d;
-  --agent-border: #3d394b;
+  --agent-fg: #a4afba;
+  --agent-bg: #22282e;
+  --agent-border: #3a424b;
 
-  --focus-ring: rgba(142, 153, 219, .32);
+  --focus-ring: rgba(119, 166, 197, .3);
   --shadow-focus: 0 1px 2px rgba(0, 0, 0, .22);
   --shadow-popover: 0 8px 24px rgba(0, 0, 0, .34);
   --shadow-dialog: 0 12px 32px rgba(0, 0, 0, .42);
 
-  --log-bg: #101216;
-  --log-fg: #dde1e8;
-  --log-muted: #8c95a2;
+  --log-bg: #0f1317;
+  --log-fg: #dde2e8;
+  --log-muted: #8c96a2;
 
   --canvas: var(--bg-canvas);
   --surface: var(--bg-surface);
@@ -123,8 +125,8 @@
   --ink-faint: var(--text-tertiary);
   --line: var(--border-default);
   --line-strong: var(--border-strong);
-  --nav: #15181d;
-  --nav-soft: #1e2228;
+  --nav: #15191e;
+  --nav-soft: #1d2329;
   --teal: var(--state-success);
   --teal-soft: var(--state-success-soft);
   --blue: var(--state-info);
