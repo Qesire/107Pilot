@@ -225,7 +225,8 @@ test("creates a WorkArea, reviews effective request, commits once, and reaches R
 
   await expect(page.getByRole("heading", { name: "Effective Slurm Request" })).toBeVisible();
   await expect(page.getByText("Students / qos_stu_medium_2gpu")).toBeVisible();
-  await expect(page.getByDisplayValue(/python train\.py/)).toBeVisible();
+  const reviewedScript = page.locator("textarea.mono[readonly]");
+  await expect(reviewedScript).toHaveValue(/python train\.py/);
   await expect(page.getByText("preflight-digest")).toBeVisible();
 
   await page.getByRole("checkbox").check();
