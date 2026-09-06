@@ -126,10 +126,18 @@ async function request<T>(
   return payload;
 }
 
-const post = <T>(path: string, user: string, body: object) => request<T>(path, user, {
-  method: "POST",
+const mutate = <T>(
+  method: "POST" | "PATCH",
+  path: string,
+  user: string,
+  body: object,
+) => request<T>(path, user, {
+  method,
   body: JSON.stringify(body),
 });
+
+const post = <T>(path: string, user: string, body: object) =>
+  mutate<T>("POST", path, user, body);
 
 export const workareaApi = {
   list: (user: string, signal?: AbortSignal) =>
@@ -142,6 +150,16 @@ export const workareaApi = {
     ),
   create: (user: string, input: { title: string; description: string; request_key: string }) =>
     post<WorkAreaDetail>("/api/v1/workareas", user, input),
+  update: (
+    user: string,
+    id: string,
+    input: { title?: string; description?: string },
+  ) => mutate<WorkAreaDetail>(
+    "PATCH",
+    `/api/v1/workareas/${encodeURIComponent(id)}`,
+    user,
+    input,
+  ),
   addBinding: (
     user: string,
     id: string,
