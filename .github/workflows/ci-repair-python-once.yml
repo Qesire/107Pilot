@@ -7,7 +7,7 @@ on:
       - fix/competition-postgres-only-ci
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   repair:
@@ -198,6 +198,29 @@ jobs:
         run: |
           set -o pipefail
           uv run pytest -q 2>&1 | tee /tmp/pytest.log
+      - name: Persist validated candidate
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/pilot107/agent/workspace_live.py \
+            src/pilot107/agent/workspace_journal.py \
+            src/pilot107/agent/operation_ledger.py \
+            src/pilot107/agent/operation_attempts.py \
+            src/pilot107/agent/operation_reconciler.py \
+            src/pilot107/worker/agent_turn_worker.py \
+            tests/conftest.py \
+            tests/agent/test_postgres_store.py \
+            tests/agent/test_project_store_contract.py \
+            tests/agent/test_task_store_contract.py \
+            tests/test_control_repository.py \
+            tests/api/test_service_snapshot_wiring.py \
+            tests/api/test_service_template_seed_wiring.py
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "fix(testing): restore explicit SQLite durability composition"
+          git push origin HEAD:fix/competition-postgres-only-ci
       - name: Capture candidate diff
         if: always()
         run: git diff -- src tests > /tmp/candidate.patch
