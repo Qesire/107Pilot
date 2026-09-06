@@ -166,7 +166,12 @@ class FakeContracts:
 
 
 class FakeLaunches:
-    def __init__(self, *, latest: LaunchPreflightRecord, assessed_digest: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        latest: LaunchPreflightRecord,
+        assessed_digest: str | None = None,
+    ) -> None:
         self.candidate = _candidate()
         self.latest = latest
         self.assessed_digest = assessed_digest or latest.assessment_digest
