@@ -52,7 +52,11 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
 # the opt-in SSH code-context transport is configured.  No server, key, or
 # credential is baked into this image.  git is required by the local
 # code-context transport (LocalWorkspaceReader) to inspect workspace revisions.
+# Upgrade the pinned base image's Debian packages before installing tools so
+# image scanning validates the patched OS state rather than the historical
+# package set baked into the reproducible base digest.
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends bubblewrap openssh-client git \
     && rm -rf /var/lib/apt/lists/*
 
