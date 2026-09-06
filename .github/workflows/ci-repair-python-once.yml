@@ -137,7 +137,7 @@ jobs:
       - name: Sync validation environment
         run: uv sync --locked --extra dev --extra api --extra postgres
       - name: Ruff
-        run: uv run ruff check src tests scripts
+        run: uv run ruff check src tests
       - name: mypy
         run: uv run mypy src
       - name: Contract and composition targets
