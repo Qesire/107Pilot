@@ -1,0 +1,43 @@
+name: ci-autofix-once
+
+on:
+  push:
+    branches:
+      - fix/competition-postgres-only-ci
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'ci-autofix-lint'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/competition-postgres-only-ci
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.3"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked --extra dev
+      - name: Apply mechanical Ruff repairs
+        run: |
+          set -euo pipefail
+          files="src/pilot107/agent/durable_workspace.py src/pilot107/agent/durable_workspace_atomic.py"
+          uv run ruff check --fix --unsafe-fixes $files
+          uv run ruff format $files
+          uv run ruff check $files
+          git diff --check
+      - name: Commit lint repairs
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/pilot107/agent/durable_workspace.py src/pilot107/agent/durable_workspace_atomic.py
+          git diff --cached --quiet && exit 0
+          git commit -m "fix(ci): normalize restored AC4 test implementation"
+          git push origin HEAD:fix/competition-postgres-only-ci
