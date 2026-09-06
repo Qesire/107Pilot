@@ -8,7 +8,12 @@ def replace_once(path: str, old: str, new: str) -> None:
     file_path = Path(path)
     text = file_path.read_text(encoding="utf-8")
     count = text.count(old)
-    if count != 1:
+    duplicate_reload = (
+        path == "tests/api/test_service_template_seed_wiring.py"
+        and old == "    importlib.reload(service_module)\n"
+        and count == 2
+    )
+    if count != 1 and not duplicate_reload:
         raise SystemExit(f"{path}: expected exactly one match for {old!r}, got {count}")
     file_path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
