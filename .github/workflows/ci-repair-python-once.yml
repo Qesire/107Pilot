@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   repair:
-    if: github.event.head_commit.message == 'ci-repair-python-teststores'
+    if: github.event.head_commit.message == 'ci-repair-python-teststores-persist'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -127,12 +127,22 @@ jobs:
         run: uv run pytest -q
       - name: Diff check
         run: git diff --check
-      - name: Commit validated test-store repair
+      - name: Persist validated test-store repair
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/pilot107/agent/workspace_live.py src/pilot107/agent/workspace_journal.py
-          git diff --cached --quiet && exit 0
+          if git diff --cached --quiet; then
+            echo "ERROR: validated repair produced no staged source diff" >&2
+            git status --short
+            exit 1
+          fi
           git commit -m "fix(ci): restore explicit SQLite test durability stores"
-          git push origin HEAD:fix/competition-postgres-only-ci
+          repair_sha="$(git rev-parse HEAD)"
+          git push origin HEAD:refs/heads/fix/competition-postgres-only-ci
+          git fetch origin refs/heads/fix/competition-postgres-only-ci
+          remote_sha="$(git rev-parse FETCH_HEAD)"
+          echo "repair_sha=$repair_sha"
+          echo "remote_sha=$remote_sha"
+          test "$repair_sha" = "$remote_sha"
