@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pilot107.agent.protocol import ToolInvocation
-from pilot107.agent.store import AgentSessionStore
+from pilot107.agent.store import AgentSessionStore, SQLiteAgentSessionStore
 from pilot107.core.postgres_domain_schema import initialize_postgres_domain_schema
 from pilot107.core.schema_migrations import SchemaMigration, apply_schema_migrations
 
@@ -212,19 +212,18 @@ def build_agent_operation_ledger(
     *,
     clock: Callable[[], datetime] | None = None,
 ) -> AgentOperationLedger | None:
-    """Select a ledger matching the existing durable Session store.
+    """Build operation durability without reintroducing runtime SQLite selection."""
 
-    Unknown test doubles retain the legacy invocation ledger. Production
-    SQLite/PostgreSQL stores gain operation receipts without changing service or
-    Workspace construction.
-    """
-
-    db_path = getattr(store, "db_path", None)
-    if isinstance(db_path, Path):
-        return SQLiteAgentOperationLedger(db_path, clock=clock)
     dsn = getattr(store, "dsn", None)
     if isinstance(dsn, str) and dsn:
         return PostgresAgentOperationLedger(dsn, clock=clock)
+    if isinstance(store, SQLiteAgentSessionStore):
+        return SQLiteAgentOperationLedger(store.db_path, clock=clock)
+    if isinstance(getattr(store, "db_path", None), Path):
+        raise RuntimeError(
+            "Agent operation ledger requires PostgreSQL; "
+            "SQLite runtime authority has been retired"
+        )
     return None
 
 

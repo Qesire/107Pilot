@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from pilot107.agent.postgres_task_store import PostgresAgentTaskStore
-from pilot107.agent.store_factory import build_agent_task_store
+from pilot107.agent.store_factory import ConfigurationError, build_agent_task_store
 from pilot107.agent.task_store import AgentTaskStore, SQLiteAgentTaskStore, _task_from_row
 from pilot107.agent.tasks import (
     AgentResourceEnvelope,
@@ -1531,10 +1531,12 @@ def test_sqlite_agent_task_store_survives_reopen(tmp_path: Path) -> None:
     assert reopened == task
 
 
-def test_factory_selects_agent_task_store(tmp_path: Path) -> None:
-    store = build_agent_task_store(sqlite_path=tmp_path / "tasks.db", postgres_dsn=None)
-
-    assert isinstance(store, SQLiteAgentTaskStore)
+def test_factory_rejects_missing_postgres_agent_task_dsn(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="requires PostgreSQL"):
+        build_agent_task_store(
+            sqlite_path=tmp_path / "tasks.db",
+            postgres_dsn=None,
+        )
 
 
 def test_factory_selects_postgres_agent_task_store(

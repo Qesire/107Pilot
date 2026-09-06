@@ -18,6 +18,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from pilot107.agent.store import SQLiteAgentSessionStore
 from pilot107.core.schema_migrations import SchemaMigration, apply_schema_migrations
 
 
@@ -95,12 +96,18 @@ def build_agent_operation_attempt_store(
     *,
     clock: Callable[[], datetime] | None = None,
 ) -> AgentOperationAttemptStore | None:
-    db_path = getattr(session_store, "db_path", None)
-    if isinstance(db_path, Path):
-        return SQLiteAgentOperationAttemptStore(db_path, clock=clock)
+    """Build attempt durability for PostgreSQL or an explicit SQLite test store."""
+
     dsn = getattr(session_store, "dsn", None)
     if isinstance(dsn, str) and dsn:
         return PostgresAgentOperationAttemptStore(dsn, clock=clock)
+    if isinstance(session_store, SQLiteAgentSessionStore):
+        return SQLiteAgentOperationAttemptStore(session_store.db_path, clock=clock)
+    if isinstance(getattr(session_store, "db_path", None), Path):
+        raise RuntimeError(
+            "Agent operation attempt store requires PostgreSQL; "
+            "SQLite runtime authority has been retired"
+        )
     return None
 
 

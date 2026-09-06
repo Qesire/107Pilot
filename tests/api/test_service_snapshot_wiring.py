@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import importlib
 import threading
 import time
 
@@ -11,7 +10,6 @@ import pytest
 
 def _reload_service_module():
     from pilot107.api import service as service_module
-    importlib.reload(service_module)
     return service_module
 
 

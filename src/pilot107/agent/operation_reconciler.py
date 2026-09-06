@@ -36,6 +36,7 @@ from pilot107.agent.operation_ledger import (
 )
 from pilot107.agent.postgres_workspace_durability import PostgresWorkspaceDurabilitySchema
 from pilot107.agent.protocol import ToolInvocation
+from pilot107.agent.store import SQLiteAgentSessionStore
 
 
 class AgentOperationReconciler(Protocol):
@@ -54,16 +55,20 @@ def build_agent_operation_reconciler(
     *,
     clock: Callable[[], datetime] | None = None,
 ) -> AgentOperationReconciler | None:
-    """Build a reconciler against the same durable DB as AgentSessionStore."""
+    """Build reconciliation against PostgreSQL or an explicit SQLite test store."""
 
     if ledger is None:
         return None
-    db_path = getattr(store, "db_path", None)
-    if isinstance(db_path, Path):
-        return SQLiteAgentOperationReconciler(db_path, ledger=ledger, clock=clock)
     dsn = getattr(store, "dsn", None)
     if isinstance(dsn, str) and dsn:
         return PostgresAgentOperationReconciler(dsn, ledger=ledger, clock=clock)
+    if isinstance(store, SQLiteAgentSessionStore):
+        return SQLiteAgentOperationReconciler(store.db_path, ledger=ledger, clock=clock)
+    if isinstance(getattr(store, "db_path", None), Path):
+        raise RuntimeError(
+            "Agent operation reconciler requires PostgreSQL; "
+            "SQLite runtime authority has been retired"
+        )
     return None
 
 
