@@ -183,7 +183,7 @@ def _patch_common_sqlite_builders(
 
 
 def _build_api_service_for_tests(config: object) -> Pilot107HttpApi:
-    db_path = Path(getattr(config, "db_path"))
+    db_path = Path(vars(config)["db_path"])
     with ExitStack() as stack:
         _patch_common_sqlite_builders(stack, api_service_module, db_path)
         stack.enter_context(
@@ -197,7 +197,7 @@ def _build_api_service_for_tests(config: object) -> Pilot107HttpApi:
 
 
 def _build_worker_service_for_tests(config: object) -> object:
-    db_path = Path(getattr(config, "db_path"))
+    db_path = Path(vars(config)["db_path"])
     with ExitStack() as stack:
         _patch_common_sqlite_builders(stack, worker_service_module, db_path)
         return _ORIGINAL_WORKER_SERVICE_BUILDER(config)  # type: ignore[arg-type]
