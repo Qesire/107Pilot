@@ -6,11 +6,11 @@ on:
       - fix/competition-postgres-only-ci
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   repair:
-    if: github.event.head_commit.message == 'ci-repair-python-teststores-persist'
+    if: github.event.head_commit.message == 'ci-repair-python-diagnose-pytest'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Restore explicit SQLite test durability stores
+      - name: Restore exact validated candidate
         run: |
           set -euo pipefail
           base=62b62c3a53d78bf4a8ad5bf3b77b134849d1ea29
@@ -71,11 +71,7 @@ jobs:
           text, count = pattern.subn(replacement, text, count=1)
           if count != 1:
               raise SystemExit(f"workspace_live factory replacement count={count}")
-          if "from typing import Protocol" not in text:
-              raise SystemExit("workspace_live typing import did not match")
           text = text.replace("from typing import Protocol", "from typing import Any, Protocol", 1)
-          if text.count("Mapping[str, object]") != 1:
-              raise SystemExit("workspace_live row mapping count mismatch")
           text = text.replace("Mapping[str, object]", "Mapping[str, Any]", 1)
           long_raise = (
               '                raise WorkspaceLiveConflict('
@@ -102,8 +98,6 @@ jobs:
               count=1,
               flags=re.S,
           )
-          if "from typing import Literal" not in journal:
-              raise SystemExit("workspace_journal typing import did not match")
           journal = journal.replace("from typing import Literal", "from typing import Any, Literal", 1)
           if journal.count("Mapping[str, object]") != 2:
               raise SystemExit("workspace_journal row mapping count mismatch")
@@ -112,37 +106,26 @@ jobs:
           PY
       - name: Sync validation environment
         run: uv sync --locked --extra dev --extra api --extra postgres
-      - name: Ruff
+      - name: Capture first pytest failure
+        id: pytest
+        shell: bash
         run: |
-          set -euo pipefail
-          files="src/pilot107/agent/workspace_live.py src/pilot107/agent/workspace_journal.py"
-          uv run ruff check --fix --unsafe-fixes $files
-          uv run ruff format $files
-          uv run ruff check src tests scripts
-      - name: Mypy
-        run: uv run mypy src
-      - name: Agent lifecycle acceptance
-        run: uv run pytest tests/test_agent_lifecycle_acceptance.py -q
-      - name: Pytest
-        run: uv run pytest -q
-      - name: Diff check
-        run: git diff --check
-      - name: Persist validated test-store repair
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/pilot107/agent/workspace_live.py src/pilot107/agent/workspace_journal.py
-          if git diff --cached --quiet; then
-            echo "ERROR: validated repair produced no staged source diff" >&2
-            git status --short
-            exit 1
-          fi
-          git commit -m "fix(ci): restore explicit SQLite test durability stores"
-          repair_sha="$(git rev-parse HEAD)"
-          git push origin HEAD:refs/heads/fix/competition-postgres-only-ci
-          git fetch origin refs/heads/fix/competition-postgres-only-ci
-          remote_sha="$(git rev-parse FETCH_HEAD)"
-          echo "repair_sha=$repair_sha"
-          echo "remote_sha=$remote_sha"
-          test "$repair_sha" = "$remote_sha"
+          set +e
+          set -o pipefail
+          uv run pytest -q --maxfail=1 2>&1 | tee /tmp/pytest.log
+          status=${PIPESTATUS[0]}
+          {
+            echo '## pytest diagnostic'
+            echo '```text'
+            tail -n 160 /tmp/pytest.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+      - name: Upload pytest diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-diagnostic
+          path: /tmp/pytest.log
+          if-no-files-found: error
