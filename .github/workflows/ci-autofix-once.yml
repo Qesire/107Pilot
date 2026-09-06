@@ -21,26 +21,28 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           ledger_path = Path("src/pilot107/agent/operation_ledger.py")
           ledger = ledger_path.read_text(encoding="utf-8")
-          old = '''        for value, label in (
-              (self.target_ref, "target_ref"),
-              (self.target_revision, "target_revision"),
-          ):
-              if value is not None:
-                  _nonempty(value, label)
-          '''
-          new = '''        for optional_value, label in (
-              (self.target_ref, "target_ref"),
-              (self.target_revision, "target_revision"),
-          ):
-              if optional_value is not None:
-                  _nonempty(optional_value, label)
-          '''
-          if ledger.count(old) != 1:
-              raise SystemExit("operation ledger target loop did not match exactly once")
-          ledger_path.write_text(ledger.replace(old, new, 1), encoding="utf-8")
+          pattern = re.compile(
+              r"for value, label in \(\n"
+              r"(?P<body>\s+\(self\.target_ref, \"target_ref\"\),\n"
+              r"\s+\(self\.target_revision, \"target_revision\"\),\n"
+              r"\s+\):\n"
+              r"\s+if value is not None:\n"
+              r"\s+_nonempty\(value, label\))"
+          )
+          matches = list(pattern.finditer(ledger))
+          if len(matches) != 1:
+              raise SystemExit(f"operation ledger target loop matches={len(matches)}")
+          block = matches[0].group(0)
+          repaired = (
+              block.replace("for value, label", "for optional_value, label", 1)
+              .replace("if value is not None", "if optional_value is not None", 1)
+              .replace("_nonempty(value, label)", "_nonempty(optional_value, label)", 1)
+          )
+          ledger_path.write_text(ledger[:matches[0].start()] + repaired + ledger[matches[0].end():], encoding="utf-8")
 
           lock_path = Path("package-lock.json")
           lock = lock_path.read_text(encoding="utf-8")
