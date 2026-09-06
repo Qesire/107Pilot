@@ -142,7 +142,10 @@ export function WorkspacePageV2({ user, location, navigate }: WorkspacePageV2Pro
                 <div className="workbench-readiness">
                   <StatusChip label={focusRun.job_id ? `Job ${focusRun.job_id}` : "尚未获得 Job ID"} tone={focusRun.job_id ? "success" : "neutral"} />
                   <StatusChip label={focusRun.contract_id ? "配置已持久化" : "配置来源未知"} tone={focusRun.contract_id ? "success" : "warning"} />
-                  <StatusChip label={`运行证据：${focusRun.collection_state}`} tone={focusRun.collection_state === "succeeded" ? "success" : "neutral"} />
+                  <StatusChip
+                    label={focusRun.collection_state ? `运行证据：${focusRun.collection_state}` : "运行证据未确认"}
+                    tone={focusRun.collection_state === "succeeded" ? "success" : "neutral"}
+                  />
                 </div>
               </div>
               <div className="workbench-next-action">
