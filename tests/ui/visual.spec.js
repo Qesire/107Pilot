@@ -16,7 +16,7 @@ test("workspace prioritizes explicit WorkArea and preparation facts", async ({ p
   const switcher = page.getByRole("combobox", { name: "当前研究区" });
   await expect(switcher).toHaveValue("");
   await switcher.selectOption("workarea_visual_alice");
-  await expect(page.getByRole("heading", { name: "当前研究区" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "当前研究区", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "查看 run_alice_succeeded" })).toBeVisible();
   await expect(page.getByText("acct_alice", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("可见分区", { exact: true })).toBeVisible();
