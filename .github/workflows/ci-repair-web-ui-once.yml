@@ -28,6 +28,13 @@ jobs:
         run: |
           set -o pipefail
           npm run test:ui 2>&1 | tee /tmp/playwright.log
+      - name: Upload validated candidate file
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-visual-spec
+          path: tests/ui/visual.spec.js
+          if-no-files-found: error
       - name: Upload Playwright diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
