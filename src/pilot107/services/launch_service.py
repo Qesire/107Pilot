@@ -19,6 +19,7 @@ from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunRecord, RunStore
 from pilot107.core.states import RunState
 from pilot107.core.workarea import PostgresWorkAreaStore
+from pilot107.core.workarea_binding_source import PostgresWorkAreaBindingSourceStore
 
 
 @dataclass(frozen=True)
@@ -39,12 +40,14 @@ class LaunchService:
         contracts: ContractService,
         run_service: RunService,
         run_store: RunStore,
+        binding_sources: PostgresWorkAreaBindingSourceStore | None = None,
     ) -> None:
         self.workareas = workareas
         self.launches = launches
         self.contracts = contracts
         self.run_service = run_service
         self.run_store = run_store
+        self.binding_sources = binding_sources
 
     def create_candidate(
         self,
@@ -60,9 +63,17 @@ class LaunchService:
         contract = self.contracts.get(contract_id)
         if contract.owner != owner:
             raise PermissionError("Contract owner does not match WorkArea owner")
-        # Selecting a Contract for a Launch also makes that relationship visible
-        # at WorkArea level. Contract remains the sole configuration authority.
+        # The Contract becomes visible at WorkArea level because a Launch uses
+        # it. That WorkArea edge is inherited unless the user explicitly bound
+        # the same Contract earlier; user provenance always has precedence.
         self.workareas.link_contract(workarea_id, owner=owner, contract_id=contract_id)
+        if self.binding_sources is not None:
+            self.binding_sources.mark(
+                workarea_id=workarea_id,
+                binding_kind="contract",
+                target_ref=contract_id,
+                source="inherited",
+            )
         return self.launches.create_candidate(
             workarea_id=workarea_id,
             owner=owner,
@@ -148,6 +159,13 @@ class LaunchService:
         )
         self.launches.attach_run(launch.launch_id, owner=owner, run_id=run.run_id, ordinal=0)
         self.workareas.link_run(candidate.workarea_id, owner=owner, run_id=run.run_id)
+        if self.binding_sources is not None:
+            self.binding_sources.mark(
+                workarea_id=candidate.workarea_id,
+                binding_kind="run",
+                target_ref=run.run_id,
+                source="inherited",
+            )
 
         # A retried HTTP Commit must not duplicate submission. If a prior call
         # already advanced the Run, return the durable Launch/Run view.
