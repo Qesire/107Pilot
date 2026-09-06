@@ -1,3 +1,5 @@
+const fs = require("node:fs");
+const path = require("node:path");
 const { expect, test } = require("@playwright/test");
 
 const WORKAREA_ID = "workarea-ui";
@@ -5,6 +7,12 @@ const CONTRACT_ID = "contract-ui";
 const CANDIDATE_ID = "launchcand-ui";
 const LAUNCH_ID = "launch-ui";
 const RUN_ID = "run-ui";
+const screenshotDir = path.resolve(__dirname, "../../artifacts/visual-regression");
+
+async function capture(page, name) {
+  fs.mkdirSync(screenshotDir, { recursive: true });
+  await page.screenshot({ path: path.join(screenshotDir, name), fullPage: true });
+}
 
 async function installWorkAreaLaunchMock(page) {
   let workarea = null;
@@ -236,6 +244,7 @@ test("creates and edits a WorkArea, reviews request, commits once, and reaches R
   await expect(page).toHaveURL(new RegExp(`/workareas/${WORKAREA_ID}`));
 
   await expect(page.getByRole("heading", { name: "Competition vertical" })).toBeVisible();
+  await capture(page, "workarea-detail.png");
   await page.getByRole("button", { name: "编辑", exact: true }).click();
   await page.getByLabel("名称").fill("Competition vertical revised");
   await page.getByLabel("说明").fill("Persistent research context");
@@ -256,6 +265,7 @@ test("creates and edits a WorkArea, reviews request, commits once, and reaches R
   await expect(page.getByText("Students / qos_stu_medium_2gpu")).toBeVisible();
   await expect(page.getByLabel("将提交的脚本")).toHaveValue(/python train\.py/);
   await expect(page.getByText("preflight-digest")).toBeVisible();
+  await capture(page, "launch-review.png");
 
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Commit 并提交 Run" }).click();
@@ -264,6 +274,7 @@ test("creates and edits a WorkArea, reviews request, commits once, and reaches R
   await expect(page.getByRole("heading", { name: LAUNCH_ID })).toBeVisible();
   await expect(page.getByText("12345")).toBeVisible();
   await expect(page.getByText(RUN_ID)).toBeVisible();
+  await capture(page, "launch-run-handoff.png");
 
   await page.getByRole("button", { name: /打开 Run、日志与 Evidence/ }).click();
   await expect(page).toHaveURL(new RegExp(`/runs/${RUN_ID}`));
