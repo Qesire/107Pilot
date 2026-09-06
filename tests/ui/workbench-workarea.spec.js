@@ -81,7 +81,7 @@ test.beforeEach(async ({ page }) => {
 test("workbench requires explicit WorkArea selection and persists it across reload", async ({ page }) => {
   await page.goto("/projects?user=alice");
 
-  const switcher = page.getByLabel("当前研究区");
+  const switcher = page.getByRole("combobox", { name: "当前研究区" });
   const newLaunch = page.locator(".workbench-v2-header").getByRole("button", { name: "新建运行" });
 
   // Even with exactly one visible WorkArea, 107Pilot must not infer selection.
@@ -95,10 +95,10 @@ test("workbench requires explicit WorkArea selection and persists it across relo
   await expect(page.locator(".workbench-current-run > strong")).toHaveText("Competition workbench");
   await expect(page.getByRole("heading", { name: "最近 Launch" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "当前研究区运行" })).toBeVisible();
-  await expect(page.evaluate((key) => localStorage.getItem(key), CURRENT_KEY)).resolves.toBe(WORKAREA_ID);
+  expect(await page.evaluate((key) => localStorage.getItem(key), CURRENT_KEY)).toBe(WORKAREA_ID);
 
   await page.reload();
-  await expect(page.getByLabel("当前研究区")).toHaveValue(WORKAREA_ID);
+  await expect(page.getByRole("combobox", { name: "当前研究区" })).toHaveValue(WORKAREA_ID);
   await expect(page.locator(".workbench-current-run > strong")).toHaveText("Competition workbench");
 
   await page.locator(".workbench-v2-header").getByRole("button", { name: "新建运行" }).click();
@@ -110,9 +110,10 @@ test("stale WorkArea preference fails closed instead of selecting another area",
   await page.evaluate((key) => localStorage.setItem(key, "workarea-missing"), CURRENT_KEY);
   await page.reload();
 
+  const switcher = page.getByRole("combobox", { name: "当前研究区" });
   await expect(page.getByRole("alert")).toContainText("系统没有自动切换到其它研究区");
-  await expect(page.getByLabel("当前研究区")).toHaveValue("");
-  await expect(page.getByLabel("当前研究区").locator(`option[value="${WORKAREA_ID}"]`)).toHaveCount(1);
+  await expect(switcher).toHaveValue("");
+  await expect(switcher.locator(`option[value="${WORKAREA_ID}"]`)).toHaveCount(1);
   await expect(
     page.locator(".workbench-v2-header").getByRole("button", { name: "新建运行" }),
   ).toBeDisabled();
