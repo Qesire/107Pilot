@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: uv sync --locked --extra dev --extra api
+      - run: uv sync --locked --extra dev --extra api --extra postgres
       - run: uv run ruff check src tests scripts
       - run: uv run mypy src
       - name: Validate agent lifecycle acceptance manifests and fail-closed reports
@@ -89,6 +89,7 @@ jobs:
             /tmp/playwright.log
             playwright-report
             test-results
+            artifacts/playwright-output
           if-no-files-found: ignore
 
   compose:
