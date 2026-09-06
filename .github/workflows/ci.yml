@@ -128,6 +128,8 @@ jobs:
           name: secret-scan-failure-log
           path: /tmp/secret-scan.log
           if-no-files-found: ignore
+      - name: Upgrade pip used by dependency audit
+        run: uv pip install --upgrade "pip>=26.2"
       - run: uv run pip-audit --progress-spinner off
       - run: npm audit --omit=dev --audit-level=high
       - run: docker build -f apps/Dockerfile -t pilot107/app-ci:${{ github.sha }} .
