@@ -1,0 +1,75 @@
+/* Final delivery chrome: remove migration/prototype affordances from the product shell. */
+
+/* Disabled future entry points and migration labels should not ship as navigation. */
+.sidebar-bottom {
+  display: none;
+}
+
+/* The page itself already communicates that this is the research workspace. */
+.research-context > span {
+  display: none;
+}
+
+.research-context > strong {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.app-topbar {
+  border-bottom-color: var(--border-default);
+  background: var(--bg-surface);
+}
+
+/* Keep shell utilities compact and visually below the page-level primary action. */
+.topbar-actions button,
+.topbar-actions select {
+  box-shadow: none !important;
+}
+
+.theme-switcher,
+.user-switcher,
+.connection-badge,
+.global-transfer-indicator {
+  border-radius: var(--radius-control) !important;
+}
+
+/* A selected destination is a quiet locator, not a promoted card. */
+.primary-nav a.active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  box-shadow: inset 2px 0 0 var(--accent-primary);
+}
+
+.primary-nav a:hover {
+  transform: none !important;
+}
+
+/* The WorkArea canvas needs enough breathing room for dense rows without looking sparse. */
+.workspace-canvas:has(.workarea-v2) {
+  padding-top: 28px;
+  padding-bottom: 48px;
+}
+
+/* Avoid the impression of a giant empty card when an asset collection is still empty. */
+.wa-assets-surface:has(.wa-empty-inline) {
+  min-height: 0;
+}
+
+/* Technical identifiers are supporting evidence; human labels remain dominant. */
+.wa-id-line code,
+.wa-index-row code,
+.wa-launch-row code {
+  letter-spacing: -.015em;
+}
+
+@media (max-width: 860px) {
+  .sidebar-bottom {
+    display: none;
+  }
+
+  .workspace-canvas:has(.workarea-v2) {
+    padding-top: 20px;
+    padding-bottom: 90px;
+  }
+}
