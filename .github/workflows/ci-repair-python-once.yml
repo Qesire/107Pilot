@@ -1,6 +1,6 @@
 name: ci-repair-python-once
 
-# Candidate validation v21.
+# Candidate validation v22.
 on:
   push:
     branches:
@@ -111,33 +111,6 @@ jobs:
           PY
       - name: Prepare explicit test-store candidate
         run: python scripts/ci_repair_python_teststores.py
-      - name: Normalize generated control-repository test
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("tests/test_control_repository.py")
-          text = path.read_text(encoding="utf-8")
-          old = '''        with tempfile.TemporaryDirectory() as temporary:
-              with self.assertRaisesRegex(ValueError, "PostgreSQL control repository is required"):
-                  build_control_repository(
-                      sqlite_path=Path(temporary) / "control.db",
-                      postgres_dsn=None,
-                  )
-          '''
-          new = '''        with (
-              tempfile.TemporaryDirectory() as temporary,
-              self.assertRaisesRegex(ValueError, "PostgreSQL control repository is required"),
-          ):
-              build_control_repository(
-                  sqlite_path=Path(temporary) / "control.db",
-                  postgres_dsn=None,
-              )
-          '''
-          if text.count(old) != 1:
-              raise SystemExit("control repository normalization signature mismatch")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
-          PY
       - name: Sync validation environment
         run: uv sync --locked --extra dev --extra api --extra postgres
       - name: Ruff
