@@ -98,17 +98,22 @@ jobs:
           journal = journal.replace("Mapping[str, object]", "Mapping[str, Any]")
           journal_path.write_text(journal, encoding="utf-8")
           PY
-      - name: Validate Python gate before commit
+      - name: Sync validation environment
+        run: uv sync --locked --extra dev --extra api --extra postgres
+      - name: Ruff check and format
         run: |
           set -euo pipefail
-          uv sync --locked --extra dev --extra api --extra postgres
           files="src/pilot107/agent/workspace_live.py src/pilot107/agent/workspace_journal.py"
-          uv run ruff check --fix --unsafe-fixes $files || true
+          uv run ruff check --fix --unsafe-fixes $files
           uv run ruff format $files
           uv run ruff check src tests scripts
-          uv run mypy src
-          uv run pytest -q
-          git diff --check
+          uv run ruff format --check src tests scripts
+      - name: Mypy
+        run: uv run mypy src
+      - name: Pytest
+        run: uv run pytest -q
+      - name: Diff check
+        run: git diff --check
       - name: Commit validated test-store repair
         run: |
           set -euo pipefail
