@@ -87,3 +87,19 @@
     padding-bottom: 90px;
   }
 }
+
+@media (max-width: 760px) {
+  /* The page heading directly below already carries route identity. Keep the
+     compact topbar for live utilities instead of truncating duplicate text. */
+  .research-context {
+    display: none;
+  }
+
+  .app-topbar {
+    justify-content: flex-end;
+  }
+
+  .topbar-actions {
+    margin-left: auto;
+  }
+}
