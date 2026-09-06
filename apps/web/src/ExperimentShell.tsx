@@ -118,9 +118,10 @@ export function ExperimentShell({ user, location, navigate, context, children }:
   const stage = run ? runExperimentStage(run.state) : "config";
   const next = run ? experimentRunNextAction(run.state) : null;
   const title = context.kind === "contract"
-    ? context.title?.trim() || (context.contractId ? "实验配置" : "新建实验")
-    : context.run.job_name?.trim() || "未命名实验运行";
+    ? context.title?.trim() || (context.contractId ? "运行配置" : "新建运行配置")
+    : context.run.job_name?.trim() || "未命名运行";
   const contractId = context.kind === "contract" ? context.contractId : context.run.contract_id;
+  const shellTitle = isRun ? "运行详情" : "运行配置";
 
   const openRunTab = (tab: string) => {
     if (!run) return;
@@ -131,12 +132,12 @@ export function ExperimentShell({ user, location, navigate, context, children }:
     <div className="experiment-shell">
       <header className="experiment-shell-header">
         <div className="experiment-shell-heading">
-          <p className="experiment-shell-kicker">实验工作区</p>
-          <h1>实验工作区</h1>
+          <p className="experiment-shell-kicker">{isRun ? "Run" : "Contract"}</p>
+          <h1>{shellTitle}</h1>
           <strong className="experiment-shell-title" title={title}>{title}</strong>
           <p>{context.kind === "contract"
-            ? "在同一上下文中准备资产、编辑配置并完成运行前检查；提交后继续进入同一实验的运行与结果阶段。"
-            : "配置、运行状态、结果与修复入口保持在同一实验上下文中；所有状态均来自现有 Contract / Run 读模型。"}</p>
+            ? "准备资产、编辑 canonical Contract 并完成运行前检查；提交后继续进入对应 Run 的状态与结果。"
+            : "配置来源、运行状态、结果与修复入口保持连续；所有状态均来自持久化的 Contract / Run 读模型。"}</p>
         </div>
         <div className="experiment-shell-actions">
           {run ? <StatusBadge label={runStateLabel(run.state)} tone={runTone(run.state)} /> : (
@@ -147,20 +148,20 @@ export function ExperimentShell({ user, location, navigate, context, children }:
           )}
           {run ? (
             <button className="button secondary" type="button" onClick={() => navigate(`/runs?user=${encodeURIComponent(user)}`)}>
-              <ArrowLeft aria-hidden="true" size={15} /> 返回实验列表
+              <ArrowLeft aria-hidden="true" size={15} /> 返回运行列表
             </button>
           ) : null}
         </div>
       </header>
 
-      <div className="experiment-identity" aria-label="实验上下文标识">
-        <span><small>实验配置</small><code>{contractId ?? "尚未持久化"}</code></span>
-        {run ? <span><small>运行 ID</small><code>{run.run_id}</code></span> : null}
+      <div className="experiment-identity" aria-label="运行上下文标识">
+        <span><small>Contract</small><code>{contractId ?? "尚未持久化"}</code></span>
+        {run ? <span><small>Run ID</small><code>{run.run_id}</code></span> : null}
         {run ? <span><small>Slurm Job</small><code>{run.job_id ?? "尚未获得"}</code></span> : null}
         {run?.workdir ? <span className="is-wide"><small>工作目录</small><code>{run.workdir}</code></span> : null}
       </div>
 
-      <nav className="experiment-trajectory" aria-label="实验生命周期">
+      <nav className="experiment-trajectory" aria-label="运行生命周期">
         <PhaseButton
           label="准备"
           detail={isRun ? "已进入运行阶段" : "资产与路径"}
@@ -218,7 +219,7 @@ export function ExperimentShell({ user, location, navigate, context, children }:
       </nav>
 
       {run && next ? (
-        <section className="experiment-next-action" aria-label="实验下一步">
+        <section className="experiment-next-action" aria-label="运行下一步">
           <div><small>下一步</small><strong>{next.detail}</strong></div>
           <button className="button primary" type="button" onClick={() => openRunTab(next.tab)}>{next.label}</button>
         </section>
