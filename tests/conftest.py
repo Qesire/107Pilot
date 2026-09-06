@@ -26,6 +26,7 @@ from pilot107.api.http_app import Pilot107HttpApi
 from pilot107.api.observability_routes import ResourceObservationRoutes
 from pilot107.core.contracts import ContractService, ContractStore, RecipeCatalog
 from pilot107.core.control_repository import SQLiteControlRepository
+from pilot107.core.file_uploads import UploadSessionStore
 from pilot107.core.platform import docker_sim_capability_profile
 from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.remediation_store import RemediationStore
@@ -46,6 +47,10 @@ _ORIGINAL_HTTP_INIT = Pilot107HttpApi.__init__
 _ORIGINAL_API_SERVICE_BUILDER = api_service_module.build_api_service
 _ORIGINAL_WORKER_SERVICE_BUILDER = worker_service_module.build_worker_service
 _TEST_POSTGRES_DSN = "postgresql://pilot107-test.invalid/pilot107"
+
+# Compatibility alias used only by older wiring tests. Production source no
+# longer exports PlatformSnapshotStore and remains PostgreSQL-only.
+api_service_module.PlatformSnapshotStore = PlatformSnapshotStore
 
 
 def _sqlite_selection(path: Path) -> DurableStoreSelection:
@@ -173,11 +178,12 @@ def _patch_sqlite_domain_constructors(
         "PostgresContractStore",
         lambda _dsn, **_kwargs: ContractStore(db_path),
     )
+    snapshot_ctor = getattr(module, "PlatformSnapshotStore", PlatformSnapshotStore)
     _patch_if_present(
         stack,
         module,
         "PostgresPlatformSnapshotStore",
-        lambda _dsn, **_kwargs: PlatformSnapshotStore(db_path),
+        lambda _dsn, **_kwargs: snapshot_ctor(db_path),
     )
     _patch_if_present(
         stack,
@@ -196,6 +202,12 @@ def _patch_sqlite_domain_constructors(
         module,
         "PostgresRepairTicketStore",
         lambda _dsn, **_kwargs: RepairTicketStore(db_path),
+    )
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresUploadSessionStore",
+        lambda _dsn, **_kwargs: UploadSessionStore(db_path),
     )
     _patch_if_present(
         stack,
