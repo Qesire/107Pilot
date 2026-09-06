@@ -123,11 +123,25 @@ function WorkAreaDetailPage({ user, navigate, workareaId }: PageProps & { workar
   const [pickerOpen, setPickerOpen] = useState(false);
   const [assetRole, setAssetRole] = useState("code");
   const [runId, setRunId] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
   const bind = useMutation({
     mutationFn: (input: { kind: "asset" | "run"; target_ref: string; role?: string }) => workareaApi.addBinding(user, workareaId, input),
     onSuccess: (record) => {
       queryClient.setQueryData(["workarea", user, workareaId], record);
       setRunId("");
+    },
+  });
+  const update = useMutation({
+    mutationFn: () => workareaApi.update(user, workareaId, {
+      title: editTitle.trim(),
+      description: editDescription.trim(),
+    }),
+    onSuccess: async (record) => {
+      queryClient.setQueryData(["workarea", user, workareaId], record);
+      await queryClient.invalidateQueries({ queryKey: ["workareas", user] });
+      setEditOpen(false);
     },
   });
   return (
@@ -137,8 +151,28 @@ function WorkAreaDetailPage({ user, navigate, workareaId }: PageProps & { workar
           eyebrow={`WorkArea / ${area.data.workarea_id}`}
           title={area.data.title}
           detail={area.data.description || "这个研究区还没有说明。"}
-          action={<button className="button primary" type="button" onClick={() => navigate(`/workareas/${encodeURIComponent(workareaId)}/launch/new?user=${encodeURIComponent(user)}`)}><Rocket aria-hidden="true" size={15} /> 新建运行</button>}
+          action={<div className="agent-action-row">
+            <button className="button secondary" type="button" onClick={() => {
+              setEditTitle(area.data!.title);
+              setEditDescription(area.data!.description);
+              setEditOpen(true);
+            }}>编辑研究区</button>
+            <button className="button primary" type="button" onClick={() => navigate(`/workareas/${encodeURIComponent(workareaId)}/launch/new?user=${encodeURIComponent(user)}`)}><Rocket aria-hidden="true" size={15} /> 新建运行</button>
+          </div>}
         />
+        {editOpen ? <section className="panel template-release-main">
+          <div className="panel-heading"><div><p className="panel-kicker">WorkArea metadata</p><h2>编辑研究区</h2></div></div>
+          <p className="side-detail">只修改研究区名称与说明；已有资产、Launch、Run、Evidence 和 provenance 不受影响。</p>
+          <div className="form-grid two">
+            <label className="form-field"><span>名称</span><input autoFocus value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label>
+            <label className="form-field"><span>说明</span><textarea value={editDescription} onChange={(event) => setEditDescription(event.target.value)} /></label>
+          </div>
+          {update.isError ? <p className="limitation" role="alert">{update.error.message}</p> : null}
+          <div className="agent-action-row">
+            <button className="button secondary" type="button" disabled={update.isPending} onClick={() => setEditOpen(false)}>取消</button>
+            <button className="button primary" type="button" disabled={!editTitle.trim() || update.isPending} onClick={() => update.mutate()}>{update.isPending ? "保存中" : "保存研究区"}</button>
+          </div>
+        </section> : null}
         <div className="template-detail-grid">
           <section className="panel template-release-main">
             <div className="panel-heading"><div><p className="panel-kicker">Assets / Files authority</p><h2>研究资产</h2></div><FolderOpen aria-hidden="true" size={19} /></div>
