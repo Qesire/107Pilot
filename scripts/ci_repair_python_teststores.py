@@ -62,8 +62,10 @@ _SQLITE_MIGRATIONS =''',
 
 replace_once(
     "src/pilot107/agent/operation_attempts.py",
-    "from typing import Any, Protocol",
-    "from typing import Any, Protocol\n\nfrom pilot107.agent.store import SQLiteAgentSessionStore",
+    "from typing import Any, Protocol\n\nfrom pilot107.core.schema_migrations import SchemaMigration, apply_schema_migrations",
+    "from typing import Any, Protocol\n\n"
+    "from pilot107.agent.store import SQLiteAgentSessionStore\n"
+    "from pilot107.core.schema_migrations import SchemaMigration, apply_schema_migrations",
 )
 regex_once(
     "src/pilot107/agent/operation_attempts.py",
