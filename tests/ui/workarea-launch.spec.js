@@ -282,6 +282,7 @@ test("creates and edits a WorkArea, reviews request, commits once, and reaches R
 
 test("WorkArea decision surfaces stay flat and keep one strong primary action", async ({ page }) => {
   await createWorkArea(page);
+  await expect(page.getByRole("button", { name: "新建运行" })).toBeVisible();
 
   const styles = await page.evaluate(() => {
     const primary = document.querySelector(".wa-page-header .button.primary");

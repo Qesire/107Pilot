@@ -169,6 +169,15 @@ export const workareaApi = {
     user,
     input,
   ),
+  removeBinding: (
+    user: string,
+    id: string,
+    input: { kind: "asset" | "contract" | "run"; target_ref: string },
+  ) => request<Record<string, never>>(
+    `/api/v1/workareas/${encodeURIComponent(id)}/bindings/${encodeURIComponent(input.kind)}/${encodeURIComponent(input.target_ref)}`,
+    user,
+    { method: "DELETE" },
+  ),
   contracts: (user: string, signal?: AbortSignal) =>
     request<Page<ContractSummary>>(
       `/api/v1/contracts?owner=${encodeURIComponent(user)}&limit=100`,
