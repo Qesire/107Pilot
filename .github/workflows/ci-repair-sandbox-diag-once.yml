@@ -1,0 +1,68 @@
+name: ci-repair-sandbox-diag-once
+
+on:
+  push:
+    branches:
+      - fix/competition-postgres-only-ci
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.event.head_commit.message == 'ci-sandbox-diag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.3"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          /usr/bin/bwrap --version
+      - name: Sync
+        run: uv sync --locked --extra dev --extra api --extra postgres
+      - name: Sandbox tests with output
+        continue-on-error: true
+        run: uv run pytest -vv -s tests/agent/test_workspace_sandbox.py
+      - name: Direct sandbox diagnostic
+        run: |
+          PYTHONPATH=src uv run python - <<'PY'
+          from pathlib import Path
+          import tempfile
+          from pilot107.agent.sandbox import SandboxExecutor
+          from pilot107.agent.workspace import AgentWorkspaceRecord, WorkspaceSnapshot
+
+          with tempfile.TemporaryDirectory() as temporary:
+              root = Path(temporary) / "workspace"
+              root.mkdir()
+              (root / "main.py").write_text("print('ok')\n", encoding="utf-8")
+              workspace = AgentWorkspaceRecord(
+                  workspace_id="workspace-sandbox-diag",
+                  project_id="project-sandbox-diag",
+                  owner="alice",
+                  local_root=str(root),
+                  snapshot=WorkspaceSnapshot(
+                      source_ref="/public/home/alice/project",
+                      digest="b" * 64,
+                      entries=(),
+                      captured_at="2026-08-19T00:00:00Z",
+                  ),
+                  created_at="2026-08-19T00:00:00Z",
+                  updated_at="2026-08-19T00:00:00Z",
+              )
+              sandbox = SandboxExecutor()
+              argv = ("python", "-m", "py_compile", "main.py")
+              print("SANDBOX_COMMAND", sandbox._sandbox_command(root.resolve(), argv))
+              result = sandbox.execute(workspace, argv=argv, timeout=3)
+              print("SANDBOX_STATUS", result.status)
+              print("SANDBOX_EXIT", result.exit_code)
+              print("SANDBOX_LIMIT", result.limit_reason)
+              print("SANDBOX_STDOUT", repr(result.stdout))
+              print("SANDBOX_STDERR", repr(result.stderr))
+          PY
