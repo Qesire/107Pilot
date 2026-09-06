@@ -1,0 +1,108 @@
+name: ci-repair-python-once
+
+on:
+  push:
+    branches:
+      - fix/competition-postgres-only-ci
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'ci-repair-python-teststores'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/competition-postgres-only-ci
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.3"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Restore explicit SQLite test durability stores
+        run: |
+          set -euo pipefail
+          base=62b62c3a53d78bf4a8ad5bf3b77b134849d1ea29
+          git show "$base:src/pilot107/agent/workspace_live.py" > src/pilot107/agent/workspace_live.py
+          git show "$base:src/pilot107/agent/workspace_journal.py" > src/pilot107/agent/workspace_journal.py
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          live_path = Path("src/pilot107/agent/workspace_live.py")
+          text = live_path.read_text(encoding="utf-8")
+          text = re.sub(
+              r'\A""".*?"""',
+              '"""Workspace live-head domain types and explicit SQLite test durability.\n\n'
+              'Production composition is PostgreSQL-only. The SQLite implementation is retained\n'
+              'solely for explicitly injected development/test Project stores and is never selected\n'
+              'by the production live-store factory.\n"""',
+              text,
+              count=1,
+              flags=re.S,
+          )
+          pattern = re.compile(
+              r"def build_workspace_live_store\(.*?\n\n\nclass SQLiteWorkspaceLiveStore:",
+              re.S,
+          )
+          replacement = '''def build_workspace_live_store(
+              project_store: object,
+              *,
+              clock: Callable[[], datetime] | None = None,
+          ) -> WorkspaceLiveStore:
+              """Build the PostgreSQL live-head authority or fail closed."""
+
+              dsn = getattr(project_store, "dsn", None)
+              if not isinstance(dsn, str) or not dsn:
+                  raise RuntimeError(
+                      "Workspace live-head authority requires PostgreSQL; "
+                      "SQLite Workspace live authority has been retired from runtime composition"
+                  )
+              from pilot107.agent.postgres_workspace_durability import PostgresWorkspaceLiveStore
+
+              return PostgresWorkspaceLiveStore(dsn, clock=clock)
+
+
+          class SQLiteWorkspaceLiveStore:'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f"workspace_live factory replacement count={count}")
+          live_path.write_text(text, encoding="utf-8")
+
+          journal_path = Path("src/pilot107/agent/workspace_journal.py")
+          journal = journal_path.read_text(encoding="utf-8")
+          journal = re.sub(
+              r'\A""".*?"""',
+              '"""Workspace mutation journal records and explicit SQLite test durability.\n\n'
+              'PostgreSQL is the production journal authority. The SQLite implementation remains\n'
+              'available only to explicitly injected development/test Workspace editors.\n"""',
+              journal,
+              count=1,
+              flags=re.S,
+          )
+          journal_path.write_text(journal, encoding="utf-8")
+          PY
+      - name: Validate Python gate before commit
+        run: |
+          set -euo pipefail
+          uv sync --locked --extra dev --extra api --extra postgres
+          files="src/pilot107/agent/workspace_live.py src/pilot107/agent/workspace_journal.py"
+          uv run ruff check --fix --unsafe-fixes $files || true
+          uv run ruff format $files
+          uv run ruff check src tests scripts
+          uv run mypy src
+          uv run pytest -q
+          git diff --check
+      - name: Commit validated test-store repair
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/pilot107/agent/workspace_live.py src/pilot107/agent/workspace_journal.py
+          git diff --cached --quiet && exit 0
+          git commit -m "fix(ci): restore explicit SQLite test durability stores"
+          git push origin HEAD:fix/competition-postgres-only-ci
