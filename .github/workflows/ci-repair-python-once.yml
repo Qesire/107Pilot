@@ -108,6 +108,8 @@ jobs:
           journal = journal.replace("Mapping[str, object]", "Mapping[str, Any]")
           journal_path.write_text(journal, encoding="utf-8")
           PY
+      - name: Prepare explicit test-store candidate
+        run: python scripts/ci_repair_python_teststores.py
       - name: Sync validation environment
         run: uv sync --locked --extra dev --extra api --extra postgres
       - name: Ruff
@@ -120,6 +122,10 @@ jobs:
         run: |
           set -o pipefail
           uv run pytest -q 2>&1 | tee /tmp/pytest.log
+      - name: Capture candidate diff
+        if: always()
+        run: |
+          git diff -- src tests > /tmp/candidate.patch
       - name: Upload pytest diagnostic
         if: failure()
         uses: actions/upload-artifact@v4
@@ -127,3 +133,22 @@ jobs:
           name: pytest-diagnostic
           path: /tmp/pytest.log
           if-no-files-found: ignore
+      - name: Upload validated candidate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-teststore-candidate
+          path: |
+            /tmp/candidate.patch
+            src/pilot107/api/service.py
+            src/pilot107/worker/service.py
+            src/pilot107/agent/workspace_live.py
+            src/pilot107/agent/workspace_journal.py
+            src/pilot107/agent/operation_ledger.py
+            src/pilot107/agent/operation_attempts.py
+            src/pilot107/agent/operation_reconciler.py
+            tests/conftest.py
+            tests/agent/test_postgres_store.py
+            tests/agent/test_project_store_contract.py
+            tests/agent/test_task_store_contract.py
+            tests/test_control_repository.py
