@@ -17,6 +17,7 @@ import "./styles/experiment-shell-v2.css";
 import "./styles/scientific-calm-v3.css";
 import "./styles/workarea-v2.css";
 import "./styles/workbench-delivery-v1.css";
+import "./styles/files-delivery-v1.css";
 import "./styles/delivery-polish-v1.css";
 
 const queryClient = new QueryClient({
