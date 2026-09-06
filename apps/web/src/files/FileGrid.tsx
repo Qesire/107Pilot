@@ -1,10 +1,17 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import Selecto from "react-selecto";
+import { useCallback, useMemo, useState } from "react";
 import { File, FileArchive, FileCode, FileImage, FileText, Folder, Link2 } from "lucide-react";
 import type { FileEntry } from "../types";
 import { EntryActionButtons, InlineRenameInput, type PaneActions } from "./entry-widgets";
 import { useFilesManager } from "./FilesManagerContext";
+import { useMarqueeSelection } from "./useMarqueeSelection";
 import type { UseFilePaneResult } from "./useFilePane";
+import {
+  GRID_GAP,
+  GRID_MIN_TILE_WIDTH,
+  GRID_ROW_HEIGHT,
+  useElementWidth,
+  useVirtualWindow,
+} from "./virtualization";
 
 type FileCategory = "code" | "archive" | "image" | "text" | "generic";
 
@@ -38,44 +45,54 @@ export function FileGrid({
 }: {
   pane: UseFilePaneResult;
   actions: PaneActions;
-  /** Directory path highlighted as a drop destination (owned by FilePane). */
   dropTarget: string | null;
 }) {
   const manager = useFilesManager();
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
-  // The element a pointer gesture started on (mousedown origin). Selecto's
-  // onSelectEnd only exposes the mouseup event, so we track the origin here to
-  // tell a tile drag (native move) from an empty-area drag (marquee select).
-  const downOnTile = useRef(false);
-
+  const width = useElementWidth(container);
+  const columns = Math.max(1, Math.floor((width + GRID_GAP) / (GRID_MIN_TILE_WIDTH + GRID_GAP)));
+  const rowCount = Math.ceil(pane.entries.length / columns);
+  const scrollElement = container?.parentElement ?? null;
+  const range = useVirtualWindow(scrollElement, rowCount, GRID_ROW_HEIGHT, 4);
+  const startIndex = range.start * columns;
+  const endIndex = Math.min(pane.entries.length, range.end * columns);
+  const entries = pane.entries.slice(startIndex, endIndex);
   const selectedSet = useMemo(() => new Set(pane.selected), [pane.selected]);
 
-  const openEntry = useCallback(
-    (entry: FileEntry) => {
-      if (entry.kind === "directory") pane.navigateTo(entry.path);
-    },
-    [pane],
-  );
+  const openEntry = useCallback((entry: FileEntry) => {
+    if (entry.kind === "directory") pane.navigateTo(entry.path);
+  }, [pane]);
+
+  const handleMarquee = useCallback((paths: string[], additive: boolean) => {
+    manager.setActivePane(pane.paneId);
+    pane.setSelection(additive
+      ? Array.from(new Set([...pane.selected, ...paths]))
+      : paths);
+  }, [manager, pane]);
+  const marquee = useMarqueeSelection({
+    rootElement: container,
+    surfaceElement: scrollElement,
+    itemSelector: ".file-tile[data-path]",
+    blockedStartSelector: ".file-tile",
+    onSelect: handleMarquee,
+  });
 
   return (
     <div
-      className="filegrid"
+      className="filegrid virtual-filegrid"
       ref={setContainer}
-      onPointerDownCapture={(e) => {
-        downOnTile.current = Boolean((e.target as Element | null)?.closest?.(".file-tile"));
-      }}
     >
-      <div className="filegrid-tiles">
-        {pane.entries.map((entry) => {
+      <div
+        className="filegrid-tiles virtual-filegrid-tiles"
+        style={{ paddingTop: range.paddingBefore, paddingBottom: range.paddingAfter }}
+        aria-setsize={pane.entries.length}
+      >
+        {entries.map((entry, localIndex) => {
           const activate = (e: React.MouseEvent | React.KeyboardEvent) => {
             manager.setActivePane(pane.paneId);
-            if (e.shiftKey || e.metaKey || e.ctrlKey) {
-              pane.toggleSelect(entry.path);
-            } else if (entry.kind === "directory") {
-              openEntry(entry);
-            } else {
-              pane.setSelection([entry.path]);
-            }
+            if (e.shiftKey || e.metaKey || e.ctrlKey) pane.toggleSelect(entry.path);
+            else if (entry.kind === "directory") openEntry(entry);
+            else pane.setSelection([entry.path]);
           };
           return (
             <div
@@ -85,11 +102,18 @@ export function FileGrid({
               draggable
               onDragStart={(e) => actions.onDragStartEntry(entry, e)}
               onDragEnd={actions.onDragEndEntry}
+              onDragOver={(e) => {
+                if (entry.kind !== "directory" || e.dataTransfer.types.includes("Files")) return;
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onDrop={(e) => actions.onDropIntoDirectory(entry, e)}
               className={`file-tile${selectedSet.has(entry.path) ? " selected" : ""}${
                 dropTarget === entry.path ? " drop-target" : ""
               }`}
               data-path={entry.path}
               data-kind={entry.kind}
+              data-virtual-index={startIndex + localIndex}
               title={entry.path}
               onClick={activate}
               onKeyDown={(e) => {
@@ -122,35 +146,7 @@ export function FileGrid({
           );
         })}
       </div>
-
-      <Selecto
-        dragContainer={container}
-        selectableTargets={[".file-tile"]}
-        hitRate={0}
-        selectByClick={false}
-        selectFromInside
-        continueSelect
-        toggleContinueSelect="shift"
-        ratio={0}
-        // Do NOT preventDefault on mousedown — doing so would suppress the
-        // native HTML5 dragstart on tiles. Marquee selection is driven by
-        // mousemove, so it still works.
-        preventDefault={false}
-        onSelectEnd={(e) => {
-          const rect = e.rect;
-          // A gesture that began on a tile is a native drag-and-drop move; let
-          // the tile onClick / native drag handle it, not marquee selection.
-          if (downOnTile.current) return;
-          // Only a gesture with a real selection rectangle is a marquee; plain
-          // clicks on empty space are ignored here.
-          if (!rect || (rect.width < 4 && rect.height < 4)) return;
-          manager.setActivePane(pane.paneId);
-          const paths = e.selected
-            .map((el) => el.getAttribute("data-path"))
-            .filter((p): p is string => Boolean(p));
-          pane.setSelection(paths);
-        }}
-      />
+      {marquee.marqueeStyle ? <div className="file-marquee" style={marquee.marqueeStyle} /> : null}
     </div>
   );
 }

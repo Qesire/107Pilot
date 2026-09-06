@@ -17,7 +17,7 @@ from pilot107.agent.project import (
     ProjectValidation,
 )
 from pilot107.agent.project_store import ProjectStore, SQLiteProjectStore
-from pilot107.agent.store_factory import build_project_store
+from pilot107.agent.store_factory import ConfigurationError, build_project_store
 from pilot107.agent.workspace import AgentWorkspaceRecord, WorkspaceSnapshot
 
 BLUEPRINT = ProjectBlueprint(
@@ -154,10 +154,12 @@ def test_blueprint_rejects_parent_path_traversal() -> None:
         )
 
 
-def test_factory_selects_sqlite_project_store(tmp_path: Path) -> None:
-    store = build_project_store(sqlite_path=tmp_path / "projects.db", postgres_dsn=None)
-
-    assert isinstance(store, SQLiteProjectStore)
+def test_factory_rejects_missing_postgres_project_dsn(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="requires PostgreSQL"):
+        build_project_store(
+            sqlite_path=tmp_path / "projects.db",
+            postgres_dsn=None,
+        )
 
 
 def test_factory_selects_postgres_project_store(monkeypatch: pytest.MonkeyPatch) -> None:

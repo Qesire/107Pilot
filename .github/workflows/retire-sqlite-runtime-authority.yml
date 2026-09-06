@@ -1,0 +1,157 @@
+name: retire-sqlite-runtime-authority
+
+on:
+  push:
+    branches:
+      - integration/v3.1-source-cleanup
+    paths:
+      - scripts/retire-sqlite-runtime-authority.py
+      - .github/workflows/retire-sqlite-runtime-authority.yml
+      - src/pilot107/agent/store_factory.py
+      - src/pilot107/core/control_repository_factory.py
+      - src/pilot107/api/run_workspace_routes.py
+      - tests/test_lifecycle_store_selection.py
+      - tests/test_postgres_only_runtime_authority.py
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: integration/v3.1-source-cleanup
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.3"
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Normalize one-shot generator authority contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/retire-sqlite-runtime-authority.py")
+          text = path.read_text(encoding="utf-8")
+          legacy = "SQLite fallback has been retired"
+          canonical = "SQLite runtime authority has been retired"
+          if legacy not in text:
+              raise SystemExit("expected legacy one-shot authority wording")
+          path.write_text(text.replace(legacy, canonical), encoding="utf-8")
+          PY
+      - name: Apply deterministic source cleanup
+        run: python scripts/retire-sqlite-runtime-authority.py
+      - name: Finalize fail-closed constructor typing and formatting
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/pilot107/api/http_app.py")
+          text = path.read_text(encoding="utf-8")
+          import_line = "from typing import Any\n"
+          argument = "            remediation_store=remediation_store,\n"
+          if text.count(import_line) != 1:
+              raise SystemExit("expected typing import exactly once")
+          if text.count(argument) != 1:
+              raise SystemExit("expected generated remediation argument exactly once")
+          text = text.replace(import_line, "from typing import Any, cast\n", 1)
+          text = text.replace(
+              argument,
+              "            remediation_store=cast(RemediationStore, remediation_store),\n",
+              1,
+          )
+          canonical_raises = {
+              '            raise ValueError("control_repository is required; SQLite runtime authority has been retired")\n': (
+                  '            raise ValueError(\n'
+                  '                "control_repository is required; "\n'
+                  '                "SQLite runtime authority has been retired"\n'
+                  '            )\n'
+              ),
+              '            raise ValueError("remediation_store is required; SQLite runtime authority has been retired")\n': (
+                  '            raise ValueError(\n'
+                  '                "remediation_store is required; "\n'
+                  '                "SQLite runtime authority has been retired"\n'
+                  '            )\n'
+              ),
+              '            raise ValueError("repair_ticket_store is required; SQLite runtime authority has been retired")\n': (
+                  '            raise ValueError(\n'
+                  '                "repair_ticket_store is required; "\n'
+                  '                "SQLite runtime authority has been retired"\n'
+                  '            )\n'
+              ),
+          }
+          for old, new in canonical_raises.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f"expected generated authority sentinel exactly once: {old.strip()}")
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+      - name: Install Python test environment
+        run: uv sync --locked --extra dev --extra api
+      - name: Verify production import closure
+        run: |
+          PYTHONPATH=src uv run python - <<'PY'
+          import pilot107.api.http_app
+          import pilot107.api.run_workspace_routes
+          import pilot107.api.service
+          import pilot107.worker.service
+          PY
+      - name: Fix and verify touched Python sources
+        run: |
+          uv run ruff check --fix \
+            src/pilot107/agent/store_factory.py \
+            src/pilot107/core/control_repository_factory.py \
+            src/pilot107/api/service.py \
+            src/pilot107/api/http_app.py \
+            src/pilot107/api/run_workspace_routes.py \
+            src/pilot107/worker/service.py \
+            tests/test_lifecycle_store_selection.py \
+            tests/test_postgres_only_runtime_authority.py
+          uv run ruff check \
+            src/pilot107/agent/store_factory.py \
+            src/pilot107/core/control_repository_factory.py \
+            src/pilot107/api/service.py \
+            src/pilot107/api/http_app.py \
+            src/pilot107/api/run_workspace_routes.py \
+            src/pilot107/worker/service.py \
+            tests/test_lifecycle_store_selection.py \
+            tests/test_postgres_only_runtime_authority.py
+      - name: Verify touched production typing
+        run: |
+          # The two disabled codes are pre-existing helper-level debt in the large
+          # API/worker composition files. This one-shot gate remains strict for
+          # every other mypy error code and self-deletes after successful landing.
+          uv run mypy --follow-imports=skip \
+            --disable-error-code unused-ignore \
+            --disable-error-code no-any-return \
+            src/pilot107/agent/store_factory.py \
+            src/pilot107/core/control_repository_factory.py \
+            src/pilot107/api/service.py \
+            src/pilot107/api/http_app.py \
+            src/pilot107/api/run_workspace_routes.py \
+            src/pilot107/worker/service.py
+      - name: Verify PostgreSQL authority regressions
+        run: |
+          uv run pytest tests/test_lifecycle_store_selection.py -q
+          uv run pytest tests/test_postgres_only_runtime_authority.py -q
+      - name: Verify Python suite before landing
+        run: uv run pytest -q
+      - name: Land cleanup and remove one-shot machinery
+        shell: bash
+        run: |
+          rm scripts/retire-sqlite-runtime-authority.py
+          rm .github/workflows/retire-sqlite-runtime-authority.yml
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source cleanup changes to commit"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "refactor(storage): remove remaining SQLite runtime composition"
+          git push origin HEAD:integration/v3.1-source-cleanup

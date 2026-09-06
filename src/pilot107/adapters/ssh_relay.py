@@ -24,6 +24,7 @@ from pilot107.adapters.slurm import (
     CommandResult,
     DiskUsage,
     FileEntry,
+    FileListPage,
     FileSearchEntry,
     FileSearchPage,
     FileStat,
@@ -42,6 +43,81 @@ _SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _SAFE_SLURM_ATOM = re.compile(r"^[A-Za-z0-9_.:+/@=%,-]+$")
 _SAFE_FORMAT = re.compile(r"^[A-Za-z0-9%|,._:+@=-]+$")
 _BASE64_ALPHABET = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
+
+_SSH_FILE_LIST_SCRIPT = r"""
+import hashlib
+import heapq
+import json
+import os
+import stat
+import sys
+
+request = json.loads(sys.argv[1])
+path = sys.argv[2]
+limit = request["limit"]
+after = request["after"]
+directory = os.stat(path, follow_symlinks=False)
+raw_revision = (
+    f"{directory.st_dev}:{directory.st_ino}:"
+    f"{directory.st_mtime_ns}:{directory.st_ctime_ns}"
+)
+revision = hashlib.sha256(raw_revision.encode()).hexdigest()[:24]
+
+
+def classify(info):
+    mode = info.st_mode
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    if stat.S_ISDIR(mode):
+        return "dir"
+    if stat.S_ISREG(mode):
+        return "file"
+    if stat.S_ISSOCK(mode):
+        return "socket"
+    if stat.S_ISFIFO(mode):
+        return "fifo"
+    if stat.S_ISCHR(mode) or stat.S_ISBLK(mode):
+        return "device"
+    return "other"
+
+
+def candidates():
+    with os.scandir(path) as handle:
+        for item in handle:
+            try:
+                info = item.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            kind = classify(info)
+            key = [0 if kind == "dir" else 1, item.name.casefold(), item.name]
+            if after is not None and key <= after:
+                continue
+            yield (
+                tuple(key),
+                {
+                    "name": item.name,
+                    "type": kind,
+                    "size": info.st_size,
+                    "mtime": int(info.st_mtime),
+                },
+            )
+
+
+selected = heapq.nsmallest(limit + 1, candidates(), key=lambda pair: pair[0])
+has_more = len(selected) > limit
+entries = [item for _, item in selected[:limit]]
+print(
+    json.dumps(
+        {
+            "entries": entries,
+            "has_more": has_more,
+            "directory_revision": revision,
+        },
+        separators=(",", ":"),
+    )
+)
+"""
+
 
 _SSH_FILE_SEARCH_SCRIPT = r"""
 import json
@@ -746,42 +822,110 @@ class SshRelayExecutor:
         return outcome
 
     def list_dir(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> list[FileEntry]:
+        self,
+        *,
+        path: str,
+        owner: str,
+        limit: int = 500,
+        cursor: str | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> FileListPage:
         self._require_file_owner(owner)
         safe_path = _validate_remote_path(path, roots=self.config.expanded_owner_roots())
-        script = (
-            'python3 -c "import json,os,stat,sys;p=sys.argv[1];'
-            "print(json.dumps([{'name':n,"
-            "'type':'symlink' if stat.S_ISLNK(s.st_mode) "
-            "else ('dir' if stat.S_ISDIR(s.st_mode) "
-            "else ('file' if stat.S_ISREG(s.st_mode) "
-            "else ('socket' if stat.S_ISSOCK(s.st_mode) "
-            "else ('fifo' if stat.S_ISFIFO(s.st_mode) "
-            "else ('device' if stat.S_ISCHR(s.st_mode) or stat.S_ISBLK(s.st_mode) "
-            "else 'other'))))),"
-            "'size':s.st_size,'mtime':int(s.st_mtime)}"
-            " for n in sorted(os.listdir(p)) for s in [os.lstat(os.path.join(p,n))]]))"
-            '" '
-        ) + shlex.quote(safe_path)
-        result = self._file_shell(script, timeout_seconds=timeout_seconds)
+        if not 1 <= limit <= 1000:
+            raise SlurmSubmissionRejected("limit must be between 1 and 1000")
+
+        cursor_binding: dict[str, object] | None = None
+        after: list[int | str] | None = None
+        if cursor:
+            state = _decode_local_search_cursor(cursor, self._search_cursor_key)
+            raw_binding = state.get("binding")
+            if not isinstance(raw_binding, dict):
+                raise SlurmSubmissionRejected("invalid directory listing cursor")
+            if (
+                raw_binding.get("kind") != "list_dir"
+                or raw_binding.get("owner") != owner
+                or raw_binding.get("path") != safe_path
+            ):
+                raise SlurmSubmissionRejected(
+                    "directory listing cursor does not match request"
+                )
+            raw_after = state.get("after")
+            if (
+                not isinstance(raw_after, list)
+                or len(raw_after) != 3
+                or not isinstance(raw_after[0], int)
+                or not isinstance(raw_after[1], str)
+                or not isinstance(raw_after[2], str)
+            ):
+                raise SlurmSubmissionRejected("invalid directory listing cursor")
+            cursor_binding = raw_binding
+            after = [raw_after[0], raw_after[1], raw_after[2]]
+
+        request = json.dumps(
+            {"limit": limit, "after": after},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        command = " ".join(
+            shlex.quote(token)
+            for token in ("python3", "-c", _SSH_FILE_LIST_SCRIPT, request, safe_path)
+        )
+        result = self._file_shell(command, timeout_seconds=timeout_seconds)
         if result.returncode != 0:
             raise SlurmTransportError("SSH.LIST_DIR_FAILED")
-        payload = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "[]"
+        payload = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "{}"
         try:
             decoded = json.loads(payload)
         except json.JSONDecodeError as exc:
             raise SlurmTransportError("SSH.LIST_DIR_INVALID") from exc
-        return [
+        if not isinstance(decoded, dict):
+            raise SlurmTransportError("SSH.LIST_DIR_INVALID")
+        raw_entries = decoded.get("entries")
+        revision = decoded.get("directory_revision")
+        has_more = decoded.get("has_more")
+        if not isinstance(raw_entries, list):
+            raise SlurmTransportError("SSH.LIST_DIR_INVALID")
+        if not isinstance(revision, str) or not revision:
+            raise SlurmTransportError("SSH.LIST_DIR_INVALID")
+        if not isinstance(has_more, bool):
+            raise SlurmTransportError("SSH.LIST_DIR_INVALID")
+        if cursor_binding is not None and cursor_binding.get("revision") != revision:
+            raise SlurmSubmissionRejected("directory listing cursor is stale")
+
+        entries = tuple(
             FileEntry(
                 name=str(item.get("name", "")),
                 type=str(item.get("type", "other")),
                 size=int(item.get("size", 0)),
                 mtime=int(item.get("mtime", 0)),
             )
-            for item in decoded
+            for item in raw_entries
             if isinstance(item, dict)
-        ]
+        )
+        if len(entries) > limit or (has_more and not entries):
+            raise SlurmTransportError("SSH.LIST_DIR_INVALID")
+        binding = {
+            "kind": "list_dir",
+            "owner": owner,
+            "path": safe_path,
+            "revision": revision,
+        }
+        next_cursor = None
+        if has_more:
+            last = entries[-1]
+            key = [0 if last.type == "dir" else 1, last.name.casefold(), last.name]
+            next_cursor = _encode_local_search_cursor(
+                {"binding": binding, "after": key}, self._search_cursor_key
+            )
+        return FileListPage(
+            path=safe_path,
+            entries=entries,
+            limit=limit,
+            has_more=has_more,
+            next_cursor=next_cursor,
+            directory_revision=revision,
+        )
 
     def search_files(
         self,

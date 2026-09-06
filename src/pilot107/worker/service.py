@@ -72,7 +72,6 @@ from pilot107.core.platform import (
     docker_sim_capability_profile,
     load_capability_profile,
 )
-from pilot107.core.platform_snapshot_store import PlatformSnapshotStore
 from pilot107.core.postgres_domain_stores import (
     PostgresContractStore,
     PostgresPlatformSnapshotStore,
@@ -81,7 +80,6 @@ from pilot107.core.postgres_domain_stores import (
 )
 from pilot107.core.preflight import LocalPathChecker, PathChecker
 from pilot107.core.redaction import redact_sensitive_structure, redact_sensitive_text
-from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.run_service import RunService
 from pilot107.core.run_store import RunStore
 from pilot107.core.submission_reconcile import ReconcileBackend
@@ -91,13 +89,11 @@ from pilot107.observability.collector import (
     ObservabilityCollectorPolicy,
 )
 from pilot107.observability.postgres_store import PostgresObservabilityStore
-from pilot107.observability.store import SQLiteObservabilityStore
 from pilot107.runtime_watch.postgres_store import PostgresRuntimeWatchStore
 from pilot107.runtime_watch.service import (
     RunStoreRuntimeLogSourceResolver,
     RuntimeWatchService,
 )
-from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.services.agent_task_service import (
     AgentTaskService,
@@ -132,7 +128,7 @@ from pilot107.worker.telemetry import (
 class WorkerServiceConfig:
     db_path: Path
     evidence_root: Path
-    database_mode: DatabaseMode = DatabaseMode.SQLITE
+    database_mode: DatabaseMode = DatabaseMode.POSTGRES
     control_postgres_dsn: str | None = field(default=None, repr=False)
     postgres_dsn: str | None = field(default=None, repr=False)
     backend: str = "docker-compose-command"
@@ -584,27 +580,23 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         postgres_dsn=config.postgres_dsn,
         control_postgres_dsn=config.control_postgres_dsn,
     )
-    postgres_dsn = selection.postgres_dsn or ""
+    postgres_dsn = selection.postgres_dsn
+    if postgres_dsn is None:
+        raise RuntimeError("PostgreSQL durable-store selection lost its DSN")
     agent_capability_secret = _load_agent_capability_secret(config)
-    if not selection.is_postgres:
-        store = RunStore(selection.sqlite_path)
-        contract_store = ContractStore(selection.sqlite_path)
-        platform_snapshot_store = PlatformSnapshotStore(selection.sqlite_path)
-        remediation_store = RemediationStore(selection.sqlite_path)
-    else:
-        store = PostgresRunStore(postgres_dsn, compatibility_path=selection.sqlite_path)
-        contract_store = PostgresContractStore(
-            postgres_dsn,
-            compatibility_path=selection.sqlite_path,
-        )
-        platform_snapshot_store = PostgresPlatformSnapshotStore(
-            postgres_dsn,
-            compatibility_path=selection.sqlite_path,
-        )
-        remediation_store = PostgresRemediationStore(
-            postgres_dsn,
-            compatibility_path=selection.sqlite_path,
-        )
+    store = PostgresRunStore(postgres_dsn, compatibility_path=selection.sqlite_path)
+    contract_store = PostgresContractStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
+    )
+    platform_snapshot_store = PostgresPlatformSnapshotStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
+    )
+    remediation_store = PostgresRemediationStore(
+        postgres_dsn,
+        compatibility_path=selection.sqlite_path,
+    )
     control_repository = build_control_repository(
         sqlite_path=selection.sqlite_path,
         postgres_dsn=selection.control_postgres_dsn,
@@ -772,13 +764,9 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
     runtime_transport = _build_runtime_watch_transport(config)
     if runtime_transport is not None and effective_roots:
         segment_root = config.evidence_root / "runtime-watch-segments"
-        runtime_store = (
-            SQLiteRuntimeWatchStore(config.db_path, segment_root=segment_root)
-            if not selection.is_postgres
-            else PostgresRuntimeWatchStore(
-                postgres_dsn,
-                segment_root=segment_root,
-            )
+        runtime_store = PostgresRuntimeWatchStore(
+            postgres_dsn,
+            segment_root=segment_root,
         )
 
         def release_logs_finalize(run_id: str) -> None:
@@ -815,13 +803,9 @@ def build_worker_service(config: WorkerServiceConfig) -> WorkerService:
         )
         if not observation_user:
             raise ValueError("resource observability requires PILOT107_SLURM_USER_NAME")
-        observation_store = (
-            SQLiteObservabilityStore(config.db_path)
-            if not selection.is_postgres
-            else PostgresObservabilityStore(
-                postgres_dsn,
-                compatibility_path=selection.sqlite_path,
-            )
+        observation_store = PostgresObservabilityStore(
+            postgres_dsn,
+            compatibility_path=selection.sqlite_path,
         )
         observability_collector = ObservabilityCollector(
             store=observation_store,
@@ -1371,12 +1355,13 @@ def _path(values: Mapping[str, str], name: str, default: Path) -> Path:
 
 
 def _database_mode(values: Mapping[str, str], *, postgres_dsn: str | None) -> DatabaseMode:
-    configured = values.get("PILOT107_DATABASE_MODE")
-    inferred = "postgres" if postgres_dsn else "sqlite"
-    try:
-        return DatabaseMode(configured or inferred)
-    except ValueError as exc:
-        raise ValueError("PILOT107_DATABASE_MODE must be sqlite or postgres") from exc
+    del postgres_dsn
+    configured = (values.get("PILOT107_DATABASE_MODE") or "postgres").strip().lower()
+    if configured == "sqlite":
+        raise ValueError("SQLite runtime authority has been retired; configure PostgreSQL")
+    if configured != "postgres":
+        raise ValueError("PILOT107_DATABASE_MODE must be postgres")
+    return DatabaseMode.POSTGRES
 
 
 def _load_postgres_dsn(values: Mapping[str, str]) -> str | None:

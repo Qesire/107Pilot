@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Selecto from "react-selecto";
 import {
   ArrowLeft,
   ArrowRight,
@@ -26,6 +25,7 @@ import { EntryActionButtons, InlineRenameInput, type PaneActions } from "./entry
 import { EntryInfoDialog } from "./EntryInfoDialog";
 import { FileContextMenu, type ContextMenuState } from "./FileContextMenu";
 import { FileGrid } from "./FileGrid";
+import { FileListView } from "./FileListView";
 import { useFilesManager } from "./FilesManagerContext";
 import { MillerColumns } from "./MillerColumns";
 import { MoveDialog } from "./MoveDialog";
@@ -33,118 +33,30 @@ import { PathBar } from "./PathBar";
 import { isArchiveName } from "./selection";
 import { useFilePane } from "./useFilePane";
 
-function FileListView({
-  pane,
-  actions,
-  dropTarget,
-}: {
-  pane: ReturnType<typeof useFilePane>;
-  actions: PaneActions;
-  dropTarget: string | null;
-}) {
-  const manager = useFilesManager();
-  const selectedSet = new Set(pane.selected);
-  const [container, setContainer] = useState<HTMLDivElement | null>(null);
-  // The element a pointer gesture started on (mousedown origin). Selecto's
-  // onSelectEnd only exposes the mouseup event, so we track the origin here to
-  // tell a row drag (native move) from an empty-area drag (marquee select).
-  const downOnRow = useRef(false);
-  return (
-    <div
-      className="filelist"
-      ref={setContainer}
-      onPointerDownCapture={(e) => {
-        downOnRow.current = Boolean((e.target as Element | null)?.closest?.(".file-row"));
-      }}
-    >
-    <table className="files-table filepane-table">
-      <thead>
-        <tr>
-          <th>名称</th>
-          <th className="col-size">大小</th>
-          <th className="col-time">修改时间</th>
-          <th className="col-ops" aria-label="操作" />
-        </tr>
-      </thead>
-      <tbody>
-        {pane.entries.map((entry: FileEntry) => (
-          <tr
-            key={entry.path}
-            className={`file-row${selectedSet.has(entry.path) ? " selected" : ""}${
-              dropTarget === entry.path ? " drop-target" : ""
-            }`}
-            data-path={entry.path}
-            data-kind={entry.kind}
-            draggable
-            onDragStart={(e) => actions.onDragStartEntry(entry, e)}
-            onDragEnd={actions.onDragEndEntry}
-            onClick={(e) => {
-              manager.setActivePane(pane.paneId);
-              if (e.shiftKey || e.metaKey || e.ctrlKey) pane.toggleSelect(entry.path);
-              else if (entry.kind === "directory") pane.navigateTo(entry.path);
-              else pane.setSelection([entry.path]);
-            }}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (!selectedSet.has(entry.path)) pane.setSelection([entry.path]);
-              actions.onOpenContext(entry, e.clientX, e.clientY);
-            }}
-          >
-            <td className="col-name">
-              {pane.renamingPath === entry.path ? (
-                <InlineRenameInput
-                  initialName={entry.name}
-                  busy={pane.busy}
-                  onCommit={(name) => void pane.renameEntry(entry.path, name)}
-                  onCancel={() => pane.setRenamingPath(null)}
-                />
-              ) : (
-                <span className="entry-name" title={entry.path}>{entry.name}</span>
-              )}
-            </td>
-            <td className="col-size">
-              {entry.kind === "directory" ? "—" : formatStorageBytes(entry.size)}
-            </td>
-            <td className="col-time">{formatTimestamp(entry.modified)}</td>
-            <td className="col-ops">
-              <EntryActionButtons entry={entry} pane={pane} actions={actions} />
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+const INTERNAL_FILE_DRAG_MIME = "application/x-107pilot-files";
 
-      <Selecto
-        dragContainer={container}
-        selectableTargets={[".file-row"]}
-        hitRate={0}
-        selectByClick={false}
-        selectFromInside
-        continueSelect
-        toggleContinueSelect="shift"
-        ratio={0}
-        // Do NOT preventDefault on mousedown — doing so would suppress the
-        // native HTML5 dragstart on rows. Marquee selection is driven by
-        // mousemove, so it still works.
-        preventDefault={false}
-        onSelectEnd={(e) => {
-          const rect = e.rect;
-          // A gesture that began on a row is a native drag-and-drop move; let
-          // the row onClick / native drag handle it, not marquee selection.
-          if (downOnRow.current) return;
-          // Only a gesture with a real selection rectangle is a marquee; plain
-          // clicks on empty space are ignored here.
-          if (!rect || (rect.width < 4 && rect.height < 4)) return;
-          manager.setActivePane(pane.paneId);
-          const paths = e.selected
-            .map((el) => el.getAttribute("data-path"))
-            .filter((p): p is string => Boolean(p));
-          pane.setSelection(paths);
-        }}
-      />
-    </div>
-  );
+function dataTransferPayload(dataTransfer: DataTransfer): {
+  sourcePaneId: string;
+  entries: FileEntry[];
+} | null {
+  const raw = dataTransfer.getData(INTERNAL_FILE_DRAG_MIME);
+  if (!raw) return null;
+  try {
+    const decoded: unknown = JSON.parse(raw);
+    if (!decoded || typeof decoded !== "object") return null;
+    const value = decoded as { sourcePaneId?: unknown; entries?: unknown };
+    if (typeof value.sourcePaneId !== "string" || !Array.isArray(value.entries)) return null;
+    const entries = value.entries.filter((entry): entry is FileEntry => {
+      if (!entry || typeof entry !== "object") return false;
+      const item = entry as { path?: unknown; name?: unknown; kind?: unknown };
+      return typeof item.path === "string"
+        && typeof item.name === "string"
+        && typeof item.kind === "string";
+    });
+    return entries.length > 0 ? { sourcePaneId: value.sourcePaneId, entries } : null;
+  } catch {
+    return null;
+  }
 }
 
 export function FilePane({
@@ -275,9 +187,11 @@ export function FilePane({
       const paths = selectedSet.has(entry.path) ? [...pane.selected] : [entry.path];
       const entries = pane.entries.filter((en) => paths.includes(en.path));
       // Shared across panes: the drop may land in a different pane.
-      manager.setDragPayload({ sourcePaneId: paneId, entries });
+      const payload = { sourcePaneId: paneId, entries };
+      manager.setDragPayload(payload);
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", paths.join("\n"));
+      e.dataTransfer.setData(INTERNAL_FILE_DRAG_MIME, JSON.stringify(payload));
     },
     [manager, pane, paneId, selectedSet],
   );
@@ -298,26 +212,41 @@ export function FilePane({
     [dropTargetAt],
   );
 
-  const handleBodyDrop = useCallback(
-    (e: React.DragEvent) => {
-      if (e.dataTransfer.types.includes("Files")) return; // page handles upload
-      e.preventDefault();
-      const dest = dropTargetAt(e.clientX, e.clientY);
+  const completeInternalDrop = useCallback(
+    (dest: string | null, dataTransfer: DataTransfer) => {
       setDropTarget(null);
-      const payload = manager.getDragPayload();
+      const payload = manager.getDragPayload() ?? dataTransferPayload(dataTransfer);
       manager.setDragPayload(null);
       if (!dest || !payload || payload.entries.length === 0) return;
       const sourceController = manager.getController(payload.sourcePaneId);
       void manager.moveEntries(payload.entries, dest).then((moved) => {
         if (moved > 0) {
-          // Refresh both the drop pane and the source pane (cross-pane move).
           sourceController?.refresh();
           if (payload.sourcePaneId !== paneId) pane.refresh();
           pane.clearSelection();
         }
       });
     },
-    [dropTargetAt, manager, pane, paneId],
+    [manager, pane, paneId],
+  );
+
+  const handleBodyDrop = useCallback(
+    (e: React.DragEvent) => {
+      if (e.dataTransfer.types.includes("Files")) return; // page handles upload
+      e.preventDefault();
+      completeInternalDrop(dropTargetAt(e.clientX, e.clientY), e.dataTransfer);
+    },
+    [completeInternalDrop, dropTargetAt],
+  );
+
+  const handleDropIntoDirectory = useCallback(
+    (entry: FileEntry, e: React.DragEvent) => {
+      if (entry.kind !== "directory" || e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      completeInternalDrop(entry.path, e.dataTransfer);
+    },
+    [completeInternalDrop],
   );
 
   const handleBodyDragLeave = useCallback((e: React.DragEvent) => {
@@ -402,9 +331,18 @@ export function FilePane({
         setMenu({ x, y, target: entry });
       },
       onDragStartEntry: (entry, e) => handleEntryDragStart(entry, e),
+      onDropIntoDirectory: (entry, e) => handleDropIntoDirectory(entry, e),
       onDragEndEntry: () => handleEntryDragEnd(),
     }),
-    [pane, downloadEntry, manager, paneId, handleEntryDragStart, handleEntryDragEnd],
+    [
+      pane,
+      downloadEntry,
+      manager,
+      paneId,
+      handleEntryDragStart,
+      handleDropIntoDirectory,
+      handleEntryDragEnd,
+    ],
   );
 
   const singleFile = pane.selectedEntries.length === 1 ? pane.selectedEntries[0] : undefined;
@@ -592,7 +530,12 @@ export function FilePane({
       </div>
 
       <footer className="filepane-status">
-        <span>{pane.entries.length} 项</span>
+        <span>{pane.entries.length} 项已加载{pane.hasNextPage ? " · 还有更多" : ""}</span>
+        {pane.viewMode !== "column" && pane.hasNextPage ? (
+          <button type="button" className="text-link" disabled={pane.isFetchingNextPage} onClick={pane.fetchNextPage}>
+            {pane.isFetchingNextPage ? "加载中…" : "加载更多"}
+          </button>
+        ) : null}
         {singleFile && singleFile.kind === "file" && (
           <button
             type="button"

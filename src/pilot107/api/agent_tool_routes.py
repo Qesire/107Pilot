@@ -123,6 +123,9 @@ def _gateway_error(
         "AGENT.TOOL.FENCED",
         "AGENT.TOOL.IDEMPOTENCY_CONFLICT",
         "AGENT.TOOL.INVOCATION_IN_PROGRESS",
+        "AGENT.TOOL.OPERATION_CONFLICT",
+        "AGENT.TOOL.OPERATION_IN_PROGRESS",
+        "AGENT.TOOL.OPERATION_UNKNOWN",
         "AGENT.BUILDER.IDEMPOTENCY_CONFLICT",
         "AGENT.BUILDER.NO_PROGRESS",
         "AGENT.BUILDER.SNAPSHOT_INVALID",
@@ -141,9 +144,11 @@ def _gateway_error(
         status = 429
     elif code == "AGENT.TOOL.DEADLINE_EXPIRED":
         status = 408
-    elif code in {"AGENT.TOOL.INVALID", "AGENT.TOOL.INVALID_RESULT"}:
-        status = 400
-    elif code == "AGENT.BUILDER.VALIDATIONS_INVALID":
+    elif code in {
+        "AGENT.TOOL.INVALID",
+        "AGENT.TOOL.INVALID_RESULT",
+        "AGENT.BUILDER.VALIDATIONS_INVALID",
+    }:
         status = 400
     elif code in {"AGENT.TOOL.UNAVAILABLE", "AGENT.BUILDER.ENVELOPE_UNAVAILABLE"}:
         status = 503
@@ -179,6 +184,11 @@ def _public_message(code: str) -> str:
         "AGENT.TOOL.FENCED": "Agent Turn capability is stale or fenced",
         "AGENT.TOOL.IDEMPOTENCY_CONFLICT": "Agent tool idempotency conflict",
         "AGENT.TOOL.INVOCATION_IN_PROGRESS": "Agent tool invocation is in progress",
+        "AGENT.TOOL.OPERATION_CONFLICT": "Agent mutation identity conflicts with stored intent",
+        "AGENT.TOOL.OPERATION_IN_PROGRESS": "Agent mutation is already in progress",
+        "AGENT.TOOL.OPERATION_UNKNOWN": (
+            "Agent mutation outcome is unknown and requires reconciliation"
+        ),
         "AGENT.TOOL.INVOCATION_BUDGET_EXCEEDED": "Agent tool invocation budget exceeded",
         "AGENT.TOOL.BYTE_BUDGET_EXCEEDED": "Agent tool byte budget exceeded",
         "AGENT.TOOL.COMMAND_BUDGET_EXCEEDED": "Agent sandbox command budget exceeded",

@@ -25,7 +25,10 @@ import {
   updateContractPath,
   type SourceFormat,
 } from "./contract-state";
-import { QueryBoundary, SectionHeading, StatusBadge } from "./components";
+import { QueryBoundary, StatusBadge } from "./components";
+import { ContractAssetSummary } from "./ContractAssetSummary";
+import { ExperimentShell } from "./ExperimentShell";
+import { FilePickerDialog } from "./files/FilePickerDialog";
 import { useContract, useContractSchema, useRecipes, useRecipeVersion } from "./query";
 import { compileClientSchemaValidator } from "./schema-validation";
 import {
@@ -205,15 +208,20 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
   // handled by the explicit studio-hydrating banner below so the message can
   // be specific ("正在加载 Contract…") instead of the generic data-loading UI.
   const studioLoading = schemaQuery.isPending || recipes.isPending;
+  const projectName = readContractValue(canonical, ["project", "name"], "");
 
   return (
-    <>
-      <SectionHeading
-        eyebrow="Contract Studio / canonical state"
-        title={contractId ? "检查与派生 Contract" : "新建 Contract"}
-        detail="表单、源码与 Agent 共享同一 canonical object；左侧编辑表单，中间实时同步源码，右侧让 Agent 建议改动。服务端 validation 始终是最终权威。"
-      />
-
+    <ExperimentShell
+      user={user}
+      location={location}
+      navigate={navigate}
+      context={{
+        kind: "contract",
+        contractId,
+        title: typeof projectName === "string" ? projectName : null,
+        dirty: canonicalDirty,
+      }}
+    >
       <QueryBoundary
         pending={studioLoading}
         error={schemaQuery.error ?? recipes.error ?? existing.error}
@@ -271,6 +279,8 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
             <div className="studio-notice error" role="alert"><AlertTriangle aria-hidden="true" /><div><strong>服务器拒绝请求</strong><p>{(validation.error ?? creation.error)?.message}</p></div></div>
           ) : null}
 
+          <ContractAssetSummary contract={canonical} parameterSchema={parameterSchema} dirty={canonicalDirty} />
+
           <div className="studio-body-3col">
             <section className="studio-col studio-col-form" aria-label="表单投影">
               <header className="projection-heading">
@@ -278,7 +288,7 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
                 <p>基础与高级字段共享同一 canonical；滚动查看全部字段。</p>
               </header>
               <div className="studio-form-scroll">
-                <BasicProjection contract={canonical} recipes={recipes.data?.items ?? []} update={update} parameterSchema={parameterSchema} />
+                <BasicProjection user={user} contract={canonical} recipes={recipes.data?.items ?? []} update={update} parameterSchema={parameterSchema} />
                 <AdvancedProjection contract={canonical} update={update} />
               </div>
             </section>
@@ -363,7 +373,7 @@ export function StudioPage({ user, location, navigate }: StudioPageProps) {
         </div>
         ) : null}
       </QueryBoundary>
-    </>
+    </ExperimentShell>
   );
 }
 
@@ -396,7 +406,7 @@ function RunLaunchPanel({ user, contractId, localDirty, navigate }: { user: stri
   );
 }
 
-function BasicProjection({ contract, recipes, update, parameterSchema }: ProjectionProps & { recipes: Array<{ recipe_id: string; latest_version: string; title: string }>; parameterSchema?: unknown }) {
+function BasicProjection({ user, contract, recipes, update, parameterSchema }: ProjectionProps & { user: string; recipes: Array<{ recipe_id: string; latest_version: string; title: string }>; parameterSchema?: unknown }) {
   const currentRecipe = readContractValue(contract, ["recipe_version_id"], "");
   const recipeOptions = recipes.map((recipe) => ({ value: `${recipe.recipe_id}@${recipe.latest_version}`, label: `${recipe.title} · ${recipe.latest_version}` }));
   if (currentRecipe && !recipeOptions.some((option) => option.value === currentRecipe)) {
@@ -407,6 +417,7 @@ function BasicProjection({ contract, recipes, update, parameterSchema }: Project
   const typedOutputs = expected.filter((item) => typeof item !== "string");
   const commandValue = readContractValue(contract, ["entry", "command"], "");
   const workdirValue = readContractValue(contract, ["project", "workdir"], "");
+  const [workdirPickerOpen, setWorkdirPickerOpen] = useState(false);
   const schemaFields = parseParameterSchema(parameterSchema);
   const fieldOf = (path: string) => schemaFields.find((field) => field.path === path);
   const requiredLabel = (path: string, base: string) => (fieldOf(path)?.required ? `${base}（必填）` : base);
@@ -419,8 +430,12 @@ function BasicProjection({ contract, recipes, update, parameterSchema }: Project
       <fieldset className="field-group"><legend>任务</legend><div className="form-grid two">
         <SelectField label="Recipe version" value={currentRecipe} onChange={(value) => update(["recipe_version_id"], value)} options={recipeOptions} />
         <TextField label="项目名（可选）" value={readContractValue(contract, ["project", "name"], "")} onChange={(value) => update(["project", "name"], value)} />
-        <TextField className="span-2" label={requiredLabel("project.workdir", "Workdir")} value={workdirValue} onChange={(value) => update(["project", "workdir"], value)} customizable={isPlaceholderValue(workdirValue)} placeholder={fieldOf("project.workdir")?.prefix ?? undefined} />
-        <TextField className="span-2" label={requiredLabel("entry.command", "Command")} multiline value={commandValue} onChange={(value) => update(["entry", "command"], value)} customizable={isPlaceholderValue(commandValue)} />
+        <div className="path-field-browser span-2">
+          <TextField label={requiredLabel("project.workdir", "工作目录")} value={workdirValue} onChange={(value) => update(["project", "workdir"], value)} customizable={isPlaceholderValue(workdirValue)} placeholder={fieldOf("project.workdir")?.prefix ?? undefined} />
+          <button type="button" className="button secondary" aria-label="浏览工作目录" onClick={() => setWorkdirPickerOpen(true)}>浏览…</button>
+        </div>
+        {workdirPickerOpen ? <FilePickerDialog user={user} homePath={`/public/home/${user}`} initialPath={workdirValue} title="选择实验工作目录" onSelect={(path) => { update(["project", "workdir"], path); setWorkdirPickerOpen(false); }} onClose={() => setWorkdirPickerOpen(false)} /> : null}
+        <TextField className="span-2" label={requiredLabel("entry.command", "运行命令")} multiline value={commandValue} onChange={(value) => update(["entry", "command"], value)} customizable={isPlaceholderValue(commandValue)} />
       </div></fieldset>
       <fieldset className="field-group"><legend>资源</legend><div className="form-grid three">
         {partitionField && partitionField.allowed.length > 0 ? (
@@ -446,7 +461,7 @@ function BasicProjection({ contract, recipes, update, parameterSchema }: Project
         <TextField label={requiredLabel("resources.memory", "Memory")} value={String(readContractValue(contract, ["resources", "memory"], ""))} onChange={(value) => update(["resources", "memory"], value || null)} />
         <NumberField label="GPU / node" value={readContractValue(contract, ["resources", "gpus_per_node"], 0) ?? 0} min={0} onChange={(value) => update(["resources", "gpus_per_node"], value)} />
       </div></fieldset>
-      <TemplateExtraParameters contract={contract} schema={parameterSchema} update={update} />
+      <TemplateExtraParameters user={user} contract={contract} schema={parameterSchema} update={update} />
       <fieldset className="field-group"><legend>输出</legend><div className="form-grid">
         <TextField label="预期输出（每行一个）" multiline value={stringOutputs.join("\n")} detail={typedOutputs.length ? `${typedOutputs.length} 个 typed output 会被原样保留。` : undefined} onChange={(value) => update(["outputs", "expected"], [...linesToStrings(value), ...typedOutputs])} />
       </div></fieldset>

@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import heapq
 import hmac
 import json
 import os
@@ -13,6 +14,7 @@ import tarfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -348,6 +350,16 @@ class FileEntry:
 
 
 @dataclass(frozen=True)
+class FileListPage:
+    path: str
+    entries: tuple[FileEntry, ...]
+    limit: int
+    has_more: bool
+    next_cursor: str | None
+    directory_revision: str
+
+
+@dataclass(frozen=True)
 class FileSearchRequest:
     owner: str
     root: str
@@ -437,9 +449,15 @@ class FileOpsExecutor(Protocol):
         """Return the hex sha256 of a remote file."""
 
     def list_dir(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> list[FileEntry]:
-        """List a directory's entries."""
+        self,
+        *,
+        path: str,
+        owner: str,
+        limit: int = 500,
+        cursor: str | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> FileListPage:
+        """List one bounded, stable page of a directory."""
 
     def search_files(
         self,
@@ -736,26 +754,51 @@ class HttpCommandGatewayExecutor:
         return str(outcome)
 
     def list_dir(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> list[FileEntry]:
+        self,
+        *,
+        path: str,
+        owner: str,
+        limit: int = 500,
+        cursor: str | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> FileListPage:
         payload = self._request(
             "/list_dir",
-            {"path": path, "owner": owner, "timeout_seconds": timeout_seconds},
+            {
+                "path": path,
+                "owner": owner,
+                "limit": limit,
+                "cursor": cursor,
+                "timeout_seconds": timeout_seconds,
+            },
             timeout_seconds=timeout_seconds,
         )
-        entries = payload.get("entries")
-        if not isinstance(entries, list):
+        raw_entries = payload.get("entries")
+        if not isinstance(raw_entries, list):
             raise SlurmTransportError("gateway list_dir response missing entries")
-        return [
-            FileEntry(
-                name=str(item.get("name", "")),
-                type=str(item.get("type", "other")),
-                size=int(item.get("size", 0)),
-                mtime=int(item.get("mtime", 0)),
-            )
-            for item in entries
-            if isinstance(item, dict)
-        ]
+        raw_cursor = payload.get("next_cursor")
+        if raw_cursor is not None and not isinstance(raw_cursor, str):
+            raise SlurmTransportError("gateway list_dir response has invalid cursor")
+        revision = payload.get("directory_revision")
+        if not isinstance(revision, str) or not revision:
+            raise SlurmTransportError("gateway list_dir response missing directory revision")
+        return FileListPage(
+            path=str(payload.get("path", path)),
+            entries=tuple(
+                FileEntry(
+                    name=str(item.get("name", "")),
+                    type=str(item.get("type", "other")),
+                    size=int(item.get("size", 0)),
+                    mtime=int(item.get("mtime", 0)),
+                )
+                for item in raw_entries
+                if isinstance(item, dict)
+            ),
+            limit=int(payload.get("limit", limit)),
+            has_more=bool(payload.get("has_more", False)),
+            next_cursor=raw_cursor,
+            directory_revision=revision,
+        )
 
     def search_files(
         self,
@@ -1041,6 +1084,16 @@ def _directory_apparent_size(root: Path) -> int:
     return total
 
 
+def _directory_revision(target: Path) -> str:
+    info = target.stat()
+    raw = f"{info.st_dev}:{info.st_ino}:{info.st_mtime_ns}:{info.st_ctime_ns}".encode()
+    return hashlib.sha256(raw).hexdigest()[:24]
+
+
+def _file_list_sort_key(entry: FileEntry) -> tuple[int, str, str]:
+    return (0 if entry.type == "dir" else 1, entry.name.casefold(), entry.name)
+
+
 def _encode_local_search_cursor(payload: dict[str, Any], key: bytes) -> str:
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     body = base64.urlsafe_b64encode(raw).rstrip(b"=")
@@ -1179,31 +1232,81 @@ class LocalFileOpsExecutor:
         return digest.hexdigest()
 
     def list_dir(
-        self, *, path: str, owner: str, timeout_seconds: float = 30.0
-    ) -> list[FileEntry]:
+        self,
+        *,
+        path: str,
+        owner: str,
+        limit: int = 500,
+        cursor: str | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> FileListPage:
+        del timeout_seconds
         target = self._authorize(path)
         if not target.is_dir():
             raise SlurmTransportError(f"not a directory: {path}")
-        entries: list[FileEntry] = []
-        for entry in sorted(target.iterdir(), key=lambda item: item.name):
-            info = entry.lstat()
-            if entry.is_symlink():
-                kind = "symlink"
-            elif entry.is_dir():
-                kind = "dir"
-            elif entry.is_file():
-                kind = "file"
-            else:
-                kind = "other"
-            entries.append(
-                FileEntry(
-                    name=entry.name,
-                    type=kind,
-                    size=info.st_size,
-                    mtime=int(info.st_mtime),
-                )
+        if not 1 <= limit <= 1000:
+            raise SlurmSubmissionRejected("limit must be between 1 and 1000")
+        revision = _directory_revision(target)
+        binding = {"kind": "list_dir", "owner": owner, "path": str(target), "revision": revision}
+        after: tuple[int, str, str] | None = None
+        if cursor:
+            state = _decode_local_search_cursor(cursor, self._search_cursor_key)
+            if state.get("binding") != binding:
+                if (
+                    isinstance(state.get("binding"), dict)
+                    and state["binding"].get("path") == str(target)
+                ):
+                    raise SlurmSubmissionRejected("directory listing cursor is stale")
+                raise SlurmSubmissionRejected("directory listing cursor does not match request")
+            raw_after = state.get("after")
+            if (
+                not isinstance(raw_after, list)
+                or len(raw_after) != 3
+                or not isinstance(raw_after[0], int)
+                or not isinstance(raw_after[1], str)
+                or not isinstance(raw_after[2], str)
+            ):
+                raise SlurmSubmissionRejected("invalid directory listing cursor")
+            after = (raw_after[0], raw_after[1], raw_after[2])
+
+        def candidates() -> Iterator[FileEntry]:
+            with os.scandir(target) as handle:
+                for item in handle:
+                    try:
+                        info = item.stat(follow_symlinks=False)
+                        if item.is_symlink():
+                            kind = "symlink"
+                        elif item.is_dir(follow_symlinks=False):
+                            kind = "dir"
+                        elif item.is_file(follow_symlinks=False):
+                            kind = "file"
+                        else:
+                            kind = "other"
+                    except OSError:
+                        continue
+                    entry = FileEntry(
+                        name=item.name, type=kind, size=info.st_size, mtime=int(info.st_mtime)
+                    )
+                    if after is None or _file_list_sort_key(entry) > after:
+                        yield entry
+
+        selected = heapq.nsmallest(limit + 1, candidates(), key=_file_list_sort_key)
+        has_more = len(selected) > limit
+        page_entries = selected[:limit]
+        next_cursor = None
+        if has_more and page_entries:
+            key = _file_list_sort_key(page_entries[-1])
+            next_cursor = _encode_local_search_cursor(
+                {"binding": binding, "after": list(key)}, self._search_cursor_key
             )
-        return entries
+        return FileListPage(
+            path=str(target),
+            entries=tuple(page_entries),
+            limit=limit,
+            has_more=has_more,
+            next_cursor=next_cursor,
+            directory_revision=revision,
+        )
 
     def search_files(
         self,

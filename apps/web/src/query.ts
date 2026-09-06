@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api } from "./api";
-import type { AgentTask } from "./types";
+import type { AgentTask, RuntimeWatchState } from "./types";
+import { runtimePollingInterval, type RuntimeViewerVisibility } from "./runtime-polling";
 import {
   cpuAllocation,
   jobsByState,
@@ -18,11 +19,12 @@ export function useWebSession(requestedUser: string) {
   });
 }
 
-export function useHealth(user: string) {
+export function useHealth(user: string, enabled = true) {
   return useQuery({
     queryKey: ["health", user],
     queryFn: ({ signal }) => api.health(user, signal),
-    refetchInterval: 30_000,
+    enabled,
+    refetchInterval: enabled ? 30_000 : false,
   });
 }
 
@@ -144,6 +146,25 @@ export function useRun(user: string, runId: string | null) {
   });
 }
 
+export function useRunWorkspace(user: string, runId: string | null) {
+  return useQuery({
+    queryKey: ["run-workspace", user, runId],
+    queryFn: ({ signal }) => api.runWorkspace(user, runId ?? "", signal),
+    enabled: Boolean(runId),
+    refetchInterval: (query) => {
+      const workspace = query.state.data;
+      if (!workspace) return 10_000;
+      if (
+        ["SUBMITTING", "SUBMITTED", "PENDING", "RUNNING", "COMPLETING", "UNKNOWN"].includes(
+          workspace.states.execution,
+        )
+      ) return 5_000;
+      if (["pending", "running"].includes(workspace.states.collection)) return 5_000;
+      return false;
+    },
+  });
+}
+
 export function useRunEvents(user: string, runId: string | null) {
   return useQuery({
     queryKey: ["run-events", user, runId],
@@ -174,13 +195,19 @@ export function useRunEvidence(user: string, runId: string | null) {
   });
 }
 
-export function useRuntimeWatch(user: string, runId: string | null) {
+export function useRuntimeWatch(
+  user: string,
+  runId: string | null,
+  visibility: RuntimeViewerVisibility = "visible",
+) {
   return useQuery({
     queryKey: ["runtime-watch", user, runId],
     queryFn: ({ signal }) => api.runtimeWatch(user, runId ?? "", signal),
     enabled: Boolean(runId),
     retry: false,
-    refetchInterval: (query) => query.state.data?.state === "stopped" ? false : 5_000,
+    refetchInterval: (query) =>
+      runtimePollingInterval("summary", query.state.data?.state, visibility),
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -188,23 +215,32 @@ export function useRuntimeWatchLogs(
   user: string,
   runId: string | null,
   stream: "stdout" | "stderr",
+  watchState: RuntimeWatchState | null = null,
+  visibility: RuntimeViewerVisibility = "visible",
 ) {
   return useQuery({
     queryKey: ["runtime-watch-logs", user, runId, stream],
     queryFn: ({ signal }) => api.runtimeWatchLogs(user, runId ?? "", stream, signal),
     enabled: Boolean(runId),
     retry: false,
-    refetchInterval: 5_000,
+    refetchInterval: () => runtimePollingInterval("logs", watchState, visibility),
+    refetchIntervalInBackground: false,
   });
 }
 
-export function useRuntimeWatchAlerts(user: string, runId: string | null) {
+export function useRuntimeWatchAlerts(
+  user: string,
+  runId: string | null,
+  watchState: RuntimeWatchState | null = null,
+  visibility: RuntimeViewerVisibility = "visible",
+) {
   return useQuery({
     queryKey: ["runtime-watch-alerts", user, runId],
     queryFn: ({ signal }) => api.runtimeWatchAlerts(user, runId ?? "", signal),
     enabled: Boolean(runId),
     retry: false,
-    refetchInterval: 5_000,
+    refetchInterval: () => runtimePollingInterval("alerts", watchState, visibility),
+    refetchIntervalInBackground: false,
   });
 }
 

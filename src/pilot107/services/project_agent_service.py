@@ -31,14 +31,13 @@ from pilot107.agent.publisher import (
 from pilot107.agent.sandbox import SandboxExecutionResult, SandboxExecutor
 from pilot107.agent.session import AgentTurnRecord
 from pilot107.agent.task_store import AgentTaskStore
-from pilot107.agent.tasks import AgentTaskState
+from pilot107.agent.tasks import AgentTaskGateState, AgentTaskState
 from pilot107.agent.tool_gateway import AgentReadHandler, AgentReadResult, AgentToolGatewayError
 from pilot107.agent.workspace import (
     AgentWorkspaceRecord,
     WorkspaceApproval,
     WorkspaceChangeSet,
     WorkspaceChangeSetState,
-    WorkspaceEditor,
     WorkspaceImporter,
     WorkspacePatch,
     WorkspacePolicyError,
@@ -46,6 +45,7 @@ from pilot107.agent.workspace import (
     change_set_payload,
     workspace_payload,
 )
+from pilot107.agent.workspace_editor_factory import build_authoritative_workspace_editor
 from pilot107.core.contracts import ContractRecord, ContractService
 from pilot107.core.contracts import contract_payload as formal_contract_record_payload
 from pilot107.core.evidence_binding import EvidenceBinder, EvidenceBundle
@@ -143,7 +143,10 @@ class ProjectAgentService:
         self.agent_session_service = agent_session_service
         self.evidence_binder = evidence_binder
         self.agent_task_store = agent_task_store
-        self.editor = WorkspaceEditor(store=store)
+        self.editor = build_authoritative_workspace_editor(
+            store=store,
+            workspace_root=self.workspace_root,
+        )
 
     def create_project(
         self,
@@ -605,10 +608,28 @@ class ProjectAgentService:
             or task.linked_run_id is None
         ):
             raise ValueError("AgentTask lineage is not successful and fully bound")
-        if not task.result.evidence_refs:
-            raise ValueError("AgentTask Evidence is missing")
         linked_run_id = task.linked_run_id
         assert linked_run_id is not None
+        gate_receipt = task.gate_receipt
+        if (
+            task.gate_state is not AgentTaskGateState.COMPLETED
+            or task.legacy_gate_unverified
+            or gate_receipt is None
+            or gate_receipt.task_id != task.task_id
+            or gate_receipt.run_id != linked_run_id
+            or gate_receipt.run_terminal_state != "completed"
+            or gate_receipt.evidence_state != "finalized"
+            or gate_receipt.integrity_state != "verified"
+            or not gate_receipt.evidence_refs
+        ):
+            raise ValueError("AgentTask terminal Evidence gate is not verified")
+        if task.completion_policy.requires_capsule and (
+            gate_receipt.capsule_state != "READY" or gate_receipt.capsule_ref is None
+        ):
+            raise ValueError("AgentTask terminal Capsule gate is not verified")
+        if tuple(task.result.evidence_refs) != tuple(gate_receipt.evidence_refs):
+            raise ValueError("AgentTask result does not match terminal Evidence gate")
+        trusted_evidence_refs = gate_receipt.evidence_refs
 
         change_set = self.store.get_change_set(change_set_id, owner=owner)
         publication = self.store.get_workspace_publication(change_set_id, owner=owner)
@@ -636,8 +657,12 @@ class ProjectAgentService:
             or validation_run.result_status is not ResultStatus.COMPLETE
         ):
             raise ValueError("AgentTask validation Run lineage is not successful")
-        bundle = evidence_binder.bind(validation_run.run_id, task.result.evidence_refs)
-        if not bundle.objects or bundle.rejected_refs:
+        bundle = evidence_binder.bind(validation_run.run_id, trusted_evidence_refs)
+        if (
+            not bundle.objects
+            or bundle.rejected_refs
+            or len(bundle.objects) != len(trusted_evidence_refs)
+        ):
             raise ValueError("AgentTask Evidence is incomplete or untrusted")
 
         project = self.store.get_project(project_id, owner=owner)
@@ -654,7 +679,7 @@ class ProjectAgentService:
             validation_task_id=task.task_id,
             validation_contract_id=validation_contract.contract_id,
             validation_run_id=validation_run.run_id,
-            validation_evidence_refs=task.result.evidence_refs,
+            validation_evidence_refs=trusted_evidence_refs,
             published_workdir=publication.target_root,
             default_command=shlex.join(validations[0].argv),
             resource_hints=project.blueprint.contract_intent.resource_hints,

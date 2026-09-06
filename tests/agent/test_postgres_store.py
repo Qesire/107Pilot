@@ -7,8 +7,7 @@ from pathlib import Path
 import pytest
 
 from pilot107.agent.postgres_store import PostgresAgentSessionStore
-from pilot107.agent.store import SQLiteAgentSessionStore
-from pilot107.agent.store_factory import build_agent_session_store
+from pilot107.agent.store_factory import ConfigurationError, build_agent_session_store
 
 from .test_store_contract import exercise_agent_store_contract
 
@@ -24,13 +23,12 @@ class MutableClock:
         self.value += delta
 
 
-def test_factory_selects_sqlite_without_postgres_dsn(tmp_path: Path) -> None:
-    store = build_agent_session_store(
-        sqlite_path=tmp_path / "agent.db",
-        postgres_dsn=None,
-    )
-
-    assert isinstance(store, SQLiteAgentSessionStore)
+def test_factory_rejects_missing_postgres_dsn(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match="requires PostgreSQL"):
+        build_agent_session_store(
+            sqlite_path=tmp_path / "agent.db",
+            postgres_dsn=None,
+        )
 
 
 def test_factory_selects_postgres_when_dsn_is_present(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,6 +36,10 @@ def test_factory_selects_postgres_when_dsn_is_present(monkeypatch: pytest.Monkey
     monkeypatch.setattr(
         "pilot107.agent.store_factory.PostgresAgentSessionStore",
         lambda dsn: sentinel,
+    )
+    monkeypatch.setattr(
+        "pilot107.agent.store_factory.ensure_postgres_checkpoint_pointer",
+        lambda dsn: None,
     )
 
     store = build_agent_session_store(

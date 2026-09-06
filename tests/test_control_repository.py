@@ -29,13 +29,18 @@ class MutableClock:
 
 
 class ControlRepositoryFactoryTests(unittest.TestCase):
-    def test_defaults_to_sqlite_and_selects_postgres_when_dsn_is_present(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            sqlite = build_control_repository(
+    def test_requires_postgres_and_selects_postgres_when_dsn_is_present(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            self.assertRaisesRegex(
+                ValueError,
+                "PostgreSQL control repository is required",
+            ),
+        ):
+            build_control_repository(
                 sqlite_path=Path(temporary) / "control.db",
                 postgres_dsn=None,
             )
-        self.assertIsInstance(sqlite, SQLiteControlRepository)
 
         with patch(
             "pilot107.core.control_repository_factory.PostgresControlRepository"

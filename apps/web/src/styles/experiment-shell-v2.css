@@ -1,0 +1,213 @@
+.experiment-shell {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.experiment-shell-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 4px 2px 0;
+}
+
+.experiment-shell-heading { min-width: 0; }
+.experiment-shell-kicker {
+  margin: 0 0 5px;
+  color: var(--accent-primary);
+  font-size: 12px;
+  font-weight: 720;
+  letter-spacing: .09em;
+}
+.experiment-shell-heading h1 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: clamp(26px, 2.2vw, 34px);
+  line-height: 1.15;
+  letter-spacing: -.035em;
+}
+.experiment-shell-title {
+  display: block;
+  max-width: 760px;
+  margin-top: 9px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 15px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.experiment-shell-heading > p:last-child {
+  max-width: 840px;
+  margin: 7px 0 0;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.experiment-shell-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.experiment-identity {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.experiment-identity > span {
+  display: grid;
+  min-width: 150px;
+  gap: 2px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  padding: 7px 10px;
+}
+.experiment-identity > span.is-wide { min-width: min(420px, 100%); flex: 1; }
+.experiment-identity small { color: var(--text-tertiary); font-size: 10px; font-weight: 650; }
+.experiment-identity code {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.experiment-trajectory {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--bg-surface);
+}
+.experiment-trajectory::before {
+  position: absolute;
+  top: 24px;
+  right: 8.4%;
+  left: 8.4%;
+  height: 1px;
+  background: var(--border-default);
+  content: "";
+  pointer-events: none;
+}
+.experiment-phase {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-right: 1px solid var(--border-default);
+  background: transparent;
+  padding: 11px 10px;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.experiment-phase:last-child { border-right: 0; }
+.experiment-phase:hover:not(:disabled) { background: var(--bg-subtle); }
+.experiment-phase:disabled { opacity: .58; cursor: default; }
+.experiment-phase.is-active { background: color-mix(in srgb, var(--accent-primary) 7%, var(--bg-surface)); color: var(--text-primary); }
+.experiment-phase-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--border-default);
+  border-radius: 50%;
+  background: var(--bg-surface);
+  color: var(--text-tertiary);
+}
+.experiment-phase-icon svg { width: 14px; height: 14px; }
+.experiment-phase.is-active .experiment-phase-icon {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  color: #fff;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-primary) 11%, transparent);
+}
+.experiment-phase.is-done .experiment-phase-icon { border-color: var(--state-success); color: var(--state-success); }
+.experiment-phase-copy { display: grid; min-width: 0; gap: 2px; }
+.experiment-phase-copy strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.experiment-phase-copy small { overflow: hidden; color: var(--text-tertiary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+
+.experiment-next-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, var(--border-default));
+  border-left: 3px solid var(--accent-primary);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-primary) 4%, var(--bg-surface));
+  padding: 11px 12px 11px 14px;
+}
+.experiment-next-action > div { display: grid; gap: 2px; min-width: 0; }
+.experiment-next-action small { color: var(--text-tertiary); font-size: 10px; font-weight: 700; }
+.experiment-next-action strong { color: var(--text-primary); font-size: 12px; font-weight: 620; }
+.experiment-shell-content { min-width: 0; }
+
+.experiment-run-workspace {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.experiment-run-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.experiment-run-heading h2 { margin: 0; font-size: 17px; }
+.experiment-run-heading p { margin: 3px 0 0; color: var(--text-tertiary); font-size: 12px; }
+.experiment-run-summary {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--bg-surface);
+  padding: 14px;
+}
+.experiment-run-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.experiment-run-summary-grid > div {
+  min-width: 0;
+  border-left: 2px solid var(--border-default);
+  padding-left: 9px;
+}
+.experiment-run-summary-grid dt { color: var(--text-tertiary); font-size: 10px; font-weight: 650; }
+.experiment-run-summary-grid dd { margin: 3px 0 0; overflow-wrap: anywhere; color: var(--text-secondary); font-size: 12px; }
+.experiment-run-summary-grid .is-wide { grid-column: span 2; }
+
+@media (max-width: 1100px) {
+  .experiment-trajectory { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .experiment-trajectory::before { display: none; }
+  .experiment-phase:nth-child(3) { border-right: 0; }
+  .experiment-phase:nth-child(-n + 3) { border-bottom: 1px solid var(--border-default); }
+  .experiment-run-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .experiment-shell-header,
+  .experiment-next-action { align-items: stretch; flex-direction: column; }
+  .experiment-shell-actions { justify-content: flex-start; }
+  .experiment-trajectory { grid-template-columns: 1fr 1fr; }
+  .experiment-phase { border-bottom: 1px solid var(--border-default); }
+  .experiment-phase:nth-child(2n) { border-right: 0; }
+  .experiment-phase:nth-last-child(-n + 2) { border-bottom: 0; }
+  .experiment-run-summary-grid { grid-template-columns: 1fr; }
+  .experiment-run-summary-grid .is-wide { grid-column: auto; }
+}

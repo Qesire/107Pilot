@@ -26,6 +26,12 @@ from pilot107.agent.protocol import (
     validate_checkpoint,
     validate_json_object,
 )
+from pilot107.agent.repair_protocol import (
+    DURABLE_REPAIR_TURN_PROTOCOL_VERSION,
+    ReceiptRepairingDurableAgentTurnRequest,
+    serialize_receipt_repair,
+    validate_repairing_payload,
+)
 
 _TASK_PAIRINGS = {
     "interactive": ("hpc-assistant-v1", "a0-none"),
@@ -260,8 +266,17 @@ def _build_durable_turn_request(
             "pilot-agentd durable Turn profile is invalid",
             code="invalid_request",
         )
-    payload = {
-        "schema_version": "pilot107.agent-turn-request/v2",
+    repairs = (
+        request.receipt_repairs
+        if isinstance(request, ReceiptRepairingDurableAgentTurnRequest)
+        else ()
+    )
+    payload: dict[str, Any] = {
+        "schema_version": (
+            DURABLE_REPAIR_TURN_PROTOCOL_VERSION
+            if repairs
+            else "pilot107.agent-turn-request/v2"
+        ),
         "session_id": request.session_id,
         "turn_id": request.turn_id,
         "owner": request.owner,
@@ -282,10 +297,17 @@ def _build_durable_turn_request(
         },
         "trace": {"correlation_id": request.turn_id},
     }
+    if repairs:
+        payload["receipt_repairs"] = [
+            serialize_receipt_repair(repair) for repair in repairs
+        ]
     try:
         if request.model_profile_id != config.model_profile_id:
             raise ValueError("model profile mismatch")
-        parse_durable_turn_request(payload)
+        if repairs:
+            validate_repairing_payload(payload)
+        else:
+            parse_durable_turn_request(payload)
     except (TypeError, ValueError, RecursionError, UnicodeError):
         raise AgentdClientError(
             "pilot-agentd durable Turn request is invalid",

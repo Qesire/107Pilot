@@ -1,33 +1,41 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from pilot107.agent.operation_attempts import build_agent_operation_attempt_store
+from pilot107.agent.operation_ledger import (
+    AgentOperationLedger,
+    build_agent_operation_ledger,
+)
+from pilot107.agent.operation_reconciler import build_agent_operation_reconciler
 from pilot107.agent.store_factory import (
     ConfigurationError,
     DatabaseMode,
+    build_agent_session_store,
+    build_agent_task_store,
+    build_project_store,
     resolve_durable_store_selection,
 )
-from pilot107.api.service import (
-    ApiServiceConfig,
-    build_api_service,
-)
-from pilot107.api.service import (
-    config_from_env as api_config_from_env,
-)
+from pilot107.api.service import ApiServiceConfig, build_api_service
+from pilot107.api.service import config_from_env as api_config_from_env
+from pilot107.core.control_repository_factory import build_control_repository
 from pilot107.core.postgres_domain_schema import domain_table_names
-from pilot107.worker.service import (
-    WorkerServiceConfig,
-    build_worker_service,
-)
-from pilot107.worker.service import (
-    config_from_env as worker_config_from_env,
-)
+from pilot107.worker.service import WorkerServiceConfig, build_worker_service
+from pilot107.worker.service import config_from_env as worker_config_from_env
+
+SQLITE_RETIRED = "SQLite runtime authority has been retired"
 
 
-def test_environment_resolves_one_explicit_database_mode(tmp_path: Path) -> None:
-    dsn = "postgresql://api:secret@db.internal:5432/pilot107"
+class _LegacySQLiteStore:
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
+
+
+def test_environment_resolves_postgres_when_dsn_is_present(tmp_path: Path) -> None:
+    dsn = "postgresql://api@db.internal:5432/pilot107"
     api = api_config_from_env(
         {"PILOT107_POSTGRES_DSN": dsn},
         project_root=tmp_path,
@@ -44,8 +52,7 @@ def test_environment_resolves_one_explicit_database_mode(tmp_path: Path) -> None
 
 
 def test_postgres_dsn_file_is_shared_without_entering_config_repr(tmp_path: Path) -> None:
-    credential = "file-" + "credential"
-    dsn = f"postgresql://api:{credential}@db.internal:5432/pilot107"
+    dsn = "postgresql://api@db.internal:5432/pilot107"
     secret_file = tmp_path / "postgres-dsn"
     secret_file.write_text(dsn + "\n")
     environment = {"PILOT107_POSTGRES_DSN_FILE": str(secret_file)}
@@ -55,8 +62,8 @@ def test_postgres_dsn_file_is_shared_without_entering_config_repr(tmp_path: Path
 
     assert api.database_mode is worker.database_mode is DatabaseMode.POSTGRES
     assert api.postgres_dsn == worker.postgres_dsn == dsn
-    assert credential not in repr(api)
-    assert credential not in repr(worker)
+    assert dsn not in repr(api)
+    assert dsn not in repr(worker)
 
 
 def test_postgres_dsn_rejects_inline_and_file_sources(tmp_path: Path) -> None:
@@ -73,8 +80,18 @@ def test_postgres_dsn_rejects_inline_and_file_sources(tmp_path: Path) -> None:
         worker_config_from_env(environment, project_root=tmp_path)
 
 
-def test_postgres_mode_rejects_sqlite_lifecycle_store(tmp_path: Path) -> None:
-    with pytest.raises(ConfigurationError, match="mixed durable stores"):
+def test_sqlite_mode_is_a_rejected_deprecation_sentinel(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
+        resolve_durable_store_selection(
+            database_mode=DatabaseMode.SQLITE,
+            sqlite_path=tmp_path / "pilot107.db",
+            postgres_dsn=None,
+            control_postgres_dsn=None,
+        )
+
+
+def test_postgres_mode_rejects_sqlite_lifecycle_override(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
         resolve_durable_store_selection(
             database_mode=DatabaseMode.POSTGRES,
             sqlite_path=tmp_path / "pilot107.db",
@@ -84,13 +101,13 @@ def test_postgres_mode_rejects_sqlite_lifecycle_store(tmp_path: Path) -> None:
         )
 
 
-def test_sqlite_mode_rejects_any_postgres_repository(tmp_path: Path) -> None:
-    with pytest.raises(ConfigurationError, match="mixed durable stores"):
+def test_postgres_mode_requires_domain_and_control_dsn(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
         resolve_durable_store_selection(
-            database_mode=DatabaseMode.SQLITE,
+            database_mode=DatabaseMode.POSTGRES,
             sqlite_path=tmp_path / "pilot107.db",
-            postgres_dsn=None,
-            control_postgres_dsn="postgresql://control@db.internal/pilot107",
+            postgres_dsn="postgresql://app@db.internal/pilot107",
+            control_postgres_dsn=None,
         )
 
 
@@ -99,8 +116,8 @@ def test_postgres_mode_rejects_different_database_identity(tmp_path: Path) -> No
         resolve_durable_store_selection(
             database_mode=DatabaseMode.POSTGRES,
             sqlite_path=tmp_path / "pilot107.db",
-            postgres_dsn="postgresql://domain:one@db.internal/pilot107",
-            control_postgres_dsn="postgresql://control:two@db.internal/control",
+            postgres_dsn="postgresql://domain@db.internal/pilot107",
+            control_postgres_dsn="postgresql://control@db.internal/control",
         )
 
 
@@ -111,9 +128,7 @@ def test_postgres_identity_may_use_separate_credentials_without_leaking_them(
         database_mode=DatabaseMode.POSTGRES,
         sqlite_path=tmp_path / "pilot107.db",
         postgres_dsn="postgresql://domain@DB.internal:5432/pilot107",
-        control_postgres_dsn=(
-            "postgresql://control@db.internal:5432/pilot107"
-        ),
+        control_postgres_dsn="postgresql://control@db.internal:5432/pilot107",
     )
 
     assert selection.mode is DatabaseMode.POSTGRES
@@ -121,26 +136,51 @@ def test_postgres_identity_may_use_separate_credentials_without_leaking_them(
     assert "postgresql" not in repr(selection)
 
 
-def test_api_and_worker_fail_before_building_mixed_stores(tmp_path: Path) -> None:
+def test_direct_agent_store_builders_have_no_sqlite_fallback(tmp_path: Path) -> None:
+    for builder in (
+        build_agent_session_store,
+        build_project_store,
+        build_agent_task_store,
+    ):
+        with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
+            builder(sqlite_path=tmp_path / "legacy.db", postgres_dsn=None)
+
+
+def test_agent_operation_builders_have_no_sqlite_fallback(tmp_path: Path) -> None:
+    legacy_store = _LegacySQLiteStore(tmp_path / "legacy.db")
+
+    with pytest.raises(RuntimeError, match="PostgreSQL"):
+        build_agent_operation_ledger(legacy_store)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="PostgreSQL"):
+        build_agent_operation_attempt_store(legacy_store)
+
+    fake_ledger = cast(AgentOperationLedger, object())
+    with pytest.raises(RuntimeError, match="PostgreSQL"):
+        build_agent_operation_reconciler(legacy_store, fake_ledger)
+
+
+def test_control_repository_has_no_sqlite_fallback(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=SQLITE_RETIRED):
+        build_control_repository(
+            sqlite_path=tmp_path / "legacy.db",
+            postgres_dsn=None,
+        )
+
+
+def test_api_and_worker_fail_closed_without_postgres(tmp_path: Path) -> None:
     api = ApiServiceConfig(
         db_path=tmp_path / "api.db",
         evidence_root=tmp_path / "api-evidence",
         capsule_root=tmp_path / "api-capsules",
-        database_mode=DatabaseMode.POSTGRES,
-        postgres_dsn="postgresql://app@db.internal/pilot107",
-        control_postgres_dsn=None,
     )
     worker = WorkerServiceConfig(
         db_path=tmp_path / "worker.db",
         evidence_root=tmp_path / "worker-evidence",
-        database_mode=DatabaseMode.POSTGRES,
-        postgres_dsn="postgresql://app@db.internal/pilot107",
-        control_postgres_dsn=None,
     )
 
-    with pytest.raises(ConfigurationError, match="mixed durable stores"):
+    with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
         build_api_service(api)
-    with pytest.raises(ConfigurationError, match="mixed durable stores"):
+    with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
         build_worker_service(worker)
 
 

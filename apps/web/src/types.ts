@@ -1245,6 +1245,8 @@ export interface FileEntry {
 export interface FileListResponse {
   path: string;
   entries: FileEntry[];
+  page: PageInfo;
+  directory_revision: string;
 }
 
 export interface FileSearchEntry {
@@ -1273,11 +1275,15 @@ export interface FileContentResponse {
 export type UploadSessionState =
   | "initialized"
   | "uploading"
-  | "completing"
-  | "completed"
+  | "assembled"
+  | "verified"
   | "written"
+  | "extracted"
   | "aborted"
-  | "failed";
+  | "failed"
+  // Compatibility with older control-plane/UI deployments.
+  | "completing"
+  | "completed";
 
 export interface UploadSession {
   upload_id: string;
