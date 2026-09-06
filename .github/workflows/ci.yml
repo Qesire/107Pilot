@@ -2,10 +2,21 @@ name: ci
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# Full CI is intentionally limited to main and pull requests. Agent/work branches
+# can contain many small commits; running all five jobs for every intermediate
+# push wastes private-repository hosted-runner minutes without adding a new
+# integration boundary. A newer run supersedes an older run for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   python:
@@ -74,7 +85,7 @@ jobs:
           if-no-files-found: ignore
 
   # Playwright UI suite (mocked API). Blocking gate: tests/ui/visual.spec.js
-  # is stabilized (14/14 passing). Covers Market→Adopt→Studio→Preflight→Run→
+  # is stabilized (34/34 passing). Covers Market→Adopt→Studio→Preflight→Run→
   # Evidence browser flows that unit tests cannot reach.
   web-ui:
     runs-on: ubuntu-24.04
