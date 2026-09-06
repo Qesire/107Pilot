@@ -28,7 +28,28 @@ jobs:
         run: |
           set -euo pipefail
           files="src/pilot107/agent/durable_workspace.py src/pilot107/agent/durable_workspace_atomic.py"
-          uv run ruff check --fix --unsafe-fixes $files
+          uv run ruff check --fix --unsafe-fixes $files || true
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/pilot107/agent/durable_workspace.py")
+          text = path.read_text(encoding="utf-8")
+          replacements = {
+              '            after_digest = None if patch.operation == "delete" else hashlib.sha256(after).hexdigest()\n':
+              '            after_digest = (\n'
+              '                None if patch.operation == "delete" else hashlib.sha256(after).hexdigest()\n'
+              '            )\n',
+              '                raise WorkspaceLiveConflict("Workspace live manifest contains unsupported file type")\n':
+              '                raise WorkspaceLiveConflict(\n'
+              '                    "Workspace live manifest contains unsupported file type"\n'
+              '                )\n',
+          }
+          for before, after in replacements.items():
+              if text.count(before) != 1:
+                  raise SystemExit(f"expected one exact long-line match, got {text.count(before)}")
+              text = text.replace(before, after, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
           uv run ruff format $files
           uv run ruff check $files
           git diff --check
