@@ -44,6 +44,19 @@ async function installWorkAreaLaunchMock(page) {
       };
       return json(workarea, 201);
     }
+    if (
+      url.pathname === `/api/v1/workareas/${WORKAREA_ID}`
+      && request.method() === "PATCH"
+    ) {
+      const body = request.postDataJSON();
+      workarea = {
+        ...workarea,
+        title: body.title,
+        description: body.description,
+        updated_at: "2026-09-06T09:00:30Z",
+      };
+      return json(workarea);
+    }
     if (url.pathname === `/api/v1/workareas/${WORKAREA_ID}` && request.method() === "GET") {
       return json(workarea);
     }
@@ -203,7 +216,7 @@ test.beforeEach(async ({ page }) => {
   await installWorkAreaLaunchMock(page);
 });
 
-test("creates a WorkArea, reviews effective request, commits once, and reaches Run authority", async ({ page }) => {
+test("creates and edits a WorkArea, reviews request, commits once, and reaches Run", async ({ page }) => {
   await page.goto("/workareas?user=alice");
 
   await expect(page.getByRole("heading", { name: "研究区" })).toBeVisible();
@@ -214,6 +227,13 @@ test("creates a WorkArea, reviews effective request, commits once, and reaches R
   await expect(page).toHaveURL(new RegExp(`/workareas/${WORKAREA_ID}`));
 
   await expect(page.getByRole("heading", { name: "Competition vertical" })).toBeVisible();
+  await page.getByRole("button", { name: "编辑研究区" }).click();
+  await page.getByLabel("名称").fill("Competition vertical revised");
+  await page.getByLabel("说明").fill("Persistent research context");
+  await page.getByRole("button", { name: "保存研究区" }).click();
+  await expect(page.getByRole("heading", { name: "Competition vertical revised" })).toBeVisible();
+  await expect(page.getByText("Persistent research context")).toBeVisible();
+
   await page.getByRole("button", { name: "新建运行" }).click();
   await expect(page).toHaveURL(new RegExp(`/workareas/${WORKAREA_ID}/launch/new`));
 
