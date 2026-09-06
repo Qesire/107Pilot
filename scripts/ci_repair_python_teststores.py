@@ -41,14 +41,17 @@ def restore_service_test_seams(path: str) -> None:
         "database_mode: DatabaseMode = DatabaseMode.SQLITE",
         "database_mode: DatabaseMode = DatabaseMode.POSTGRES",
     )
-    regex_once(
+    replace_once(
         path,
-        r"def _database_mode\(\n"
-        r"    values: Mapping\[str, str\], \*, postgres_dsn: str \| None\n"
-        r"\) -> DatabaseMode:\n.*?\n\n\ndef _load_postgres_dsn",
-        '''def _database_mode(
-    values: Mapping[str, str], *, postgres_dsn: str | None
-) -> DatabaseMode:
+        '''def _database_mode(values: Mapping[str, str], *, postgres_dsn: str | None) -> DatabaseMode:
+    configured = values.get("PILOT107_DATABASE_MODE")
+    inferred = "postgres" if postgres_dsn else "sqlite"
+    try:
+        return DatabaseMode(configured or inferred)
+    except ValueError as exc:
+        raise ValueError("PILOT107_DATABASE_MODE must be sqlite or postgres") from exc
+''',
+        '''def _database_mode(values: Mapping[str, str], *, postgres_dsn: str | None) -> DatabaseMode:
     del postgres_dsn
     configured = (values.get("PILOT107_DATABASE_MODE") or "postgres").strip().lower()
     if configured == "sqlite":
@@ -56,9 +59,7 @@ def restore_service_test_seams(path: str) -> None:
     if configured != "postgres":
         raise ValueError("PILOT107_DATABASE_MODE must be postgres")
     return DatabaseMode.POSTGRES
-
-
-def _load_postgres_dsn''',
+''',
     )
 
 
