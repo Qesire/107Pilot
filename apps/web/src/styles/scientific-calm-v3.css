@@ -1,0 +1,321 @@
+/*
+ * Scientific Calm v3 — final compatibility correction layer.
+ *
+ * The application still carries a number of mature legacy components whose
+ * behaviour is worth preserving.  This file intentionally fixes their visual
+ * grammar after all migration layers are loaded: flat/dense/trustworthy,
+ * semantic colour only, no decorative gradients, no hover lift, no pill-heavy
+ * status language.  Floating surfaces (dialogs/popovers/drawers) remain the
+ * only place where controlled shadow is allowed.
+ */
+
+/* ---------- Shared controls ---------- */
+.button {
+  min-height: var(--control-height);
+  border-radius: var(--radius-control);
+  box-shadow: none !important;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+  transition:
+    background-color var(--duration-normal) ease,
+    border-color var(--duration-normal) ease,
+    color var(--duration-normal) ease;
+}
+
+.button:hover,
+.button.secondary:hover,
+.button.primary:hover {
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.button.primary {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  color: #fff;
+}
+
+.button.primary:hover {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+.button.secondary {
+  border-color: var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.button.secondary:hover {
+  border-color: var(--text-tertiary);
+  background: var(--bg-subtle);
+}
+
+.button.ghost,
+.text-button,
+.text-link {
+  color: var(--accent-primary);
+}
+
+.icon-button {
+  border-radius: var(--radius-control);
+  box-shadow: none;
+}
+
+/* Status is semantic information, not decorative pill UI. */
+.status-badge {
+  min-height: 24px;
+  gap: 6px;
+  border-radius: var(--radius-status);
+  background: var(--bg-subtle);
+  padding: 2px 7px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.status-badge::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+}
+
+.status-badge.tone-success,
+.tone-success {
+  border-color: color-mix(in srgb, var(--state-success) 28%, var(--border-default));
+  background: var(--state-success-soft);
+  color: var(--state-success);
+}
+
+.status-badge.tone-info,
+.tone-info {
+  border-color: color-mix(in srgb, var(--state-info) 28%, var(--border-default));
+  background: var(--state-info-soft);
+  color: var(--state-info);
+}
+
+.status-badge.tone-warning,
+.tone-warning {
+  border-color: color-mix(in srgb, var(--state-warning) 28%, var(--border-default));
+  background: var(--state-warning-soft);
+  color: var(--state-warning);
+}
+
+.status-badge.tone-danger,
+.tone-danger {
+  border-color: color-mix(in srgb, var(--state-danger) 28%, var(--border-default));
+  background: var(--state-danger-soft);
+  color: var(--state-danger);
+}
+
+/* ---------- Typography and page hierarchy ---------- */
+.section-heading {
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.section-heading h1 {
+  margin-bottom: 7px;
+  font-size: 28px;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -.035em;
+}
+
+.section-heading > div > p:last-child {
+  max-width: 780px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.eyebrow,
+.panel-kicker {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .045em;
+}
+
+.panel-heading h2,
+.drawer-heading h2 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -.015em;
+}
+
+/* ---------- Surfaces ---------- */
+.panel,
+.signal-strip,
+.template-card,
+.cluster-summary > div,
+.query-state {
+  border-radius: var(--radius-panel);
+  box-shadow: none !important;
+}
+
+.panel {
+  border-color: var(--border-default);
+  background: var(--bg-surface);
+  padding: 20px;
+}
+
+.template-card {
+  border-color: var(--border-default);
+  background: var(--bg-surface);
+  box-shadow: none !important;
+  transition:
+    background-color var(--duration-normal) ease,
+    border-color var(--duration-normal) ease;
+}
+
+.template-card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+/* Decorative signal gradients from the migration layer are deliberately gone. */
+.signal-strip article,
+.signal-strip article:nth-child(2),
+.signal-strip article:nth-child(3),
+.signal-strip article:nth-child(4) {
+  background: var(--bg-surface);
+}
+
+.signal-icon,
+.action-icon {
+  border-radius: var(--radius-control);
+  box-shadow: none !important;
+}
+
+/* Floating UI is the one legitimate elevated layer. */
+.detail-drawer,
+.drawer,
+.dialog,
+[role="dialog"] {
+  border-radius: var(--radius-float);
+}
+
+.detail-drawer {
+  box-shadow: var(--shadow-popover) !important;
+}
+
+/* ---------- Dense data ---------- */
+.data-table {
+  border-collapse: collapse;
+  background: transparent;
+  font-size: 13px;
+}
+
+.data-table th {
+  height: 34px;
+  border-bottom-color: var(--border-default);
+  background: transparent;
+  color: var(--text-tertiary);
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .035em;
+}
+
+.data-table td {
+  height: 38px;
+  border-bottom-color: var(--border-default);
+  padding: 8px 10px;
+}
+
+.data-table tbody tr:hover {
+  background: var(--bg-subtle);
+}
+
+/* ---------- Runs ---------- */
+.run-list {
+  gap: 0;
+  padding: 0;
+}
+
+.run-list-item {
+  gap: 6px;
+  border: 0;
+  border-bottom: 1px solid var(--border-default);
+  border-radius: 0;
+  background: transparent;
+  padding: 11px 10px;
+  transition: background-color var(--duration-fast) ease;
+}
+
+.run-list-item:first-child {
+  border-top: 1px solid var(--border-default);
+}
+
+.run-list-item:hover {
+  border-color: var(--border-default);
+  background: var(--bg-subtle);
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.run-list-item.is-selected {
+  border-color: var(--border-default);
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent-primary) !important;
+}
+
+.run-list-facts {
+  border-top-color: var(--border-default);
+}
+
+.run-detail-summary {
+  border-color: var(--border-default);
+  border-radius: var(--radius-panel);
+  background: var(--bg-subtle);
+  box-shadow: none;
+}
+
+/* ---------- Forms ---------- */
+.form-field input,
+.form-field select,
+.form-field textarea,
+.search-field,
+.select-field {
+  border-radius: var(--radius-control);
+  box-shadow: none;
+}
+
+.form-field input,
+.form-field select {
+  min-height: var(--control-height);
+}
+
+.form-field textarea {
+  min-height: 88px;
+}
+
+.form-field input:hover,
+.form-field select:hover,
+.form-field textarea:hover {
+  border-color: var(--border-strong);
+}
+
+.checkbox-field {
+  border-radius: var(--radius-control);
+}
+
+/* Avoid large celebratory surfaces for normal success. */
+.studio-notice.success {
+  border-color: var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+/* Motion is functional and quiet. */
+.page-transition {
+  animation: v2-page-fade var(--duration-fast) ease both !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-transition { animation: none !important; }
+}
