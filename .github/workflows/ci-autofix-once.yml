@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   patch:
-    if: github.event.head_commit.message == 'ci: run one-shot source repair'
+    if: github.event.head_commit.message == 'ci-autofix-trigger'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -44,15 +44,11 @@ jobs:
 
           lock_path = Path("package-lock.json")
           lock = lock_path.read_text(encoding="utf-8")
-          replacements = {
-              '"version": "3.1.3",\n      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.3.tgz",\n      "integrity": "sha512-i70LwGWUduXqzicKXWshooq+sWL1K3WUU5rKZNG/0i3a1OSoX3HqhH5WbWwTmqWfor4urUakGPiRQcleRZTwOg=="':
-              '"version": "3.1.7",\n      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.7.tgz",\n      "integrity": "sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg=="'
-          }
-          for before, after in replacements.items():
-              if lock.count(before) != 1:
-                  raise SystemExit("fast-uri lock entry did not match exactly once")
-              lock = lock.replace(before, after, 1)
-          lock_path.write_text(lock, encoding="utf-8")
+          before = '"version": "3.1.3",\n      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.3.tgz",\n      "integrity": "sha512-i70LwGWUduXqzicKXWshooq+sWL1K3WUU5rKZNG/0i3a1OSoX3HqhH5WbWwTmqWfor4urUakGPiRQcleRZTwOg=="'
+          after = '"version": "3.1.7",\n      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.7.tgz",\n      "integrity": "sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg=="'
+          if lock.count(before) != 1:
+              raise SystemExit("fast-uri lock entry did not match exactly once")
+          lock_path.write_text(lock.replace(before, after, 1), encoding="utf-8")
           PY
       - name: Verify lockfile and dependency audit
         run: |
