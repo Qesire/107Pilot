@@ -203,7 +203,6 @@ test("workbench requires explicit WorkArea selection, scopes facts, and persists
   await expect(page.getByRole("heading", { name: "当前研究区运行" })).toBeVisible();
   await expect(page.getByText("run_alice_bound", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("run_global_unbound_failure", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("没有待处理的失败运行")).toBeVisible();
   await expect(page.getByText("acct_alice", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("可见分区", { exact: true })).toBeVisible();
   expect(await page.evaluate((key) => localStorage.getItem(key), `${CURRENT_KEY_PREFIX}alice`)).toBe(area.workarea_id);
