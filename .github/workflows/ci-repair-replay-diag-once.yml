@@ -1,0 +1,51 @@
+name: ci-repair-replay-diag-once
+
+on:
+  push:
+    branches:
+      - fix/competition-postgres-only-ci
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event.head_commit.message == 'ci-replay-diag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.3"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply replay candidate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/pilot107/worker/agent_turn_worker.py')
+          text = path.read_text(encoding='utf-8')
+          old = '                durable_sequence = event_sequence_base + event.sequence\n'
+          new = (
+              '                durable_sequence = (\n'
+              '                    event.sequence\n'
+              '                    if checkpoint is None\n'
+              '                    else event_sequence_base + event.sequence\n'
+              '                )\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one replay sequence site, got {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Sync
+        run: uv sync --locked --extra dev --extra api --extra postgres
+      - name: Ruff
+        run: uv run ruff check src/pilot107/worker/agent_turn_worker.py tests/test_agent_turn_worker.py
+      - name: mypy
+        run: uv run mypy src/pilot107/worker/agent_turn_worker.py
+      - name: Replay tests
+        run: uv run pytest -q tests/test_agent_turn_worker.py
+      - name: Show patch
+        if: always()
+        run: git diff -- src/pilot107/worker/agent_turn_worker.py
