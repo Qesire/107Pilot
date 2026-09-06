@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   repair:
-    if: github.event.head_commit.message == 'ci-repair-python-diagnose-pytest'
+    if: github.event.head_commit.message == 'ci-repair-python-validate-teststores'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +23,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Restore exact validated candidate
+      - name: Install sandbox runtime dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+      - name: Restore exact candidate under validation
         run: |
           set -euo pipefail
           base=62b62c3a53d78bf4a8ad5bf3b77b134849d1ea29
@@ -106,26 +110,20 @@ jobs:
           PY
       - name: Sync validation environment
         run: uv sync --locked --extra dev --extra api --extra postgres
-      - name: Capture first pytest failure
-        id: pytest
-        shell: bash
+      - name: Ruff
+        run: uv run ruff check src tests scripts
+      - name: mypy
+        run: uv run mypy src
+      - name: Lifecycle acceptance
+        run: uv run pytest tests/test_agent_lifecycle_acceptance.py -q
+      - name: Full pytest
         run: |
-          set +e
           set -o pipefail
-          uv run pytest -q --maxfail=1 2>&1 | tee /tmp/pytest.log
-          status=${PIPESTATUS[0]}
-          {
-            echo '## pytest diagnostic'
-            echo '```text'
-            tail -n 160 /tmp/pytest.log
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-          exit "$status"
+          uv run pytest -q 2>&1 | tee /tmp/pytest.log
       - name: Upload pytest diagnostic
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: pytest-diagnostic
           path: /tmp/pytest.log
-          if-no-files-found: error
+          if-no-files-found: ignore
