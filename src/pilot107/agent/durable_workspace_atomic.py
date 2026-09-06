@@ -125,23 +125,17 @@ class AtomicDurableWorkspaceEditor(DurableWorkspaceEditor):
                 self._crash("after_journal_prepared")
                 root = Path(workspace.local_root).resolve(strict=True)
                 for item in prepared:
-                    lease = self.live_store.renew_writer(
-                        lease, lease_seconds=self.lease_seconds
-                    )
+                    lease = self.live_store.renew_writer(lease, lease_seconds=self.lease_seconds)
                     _dw._apply_prepared(item, root)
                     self._crash(f"after_file:{item.path}")
                 observed_after, _ = _dw._capture_manifest(workspace)
                 if observed_after != expected_after:
-                    raise WorkspaceLiveConflict(
-                        "Workspace changed outside the controlled mutation"
-                    )
+                    raise WorkspaceLiveConflict("Workspace changed outside the controlled mutation")
                 # The filesystem is now fully applied and verified. The journal
                 # intentionally remains PREPARED until the transaction below
                 # publishes every authoritative database fact together.
                 self._crash("after_files_applied")
-                lease = self.live_store.renew_writer(
-                    lease, lease_seconds=self.lease_seconds
-                )
+                lease = self.live_store.renew_writer(lease, lease_seconds=self.lease_seconds)
                 _atomic_finalize(
                     self,
                     journal=journal,
@@ -162,10 +156,8 @@ class AtomicDurableWorkspaceEditor(DurableWorkspaceEditor):
                         _dw._remove_tree(backup)
                 raise
             finally:
-                try:
+                with suppress(WorkspaceLiveConflict, KeyError):
                     self.live_store.release_writer(lease)
-                except (WorkspaceLiveConflict, KeyError):
-                    pass
 
     def _recover_locked(self, workspace: AgentWorkspaceRecord) -> WorkspaceRecoveryReport:
         report = super()._recover_locked(workspace)
@@ -208,9 +200,7 @@ def _atomic_finalize(
         raise WorkspaceLiveConflict("Workspace atomic finalize requires a fresh DRAFT ChangeSet")
     if not isinstance(diff_text, str) or len(diff_text.encode()) > editor.max_diff_bytes:
         raise WorkspacePolicyError("Workspace diff exceeds the output limit")
-    if len(to_digest) != 64 or any(
-        character not in "0123456789abcdef" for character in to_digest
-    ):
+    if len(to_digest) != 64 or any(character not in "0123456789abcdef" for character in to_digest):
         raise WorkspaceLiveConflict("Workspace target digest is invalid")
 
     now = editor.journal_store._now()  # noqa: SLF001 - shared SQLite transaction clock
