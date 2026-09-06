@@ -17,6 +17,7 @@ from pilot107.core.launch import (
     preflight_payload,
 )
 from pilot107.core.workarea import PostgresWorkAreaStore, WorkAreaConflict, WorkAreaGraph
+from pilot107.core.workarea_binding_source import PostgresWorkAreaBindingSourceStore
 from pilot107.services.launch_service import LaunchCommitResult, LaunchService
 
 
@@ -27,10 +28,12 @@ class WorkAreaLaunchRoutes:
         workareas: PostgresWorkAreaStore,
         launches: PostgresLaunchStore,
         launch_service: LaunchService,
+        binding_sources: PostgresWorkAreaBindingSourceStore,
     ) -> None:
         self.workareas = workareas
         self.launches = launches
         self.launch_service = launch_service
+        self.binding_sources = binding_sources
 
     def handle_get(
         self,
@@ -57,7 +60,7 @@ class WorkAreaLaunchRoutes:
                 )
             if len(parts) == 2 and parts[0] == "workareas":
                 graph = self.workareas.graph(parts[1], owner=owner)
-                return ApiResponse(status=200, payload=_workarea_graph(graph))
+                return ApiResponse(status=200, payload=self._graph_payload(graph))
             if len(parts) == 3 and parts[0] == "workareas" and parts[2] == "launches":
                 self.workareas.get(parts[1], owner=owner)
                 launch_records = self.launches.list_for_workarea(
@@ -115,7 +118,7 @@ class WorkAreaLaunchRoutes:
                 )
                 return ApiResponse(
                     status=201,
-                    payload=_workarea_graph(
+                    payload=self._graph_payload(
                         self.workareas.graph(record.workarea_id, owner=owner)
                     ),
                 )
@@ -139,9 +142,17 @@ class WorkAreaLaunchRoutes:
                     self.workareas.link_run(parts[1], owner=owner, run_id=target_ref)
                 else:
                     raise ValueError("kind must be asset, contract, or run")
+                self.binding_sources.mark(
+                    workarea_id=parts[1],
+                    binding_kind=kind,
+                    target_ref=target_ref,
+                    source="user",
+                )
                 return ApiResponse(
                     status=200,
-                    payload=_workarea_graph(self.workareas.graph(parts[1], owner=owner)),
+                    payload=self._graph_payload(
+                        self.workareas.graph(parts[1], owner=owner)
+                    ),
                 )
             if (
                 len(parts) == 3
@@ -217,9 +228,6 @@ class WorkAreaLaunchRoutes:
         try:
             _only(payload, {"title", "description"})
             current = self.workareas.get(parts[1], owner=owner)
-            # The exploration store intentionally had no state machine. Keep
-            # PATCH small and use a direct authority update here until the store
-            # exposes it as a first-class method.
             title = _optional(payload, "title") or current.title
             description = (
                 current.description
@@ -238,7 +246,9 @@ class WorkAreaLaunchRoutes:
                     raise WorkAreaConflict("WorkArea changed during update")
             return ApiResponse(
                 status=200,
-                payload=_workarea_graph(self.workareas.graph(parts[1], owner=owner)),
+                payload=self._graph_payload(
+                    self.workareas.graph(parts[1], owner=owner)
+                ),
             )
         except KeyError:
             return _not_found("workarea", parts[1])
@@ -246,6 +256,10 @@ class WorkAreaLaunchRoutes:
             return _error(400, "WORKAREA.INVALID", str(exc))
         except WorkAreaConflict as exc:
             return _error(409, "WORKAREA.CONFLICT", str(exc))
+
+    def _graph_payload(self, graph: WorkAreaGraph) -> dict[str, Any]:
+        sources = self.binding_sources.sources_for_workarea(graph.workarea.workarea_id)
+        return _workarea_graph(graph, sources=sources)
 
 
 def _commit_payload(result: LaunchCommitResult) -> dict[str, Any]:
@@ -276,16 +290,28 @@ def _workarea_summary(record: Any) -> dict[str, Any]:
     }
 
 
-def _workarea_graph(graph: WorkAreaGraph) -> dict[str, Any]:
+def _workarea_graph(
+    graph: WorkAreaGraph,
+    *,
+    sources: Mapping[tuple[str, str], str],
+) -> dict[str, Any]:
     return {
         **_workarea_summary(graph.workarea),
         "bindings": {
             "contracts": [
-                {"kind": "contract", "target_ref": item, "source": "user"}
+                {
+                    "kind": "contract",
+                    "target_ref": item,
+                    "source": sources.get(("contract", item), "user"),
+                }
                 for item in graph.contract_ids
             ],
             "runs": [
-                {"kind": "run", "target_ref": item, "source": "inherited"}
+                {
+                    "kind": "run",
+                    "target_ref": item,
+                    "source": sources.get(("run", item), "user"),
+                }
                 for item in graph.run_ids
             ],
             "assets": [
@@ -293,7 +319,7 @@ def _workarea_graph(graph: WorkAreaGraph) -> dict[str, Any]:
                     "kind": "asset",
                     "target_ref": item.asset_ref,
                     "role": item.asset_kind,
-                    "source": "user",
+                    "source": sources.get(("asset", item.asset_ref), "user"),
                     "linked_at": item.linked_at,
                 }
                 for item in graph.assets
