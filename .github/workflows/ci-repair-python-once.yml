@@ -77,6 +77,18 @@ jobs:
           if text.count("Mapping[str, object]") != 1:
               raise SystemExit("workspace_live row mapping count mismatch")
           text = text.replace("Mapping[str, object]", "Mapping[str, Any]", 1)
+          long_raise = (
+              '                raise WorkspaceLiveConflict('
+              '"Workspace live manifest contains unsupported file type")'
+          )
+          wrapped_raise = (
+              '                raise WorkspaceLiveConflict(\n'
+              '                    "Workspace live manifest contains unsupported file type"\n'
+              '                )'
+          )
+          if text.count(long_raise) != 1:
+              raise SystemExit("workspace_live long raise count mismatch")
+          text = text.replace(long_raise, wrapped_raise, 1)
           live_path.write_text(text, encoding="utf-8")
 
           journal_path = Path("src/pilot107/agent/workspace_journal.py")
