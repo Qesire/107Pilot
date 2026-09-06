@@ -26,16 +26,14 @@ jobs:
           from pathlib import Path
           path = Path('src/pilot107/worker/agent_turn_worker.py')
           text = path.read_text(encoding='utf-8')
-          old = '                durable_sequence = event_sequence_base + event.sequence\n'
+          old = '        event_sequence_base = current.event_sequence\n'
           new = (
-              '                durable_sequence = (\n'
-              '                    event.sequence\n'
-              '                    if checkpoint is None\n'
-              '                    else event_sequence_base + event.sequence\n'
-              '                )\n'
+              '        event_sequence_base = (\n'
+              '            current.event_sequence if current.final_checkpoint is not None else 0\n'
+              '        )\n'
           )
           if text.count(old) != 1:
-              raise SystemExit(f'expected one replay sequence site, got {text.count(old)}')
+              raise SystemExit(f'expected one replay base site, got {text.count(old)}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
       - name: Sync
