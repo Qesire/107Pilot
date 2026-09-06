@@ -1,0 +1,83 @@
+/* Files delivery polish: status strip + toolbar + browser, not dashboard cards. */
+
+.file-workspace-status {
+  gap: 0;
+  border-top: 1px solid var(--border-default);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.file-status-card {
+  min-height: 74px;
+  border: 0;
+  border-right: 1px solid var(--border-default);
+  border-radius: 0;
+  background: transparent;
+  padding: 11px 18px;
+}
+
+.file-status-card:first-child {
+  padding-left: 2px;
+}
+
+.file-status-card:last-child {
+  border-right: 0;
+}
+
+.file-status-icon {
+  width: 28px;
+  height: 28px;
+  flex-basis: 28px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.file-status-heading strong {
+  font-size: 14px;
+}
+
+.file-status-card p {
+  margin-top: 4px;
+}
+
+.files-global-toolbar {
+  border: 0;
+  border-bottom: 1px solid var(--border-default);
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 0 9px;
+}
+
+.file-upload-policy select {
+  border-radius: var(--radius-control);
+  background: var(--bg-surface);
+}
+
+.files-page .file-search-panel {
+  border-radius: var(--radius-control);
+}
+
+.files-page .filepane,
+.files-page .pane-manager,
+.files-page .pane-leaf {
+  box-shadow: none !important;
+}
+
+.files-page .files-table th {
+  background: transparent;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+@media (max-width: 980px) {
+  .file-workspace-status {
+    border-top: 0;
+  }
+
+  .file-status-card,
+  .file-status-card:first-child {
+    border-right: 0;
+    border-top: 1px solid var(--border-default);
+    padding: 11px 2px;
+  }
+}

@@ -1,0 +1,82 @@
+/* Cluster delivery view: capability facts first, dashboard decoration removed. */
+
+.cluster-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin-bottom: 22px;
+  border-top: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.cluster-summary > div {
+  min-height: 64px;
+  border: 0;
+  border-right: 1px solid var(--border-default);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none !important;
+  padding: 11px 16px;
+}
+
+.cluster-summary > div:first-child {
+  padding-left: 2px;
+}
+
+.cluster-summary > div:last-child {
+  border-right: 0;
+}
+
+.cluster-summary svg {
+  color: var(--text-tertiary);
+}
+
+.cluster-summary strong {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 620;
+}
+
+.cluster-summary small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  letter-spacing: .015em;
+}
+
+.cluster-grid .panel {
+  box-shadow: none;
+}
+
+.partition-grid {
+  border-top: 1px solid var(--border-strong);
+}
+
+.partition-row {
+  border-bottom: 1px solid var(--border-default);
+}
+
+@media (max-width: 760px) {
+  .cluster-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cluster-summary > div,
+  .cluster-summary > div:first-child {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-default);
+    padding: 10px 2px;
+  }
+
+  .cluster-summary > div:nth-child(odd) {
+    border-right: 1px solid var(--border-default);
+    padding-right: 12px;
+  }
+
+  .cluster-summary > div:nth-child(even) {
+    padding-left: 12px;
+  }
+
+  .cluster-summary > div:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+}

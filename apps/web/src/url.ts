@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { flushSync } from "react-dom";
 
 export interface LocationState {
   pathname: string;
@@ -32,17 +31,9 @@ export function useLocationState(): [
   const navigate = useCallback(
     (path: string, options?: NavigateOptions) => {
       const method = options?.replace ? "replaceState" : "pushState";
-      const commit = () => {
-        window.history[method](null, "", path);
-        setLocation(currentLocation());
-        window.scrollTo({ top: 0, behavior: "auto" });
-      };
-      const nextPathname = new URL(path, window.location.origin).pathname;
-      if (nextPathname !== window.location.pathname && typeof document.startViewTransition === "function") {
-        document.startViewTransition(() => flushSync(commit));
-      } else {
-        commit();
-      }
+      window.history[method](null, "", path);
+      setLocation(currentLocation());
+      window.scrollTo({ top: 0, behavior: "auto" });
     },
     [],
   );

@@ -84,9 +84,8 @@ jobs:
           path: /tmp/web-static-drift.diff
           if-no-files-found: ignore
 
-  # Playwright UI suite (mocked API). Blocking gate: tests/ui/visual.spec.js
-  # is stabilized (34/34 passing). Covers Market→Adopt→Studio→Preflight→Run→
-  # Evidence browser flows that unit tests cannot reach.
+  # Playwright UI suite (mocked API). Blocking gate covers the browser-level
+  # Workbench → WorkArea/Launch → Run/Evidence flows that unit tests cannot reach.
   web-ui:
     runs-on: ubuntu-24.04
     steps:
@@ -101,6 +100,14 @@ jobs:
         run: |
           set -o pipefail
           npm run test:ui 2>&1 | tee /tmp/playwright.log
+      - name: Upload visual review frames
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-review
+          path: artifacts/visual-regression
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Upload Playwright failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4

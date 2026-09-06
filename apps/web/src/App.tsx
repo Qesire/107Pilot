@@ -1,19 +1,18 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import {
+  Activity,
   Blocks,
   Bot,
   ChevronDown,
   CircleUserRound,
   Command,
-  FlaskConical,
   FolderKanban,
   FolderOpen,
-  LifeBuoy,
+  LayoutDashboard,
   Monitor,
   Moon,
   MoreHorizontal,
   Server,
-  Settings,
   SquareTerminal,
   Sun,
 } from "lucide-react";
@@ -33,10 +32,13 @@ interface NavigationItem {
   mobilePrimary?: boolean;
 }
 
-const workNavigation: NavigationItem[] = [
-  { path: "/projects", label: "工作台", icon: FolderKanban, mobilePrimary: true },
+const researchNavigation: NavigationItem[] = [
+  { path: "/projects", label: "工作台", icon: LayoutDashboard, mobilePrimary: true },
   { path: "/workareas", label: "研究区", icon: FolderKanban, mobilePrimary: true },
-  { path: "/runs", label: "实验", icon: FlaskConical, mobilePrimary: true },
+  { path: "/runs", label: "运行", icon: Activity, mobilePrimary: true },
+];
+
+const resourceNavigation: NavigationItem[] = [
   { path: "/files", label: "文件", icon: FolderOpen, mobilePrimary: true },
   { path: "/market", label: "方案库", icon: Blocks },
   { path: "/cluster", label: "计算资源", icon: Server },
@@ -47,7 +49,7 @@ const toolNavigation: NavigationItem[] = [
   { path: "/terminal", label: "终端", icon: SquareTerminal },
 ];
 
-const navigation = [...workNavigation, ...toolNavigation];
+const navigation = [...researchNavigation, ...resourceNavigation, ...toolNavigation];
 
 const StudioPage = lazy(() => import("./StudioPage").then((module) => ({ default: module.StudioPage })));
 const FilesPage = lazy(() => import("./FilesPage").then((module) => ({ default: module.FilesPage })));
@@ -109,7 +111,7 @@ function routeLabel(pathname: string): string {
   const item = navigation.find((entry) => pathname === entry.path || pathname.startsWith(`${entry.path}/`));
   if (item) return item.label;
   if (pathname.startsWith("/launches/")) return "运行提交";
-  if (pathname.startsWith("/studio/")) return "实验配置";
+  if (pathname.startsWith("/studio/")) return "运行配置";
   if (pathname.startsWith("/templates/")) return "方案库";
   return "科研工作区";
 }
@@ -141,7 +143,7 @@ export default function App() {
       document.documentElement.dataset.themePreference = themePreference;
       localStorage.setItem("107pilot-theme", themePreference);
       const meta = document.querySelector('meta[name="theme-color"]');
-      meta?.setAttribute("content", resolved === "dark" ? "#121418" : "#f6f7f9");
+      meta?.setAttribute("content", resolved === "dark" ? "#111519" : "#f5f6f8");
     };
     apply();
     if (themePreference !== "system") return undefined;
@@ -184,7 +186,10 @@ export default function App() {
     );
   };
 
-  const mobileMoreNavigation = [...workNavigation.filter((item) => !item.mobilePrimary), ...toolNavigation];
+  const mobileMoreNavigation = [
+    ...resourceNavigation.filter((item) => !item.mobilePrimary),
+    ...toolNavigation,
+  ];
   const mobileMoreActive = mobileMoreNavigation.some((item) => item.path === activePath);
 
   return (
@@ -200,8 +205,12 @@ export default function App() {
 
         <nav className="primary-nav" aria-label="主要导航">
           <div className="nav-group">
-            <p className="nav-group-label">工作</p>
-            {workNavigation.map((item) => renderNavigationItem(item))}
+            <p className="nav-group-label">研究工作</p>
+            {researchNavigation.map((item) => renderNavigationItem(item))}
+          </div>
+          <div className="nav-group">
+            <p className="nav-group-label">资源</p>
+            {resourceNavigation.map((item) => renderNavigationItem(item))}
           </div>
           <div className="nav-group">
             <p className="nav-group-label">工具</p>
@@ -240,19 +249,12 @@ export default function App() {
             ) : null}
           </div>
         </nav>
-
-        <div className="sidebar-bottom">
-          <button type="button" disabled title="帮助中心将在后续切片接入"><LifeBuoy aria-hidden="true" /><span>帮助与文档</span></button>
-          <button type="button" disabled title="设置将在后续切片接入"><Settings aria-hidden="true" /><span>设置</span></button>
-          <p>UX v2 foundation · compatibility mode</p>
-        </div>
       </aside>
 
       <div className="app-stage">
         <header className="app-topbar">
           <div className="research-context">
             <strong>{currentLabel}</strong>
-            <span>科研工作区</span>
           </div>
           <div className="topbar-actions">
             <ConnectionBadge user={user} />

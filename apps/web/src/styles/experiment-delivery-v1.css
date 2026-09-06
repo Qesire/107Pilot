@@ -1,0 +1,100 @@
+/* Run / experiment delivery polish: provenance and lifecycle, not dashboard cards. */
+
+.experiment-shell-kicker {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .045em;
+}
+
+.experiment-shell-title {
+  font-weight: 600;
+}
+
+.experiment-identity {
+  gap: 0;
+  border-top: 1px solid var(--border-default);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.experiment-identity > span {
+  min-width: 150px;
+  border: 0;
+  border-right: 1px solid var(--border-default);
+  border-radius: 0;
+  background: transparent;
+  padding: 7px 12px;
+}
+
+.experiment-identity > span:first-child {
+  padding-left: 2px;
+}
+
+.experiment-identity > span:last-child {
+  border-right: 0;
+}
+
+.experiment-trajectory {
+  border: 0;
+  border-top: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-default);
+  border-radius: 0;
+  background: transparent;
+}
+
+.experiment-phase {
+  min-height: 54px;
+  padding: 10px;
+}
+
+.experiment-phase.is-active {
+  background: var(--accent-soft);
+}
+
+.experiment-phase-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+.experiment-phase.is-active .experiment-phase-icon {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  box-shadow: none;
+}
+
+.experiment-next-action {
+  border: 0;
+  border-top: 1px solid var(--border-default);
+  border-bottom: 1px solid var(--border-default);
+  border-left: 2px solid var(--accent-primary);
+  border-radius: 0;
+  background: transparent;
+  padding: 10px 10px 10px 14px;
+}
+
+.experiment-run-summary {
+  border: 0;
+  border-top: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-default);
+  border-radius: 0;
+  background: transparent;
+  padding: 12px 2px;
+}
+
+.experiment-run-summary-grid > div {
+  border-left-width: 1px;
+}
+
+@media (max-width: 760px) {
+  .experiment-identity > span,
+  .experiment-identity > span:first-child {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-default);
+    padding: 7px 2px;
+  }
+
+  .experiment-identity > span:last-child {
+    border-bottom: 0;
+  }
+}

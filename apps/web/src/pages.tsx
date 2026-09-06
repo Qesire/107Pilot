@@ -203,9 +203,9 @@ function RunsIndexPage({ user, location, navigate }: PageProps) {
   return (
     <>
       <SectionHeading
-        eyebrow="实验 / 运行历史"
-        title="实验运行"
-        detail="这里是实验运行历史入口。打开某次运行后，会进入独立的实验工作区，而不是在列表旁展开抽屉。"
+        eyebrow="Runs / 运行历史"
+        title="运行历史"
+        detail="查看已经形成的 Run。打开某次运行后进入独立运行详情；日志、Evidence、诊断与结果按视图加载。"
       />
       <section className="filter-bar" aria-label="运行筛选">
         <label className="search-field">
@@ -296,11 +296,11 @@ function RunExperimentPage({
           navigate={navigate}
           context={{ kind: "run", run }}
         >
-          <section className="experiment-run-workspace" aria-labelledby="run-detail-heading">
+          <section className="experiment-run-workspace" aria-labelledby="run-view-heading">
             <header className="experiment-run-heading">
               <div>
-                <h2 id="run-detail-heading">运行详情</h2>
-                <p>首屏只读取运行对象与聚合工作区模型；日志、结果、诊断、自动归档和证据对象按视图加载。</p>
+                <h2 id="run-view-heading">运行视图</h2>
+                <p>首屏只读取 Run 与聚合读模型；日志、结果、诊断、自动归档和 Evidence 对象按视图加载。</p>
               </div>
               {model.evidence_summary.capsule_available ? (
                 <button

@@ -1,0 +1,105 @@
+/* Delivery hierarchy for the Workbench: one focus surface, one action inspector. */
+
+.workbench-v2-focus {
+  border-color: var(--border-default);
+  box-shadow: none;
+}
+
+.workbench-v2-actions {
+  border: 0;
+  border-left: 1px solid var(--border-default);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 4px 0 0 20px;
+}
+
+/* Readiness is a compact fact line, not a collection of celebratory chips. */
+.workbench-readiness {
+  gap: 0;
+  border-top: 1px solid var(--border-default);
+  border-bottom: 1px solid var(--border-default);
+  padding: 7px 0;
+}
+
+.workbench-readiness .v2-status-chip {
+  min-height: 22px;
+  border: 0;
+  border-right: 1px solid var(--border-default);
+  border-radius: 0;
+  background: transparent !important;
+  padding: 2px 10px;
+  color: var(--text-secondary) !important;
+  font-size: 11px;
+}
+
+.workbench-readiness .v2-status-chip:first-child {
+  padding-left: 0;
+}
+
+.workbench-readiness .v2-status-chip:last-child {
+  border-right: 0;
+}
+
+/* Preparation is supporting material: no equal-weight card gallery. */
+.workbench-v2-prep-card {
+  min-height: 0;
+  border: 0;
+  border-top: 1px solid var(--border-strong);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 16px 2px 4px;
+}
+
+.workbench-v2-prep-card > svg {
+  color: var(--text-tertiary);
+}
+
+.workbench-v2-prep-card p {
+  max-width: 34ch;
+}
+
+.workbench-prep-facts {
+  gap: 5px;
+}
+
+/* Internal migration notes are not product copy. */
+.workbench-history-heading .v2-section-detail {
+  display: none;
+}
+
+.workbench-history {
+  margin-top: 10px;
+  padding-top: 2px;
+}
+
+.workbench-history-heading {
+  align-items: flex-end;
+}
+
+.workbench-secondary-details {
+  margin-top: 2px;
+}
+
+@media (max-width: 1179px) {
+  .workbench-v2-actions {
+    border-top: 1px solid var(--border-default);
+    border-left: 0;
+    padding: 18px 0 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .workbench-v2-actions {
+    padding: 16px 0 0;
+  }
+
+  .workbench-v2-prep-card {
+    padding: 14px 0 4px;
+  }
+
+  .workbench-readiness .v2-status-chip {
+    flex: 1 1 auto;
+  }
+}
