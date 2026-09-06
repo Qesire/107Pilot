@@ -9,7 +9,7 @@ import {
 } from "./AgentTaskPanel";
 
 function task(overrides: Partial<AgentTask> = {}): AgentTask {
-  return {
+  const base: AgentTask = {
     schema_version: "pilot107.agent-task/v1",
     task_id: "task-1",
     owner: "alice",
@@ -52,6 +52,30 @@ function task(overrides: Partial<AgentTask> = {}): AgentTask {
     updated_at: "2026-08-25T12:00:30Z",
     ...overrides,
   };
+  if (base.state !== "succeeded" || base.result?.status !== "succeeded" || !base.linked_run_id) {
+    return base;
+  }
+  return {
+    ...base,
+    completion_policy: "evidence_required",
+    gate_state: "completed",
+    legacy_gate_unverified: false,
+    gate_receipt: {
+      task_id: base.task_id,
+      run_id: base.linked_run_id,
+      run_terminal_state: "completed",
+      evidence_state: "finalized",
+      evidence_refs: base.result.evidence_refs,
+      evidence_digest: "b".repeat(64),
+      integrity_verified_at: "2026-08-25T12:00:25Z",
+      integrity_state: "verified",
+      workspace_revision: 1,
+      workspace_digest: base.resource_envelope.workspace_snapshot_digest,
+      legacy_boundary: false,
+      capsule_ref: null,
+      capsule_state: "NOT_REQUIRED",
+    },
+  } as AgentTask;
 }
 
 function renderPanel(tasks: AgentTask[]): string {
@@ -67,14 +91,15 @@ function renderPanel(tasks: AgentTask[]): string {
 }
 
 describe("AgentTaskPanel", () => {
-  it("renders linked Run, resources, evidence and terminal status", () => {
+  it("renders linked Run, resources, verified evidence and terminal gate status", () => {
     const markup = renderPanel([task()]);
 
     expect(markup).toContain("1 CPU · 512 MiB · 0 GPU");
     expect(markup).toContain('/runs/run-agent-task?user=alice&amp;tab=overview');
     expect(markup).toContain("run-agent-task");
     expect(markup).toContain("agent-task:task-1");
-    expect(markup).toContain("已成功");
+    expect(markup).toContain("验证完成");
+    expect(markup).toContain("已验证 Evidence");
     expect(markup).not.toContain("private-worker-id");
   });
 
@@ -116,4 +141,3 @@ describe("AgentTaskPanel", () => {
     expect(markup).toContain("cluster authentication is required");
   });
 });
-

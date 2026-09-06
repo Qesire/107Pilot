@@ -19,12 +19,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: uv sync --locked --extra dev --extra api
+      - name: Prepare sandbox runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          if sysctl -n kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - run: uv sync --locked --extra dev --extra api --extra postgres
       - run: uv run ruff check src tests scripts
       - run: uv run mypy src
       - name: Validate agent lifecycle acceptance manifests and fail-closed reports
         run: uv run pytest tests/test_agent_lifecycle_acceptance.py -q
-      - run: uv run pytest -q
+      - name: Run Python test suite
+        run: |
+          set -o pipefail
+          uv run pytest -q 2>&1 | tee /tmp/pytest.log
+      - name: Upload Python failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-failure-log
+          path: /tmp/pytest.log
+          if-no-files-found: ignore
 
   web:
     runs-on: ubuntu-24.04
@@ -40,11 +60,18 @@ jobs:
       - run: npm run build
       - name: Detect web static build drift
         run: |
-          if ! git diff --exit-code -- src/pilot107/web/static; then
+          if ! git diff --exit-code -- src/pilot107/web/static | tee /tmp/web-static-drift.diff; then
             echo "::error::src/pilot107/web/static is stale. Run 'npm run build' locally and commit the updated bundle."
-            git diff --stat -- src/pilot107/web/static
+            git diff --stat -- src/pilot107/web/static | tee -a /tmp/web-static-drift.diff
             exit 1
           fi
+      - name: Upload web static drift
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-static-drift
+          path: /tmp/web-static-drift.diff
+          if-no-files-found: ignore
 
   # Playwright UI suite (mocked API). Blocking gate: tests/ui/visual.spec.js
   # is stabilized (14/14 passing). Covers Market→Adopt→Studio→Preflight→Run→
@@ -59,7 +86,21 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:ui
+      - name: Run Playwright UI suite
+        run: |
+          set -o pipefail
+          npm run test:ui 2>&1 | tee /tmp/playwright.log
+      - name: Upload Playwright failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failure
+          path: |
+            /tmp/playwright.log
+            playwright-report
+            test-results
+            artifacts/playwright-output
+          if-no-files-found: ignore
 
   compose:
     runs-on: ubuntu-24.04
@@ -86,7 +127,19 @@ jobs:
           cache: npm
       - run: uv sync --locked --extra dev
       - run: npm ci
-      - run: uv run python scripts/scan-tracked-secrets.py
+      - name: Scan tracked secrets
+        run: |
+          set -o pipefail
+          uv run python scripts/scan-tracked-secrets.py 2>&1 | tee /tmp/secret-scan.log
+      - name: Upload secret-scan failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: secret-scan-failure-log
+          path: /tmp/secret-scan.log
+          if-no-files-found: ignore
+      - name: Upgrade pip used by dependency audit
+        run: uv pip install --upgrade "pip>=26.2"
       - run: uv run pip-audit --progress-spinner off
       - run: npm audit --omit=dev --audit-level=high
       - run: docker build -f apps/Dockerfile -t pilot107/app-ci:${{ github.sha }} .

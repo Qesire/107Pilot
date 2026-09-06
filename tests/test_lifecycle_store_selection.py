@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from pilot107.agent.operation_attempts import build_agent_operation_attempt_store
+from pilot107.agent.operation_ledger import (
+    AgentOperationLedger,
+    build_agent_operation_ledger,
+)
+from pilot107.agent.operation_reconciler import build_agent_operation_reconciler
 from pilot107.agent.store_factory import (
     ConfigurationError,
     DatabaseMode,
@@ -19,8 +26,12 @@ from pilot107.core.postgres_domain_schema import domain_table_names
 from pilot107.worker.service import WorkerServiceConfig, build_worker_service
 from pilot107.worker.service import config_from_env as worker_config_from_env
 
-
 SQLITE_RETIRED = "SQLite runtime authority has been retired"
+
+
+class _LegacySQLiteStore:
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
 
 
 def test_environment_resolves_postgres_when_dsn_is_present(tmp_path: Path) -> None:
@@ -133,6 +144,19 @@ def test_direct_agent_store_builders_have_no_sqlite_fallback(tmp_path: Path) -> 
     ):
         with pytest.raises(ConfigurationError, match=SQLITE_RETIRED):
             builder(sqlite_path=tmp_path / "legacy.db", postgres_dsn=None)
+
+
+def test_agent_operation_builders_have_no_sqlite_fallback(tmp_path: Path) -> None:
+    legacy_store = _LegacySQLiteStore(tmp_path / "legacy.db")
+
+    with pytest.raises(RuntimeError, match="PostgreSQL"):
+        build_agent_operation_ledger(legacy_store)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="PostgreSQL"):
+        build_agent_operation_attempt_store(legacy_store)
+
+    fake_ledger = cast(AgentOperationLedger, object())
+    with pytest.raises(RuntimeError, match="PostgreSQL"):
+        build_agent_operation_reconciler(legacy_store, fake_ledger)
 
 
 def test_control_repository_has_no_sqlite_fallback(tmp_path: Path) -> None:

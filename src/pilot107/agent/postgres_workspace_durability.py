@@ -1,8 +1,8 @@
 """PostgreSQL AC4 live-head and mutation-journal persistence.
 
-The filesystem mutation algorithm is shared with the SQLite AC4 implementation,
-but its authoritative revision, writer fence, and write-ahead receipt must live
-in the same PostgreSQL transaction domain as ``PostgresProjectStore``.
+The filesystem mutation algorithm is backend-neutral, while authoritative
+revision state, writer fencing and write-ahead receipts live in the same
+PostgreSQL transaction domain as ``PostgresProjectStore``.
 """
 
 from __future__ import annotations
@@ -484,7 +484,9 @@ class PostgresWorkspaceMutationJournalStore:
             or lease.writer_id != head.writer_id
             or lease.fencing_token != head.fencing_token
         ):
-            raise WorkspaceLiveConflict("Workspace journal writer does not own the live head")
+            raise WorkspaceLiveConflict(
+                "Workspace journal writer does not own the live head"
+            )
         mutation_id = _mutation_id(head.workspace_id, request_key)
         intent_digest = _intent_digest(
             workspace_id=head.workspace_id,
@@ -529,7 +531,9 @@ class PostgresWorkspaceMutationJournalStore:
                 expected_digest=head.live_digest,
                 now=now,
             ):
-                raise WorkspaceLiveConflict("Workspace live head changed before journal prepare")
+                raise WorkspaceLiveConflict(
+                    "Workspace live head changed before journal prepare"
+                )
             connection.execute(
                 """
                 INSERT INTO agent_workspace_mutation_journal (
@@ -552,14 +556,19 @@ class PostgresWorkspaceMutationJournalStore:
                     head.live_digest,
                     lease.writer_id,
                     lease.fencing_token,
-                    self._jsonb([_file_payload(item) for item in normalized_files]),
+                    self._jsonb(
+                        [_file_payload(item) for item in normalized_files]
+                    ),
                     backup_ref,
                     now,
                     now,
                 ),
             )
             row = connection.execute(
-                "SELECT * FROM agent_workspace_mutation_journal WHERE mutation_id = %s",
+                """
+                SELECT * FROM agent_workspace_mutation_journal
+                WHERE mutation_id = %s
+                """,
                 (mutation_id,),
             ).fetchone()
         if row is None:
@@ -590,7 +599,11 @@ class PostgresWorkspaceMutationJournalStore:
     ) -> list[WorkspaceMutationJournal]:
         _key(workspace_id, "workspace_id")
         _owner(owner)
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 1000:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 1000
+        ):
             raise ValueError("limit must be between 1 and 1000")
         with self.connect() as connection:
             rows = connection.execute(
@@ -638,7 +651,9 @@ class PostgresWorkspaceMutationJournalStore:
                     )
                 return current
             if current.state is not WorkspaceMutationState.PREPARED:
-                raise WorkspaceLiveConflict("Workspace mutation is no longer prepared")
+                raise WorkspaceLiveConflict(
+                    "Workspace mutation is no longer prepared"
+                )
             live = connection.execute(
                 """
                 SELECT * FROM agent_workspace_live_heads
@@ -670,7 +685,9 @@ class PostgresWorkspaceMutationJournalStore:
                 (to_digest, now, mutation_id, owner),
             ).fetchone()
         if updated is None:
-            raise WorkspaceLiveConflict("Workspace mutation files-applied CAS failed")
+            raise WorkspaceLiveConflict(
+                "Workspace mutation files-applied CAS failed"
+            )
         return _row_to_journal(updated)
 
     def commit(
@@ -700,13 +717,17 @@ class PostgresWorkspaceMutationJournalStore:
             if current.state is WorkspaceMutationState.COMMITTED:
                 return current
             if lease.workspace_id != current.workspace_id or lease.owner != owner:
-                raise WorkspaceLiveConflict("Workspace journal lease does not own this mutation")
+                raise WorkspaceLiveConflict(
+                    "Workspace journal lease does not own this mutation"
+                )
             if (
                 current.state is not WorkspaceMutationState.FILES_APPLIED
                 or current.to_revision is None
                 or current.to_digest is None
             ):
-                raise WorkspaceLiveConflict("Workspace mutation is not ready to commit")
+                raise WorkspaceLiveConflict(
+                    "Workspace mutation is not ready to commit"
+                )
             live = connection.execute(
                 """
                 UPDATE agent_workspace_live_heads
@@ -730,7 +751,9 @@ class PostgresWorkspaceMutationJournalStore:
                 ),
             ).fetchone()
             if live is None:
-                raise WorkspaceLiveConflict("Workspace live CAS failed while committing journal")
+                raise WorkspaceLiveConflict(
+                    "Workspace live CAS failed while committing journal"
+                )
             committed = connection.execute(
                 """
                 UPDATE agent_workspace_mutation_journal
@@ -748,7 +771,9 @@ class PostgresWorkspaceMutationJournalStore:
                 ),
             ).fetchone()
             if committed is None:
-                raise WorkspaceLiveConflict("Workspace journal fence changed during commit")
+                raise WorkspaceLiveConflict(
+                    "Workspace journal fence changed during commit"
+                )
         return _row_to_journal(committed)
 
     def mark_conflicted(
@@ -785,7 +810,9 @@ class PostgresWorkspaceMutationJournalStore:
                     raise KeyError(mutation_id)
                 record = _row_to_journal(row)
                 if record.state is not WorkspaceMutationState.CONFLICTED:
-                    raise WorkspaceLiveConflict("Workspace mutation is already terminal")
+                    raise WorkspaceLiveConflict(
+                        "Workspace mutation is already terminal"
+                    )
                 return record
         return _row_to_journal(row)
 
@@ -835,7 +862,9 @@ class PostgresWorkspaceMutationJournalStore:
                 (now, mutation_id, owner),
             ).fetchone()
             if row is None:
-                raise WorkspaceLiveConflict("Workspace mutation cannot be marked rolled back")
+                raise WorkspaceLiveConflict(
+                    "Workspace mutation cannot be marked rolled back"
+                )
         return _row_to_journal(row)
 
     def _now(self) -> datetime:
@@ -868,14 +897,18 @@ def _live_authority_matches(
     expected_digest: str,
     now: datetime,
 ) -> bool:
-    expiry = _datetime_value(row["writer_lease_expires_at"], "writer_lease_expires_at")
+    expiry = _datetime_value(
+        row["writer_lease_expires_at"], "writer_lease_expires_at"
+    )
     return (
         str(row["workspace_id"]) == lease.workspace_id
         and str(row["owner"]) == lease.owner
         and row["writer_id"] == lease.writer_id
-        and int(row["fencing_token"]) == lease.fencing_token
+        and _integer_value(row["fencing_token"], "fencing_token")
+        == lease.fencing_token
         and expiry > now
-        and int(row["live_revision"]) == expected_revision
+        and _integer_value(row["live_revision"], "live_revision")
+        == expected_revision
         and str(row["live_digest"]) == expected_digest
     )
 
@@ -887,11 +920,15 @@ def _row_to_head(row: Mapping[str, object]) -> WorkspaceLiveHead:
         project_id=str(row["project_id"]),
         owner=str(row["owner"]),
         base_snapshot_digest=str(row["base_snapshot_digest"]),
-        live_revision=int(row["live_revision"]),
+        live_revision=_integer_value(row["live_revision"], "live_revision"),
         live_digest=str(row["live_digest"]),
-        writer_id=None if row["writer_id"] is None else str(row["writer_id"]),
-        writer_lease_expires_at=None if expiry is None else _timestamp_text(expiry),
-        fencing_token=int(row["fencing_token"]),
+        writer_id=(
+            None if row["writer_id"] is None else str(row["writer_id"])
+        ),
+        writer_lease_expires_at=(
+            None if expiry is None else _timestamp_text(expiry)
+        ),
+        fencing_token=_integer_value(row["fencing_token"], "fencing_token"),
         created_at=_timestamp_text(row["created_at"]),
         updated_at=_timestamp_text(row["updated_at"]),
     )
@@ -906,7 +943,9 @@ def _row_to_journal(row: Mapping[str, object]) -> WorkspaceMutationJournal:
     files: list[WorkspaceMutationFile] = []
     for item in raw_files:
         if not isinstance(item, Mapping):
-            raise TypeError("Workspace mutation files_json contains invalid entries")
+            raise TypeError(
+                "Workspace mutation files_json contains invalid entries"
+            )
         files.append(
             WorkspaceMutationFile(
                 path=str(item["path"]),
@@ -930,17 +969,29 @@ def _row_to_journal(row: Mapping[str, object]) -> WorkspaceMutationJournal:
         owner=str(row["owner"]),
         request_key=str(row["request_key"]),
         intent_digest=str(row["intent_digest"]),
-        change_set_id=None if row["change_set_id"] is None else str(row["change_set_id"]),
-        from_revision=int(row["from_revision"]),
+        change_set_id=(
+            None
+            if row["change_set_id"] is None
+            else str(row["change_set_id"])
+        ),
+        from_revision=_integer_value(row["from_revision"], "from_revision"),
         from_digest=str(row["from_digest"]),
-        to_revision=None if row["to_revision"] is None else int(row["to_revision"]),
-        to_digest=None if row["to_digest"] is None else str(row["to_digest"]),
+        to_revision=(
+            None
+            if row["to_revision"] is None
+            else _integer_value(row["to_revision"], "to_revision")
+        ),
+        to_digest=(
+            None if row["to_digest"] is None else str(row["to_digest"])
+        ),
         writer_id=str(row["writer_id"]),
-        fencing_token=int(row["fencing_token"]),
+        fencing_token=_integer_value(row["fencing_token"], "fencing_token"),
         state=WorkspaceMutationState(str(row["state"])),
         files=tuple(files),
         backup_ref=str(row["backup_ref"]),
-        error_code=None if row["error_code"] is None else str(row["error_code"]),
+        error_code=(
+            None if row["error_code"] is None else str(row["error_code"])
+        ),
         created_at=_timestamp_text(row["created_at"]),
         updated_at=_timestamp_text(row["updated_at"]),
     )
@@ -953,7 +1004,9 @@ def _normalize_files(
         raise TypeError("files must be a sequence of WorkspaceMutationFile")
     normalized = tuple(files)
     if not normalized or len(normalized) > 256:
-        raise ValueError("Workspace mutation files must contain 1 to 256 entries")
+        raise ValueError(
+            "Workspace mutation files must contain 1 to 256 entries"
+        )
     if any(not isinstance(item, WorkspaceMutationFile) for item in normalized):
         raise TypeError("files must contain WorkspaceMutationFile")
     if len({item.path for item in normalized}) != len(normalized):
@@ -962,7 +1015,9 @@ def _normalize_files(
 
 
 def _mutation_id(workspace_id: str, request_key: str) -> str:
-    digest = hashlib.sha256(f"{workspace_id}\0{request_key}".encode()).hexdigest()
+    digest = hashlib.sha256(
+        f"{workspace_id}\0{request_key}".encode()
+    ).hexdigest()
     return f"workspace-mutation-{digest}"
 
 
@@ -1015,7 +1070,11 @@ def _migration_checksum(statements: tuple[str, ...]) -> str:
 
 
 def _dsn(value: str) -> str:
-    if not isinstance(value, str) or not value or any(character in value for character in "\r\n\0"):
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(character in value for character in "\r\n\0")
+    ):
         raise ValueError("PostgreSQL DSN is invalid")
     return value
 
@@ -1027,7 +1086,12 @@ def _owner(value: str) -> str:
 
 
 def _key(value: str, label: str) -> str:
-    if not isinstance(value, str) or not value or "\0" in value or len(value) > 512:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\0" in value
+        or len(value) > 512
+    ):
         raise ValueError(f"{label} is invalid")
     return value
 
@@ -1049,8 +1113,18 @@ def _positive(value: int, label: str) -> int:
 
 
 def _lease_seconds(value: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 86_400:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 1 <= value <= 86_400
+    ):
         raise ValueError("lease_seconds must be between 1 and 86400")
+    return value
+
+
+def _integer_value(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{label} is not an integer PostgreSQL value")
     return value
 
 
@@ -1070,6 +1144,6 @@ def _datetime_value(value: object, label: str) -> datetime:
 
 
 def _timestamp_text(value: object) -> str:
-    return _datetime_value(value, "timestamp").isoformat(timespec="microseconds").replace(
-        "+00:00", "Z"
-    )
+    return _datetime_value(value, "timestamp").isoformat(
+        timespec="microseconds"
+    ).replace("+00:00", "Z")

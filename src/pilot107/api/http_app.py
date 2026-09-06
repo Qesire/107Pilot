@@ -19,7 +19,6 @@ from pilot107.agent.market_sessions import (
     MarketApplicationService,
     TemplatePublicationService,
 )
-from pilot107.agent.store import SQLiteAgentSessionStore
 from pilot107.api.agent_session_routes import AgentSessionRoutes
 from pilot107.api.agent_task_routes import AgentTaskRoutes
 from pilot107.api.agent_tool_routes import AgentToolRoutes
@@ -60,7 +59,7 @@ from pilot107.core.contracts import (
     recipe_version_payload,
     validation_payload,
 )
-from pilot107.core.control_repository import ControlRepository, SQLiteControlRepository
+from pilot107.core.control_repository import ControlRepository
 from pilot107.core.diagnosis import DiagnosisService, KnownErrorRule, load_known_error_rules
 from pilot107.core.evidence_binding import EvidenceBinder
 from pilot107.core.identity import (
@@ -132,7 +131,7 @@ from pilot107.core.template_market import (
     template_review_queue_payload,
     template_verification_payload,
 )
-from pilot107.core.template_policy import TemplatePublicationGate, TemplateRoleDirectory
+from pilot107.core.template_policy import TemplateRoleDirectory
 from pilot107.core.template_verification import TemplateVerificationService
 from pilot107.core.terminal import TerminalCommandError, TerminalCommandService
 from pilot107.core.user_entitlement_store import UserEntitlementStore
@@ -206,7 +205,9 @@ class Pilot107HttpApi:
     ) -> None:
         self.store = store
         self.evidence_query = evidence_query
-        self.control_repository = control_repository or SQLiteControlRepository(store.db_path)
+        if control_repository is None:
+            raise ValueError("control_repository is required; SQLite fallback has been retired")
+        self.control_repository = control_repository
         self.worker_metrics_root = worker_metrics_root or store.db_path.parent / "worker-metrics"
         self.metrics = metrics or ControlPlaneMetrics(
             control_repository=self.control_repository,
@@ -217,8 +218,7 @@ class Pilot107HttpApi:
         self.run_workspace_service = run_workspace_service or RunWorkspaceService(
             store=store,
             contract_store=(
-                contract_store
-                or (contract_service.store if contract_service is not None else None)
+                contract_store or (contract_service.store if contract_service is not None else None)
             ),
         )
         self.run_workspace_routes = RunWorkspaceRoutes(self.run_workspace_service)
@@ -248,22 +248,24 @@ class Pilot107HttpApi:
             contract_service=contract_service,
             run_service=run_service,
         )
+        if remediation_service is None and remediation_store is None:
+            raise ValueError("remediation_store is required; SQLite fallback has been retired")
         self.remediation_service = remediation_service or RemediationService(
             run_store=store,
-            remediation_store=remediation_store or RemediationStore(store.db_path),
+            remediation_store=remediation_store,
             advice_service=self.agent_advice_service,
             contract_store=contract_store,
             evidence_store=evidence_store,
             project_agent_service=project_agent_service,
         )
         self.remediation_routes = RemediationRoutes(self.remediation_service)
+        if repair_ticket_store is None:
+            raise ValueError("repair_ticket_store is required; SQLite fallback has been retired")
         self.repair_ticket_service = RepairTicketService(
             run_store=store,
-            repair_ticket_store=repair_ticket_store or RepairTicketStore(store.db_path),
+            repair_ticket_store=repair_ticket_store,
             remediation_store=self.remediation_service.remediation_store,
-            project_store=(
-                None if project_agent_service is None else project_agent_service.store
-            ),
+            project_store=(None if project_agent_service is None else project_agent_service.store),
         )
         self.repair_ticket_routes = RepairTicketRoutes(self.repair_ticket_service)
         self.terminal_service = terminal_service
@@ -553,9 +555,7 @@ class Pilot107HttpApi:
                 payload={
                     "items": [
                         record.public_payload()
-                        for record in self.ssh_connection_service.list_for_owner(
-                            identity.username
-                        )
+                        for record in self.ssh_connection_service.list_for_owner(identity.username)
                     ]
                 },
             )
@@ -1087,11 +1087,7 @@ class Pilot107HttpApi:
                 return file_response
         if parts == ["terminal", "commands"]:
             return self._terminal_command(body=body, identity=identity)
-        if (
-            len(parts) == 4
-            and parts[:2] == ["platform", "connections"]
-            and parts[3] == "check"
-        ):
+        if len(parts) == 4 and parts[:2] == ["platform", "connections"] and parts[3] == "check":
             if identity is None:
                 return ApiResponse(
                     status=401,
@@ -1173,11 +1169,7 @@ class Pilot107HttpApi:
                 body=body,
                 identity=identity,
             )
-        if (
-            len(parts) == 3
-            and parts[0] == "market"
-            and parts[2] in {"adopt", "withdraw"}
-        ):
+        if len(parts) == 3 and parts[0] == "market" and parts[2] in {"adopt", "withdraw"}:
             return self._mutate_successful_run_market_item(
                 publication_id=parts[1],
                 action=parts[2],
@@ -1203,7 +1195,8 @@ class Pilot107HttpApi:
 
         if len(parts) == 3 and parts == ["contracts", "agent", "suggest"]:
             return self._contract_agent_suggest(
-                body=body, identity=identity,
+                body=body,
+                identity=identity,
             )
 
         if len(parts) == 1 and parts[0] == "contracts":
@@ -1734,9 +1727,7 @@ class Pilot107HttpApi:
         payload = self.capability_profile.to_payload()
         if owner is not None and self.platform_snapshot_store is not None:
             latest = self.platform_snapshot_store.latest_usable(owner=owner)
-            payload["latest_snapshot"] = (
-                None if latest is None else latest.summary_payload()
-            )
+            payload["latest_snapshot"] = None if latest is None else latest.summary_payload()
         else:
             payload["latest_snapshot"] = None
         if owner is not None and self.user_entitlement_store is not None:
@@ -2154,6 +2145,7 @@ class Pilot107HttpApi:
             AgentProviderError,
             suggest_contract_patch_without_llm,
         )
+
         payload, error = _json_body(body)
         if error is not None:
             return error
@@ -2688,10 +2680,7 @@ class Pilot107HttpApi:
                 payload={"error": {"code": "market_item_not_found", "id": item_id}},
             )
         except (RunPublicationError, TemplateMarketError) as exc:
-            if (
-                isinstance(exc, TemplateMarketError)
-                and exc.code == "TEMPLATE.FORBIDDEN"
-            ):
+            if isinstance(exc, TemplateMarketError) and exc.code == "TEMPLATE.FORBIDDEN":
                 return ApiResponse(
                     status=404,
                     payload={"error": {"code": "market_item_not_found", "id": item_id}},
@@ -2712,9 +2701,7 @@ class Pilot107HttpApi:
             item = self.market_read_service.get(
                 item_id=item_id,
                 actor=identity.username,
-                course_scopes=self.template_role_directory.visible_course_scopes(
-                    identity.username
-                ),
+                course_scopes=self.template_role_directory.visible_course_scopes(identity.username),
             )
         except KeyError:
             return ApiResponse(
@@ -2823,17 +2810,13 @@ class Pilot107HttpApi:
                 visibility=visibility,
                 scope_key=_optional_body_string(payload, "scope_key"),
                 description=_required_body_bool(manifest_payload, "description"),
-                resource_summary=_required_body_bool(
-                    manifest_payload, "resource_summary"
-                ),
+                resource_summary=_required_body_bool(manifest_payload, "resource_summary"),
                 result_summary=_required_body_bool(manifest_payload, "result_summary"),
                 contract_for_adaptation=_required_body_bool(
                     manifest_payload, "contract_for_adaptation"
                 ),
                 script=_required_body_bool(manifest_payload, "script"),
-                evidence_previews=_required_body_bool(
-                    manifest_payload, "evidence_previews"
-                ),
+                evidence_previews=_required_body_bool(manifest_payload, "evidence_previews"),
                 small_assets=tuple(small_assets),
             )
             record = self.run_publication_store.publish(
@@ -3420,67 +3403,17 @@ def build_api(
     auth_required: bool = False,
     trusted_user_header: str = "X-Pilot107-User",
 ) -> Pilot107HttpApi:
-    store = RunStore(db_path)
-    contract_store = ContractStore(db_path)
-    capability_profile = docker_sim_capability_profile()
-    partition_qos = capability_profile.partition_qos()
-    catalog = RecipeCatalog(
-        store=contract_store,
-        partition_qos=partition_qos,
-        default_partition=capability_profile.default_partition,
-        default_qos=capability_profile.default_qos,
-    )
-    platform_snapshot_store = PlatformSnapshotStore(db_path)
-    user_entitlement_store = UserEntitlementStore(db_path)
-    contract_service = ContractService(
-        catalog=catalog,
-        store=contract_store,
-        partition_qos=partition_qos,
-        qos_limits=capability_profile.qos_limits(),
-        platform_snapshot_store=platform_snapshot_store,
-        user_entitlement_store=user_entitlement_store,
-    )
-    control_repository = SQLiteControlRepository(db_path)
-    from pilot107.observability.service import ObservabilityService
-    from pilot107.observability.store import SQLiteObservabilityStore
+    """Retired SQLite composition entrypoint.
 
-    return Pilot107HttpApi(
-        store=store,
-        control_repository=control_repository,
-        agent_session_service=AgentSessionService(
-            store=SQLiteAgentSessionStore(db_path),
-            control_repository=control_repository,
-        ),
-        auth_required=auth_required,
-        trusted_user_header=trusted_user_header,
-        recipe_catalog=catalog,
-        contract_service=contract_service,
-        template_market_store=TemplateMarketStore(
-            db_path,
-            publication_gate=TemplatePublicationGate(contract_service),
-            contract_service=contract_service,
-        ),
-        run_publication_store=RunPublicationStore(
-            db_path,
-            run_store=store,
-            contract_service=contract_service,
-        ),
-        evidence_query=EvidenceQueryService(
-            store=store,
-            evidence_store=EvidenceStore(evidence_root),
-        ),
-        capsule_service=RawCapsuleService(
-            store=store,
-            evidence_store=EvidenceStore(evidence_root),
-            capsule_root=evidence_root.parent / "capsules",
-            creator="pilot107-api",
-        ),
-        platform_snapshot_store=platform_snapshot_store,
-        user_entitlement_store=user_entitlement_store,
-        capability_profile=capability_profile,
-        observability_routes=ResourceObservationRoutes(
-            ObservabilityService(store=SQLiteObservabilityStore(db_path))
-        ),
+    Production composition is PostgreSQL-only and must go through
+    :func:`pilot107.api.service.build_api_service`, which injects every durable
+    repository explicitly.  The legacy signature remains only as an explicit
+    fail-closed compatibility sentinel for callers that have not migrated yet.
+    """
+
+    del db_path, evidence_root, auth_required, trusted_user_header
+    raise RuntimeError(
+        "build_api SQLite composition has been retired; use build_api_service with PostgreSQL"
     )
 
 

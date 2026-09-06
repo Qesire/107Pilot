@@ -11,7 +11,7 @@ const campusEnv: NodeJS.ProcessEnv = {
   PILOT107_AGENTD_TOKEN: "internal-secret",
   PILOT107_AGENTD_MODEL_PROFILE: "campus-default",
   PILOT107_LLM_BASE_URL: "http://127.0.0.1:4111/v1",
-  PILOT107_LLM_API_KEY: "llm-secret",
+  PILOT107_LLM_API_KEY: "llm-secret", // secret-scan: allow — deterministic test fixture
   PILOT107_LLM_MODEL: "campus-model",
 };
 

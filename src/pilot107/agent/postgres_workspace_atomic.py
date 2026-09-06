@@ -1,30 +1,27 @@
-"""PostgreSQL authoritative AC4 Workspace mutation editor.
+"""PostgreSQL-authoritative AC4 Workspace mutation editor.
 
-``Workspace`` in this module is exclusively the Agent-owned writable workspace.
-The product-level experiment boundary is ``WorkArea`` and is intentionally not
-consulted by the mutation protocol.
-
-Filesystem preparation, manifest verification, backups, rollback and OS locking
-reuse the SQLite-proven AC4 implementation. PostgreSQL supplies the durable live
-head, writer fence and journal. Final publication of the ChangeSet, live-head
-advance and COMMITTED journal receipt happens in one PostgreSQL transaction.
+``Workspace`` here is the Agent-owned writable workspace. Filesystem preparation,
+manifest verification, backup/rollback and OS locking are backend-neutral local
+mechanics. PostgreSQL is the only durable authority for live-head state, writer
+fencing, mutation journals and ChangeSet publication.
 """
 
 from __future__ import annotations
 
+import difflib
+import fcntl
+import hashlib
 import os
+import stat
 import uuid
-from contextlib import suppress
-from pathlib import Path
-from typing import Any, Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
+from dataclasses import replace
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 from pilot107.agent import durable_workspace as _dw
-from pilot107.agent.durable_workspace import WorkspaceRecoveryReport
-from pilot107.agent.durable_workspace_atomic import (
-    AtomicDurableWorkspaceEditor,
-    _bind_change_set_to_live_revision,
-    _write_backup_atomically,
-)
+from pilot107.agent.durable_workspace import WorkspaceRecoveryReport, _PreparedPatch
 from pilot107.agent.operation_context import current_agent_operation_key
 from pilot107.agent.postgres_workspace_durability import (
     PostgresWorkspaceLiveStore,
@@ -36,10 +33,17 @@ from pilot107.agent.project_store import ProjectStore
 from pilot107.agent.workspace import (
     AgentWorkspaceRecord,
     WorkspaceChangeSet,
+    WorkspaceChangeSetState,
     WorkspaceConflict,
     WorkspaceEditor,
+    WorkspaceFileChange,
     WorkspacePatch,
     WorkspacePolicyError,
+    _change_set_digest,
+    _editable_path,
+    _relative_path,
+    _timestamp,
+    _validate_patch_target,
     change_set_payload,
 )
 from pilot107.agent.workspace_journal import (
@@ -47,11 +51,15 @@ from pilot107.agent.workspace_journal import (
     WorkspaceMutationJournal,
     WorkspaceMutationState,
 )
-from pilot107.agent.workspace_live import WorkspaceLiveConflict, WorkspaceWriterLease
+from pilot107.agent.workspace_live import (
+    WorkspaceLiveConflict,
+    WorkspaceLiveHead,
+    WorkspaceWriterLease,
+)
 
 
-class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
-    """AC4 editor backed by the PostgreSQL Project persistence authority."""
+class PostgresAtomicDurableWorkspaceEditor(WorkspaceEditor):
+    """AC4 editor with PostgreSQL as its sole durable state authority."""
 
     def __init__(
         self,
@@ -64,11 +72,7 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
         crash_hook: Callable[[str], None] | None = None,
         clock: Callable[[], Any] | None = None,
     ) -> None:
-        # AtomicDurableWorkspaceEditor ultimately inherits an SQLite-specific
-        # DurableWorkspaceEditor initializer. Install only the shared editor
-        # contract here and then provide PostgreSQL live-head/journal stores.
-        WorkspaceEditor.__init__(
-            self,
+        super().__init__(
             store=store,
             max_file_bytes=max_file_bytes,
             max_diff_bytes=max_diff_bytes,
@@ -87,8 +91,26 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
         self.backup_root.mkdir(parents=True, exist_ok=True)
         self.lease_seconds = lease_seconds
         self.crash_hook = crash_hook
-        self.live_store = PostgresWorkspaceLiveStore(dsn, clock=clock)
-        self.journal_store = PostgresWorkspaceMutationJournalStore(dsn, clock=clock)
+        self.live_store: PostgresWorkspaceLiveStore = PostgresWorkspaceLiveStore(
+            dsn, clock=clock
+        )
+        self.journal_store: PostgresWorkspaceMutationJournalStore = (
+            PostgresWorkspaceMutationJournalStore(dsn, clock=clock)
+        )
+
+    def apply_patch(
+        self,
+        workspace_id: str,
+        owner: str,
+        relative_path: str,
+        expected_source_digest: str | None,
+        patch: WorkspacePatch,
+    ) -> WorkspaceChangeSet:
+        return self.apply_patches(
+            workspace_id,
+            owner,
+            ((relative_path, expected_source_digest, patch),),
+        )
 
     def apply_patches(
         self,
@@ -164,7 +186,6 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                         for item in prepared
                     ),
                     backup_ref=str(backup),
-                    # Publication is deliberately deferred into _atomic_finalize.
                     change_set_id=None,
                 )
                 self._crash("after_journal_prepared")
@@ -180,8 +201,6 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                     raise WorkspaceLiveConflict(
                         "Workspace changed outside the controlled mutation"
                     )
-                # Keep the journal PREPARED until all PostgreSQL authoritative
-                # facts can become visible together.
                 self._crash("after_files_applied")
                 lease = self.live_store.renew_writer(
                     lease, lease_seconds=self.lease_seconds
@@ -205,10 +224,183 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                         _dw._remove_tree(backup)
                 raise
             finally:
-                try:
+                with suppress(WorkspaceLiveConflict, KeyError):
                     self.live_store.release_writer(lease)
-                except (WorkspaceLiveConflict, KeyError):
-                    pass
+
+    def recover_workspace(self, workspace_id: str, owner: str) -> WorkspaceRecoveryReport:
+        workspace = self.store.get_workspace(workspace_id, owner=owner)
+        with self._workspace_lock(workspace):
+            return self._recover_locked(workspace)
+
+    def _rollback_exception(
+        self,
+        workspace: AgentWorkspaceRecord,
+        journal: WorkspaceMutationJournal,
+    ) -> None:
+        current = self.journal_store.get(journal.mutation_id, owner=workspace.owner)
+        if current.state is not WorkspaceMutationState.PREPARED:
+            return
+        if not _dw._touched_paths_known(workspace, current):
+            self._conflict(current, "WORKSPACE_ROLLBACK_THIRD_STATE")
+            return
+        _dw._restore_backup(workspace, Path(current.backup_ref))
+        restored, _ = _dw._capture_manifest(workspace)
+        if restored == current.from_digest:
+            self.journal_store.mark_rolled_back(
+                current.mutation_id,
+                owner=workspace.owner,
+                observed_live_digest=restored,
+            )
+            _dw._remove_tree(Path(current.backup_ref))
+        else:
+            self._conflict(current, "WORKSPACE_ROLLBACK_DIGEST_MISMATCH")
+
+    def _conflict(self, journal: WorkspaceMutationJournal, code: str) -> None:
+        self.journal_store.mark_conflicted(
+            journal.mutation_id,
+            owner=journal.owner,
+            error_code=code,
+        )
+
+    def _prepare(
+        self,
+        workspace: AgentWorkspaceRecord,
+        patches: tuple[tuple[str, str | None, WorkspacePatch], ...],
+    ) -> tuple[tuple[_PreparedPatch, ...], WorkspaceChangeSet, str]:
+        root = Path(workspace.local_root).resolve(strict=True)
+        prepared: list[_PreparedPatch] = []
+        seen: set[str] = set()
+        total_diff_bytes = 0
+        for relative_path, expected_source_digest, patch in patches:
+            try:
+                relative = _relative_path(relative_path)
+            except (TypeError, ValueError) as exc:
+                raise WorkspacePolicyError(str(exc)) from exc
+            if relative in seen:
+                raise WorkspacePolicyError(
+                    "Workspace patch batch contains duplicate paths"
+                )
+            seen.add(relative)
+            if not isinstance(patch, WorkspacePatch):
+                raise TypeError("patch must be WorkspacePatch")
+            target = root.joinpath(*PurePosixPath(relative).parts)
+            _validate_patch_target(root, target)
+            exists = target.exists()
+            if exists:
+                resolved = target.resolve(strict=True)
+                if not resolved.is_relative_to(root) or not resolved.is_file():
+                    raise WorkspacePolicyError(
+                        "Workspace patch target is not a contained file"
+                    )
+                before = resolved.read_bytes()
+                mode = stat.S_IMODE(resolved.stat().st_mode)
+            else:
+                before = b""
+                mode = 0o600
+            before_digest = hashlib.sha256(before).hexdigest() if exists else None
+            if patch.operation == "create":
+                if exists or expected_source_digest is not None:
+                    raise WorkspaceConflict(
+                        "create patch no longer matches an absent source"
+                    )
+            else:
+                if not exists:
+                    raise WorkspaceConflict("patch source file no longer exists")
+                if expected_source_digest != before_digest:
+                    raise WorkspaceConflict("patch source digest no longer matches")
+            if not _editable_path(relative):
+                raise WorkspacePolicyError(
+                    "Workspace patch target is not an editable file type"
+                )
+            after = b"" if patch.operation == "delete" else (patch.content or "").encode()
+            if len(after) > self.max_file_bytes:
+                raise WorkspacePolicyError("Workspace patch exceeds the file size limit")
+            try:
+                before_text = before.decode("utf-8")
+                after_text = after.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise WorkspacePolicyError(
+                    "Workspace patches require UTF-8 text files"
+                ) from exc
+            unified = "".join(
+                difflib.unified_diff(
+                    before_text.splitlines(keepends=True),
+                    after_text.splitlines(keepends=True),
+                    fromfile=f"a/{relative}",
+                    tofile=f"b/{relative}",
+                )
+            )
+            total_diff_bytes += len(unified.encode())
+            if total_diff_bytes > self.max_diff_bytes:
+                raise WorkspacePolicyError("Workspace diff exceeds the output limit")
+            after_digest = (
+                None
+                if patch.operation == "delete"
+                else hashlib.sha256(after).hexdigest()
+            )
+            change = WorkspaceFileChange(
+                path=relative,
+                operation=patch.operation,
+                before_sha256=before_digest,
+                after_sha256=after_digest,
+                diff_sha256=hashlib.sha256(unified.encode()).hexdigest(),
+                size_bytes=len(after),
+            )
+            prepared.append(
+                _PreparedPatch(
+                    path=relative,
+                    target=target,
+                    operation=patch.operation,
+                    before=before,
+                    after=after,
+                    existed=exists,
+                    mode=mode,
+                    change=change,
+                    unified_diff=unified,
+                )
+            )
+        files = tuple(item.change for item in prepared)
+        digest = _change_set_digest(workspace, files)
+        now = _timestamp()
+        change_set = WorkspaceChangeSet(
+            change_set_id=f"changeset-{digest[:24]}",
+            project_id=workspace.project_id,
+            workspace_id=workspace.workspace_id,
+            owner=workspace.owner,
+            base_snapshot_digest=workspace.snapshot.digest,
+            digest=digest,
+            state=WorkspaceChangeSetState.DRAFT,
+            version=1,
+            files=files,
+            sandbox_results=(),
+            approval=None,
+            created_at=now,
+            updated_at=now,
+        )
+        return tuple(prepared), change_set, "".join(
+            item.unified_diff for item in prepared
+        )
+
+    def _backup_path(self, workspace: AgentWorkspaceRecord, request_key: str) -> Path:
+        digest = hashlib.sha256(request_key.encode()).hexdigest()
+        return self.backup_root / workspace.owner / workspace.workspace_id / digest
+
+    @contextmanager
+    def _workspace_lock(self, workspace: AgentWorkspaceRecord) -> Iterator[None]:
+        name = hashlib.sha256(
+            f"{workspace.owner}\0{workspace.workspace_id}".encode()
+        ).hexdigest()
+        path = self.lock_root / f"{name}.lock"
+        with path.open("a+b") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _crash(self, stage: str) -> None:
+        if self.crash_hook is not None:
+            self.crash_hook(stage)
 
     def _atomic_finalize(
         self,
@@ -223,7 +415,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
             journal.state is not WorkspaceMutationState.PREPARED
             or journal.change_set_id is not None
         ):
-            raise WorkspaceLiveConflict("Workspace journal is not a fresh PREPARED mutation")
+            raise WorkspaceLiveConflict(
+                "Workspace journal is not a fresh PREPARED mutation"
+            )
         if (
             journal.workspace_id != change_set.workspace_id
             or journal.project_id != change_set.project_id
@@ -245,7 +439,7 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
         ):
             raise WorkspaceLiveConflict("Workspace target digest is invalid")
 
-        now = self.journal_store._now()  # noqa: SLF001 - one transaction clock
+        now = self.journal_store._now()  # noqa: SLF001 - one PostgreSQL tx clock
         payload = change_set_payload(change_set)
         with self.journal_store.connect() as connection, connection.transaction():
             journal_row = connection.execute(
@@ -267,7 +461,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 or current.writer_id != lease.writer_id
                 or current.fencing_token != lease.fencing_token
             ):
-                raise WorkspaceLiveConflict("Workspace journal changed before atomic finalize")
+                raise WorkspaceLiveConflict(
+                    "Workspace journal changed before atomic finalize"
+                )
 
             live = connection.execute(
                 """
@@ -298,7 +494,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 (change_set.change_set_id, change_set.owner),
             ).fetchone()
             if existing is not None:
-                raise WorkspaceConflict("Revision-bound ChangeSet identity already exists")
+                raise WorkspaceConflict(
+                    "Revision-bound ChangeSet identity already exists"
+                )
 
             connection.execute(
                 """
@@ -340,7 +538,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 ),
             )
             if live_update.rowcount != 1:
-                raise WorkspaceLiveConflict("Workspace live CAS failed during atomic finalize")
+                raise WorkspaceLiveConflict(
+                    "Workspace live CAS failed during atomic finalize"
+                )
             journal_update = connection.execute(
                 """
                 UPDATE agent_workspace_mutation_journal
@@ -360,7 +560,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 ),
             )
             if journal_update.rowcount != 1:
-                raise WorkspaceLiveConflict("Workspace journal CAS failed during atomic finalize")
+                raise WorkspaceLiveConflict(
+                    "Workspace journal CAS failed during atomic finalize"
+                )
 
     def _recover_locked(self, workspace: AgentWorkspaceRecord) -> WorkspaceRecoveryReport:
         self.live_store.ensure_head(workspace)
@@ -388,7 +590,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 _dw._restore_backup(workspace, Path(journal.backup_ref))
                 restored, _ = _dw._capture_manifest(workspace)
                 if restored != journal.from_digest:
-                    self._conflict(journal, "WORKSPACE_RECOVERY_DIGEST_MISMATCH")
+                    self._conflict(
+                        journal, "WORKSPACE_RECOVERY_DIGEST_MISMATCH"
+                    )
                     conflicted.append(journal.mutation_id)
                     continue
                 self.journal_store.mark_rolled_back(
@@ -413,7 +617,8 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                                 workspace.workspace_id,
                                 owner=workspace.owner,
                                 writer_id=(
-                                    f"workspace-recovery:{os.getpid()}:{uuid.uuid4().hex}"
+                                    f"workspace-recovery:{os.getpid()}:"
+                                    f"{uuid.uuid4().hex}"
                                 ),
                                 lease_seconds=self.lease_seconds,
                             )
@@ -429,10 +634,8 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                                 lease=lease,
                             )
                         finally:
-                            try:
+                            with suppress(WorkspaceLiveConflict):
                                 self.live_store.release_writer(lease)
-                            except WorkspaceLiveConflict:
-                                pass
                         _dw._remove_tree(Path(journal.backup_ref))
                         committed.append(journal.mutation_id)
                         continue
@@ -452,7 +655,9 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
         lease: WorkspaceWriterLease,
     ) -> None:
         if lease.workspace_id != journal.workspace_id or lease.owner != journal.owner:
-            raise WorkspaceLiveConflict("Workspace recovery lease does not own journal")
+            raise WorkspaceLiveConflict(
+                "Workspace recovery lease does not own journal"
+            )
         now = self.journal_store._now()  # noqa: SLF001
         with self.journal_store.connect() as connection, connection.transaction():
             live = connection.execute(
@@ -512,7 +717,11 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                 (workspace.workspace_id, workspace.owner),
             ).fetchall()
         for row in rows:
-            if str(row["state"]) not in {"prepared", "files_applied", "conflicted"}:
+            if str(row["state"]) not in {
+                "prepared",
+                "files_applied",
+                "conflicted",
+            }:
                 continue
             candidate = Path(str(row["backup_ref"])).resolve(strict=False)
             if candidate == root or candidate.is_relative_to(root):
@@ -528,6 +737,40 @@ class PostgresAtomicDurableWorkspaceEditor(AtomicDurableWorkspaceEditor):
                     _dw._remove_tree(child)
         with suppress(OSError):
             root.rmdir()
+
+
+def _bind_change_set_to_live_revision(
+    change_set: WorkspaceChangeSet,
+    head: WorkspaceLiveHead,
+) -> WorkspaceChangeSet:
+    identity = hashlib.sha256(
+        f"{change_set.digest}\0{head.live_revision}\0{head.live_digest}".encode()
+    ).hexdigest()
+    return replace(change_set, change_set_id=f"changeset-{identity[:24]}")
+
+
+def _write_backup_atomically(
+    destination: Path,
+    workspace_root: Path,
+    prepared: tuple[_PreparedPatch, ...],
+) -> None:
+    if destination.exists():
+        if (destination / "manifest.json").is_file():
+            return
+        raise WorkspaceLiveConflict(
+            "Workspace backup exists without durable manifest"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = destination.with_name(
+        f".{destination.name}.tmp-{uuid.uuid4().hex}"
+    )
+    try:
+        _dw._write_backup(temporary, workspace_root, prepared)
+        os.replace(temporary, destination)
+        _dw._fsync_dir(destination.parent)
+    finally:
+        if temporary.exists():
+            _dw._remove_tree(temporary)
 
 
 __all__ = ["PostgresAtomicDurableWorkspaceEditor"]

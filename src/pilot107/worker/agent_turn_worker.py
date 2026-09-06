@@ -184,7 +184,9 @@ class AgentTurnWorker:
         session = self.store.get_session(claim.session_id, owner=claim.owner)
         context_refs = _context_refs(session.source)
         checkpoint = current.final_checkpoint
-        event_sequence_base = current.event_sequence
+        event_sequence_base = (
+            current.event_sequence if current.final_checkpoint is not None else 0
+        )
         try:
             receipt_repairs = (
                 ()

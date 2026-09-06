@@ -1,9 +1,7 @@
-"""Write-ahead journal for fenced Workspace live mutations.
+"""Workspace mutation journal records and explicit SQLite test durability.
 
-The journal is the database half of AC4's filesystem/DB two-phase boundary.
-Preparing a journal does not touch files.  ``mark_files_applied`` records a
-verified post-write digest, and ``commit`` advances the Workspace live head and
-the journal to COMMITTED in the same SQLite transaction.
+PostgreSQL is the production journal authority. The SQLite implementation remains
+available only to explicitly injected development/test Workspace editors.
 """
 
 from __future__ import annotations
@@ -16,7 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pilot107.agent.workspace_live import (
     WorkspaceLiveConflict,
@@ -631,7 +629,7 @@ def _intent_digest(
 
 
 def _live_authority_matches(
-    row: Mapping[str, object],
+    row: Mapping[str, Any],
     *,
     lease: WorkspaceWriterLease,
     expected_revision: int,
@@ -662,7 +660,7 @@ def _file_payload(item: WorkspaceMutationFile) -> dict[str, object]:
     }
 
 
-def _row_to_journal(row: Mapping[str, object]) -> WorkspaceMutationJournal:
+def _row_to_journal(row: Mapping[str, Any]) -> WorkspaceMutationJournal:
     raw_files = json.loads(str(row["files_json"]))
     if not isinstance(raw_files, list):
         raise TypeError("Workspace mutation files_json is invalid")

@@ -1,10 +1,8 @@
-"""Live Workspace revision authority layered over immutable imported snapshots.
+"""Workspace live-head domain types and explicit SQLite test durability.
 
-The imported ``AgentWorkspaceRecord.snapshot`` remains immutable.  This module
-adds a separate mutable *head* for the isolated local Workspace: a monotonic
-revision, a content/permission digest, and a fenced single-writer lease.  File
-mutation journaling is intentionally a later AC4 step; this store does not write
-Workspace files itself.
+Production composition is PostgreSQL-only. The SQLite implementation is retained
+solely for explicitly injected development/test Project stores and is never selected
+by the production live-store factory.
 """
 
 from __future__ import annotations
@@ -18,7 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from pilot107.agent.workspace import AgentWorkspaceRecord
 from pilot107.core.identity import is_safe_username
@@ -152,18 +150,18 @@ def build_workspace_live_store(
     project_store: object,
     *,
     clock: Callable[[], datetime] | None = None,
-) -> WorkspaceLiveStore | None:
-    """Build a live-head store for the existing Project persistence backend.
+) -> WorkspaceLiveStore:
+    """Build the PostgreSQL live-head authority or fail closed."""
 
-    Project/Workspace persistence is currently SQLite-only.  Returning ``None``
-    for unknown stores is deliberate: AC4 must not pretend PostgreSQL Project
-    parity exists before that domain backend is implemented.
-    """
+    dsn = getattr(project_store, "dsn", None)
+    if not isinstance(dsn, str) or not dsn:
+        raise RuntimeError(
+            "Workspace live-head authority requires PostgreSQL; "
+            "SQLite Workspace live authority has been retired from runtime composition"
+        )
+    from pilot107.agent.postgres_workspace_durability import PostgresWorkspaceLiveStore
 
-    db_path = getattr(project_store, "db_path", None)
-    if isinstance(db_path, Path):
-        return SQLiteWorkspaceLiveStore(db_path, clock=clock)
-    return None
+    return PostgresWorkspaceLiveStore(dsn, clock=clock)
 
 
 class SQLiteWorkspaceLiveStore:
@@ -514,7 +512,9 @@ def capture_workspace_live_digest(
                 stack.append(path)
                 continue
             if not stat.S_ISREG(info.st_mode):
-                raise WorkspaceLiveConflict("Workspace live manifest contains unsupported file type")
+                raise WorkspaceLiveConflict(
+                    "Workspace live manifest contains unsupported file type"
+                )
             digest = _file_sha256(path)
             manifest.append(
                 {
@@ -549,7 +549,7 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _row_to_head(row: Mapping[str, object]) -> WorkspaceLiveHead:
+def _row_to_head(row: Mapping[str, Any]) -> WorkspaceLiveHead:
     return WorkspaceLiveHead(
         workspace_id=str(row["workspace_id"]),
         project_id=str(row["project_id"]),
