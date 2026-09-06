@@ -37,6 +37,7 @@ from pilot107.core.template_policy import TemplatePublicationGate
 from pilot107.core.user_entitlement_store import UserEntitlementStore
 from pilot107.observability.service import ObservabilityService
 from pilot107.observability.store import SQLiteObservabilityStore
+from pilot107.runtime_watch.store import SQLiteRuntimeWatchStore
 from pilot107.services.agent_session_service import AgentSessionService
 from pilot107.worker.capsule import RawCapsuleService
 from pilot107.worker.evidence import EvidenceStore
@@ -44,14 +45,17 @@ from pilot107.worker.evidence import EvidenceStore
 _ORIGINAL_HTTP_INIT = Pilot107HttpApi.__init__
 _ORIGINAL_API_SERVICE_BUILDER = api_service_module.build_api_service
 _ORIGINAL_WORKER_SERVICE_BUILDER = worker_service_module.build_worker_service
+_TEST_POSTGRES_DSN = "postgresql://pilot107-test.invalid/pilot107"
 
 
 def _sqlite_selection(path: Path) -> DurableStoreSelection:
+    """Return a test-only selection that lets strict builders run without PG I/O."""
+
     return DurableStoreSelection(
         mode=DatabaseMode.SQLITE,
         sqlite_path=path.resolve(),
-        postgres_dsn=None,
-        control_postgres_dsn=None,
+        postgres_dsn=_TEST_POSTGRES_DSN,
+        control_postgres_dsn=_TEST_POSTGRES_DSN,
     )
 
 
@@ -145,6 +149,91 @@ def _build_api_for_tests(
 http_app_module.build_api = _build_api_for_tests
 
 
+def _patch_if_present(stack: ExitStack, module: object, name: str, value: object) -> None:
+    if hasattr(module, name):
+        stack.enter_context(patch.object(module, name, value))
+
+
+def _patch_sqlite_domain_constructors(
+    stack: ExitStack,
+    module: object,
+    db_path: Path,
+) -> None:
+    """Map strict Postgres constructor names to explicit SQLite test stores."""
+
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresRunStore",
+        lambda _dsn, **_kwargs: RunStore(db_path),
+    )
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresContractStore",
+        lambda _dsn, **_kwargs: ContractStore(db_path),
+    )
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresPlatformSnapshotStore",
+        lambda _dsn, **_kwargs: PlatformSnapshotStore(db_path),
+    )
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresUserEntitlementStore",
+        lambda _dsn, **_kwargs: UserEntitlementStore(db_path),
+    )
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresRemediationStore",
+        lambda _dsn, **_kwargs: RemediationStore(db_path),
+    )
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresRepairTicketStore",
+        lambda _dsn, **_kwargs: RepairTicketStore(db_path),
+    )
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresTemplateMarketStore",
+        lambda _dsn, *, publication_gate, contract_service, **_kwargs: TemplateMarketStore(
+            db_path,
+            publication_gate=publication_gate,
+            contract_service=contract_service,
+        ),
+    )
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresRunPublicationStore",
+        lambda _dsn, *, run_store, contract_service, **_kwargs: RunPublicationStore(
+            db_path,
+            run_store=run_store,
+            contract_service=contract_service,
+        ),
+    )
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresObservabilityStore",
+        lambda _dsn, **_kwargs: SQLiteObservabilityStore(db_path),
+    )
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresRuntimeWatchStore",
+        lambda _dsn, *, segment_root, **_kwargs: SQLiteRuntimeWatchStore(
+            db_path,
+            segment_root=Path(segment_root),
+        ),
+    )
+
+
 def _patch_common_sqlite_builders(
     stack: ExitStack,
     module: object,
@@ -154,7 +243,7 @@ def _patch_common_sqlite_builders(
         patch.object(
             module,
             "resolve_durable_store_selection",
-            lambda **kwargs: _sqlite_selection(db_path),
+            lambda **_kwargs: _sqlite_selection(db_path),
         )
     )
     stack.enter_context(
@@ -178,8 +267,8 @@ def _patch_common_sqlite_builders(
             lambda **kwargs: SQLiteAgentTaskStore(Path(kwargs["sqlite_path"])),
         ),
     ):
-        if hasattr(module, name):
-            stack.enter_context(patch.object(module, name, factory))
+        _patch_if_present(stack, module, name, factory)
+    _patch_sqlite_domain_constructors(stack, module, db_path)
 
 
 def _build_api_service_for_tests(config: object) -> Pilot107HttpApi:
