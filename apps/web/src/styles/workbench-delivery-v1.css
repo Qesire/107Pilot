@@ -14,6 +14,53 @@
   padding: 4px 0 0 20px;
 }
 
+/* Current WorkArea is an explicit user selection, not an inferred dashboard filter. */
+.workbench-workarea-switcher {
+  display: grid;
+  min-width: min(260px, 36vw);
+  gap: 3px;
+}
+
+.workbench-workarea-switcher > span {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .035em;
+}
+
+.workbench-workarea-switcher select {
+  min-height: var(--control-height);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  padding: 0 30px 0 10px;
+  font-size: 12px;
+}
+
+.workbench-context-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border-left: 2px solid var(--state-warning);
+  background: var(--state-warning-soft);
+  color: var(--text-secondary);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.workbench-context-warning svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--state-warning);
+}
+
+.workbench-context-warning code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 /* Readiness is a compact fact line, not a collection of celebratory chips. */
 .workbench-readiness {
   gap: 0;
@@ -90,6 +137,18 @@
   }
 }
 
+@media (max-width: 860px) {
+  .workbench-v2-header-actions {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .workbench-workarea-switcher {
+    min-width: min(100%, 320px);
+    flex: 1 1 260px;
+  }
+}
+
 @media (max-width: 760px) {
   .workbench-v2-actions {
     padding: 16px 0 0;
@@ -101,5 +160,14 @@
 
   .workbench-readiness .v2-status-chip {
     flex: 1 1 auto;
+  }
+
+  .workbench-workarea-switcher {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .workbench-workarea-switcher select {
+    width: 100%;
   }
 }
