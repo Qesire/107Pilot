@@ -1,0 +1,41 @@
+name: ci-repair-web-ui-once
+
+on:
+  push:
+    branches:
+      - fix/competition-postgres-only-ci
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'ci-repair-web-ui-validate'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/competition-postgres-only-ci
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Apply candidate visual mock contract repair
+        run: python scripts/ci_repair_visual_contracts.py
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run candidate Playwright UI suite
+        run: |
+          set -o pipefail
+          npm run test:ui 2>&1 | tee /tmp/playwright.log
+      - name: Upload Playwright diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-repair-diagnostic
+          path: |
+            /tmp/playwright.log
+            playwright-report
+            test-results
+            artifacts/playwright-output
+          if-no-files-found: ignore
