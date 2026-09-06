@@ -48,22 +48,26 @@ class WorkAreaLaunchRoutes:
         try:
             if parts == ["workareas"]:
                 limit = _limit(params)
-                records = self.workareas.list(owner=owner, limit=limit)
+                workarea_records = self.workareas.list(owner=owner, limit=limit)
                 return ApiResponse(
                     status=200,
-                    payload={"items": [_workarea_summary(item) for item in records]},
+                    payload={
+                        "items": [_workarea_summary(item) for item in workarea_records]
+                    },
                 )
             if len(parts) == 2 and parts[0] == "workareas":
                 graph = self.workareas.graph(parts[1], owner=owner)
                 return ApiResponse(status=200, payload=_workarea_graph(graph))
             if len(parts) == 3 and parts[0] == "workareas" and parts[2] == "launches":
                 self.workareas.get(parts[1], owner=owner)
-                records = self.launches.list_for_workarea(
+                launch_records = self.launches.list_for_workarea(
                     workarea_id=parts[1], owner=owner, limit=_limit(params)
                 )
                 return ApiResponse(
                     status=200,
-                    payload={"items": [launch_payload(item) for item in records]},
+                    payload={
+                        "items": [launch_payload(item) for item in launch_records]
+                    },
                 )
             if len(parts) == 2 and parts[0] == "launch-candidates":
                 candidate = self.launches.get_candidate(parts[1], owner=owner)
@@ -77,8 +81,11 @@ class WorkAreaLaunchRoutes:
         except KeyError as exc:
             return _not_found(parts[0], str(exc.args[0]))
         except (ValueError, WorkAreaConflict, LaunchConflict) as exc:
-            return _error(409 if isinstance(exc, (WorkAreaConflict, LaunchConflict)) else 400,
-                          "WORKAREA_LAUNCH.INVALID", str(exc))
+            return _error(
+                409 if isinstance(exc, (WorkAreaConflict, LaunchConflict)) else 400,
+                "WORKAREA_LAUNCH.INVALID",
+                str(exc),
+            )
         return None
 
     def handle_post(
@@ -108,7 +115,9 @@ class WorkAreaLaunchRoutes:
                 )
                 return ApiResponse(
                     status=201,
-                    payload=_workarea_graph(self.workareas.graph(record.workarea_id, owner=owner)),
+                    payload=_workarea_graph(
+                        self.workareas.graph(record.workarea_id, owner=owner)
+                    ),
                 )
             if len(parts) == 3 and parts[0] == "workareas" and parts[2] == "bindings":
                 _only(payload, {"kind", "target_ref", "role"})
@@ -117,10 +126,15 @@ class WorkAreaLaunchRoutes:
                 role = _optional(payload, "role")
                 if kind == "asset":
                     self.workareas.link_asset(
-                        parts[1], owner=owner, asset_ref=target_ref, asset_kind=role or "file"
+                        parts[1],
+                        owner=owner,
+                        asset_ref=target_ref,
+                        asset_kind=role or "file",
                     )
                 elif kind == "contract":
-                    self.workareas.link_contract(parts[1], owner=owner, contract_id=target_ref)
+                    self.workareas.link_contract(
+                        parts[1], owner=owner, contract_id=target_ref
+                    )
                 elif kind == "run":
                     self.workareas.link_run(parts[1], owner=owner, run_id=target_ref)
                 else:
@@ -144,11 +158,19 @@ class WorkAreaLaunchRoutes:
                     note=_optional(payload, "note") or "",
                 )
                 return ApiResponse(status=201, payload=candidate_payload(candidate))
-            if len(parts) == 3 and parts[0] == "launch-candidates" and parts[2] == "preflight":
+            if (
+                len(parts) == 3
+                and parts[0] == "launch-candidates"
+                and parts[2] == "preflight"
+            ):
                 _only(payload, set())
                 assessment = self.launch_service.assess(parts[1], owner=owner)
                 return ApiResponse(status=200, payload=preflight_payload(assessment))
-            if len(parts) == 3 and parts[0] == "launch-candidates" and parts[2] == "commit":
+            if (
+                len(parts) == 3
+                and parts[0] == "launch-candidates"
+                and parts[2] == "commit"
+            ):
                 _only(payload, {"preflight_digest", "request_key"})
                 result = self.launch_service.commit(
                     parts[1],
@@ -162,7 +184,12 @@ class WorkAreaLaunchRoutes:
         except KeyError as exc:
             return _not_found(parts[0], str(exc.args[0]))
         except ContractError as exc:
-            return _error(422, exc.code, str(exc), findings=[_finding(item) for item in exc.findings])
+            return _error(
+                422,
+                exc.code,
+                str(exc),
+                findings=[_finding(item) for item in exc.findings],
+            )
         except LaunchConflict as exc:
             return _error(409, "LAUNCH.CONFLICT", str(exc))
         except WorkAreaConflict as exc:
