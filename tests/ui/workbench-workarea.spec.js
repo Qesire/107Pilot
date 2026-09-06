@@ -195,10 +195,11 @@ test("workbench requires explicit WorkArea selection, scopes facts, and persists
   await expect(page.getByText("run_global_unbound_failure", { exact: true })).toHaveCount(0);
 
   const area = await selectCurrentArea(page, "alice");
+  const launchSection = page.locator('section[aria-labelledby="recent-launches-heading"]');
   await expect(newLaunch).toBeEnabled();
   await expect(page.locator(".workbench-current-run > strong")).toHaveText(area.title);
   await expect(page.getByRole("heading", { name: "最近 Launch" })).toBeVisible();
-  await expect(page.getByText("launch-workbench-alice", { exact: true })).toBeVisible();
+  await expect(launchSection.getByText("run_alice_bound", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "当前研究区运行" })).toBeVisible();
   await expect(page.getByText("run_alice_bound", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("run_global_unbound_failure", { exact: true })).toHaveCount(0);
@@ -212,7 +213,7 @@ test("workbench requires explicit WorkArea selection, scopes facts, and persists
   await page.reload();
   await expect(page.getByRole("combobox", { name: "当前研究区" })).toHaveValue(area.workarea_id);
   await expect(page.locator(".workbench-current-run > strong")).toHaveText(area.title);
-  await expect(page.getByText("launch-workbench-alice", { exact: true })).toBeVisible();
+  await expect(page.locator('section[aria-labelledby="recent-launches-heading"]').getByText("run_alice_bound", { exact: true })).toBeVisible();
 
   await page.locator(".workbench-v2-header").getByRole("button", { name: "新建运行" }).click();
   await expect(page).toHaveURL(new RegExp(`/workareas/${area.workarea_id}/launch/new`));
