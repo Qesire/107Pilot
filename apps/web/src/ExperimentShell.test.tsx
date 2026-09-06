@@ -47,9 +47,10 @@ describe("ExperimentShell", () => {
         <div>content</div>
       </ExperimentShell>,
     );
-    expect(markup).toContain("实验工作区");
+    expect(markup).toContain("运行配置");
     expect(markup).toContain("尚未持久化");
-    expect(markup).not.toContain("运行 ID");
+    expect(markup).not.toContain("Run ID");
+    expect(markup).not.toContain("实验工作区");
   });
 
   it("renders Run and Contract identifiers from the existing read model", () => {
@@ -66,5 +67,6 @@ describe("ExperimentShell", () => {
     expect(markup).toContain("contract_test");
     expect(markup).toContain("run_test");
     expect(markup).toContain("需要处理");
+    expect(markup).toContain("运行详情");
   });
 });
