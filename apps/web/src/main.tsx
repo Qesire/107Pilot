@@ -20,6 +20,7 @@ import "./styles/workbench-delivery-v1.css";
 import "./styles/files-delivery-v1.css";
 import "./styles/experiment-delivery-v1.css";
 import "./styles/market-delivery-v1.css";
+import "./styles/cluster-delivery-v1.css";
 import "./styles/delivery-polish-v1.css";
 
 const queryClient = new QueryClient({
