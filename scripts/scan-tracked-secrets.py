@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 from pathlib import Path
@@ -26,6 +27,24 @@ SKIP_PREFIXES = (
 SKIP_NAMES = {"package-lock.json", "uv.lock"}
 ALLOW_MARKER = "secret-scan: allow"
 
+# Exact line digests for intentionally synthetic credential-shaped fixtures.  Keeping
+# the literal out of this scanner prevents self-matches; any edit to a fixture makes
+# the allowance stop matching and the scan fail closed again.
+ALLOWED_FIXTURE_DIGESTS = {
+    (
+        "docs/superpowers/plans/2026-08-10-pilot-agentd-a0.md",
+        "literal-deployment-secret",
+    ): "d8f4b485b4bc34858db088794947905f0d1cc9a3efffa2832583fc5f72545ef5",
+    (
+        "services/pilot-agentd/tests/server.test.ts",
+        "literal-deployment-secret",
+    ): "e2e0dc4d049dd8b16af13291bc3a77f8ac000fcf620a7efc68a70c3a68ea9e78",
+    (
+        "tests/agent/test_client.py",
+        "embedded-url-password",
+    ): "fa29f884f5388b54c8ecda831889fc3305c0693b5717da85eec2e4c1b82e94fd",
+}
+
 
 def candidate_paths(root: Path) -> list[Path]:
     output = subprocess.check_output(
@@ -33,6 +52,13 @@ def candidate_paths(root: Path) -> list[Path]:
         cwd=root,
     )
     return [root / item.decode("utf-8") for item in output.split(b"\0") if item]
+
+
+def _allowed_fixture(relative: str, line: str, name: str) -> bool:
+    expected = ALLOWED_FIXTURE_DIGESTS.get((relative, name))
+    if expected is None:
+        return False
+    return hashlib.sha256(line.encode("utf-8")).hexdigest() == expected
 
 
 def findings(root: Path) -> list[tuple[str, int, str]]:
@@ -49,7 +75,7 @@ def findings(root: Path) -> list[tuple[str, int, str]]:
             if ALLOW_MARKER in line:
                 continue
             for name, pattern in PATTERNS.items():
-                if pattern.search(line):
+                if pattern.search(line) and not _allowed_fixture(relative, line, name):
                     found.append((relative, line_number, name))
     return found
 
