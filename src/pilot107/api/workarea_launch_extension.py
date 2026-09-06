@@ -1,10 +1,9 @@
 """Narrow route extension for WorkArea/Launch delivery APIs.
 
-The central stdlib HTTP adapter is intentionally stable and very large.  This
+The central stdlib HTTP adapter is intentionally stable and very large. This
 module installs an isolated extension at its two internal dispatch seams so the
 competition vertical can evolve without duplicating or rewriting the existing
-Run/Files/Market router.  Unrelated paths fall through byte-for-byte to the
-original handlers.
+Run/Files/Market router. Unrelated paths fall through to the original handlers.
 """
 
 from __future__ import annotations
@@ -71,8 +70,11 @@ def install_workarea_launch_extension() -> None:
                     return response
         return original_post(self, path, body=body, headers=headers)
 
-    Pilot107HttpApi._handle_get = extended_get
-    Pilot107HttpApi._handle_post = extended_post
+    # setattr keeps the extension isolated while preserving strict mypy on the
+    # concrete Pilot107HttpApi class; both callables keep the original method
+    # signatures and unrelated requests delegate to the captured methods.
+    setattr(Pilot107HttpApi, "_handle_get", extended_get)
+    setattr(Pilot107HttpApi, "_handle_post", extended_post)
     _INSTALLED = True
 
 
