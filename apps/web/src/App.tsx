@@ -35,9 +35,10 @@ interface NavigationItem {
 
 const workNavigation: NavigationItem[] = [
   { path: "/projects", label: "工作台", icon: FolderKanban, mobilePrimary: true },
+  { path: "/workareas", label: "研究区", icon: FolderKanban, mobilePrimary: true },
   { path: "/runs", label: "实验", icon: FlaskConical, mobilePrimary: true },
   { path: "/files", label: "文件", icon: FolderOpen, mobilePrimary: true },
-  { path: "/market", label: "方案库", icon: Blocks, mobilePrimary: true },
+  { path: "/market", label: "方案库", icon: Blocks },
   { path: "/cluster", label: "计算资源", icon: Server },
 ];
 
@@ -58,6 +59,7 @@ const MarketPage = lazy(() => import("./MarketPages").then((module) => ({ defaul
 const MarketItemDetailPage = lazy(() => import("./MarketPages").then((module) => ({ default: module.MarketItemDetailPage })));
 const TemplateDetailPage = lazy(() => import("./MarketPages").then((module) => ({ default: module.TemplateDetailPage })));
 const TemplateWorkbenchPage = lazy(() => import("./TemplateWorkbenchPage").then((module) => ({ default: module.TemplateWorkbenchPage })));
+const WorkAreaPages = lazy(() => import("./WorkAreaPages").then((module) => ({ default: module.WorkAreaPages })));
 
 type ThemePreference = "system" | "light" | "dark";
 
@@ -93,6 +95,8 @@ function canvasClass(pathname: string): "decision-canvas" | "workspace-canvas" {
   if (
     pathname === "/files"
     || pathname.startsWith("/runs/")
+    || pathname.startsWith("/workareas/")
+    || pathname.startsWith("/launches/")
     || pathname.startsWith("/studio/")
     || pathname === "/agent"
     || pathname === "/terminal"
@@ -104,6 +108,7 @@ function canvasClass(pathname: string): "decision-canvas" | "workspace-canvas" {
 function routeLabel(pathname: string): string {
   const item = navigation.find((entry) => pathname === entry.path || pathname.startsWith(`${entry.path}/`));
   if (item) return item.label;
+  if (pathname.startsWith("/launches/")) return "运行提交";
   if (pathname.startsWith("/studio/")) return "实验配置";
   if (pathname.startsWith("/templates/")) return "方案库";
   return "科研工作区";
@@ -179,7 +184,7 @@ export default function App() {
     );
   };
 
-  const mobileMoreNavigation = [workNavigation[4]!, ...toolNavigation];
+  const mobileMoreNavigation = [...workNavigation.filter((item) => !item.mobilePrimary), ...toolNavigation];
   const mobileMoreActive = mobileMoreNavigation.some((item) => item.path === activePath);
 
   return (
@@ -292,6 +297,7 @@ export default function App() {
           {session.isSuccess ? (
             <Suspense fallback={<RouteFallback label={currentLabel} />}>
               {location.pathname === "/" || location.pathname === "/projects" ? <WorkspacePageV2 user={user} location={location} navigate={navigate} /> : null}
+              {location.pathname.startsWith("/workareas") || location.pathname.startsWith("/launches/") ? <WorkAreaPages user={user} location={location} navigate={navigate} /> : null}
               {location.pathname === "/runs" || location.pathname.startsWith("/runs/") ? <RunsPage user={user} location={location} navigate={navigate} /> : null}
               {location.pathname === "/files" ? <FilesPage user={user} location={location} navigate={navigate} /> : null}
               {location.pathname === "/cluster" ? <ClusterPage user={user} location={location} navigate={navigate} /> : null}
@@ -319,5 +325,5 @@ export default function App() {
 }
 
 function isKnownPath(pathname: string): boolean {
-  return pathname === "/" || pathname === "/projects" || pathname === "/runs" || pathname.startsWith("/runs/") || pathname === "/files" || pathname === "/cluster" || pathname === "/agent" || pathname === "/terminal" || pathname.startsWith("/market") || pathname === "/templates" || pathname.startsWith("/templates/") || pathname.startsWith("/studio/");
+  return pathname === "/" || pathname === "/projects" || pathname === "/workareas" || pathname.startsWith("/workareas/") || pathname.startsWith("/launches/") || pathname === "/runs" || pathname.startsWith("/runs/") || pathname === "/files" || pathname === "/cluster" || pathname === "/agent" || pathname === "/terminal" || pathname.startsWith("/market") || pathname === "/templates" || pathname.startsWith("/templates/") || pathname.startsWith("/studio/");
 }
