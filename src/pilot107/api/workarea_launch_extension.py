@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from pilot107.api.workarea_launch_routes import WorkAreaLaunchRoutes
 from pilot107.core.launch import PostgresLaunchStore
 from pilot107.core.workarea import PostgresWorkAreaStore
+from pilot107.core.workarea_binding_source import PostgresWorkAreaBindingSourceStore
 from pilot107.services.launch_service import LaunchService
 
 _INSTALLED = False
@@ -94,7 +95,10 @@ def _routes(api: Any) -> WorkAreaLaunchRoutes | None:
     ):
         api._workarea_launch_extension_routes = False
         return None
+    # WorkArea schema is initialized first because both provenance and Launch
+    # migrations reference the WorkArea tables created by 006c.002-004.
     workareas = PostgresWorkAreaStore(dsn)
+    binding_sources = PostgresWorkAreaBindingSourceStore(dsn)
     launches = PostgresLaunchStore(dsn)
     service = LaunchService(
         workareas=workareas,
@@ -102,11 +106,13 @@ def _routes(api: Any) -> WorkAreaLaunchRoutes | None:
         contracts=api.contract_service,
         run_service=api.run_service,
         run_store=api.store,
+        binding_sources=binding_sources,
     )
     routes = WorkAreaLaunchRoutes(
         workareas=workareas,
         launches=launches,
         launch_service=service,
+        binding_sources=binding_sources,
     )
     api._workarea_launch_extension_routes = routes
     return routes
