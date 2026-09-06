@@ -9,11 +9,14 @@ test.beforeEach(async ({ page }) => {
   await installMockApi(page);
 });
 
-test("workspace prioritizes current work and preparation facts", async ({ page }) => {
+test("workspace prioritizes explicit WorkArea and preparation facts", async ({ page }) => {
   await page.goto("/projects?user=alice");
 
   await expect(page.getByRole("heading", { name: "工作台" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "当前工作" })).toBeVisible();
+  const switcher = page.getByRole("combobox", { name: "当前研究区" });
+  await expect(switcher).toHaveValue("");
+  await switcher.selectOption("workarea_visual_alice");
+  await expect(page.getByRole("heading", { name: "当前研究区" })).toBeVisible();
   await expect(page.getByRole("button", { name: "查看 run_alice_succeeded" })).toBeVisible();
   await expect(page.getByText("acct_alice", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("可见分区", { exact: true })).toBeVisible();
@@ -88,12 +91,18 @@ test("run detail makes an omitted workdir explicit", async ({ page }) => {
   await expect(page.getByText("服务器 read model 未公开", { exact: true })).toBeVisible();
 });
 
-test("switching user updates URL and invalidates scoped queries", async ({ page }) => {
+test("switching user updates URL and resets explicit WorkArea context", async ({ page }) => {
   await page.goto("/projects?user=alice");
+  const aliceSwitcher = page.getByRole("combobox", { name: "当前研究区" });
+  await aliceSwitcher.selectOption("workarea_visual_alice");
   await expect(page.getByRole("button", { name: "查看 run_alice_succeeded" })).toBeVisible();
 
   await page.getByLabel("当前用户").selectOption("bob");
   await expect(page).toHaveURL(/user=bob/);
+  const bobSwitcher = page.getByRole("combobox", { name: "当前研究区" });
+  await expect(bobSwitcher).toHaveValue("");
+  await expect(page.getByText("run_alice_succeeded", { exact: true })).toHaveCount(0);
+  await bobSwitcher.selectOption("workarea_visual_bob");
   await expect(page.getByRole("button", { name: "查看 run_bob_running" })).toBeVisible();
   await expect(page.getByText("acct_bob", { exact: true }).first()).toBeVisible();
 });
@@ -304,6 +313,23 @@ async function installMockApi(page, options = {}) {
     if (url.pathname === "/api/v1/web/session") {
       const requestedUser = request.headers()["x-pilot107-user"] || "alice";
       return json(route, { identity_mode: "demo", user: requestedUser, switchable: true });
+    }
+    if (url.pathname === "/api/v1/workareas" && request.method() === "GET") {
+      const user = request.headers()["x-pilot107-user"] || "alice";
+      return json(route, { items: [workareaSummary(user)] });
+    }
+    if (url.pathname === "/api/v1/workareas/workarea_visual_alice" && request.method() === "GET") {
+      return json(route, workareaDetail("alice"));
+    }
+    if (url.pathname === "/api/v1/workareas/workarea_visual_bob" && request.method() === "GET") {
+      return json(route, workareaDetail("bob"));
+    }
+    if (
+      (url.pathname === "/api/v1/workareas/workarea_visual_alice/launches"
+        || url.pathname === "/api/v1/workareas/workarea_visual_bob/launches")
+      && request.method() === "GET"
+    ) {
+      return json(route, { items: [] });
     }
     if (url.pathname === "/api/v1/files/usage") {
       return json(route, {
@@ -752,6 +778,36 @@ function json(route, body, status = 200) {
     contentType: "application/json",
     body: JSON.stringify(body),
   });
+}
+
+function workareaSummary(user) {
+  return {
+    workarea_id: `workarea_visual_${user}`,
+    owner: user,
+    title: user === "bob" ? "Bob research context" : "Alice research context",
+    description: "Explicit visual-test WorkArea",
+    created_at: "2026-07-16T00:00:00Z",
+    updated_at: "2026-07-16T03:02:00Z",
+  };
+}
+
+function workareaDetail(user) {
+  const summary = workareaSummary(user);
+  const runIds = user === "bob"
+    ? ["run_bob_running"]
+    : ["run_alice_failed", "run_alice_succeeded"];
+  return {
+    ...summary,
+    bindings: {
+      contracts: [],
+      runs: runIds.map((target_ref) => ({
+        kind: "run",
+        target_ref,
+        source: "inherited",
+      })),
+      assets: [],
+    },
+  };
 }
 
 function runListFor(user) {
