@@ -1,19 +1,7 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
-
-BASE = "62b62c3a53d78bf4a8ad5bf3b77b134849d1ea29"
-
-
-def restore(path: str) -> None:
-    result = subprocess.run(
-        ["git", "show", f"{BASE}:{path}"],
-        check=True,
-        stdout=subprocess.PIPE,
-    )
-    Path(path).write_bytes(result.stdout)
 
 
 def replace_once(path: str, old: str, new: str) -> None:
@@ -34,38 +22,13 @@ def regex_once(path: str, pattern: str, replacement: str) -> None:
     file_path.write_text(updated, encoding="utf-8")
 
 
-def restore_service_test_seams(path: str) -> None:
-    restore(path)
-    replace_once(
-        path,
-        "database_mode: DatabaseMode = DatabaseMode.SQLITE",
-        "database_mode: DatabaseMode = DatabaseMode.POSTGRES",
-    )
-    replace_once(
-        path,
-        '''def _database_mode(values: Mapping[str, str], *, postgres_dsn: str | None) -> DatabaseMode:
-    configured = values.get("PILOT107_DATABASE_MODE")
-    inferred = "postgres" if postgres_dsn else "sqlite"
-    try:
-        return DatabaseMode(configured or inferred)
-    except ValueError as exc:
-        raise ValueError("PILOT107_DATABASE_MODE must be sqlite or postgres") from exc
-''',
-        '''def _database_mode(values: Mapping[str, str], *, postgres_dsn: str | None) -> DatabaseMode:
-    del postgres_dsn
-    configured = (values.get("PILOT107_DATABASE_MODE") or "postgres").strip().lower()
-    if configured == "sqlite":
-        raise ValueError("SQLite runtime authority has been retired; configure PostgreSQL")
-    if configured != "postgres":
-        raise ValueError("PILOT107_DATABASE_MODE must be postgres")
-    return DatabaseMode.POSTGRES
-''',
-    )
-
-
-restore_service_test_seams("src/pilot107/api/service.py")
-restore_service_test_seams("src/pilot107/worker/service.py")
-
+# Operation durability remains available to an explicitly constructed SQLite
+# AgentSessionStore in tests/dev, while arbitrary db_path duck-types fail closed.
+replace_once(
+    "src/pilot107/agent/operation_ledger.py",
+    "from pilot107.agent.store import AgentSessionStore",
+    "from pilot107.agent.store import AgentSessionStore, SQLiteAgentSessionStore",
+)
 regex_once(
     "src/pilot107/agent/operation_ledger.py",
     r"def build_agent_operation_ledger\(.*?\n\n\n_SQLITE_MIGRATIONS =",
@@ -74,11 +37,13 @@ regex_once(
     *,
     clock: Callable[[], datetime] | None = None,
 ) -> AgentOperationLedger | None:
-    """Build the PostgreSQL operation ledger or fail closed for legacy SQLite stores."""
+    """Build operation durability without reintroducing runtime SQLite selection."""
 
     dsn = getattr(store, "dsn", None)
     if isinstance(dsn, str) and dsn:
         return PostgresAgentOperationLedger(dsn, clock=clock)
+    if isinstance(store, SQLiteAgentSessionStore):
+        return SQLiteAgentOperationLedger(store.db_path, clock=clock)
     if isinstance(getattr(store, "db_path", None), Path):
         raise RuntimeError(
             "Agent operation ledger requires PostgreSQL; "
@@ -90,6 +55,11 @@ regex_once(
 _SQLITE_MIGRATIONS =''',
 )
 
+replace_once(
+    "src/pilot107/agent/operation_attempts.py",
+    "from typing import Any, Protocol",
+    "from typing import Any, Protocol\n\nfrom pilot107.agent.store import SQLiteAgentSessionStore",
+)
 regex_once(
     "src/pilot107/agent/operation_attempts.py",
     r"def build_agent_operation_attempt_store\(.*?\n\n\n_SQLITE_MIGRATIONS =",
@@ -98,11 +68,13 @@ regex_once(
     *,
     clock: Callable[[], datetime] | None = None,
 ) -> AgentOperationAttemptStore | None:
-    """Build the PostgreSQL attempt store or fail closed for legacy SQLite stores."""
+    """Build attempt durability for PostgreSQL or an explicit SQLite test store."""
 
     dsn = getattr(session_store, "dsn", None)
     if isinstance(dsn, str) and dsn:
         return PostgresAgentOperationAttemptStore(dsn, clock=clock)
+    if isinstance(session_store, SQLiteAgentSessionStore):
+        return SQLiteAgentOperationAttemptStore(session_store.db_path, clock=clock)
     if isinstance(getattr(session_store, "db_path", None), Path):
         raise RuntimeError(
             "Agent operation attempt store requires PostgreSQL; "
@@ -114,6 +86,11 @@ regex_once(
 _SQLITE_MIGRATIONS =''',
 )
 
+replace_once(
+    "src/pilot107/agent/operation_reconciler.py",
+    "from pilot107.agent.protocol import ToolInvocation",
+    "from pilot107.agent.protocol import ToolInvocation\nfrom pilot107.agent.store import SQLiteAgentSessionStore",
+)
 regex_once(
     "src/pilot107/agent/operation_reconciler.py",
     r"def build_agent_operation_reconciler\(.*?\n\n\nclass SQLiteAgentOperationReconciler:",
@@ -123,13 +100,15 @@ regex_once(
     *,
     clock: Callable[[], datetime] | None = None,
 ) -> AgentOperationReconciler | None:
-    """Build the PostgreSQL reconciler against the Session authority."""
+    """Build reconciliation against PostgreSQL or an explicit SQLite test store."""
 
     if ledger is None:
         return None
     dsn = getattr(store, "dsn", None)
     if isinstance(dsn, str) and dsn:
         return PostgresAgentOperationReconciler(dsn, ledger=ledger, clock=clock)
+    if isinstance(store, SQLiteAgentSessionStore):
+        return SQLiteAgentOperationReconciler(store.db_path, ledger=ledger, clock=clock)
     if isinstance(getattr(store, "db_path", None), Path):
         raise RuntimeError(
             "Agent operation reconciler requires PostgreSQL; "
@@ -141,6 +120,7 @@ regex_once(
 class SQLiteAgentOperationReconciler:''',
 )
 
+# Obsolete factory tests now assert the frozen PostgreSQL-only production contract.
 replace_once(
     "tests/agent/test_postgres_store.py",
     "from pilot107.agent.store import SQLiteAgentSessionStore\n"
@@ -244,4 +224,41 @@ regex_once(
         self.assertIs(selected, postgres.return_value)
         postgres.assert_called_once_with("postgresql://control.example/pilot107")
 ''',
+)
+
+# These tests reload the service module only to pick up environment variables,
+# but config_from_env already reads the environment per call. Reloading destroys
+# the pytest-only composition seam and is therefore both unnecessary and harmful.
+replace_once(
+    "tests/api/test_service_snapshot_wiring.py",
+    "import contextlib\nimport importlib\nimport threading",
+    "import contextlib\nimport threading",
+)
+replace_once(
+    "tests/api/test_service_snapshot_wiring.py",
+    '''def _reload_service_module():
+    from pilot107.api import service as service_module
+    importlib.reload(service_module)
+    return service_module
+''',
+    '''def _reload_service_module():
+    from pilot107.api import service as service_module
+    return service_module
+''',
+)
+replace_once(
+    "tests/api/test_service_template_seed_wiring.py",
+    "import contextlib\nimport importlib",
+    "import contextlib",
+)
+replace_once(
+    "tests/api/test_service_template_seed_wiring.py",
+    "    importlib.reload(service_module)\n",
+    "",
+)
+# The template-seed file has the same reload in both tests.
+replace_once(
+    "tests/api/test_service_template_seed_wiring.py",
+    "    importlib.reload(service_module)\n",
+    "",
 )
