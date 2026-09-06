@@ -19,10 +19,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install sandbox runtime dependency
+      - name: Prepare sandbox runtime
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bubblewrap
+          if sysctl -n kernel.unprivileged_userns_clone >/dev/null 2>&1; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - run: uv sync --locked --extra dev --extra api --extra postgres
       - run: uv run ruff check src tests scripts
       - run: uv run mypy src
