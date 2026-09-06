@@ -106,13 +106,13 @@ export function WorkspacePageV2({ user, location, navigate }: WorkspacePageV2Pro
           </button>
           <div className="workbench-new-experiment">
             <button className="button primary" type="button" aria-expanded={newExperimentOpen} onClick={() => setNewExperimentOpen((open) => !open)}>
-              <Plus aria-hidden="true" size={16} /> 新建实验
+              <Plus aria-hidden="true" size={16} /> 新建运行
             </button>
             {newExperimentOpen ? (
               <div className="workbench-new-menu v2-surface" role="menu">
                 <button type="button" role="menuitem" onClick={() => navigate(`/market?user=${encodeURIComponent(user)}`)}>
                   <Blocks aria-hidden="true" />
-                  <span><strong>从实验方案开始</strong><small>推荐第一次使用时选择</small></span>
+                  <span><strong>从可复用方案开始</strong><small>推荐第一次使用时选择</small></span>
                 </button>
                 <button type="button" role="menuitem" onClick={() => navigate(`/studio/new?user=${encodeURIComponent(user)}`)}>
                   <FlaskConical aria-hidden="true" />
@@ -137,7 +137,7 @@ export function WorkspacePageV2({ user, location, navigate }: WorkspacePageV2Pro
           {focusRun && focusAction ? (
             <>
               <div className="workbench-current-run">
-                <strong title={focusRun.job_name ?? focusRun.run_id}>{focusRun.job_name ?? "未命名实验运行"}</strong>
+                <strong title={focusRun.job_name ?? focusRun.run_id}>{focusRun.job_name ?? "未命名运行"}</strong>
                 <p className="mono">{focusRun.run_id}</p>
                 <div className="workbench-readiness">
                   <StatusChip label={focusRun.job_id ? `Job ${focusRun.job_id}` : "尚未获得 Job ID"} tone={focusRun.job_id ? "success" : "neutral"} />
@@ -159,11 +159,11 @@ export function WorkspacePageV2({ user, location, navigate }: WorkspacePageV2Pro
           ) : (
             <div className="workbench-current-run">
               <strong>开始你的第一次科研计算</strong>
-              <p>先准备文件和实验方案。107Pilot 会在运行前检查配置与平台事实。</p>
+              <p>先准备文件和可复用方案。107Pilot 会在运行前检查配置与平台事实。</p>
               <div className="workbench-next-action">
                 <div><strong>推荐</strong><span>从方案库采用一个经过审核的起点。</span></div>
                 <button className="button primary" type="button" onClick={() => navigate(`/market?user=${encodeURIComponent(user)}`)}>
-                  从实验方案开始 <ArrowRight aria-hidden="true" size={15} />
+                  从可复用方案开始 <ArrowRight aria-hidden="true" size={15} />
                 </button>
               </div>
             </div>
@@ -206,7 +206,7 @@ export function WorkspacePageV2({ user, location, navigate }: WorkspacePageV2Pro
 
         <section className="workbench-v2-prep-card" aria-labelledby="asset-prep-heading">
           <FolderOpen aria-hidden="true" />
-          <div><h3 id="asset-prep-heading">文件与资产</h3><p>上传、整理并选择实验需要的数据、代码和模型。</p></div>
+          <div><h3 id="asset-prep-heading">文件与资产</h3><p>上传、整理并选择运行需要的数据、代码和模型。</p></div>
           <div className="workbench-prep-facts">
             <div><span>个人存储</span><strong>{storage.data ? formatStorageBytes(storage.data.used_bytes) : "—"}</strong></div>
             <div><span>使用率</span><strong>{storagePct === null ? "总量未知" : `${storagePct}%`}</strong></div>
@@ -227,7 +227,7 @@ export function WorkspacePageV2({ user, location, navigate }: WorkspacePageV2Pro
 
         <section className="workbench-v2-prep-card" aria-labelledby="scheme-prep-heading">
           <Blocks aria-hidden="true" />
-          <div><h3 id="scheme-prep-heading">实验方案</h3><p>从经过审核的模板和成功运行中选择起点，再按实验需求修改。</p></div>
+          <div><h3 id="scheme-prep-heading">可复用方案</h3><p>从经过审核的模板和成功运行中选择起点，再按当前研究上下文调整。</p></div>
           <div className="workbench-prep-facts">
             <div><span>推荐路径</span><strong>方案 → 配置 → 检查</strong></div>
             <div><span>高级入口</span><strong>空白配置</strong></div>
@@ -238,7 +238,7 @@ export function WorkspacePageV2({ user, location, navigate }: WorkspacePageV2Pro
 
       <section className="workbench-history" aria-labelledby="recent-runs-heading">
         <div className="workbench-history-heading">
-          <div><h2 id="recent-runs-heading">最近实验运行</h2><p className="v2-section-detail">Experiment 一级对象落地前，这里继续使用现有 Run 作为兼容读模型。</p></div>
+          <div><h2 id="recent-runs-heading">最近运行</h2><p className="v2-section-detail">按时间查看最近的 Run；打开后进入其持久化状态、日志与 Evidence。</p></div>
           <button className="workbench-prep-link" type="button" onClick={() => navigate(withSearch("/runs", location.search, {}))}>查看全部 <ArrowRight aria-hidden="true" size={14} /></button>
         </div>
         <QueryBoundary
@@ -246,7 +246,7 @@ export function WorkspacePageV2({ user, location, navigate }: WorkspacePageV2Pro
           error={runs.error}
           empty={items.length === 0}
           emptyTitle="还没有运行记录"
-          emptyDetail="从方案库或空白配置创建第一个实验起点。"
+          emptyDetail="从方案库或空白配置开始准备第一个运行。"
         >
           <RunTable runs={items} onSelect={(runId) => navigate(`/runs/${runId}?user=${encodeURIComponent(user)}`)} />
         </QueryBoundary>
