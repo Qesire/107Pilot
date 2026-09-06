@@ -71,6 +71,12 @@ jobs:
           text, count = pattern.subn(replacement, text, count=1)
           if count != 1:
               raise SystemExit(f"workspace_live factory replacement count={count}")
+          if "from typing import Protocol" not in text:
+              raise SystemExit("workspace_live typing import did not match")
+          text = text.replace("from typing import Protocol", "from typing import Any, Protocol", 1)
+          if text.count("Mapping[str, object]") != 1:
+              raise SystemExit("workspace_live row mapping count mismatch")
+          text = text.replace("Mapping[str, object]", "Mapping[str, Any]", 1)
           live_path.write_text(text, encoding="utf-8")
 
           journal_path = Path("src/pilot107/agent/workspace_journal.py")
@@ -84,6 +90,12 @@ jobs:
               count=1,
               flags=re.S,
           )
+          if "from typing import Literal" not in journal:
+              raise SystemExit("workspace_journal typing import did not match")
+          journal = journal.replace("from typing import Literal", "from typing import Any, Literal", 1)
+          if journal.count("Mapping[str, object]") != 2:
+              raise SystemExit("workspace_journal row mapping count mismatch")
+          journal = journal.replace("Mapping[str, object]", "Mapping[str, Any]")
           journal_path.write_text(journal, encoding="utf-8")
           PY
       - name: Validate Python gate before commit
