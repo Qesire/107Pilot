@@ -1,0 +1,70 @@
+name: ci-autofix-once
+
+on:
+  push:
+    branches:
+      - fix/competition-postgres-only-ci
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'ci: run one-shot source repair'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/competition-postgres-only-ci
+          fetch-depth: 0
+      - name: Apply exact CI repairs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          ledger_path = Path("src/pilot107/agent/operation_ledger.py")
+          ledger = ledger_path.read_text(encoding="utf-8")
+          old = '''        for value, label in (
+              (self.target_ref, "target_ref"),
+              (self.target_revision, "target_revision"),
+          ):
+              if value is not None:
+                  _nonempty(value, label)
+          '''
+          new = '''        for optional_value, label in (
+              (self.target_ref, "target_ref"),
+              (self.target_revision, "target_revision"),
+          ):
+              if optional_value is not None:
+                  _nonempty(optional_value, label)
+          '''
+          if ledger.count(old) != 1:
+              raise SystemExit("operation ledger target loop did not match exactly once")
+          ledger_path.write_text(ledger.replace(old, new, 1), encoding="utf-8")
+
+          lock_path = Path("package-lock.json")
+          lock = lock_path.read_text(encoding="utf-8")
+          replacements = {
+              '"version": "3.1.3",\n      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.3.tgz",\n      "integrity": "sha512-i70LwGWUduXqzicKXWshooq+sWL1K3WUU5rKZNG/0i3a1OSoX3HqhH5WbWwTmqWfor4urUakGPiRQcleRZTwOg=="':
+              '"version": "3.1.7",\n      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.7.tgz",\n      "integrity": "sha512-dOvZVzjdZdz7phd9v6jCbwxrBW3fK6n8Rc0CtdmM4bumzMnxywBYhuph6J819RRw/ku+rLbelwfMunktuzVVHg=="'
+          }
+          for before, after in replacements.items():
+              if lock.count(before) != 1:
+                  raise SystemExit("fast-uri lock entry did not match exactly once")
+              lock = lock.replace(before, after, 1)
+          lock_path.write_text(lock, encoding="utf-8")
+          PY
+      - name: Verify lockfile and dependency audit
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
+      - name: Commit exact repairs
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/pilot107/agent/operation_ledger.py package-lock.json
+          git diff --cached --quiet && exit 0
+          git commit -m "fix(ci): resolve typed ledger and fast-uri audit"
+          git push origin HEAD:fix/competition-postgres-only-ci
