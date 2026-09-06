@@ -35,7 +35,7 @@ test("file workspace consumes backend storage and upload session read models", a
 test("run filters are URL-controlled and narrow the server query", async ({ page }) => {
   await page.goto("/runs?user=alice");
 
-  await page.getByPlaceholder("搜索 Run ID、Job ID 或 workdir").fill("failed");
+  await page.getByPlaceholder("搜索运行 ID、Job ID 或工作目录").fill("failed");
   await expect(page).toHaveURL(/q=failed/);
   await page.getByLabel("状态").selectOption("FAILED");
   await expect(page).toHaveURL(/state=FAILED/);
@@ -135,9 +135,10 @@ test("mobile layout exposes primary destinations without horizontal overflow", a
 test("studio requires server validation before creating a canonical contract", async ({ page }) => {
   await page.goto("/studio/new?user=alice");
 
-  await expect(page.getByRole("heading", { name: "新建 Contract" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "实验工作区" })).toBeVisible();
   await expect(page.getByRole("button", { name: "创建 Contract" })).toBeDisabled();
   await page.getByRole("textbox", { name: "工作目录", exact: true }).fill("/public/home/alice/studio-case");
+  await page.getByRole("textbox", { name: /^runtime\.environment\.DATA_ROOT/ }).fill("/public/home/alice/dataset.tar.gz");
   await page.getByRole("button", { name: "服务端校验" }).click();
   await expect(page.getByText("服务器 OK", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "创建 Contract" })).toBeEnabled();
@@ -186,7 +187,7 @@ test("dirty source is not silently overwritten by a basic form update", async ({
   await editor.fill("schema_version: pilot107.contract/v2\nrecipe_version_id: changed-in-source\n");
   await page.getByRole("textbox", { name: "工作目录", exact: true }).fill("/public/home/alice/form-change");
 
-  await expect(page.getByRole("alert")).toContainText("表单与未应用源码发生冲突");
+  await expect(page.getByRole("alert").filter({ hasText: "表单与未应用源码发生冲突" })).toBeVisible();
   await expect(page.getByRole("button", { name: "应用源码并覆盖表单" })).toBeVisible();
 });
 
@@ -445,6 +446,21 @@ async function installMockApi(page, options = {}) {
     if (url.pathname === "/api/v1/templates/template_visual/releases/1.1.0/adopt" && request.method() === "POST") {
       return json(route, { adoption_id: "adoption_visual", release_id: "release_110", adopter: "alice", request_key: request.postDataJSON().request_key, target_template_id: "template_private_visual", target_draft_id: "draft_visual", target_contract_id: "contract_adopted_visual", created_at: "2026-07-16T02:08:00Z" }, 201);
     }
+    if (url.pathname === "/api/v1/platform/connections") {
+      return json(route, {
+        items: [{
+          connection_id: "visual-107",
+          target_id: "107-simulator",
+          state: "active",
+          owner: "current-user-only",
+          checked_at: "2026-07-16T02:08:00Z",
+          expires_at: null,
+          message: "连接正常",
+          status_code: "ok",
+          revision: 1,
+        }],
+      });
+    }
     if (url.pathname === "/api/v1/platform/capabilities") {
       if (options.capabilitiesForbidden) {
         return json(route, {
@@ -452,18 +468,70 @@ async function installMockApi(page, options = {}) {
         }, 403);
       }
       return json(route, {
-        user: request.headers()["x-pilot107-user"] || "alice",
-        observed_at: "2026-07-16T02:08:00Z",
-        degraded: Boolean(options.stalePlatform),
-        source: "simulator",
-        scheduler: {
-          default_account: request.headers()["x-pilot107-user"] === "bob" ? "acct_bob" : "acct_alice",
-          default_qos: "normal",
-          allowed_accounts: [request.headers()["x-pilot107-user"] === "bob" ? "acct_bob" : "acct_alice"],
-          partitions: ["Students", "GPU"],
-          qos_by_partition: { Students: ["normal"], GPU: ["normal", "gpu"] },
+        profile_id: "visual-capability-v1",
+        source_authority: "visual-fixture",
+        captured_at: "2026-07-16T02:08:00Z",
+        freshness_seconds: 60,
+        default_partition: "Students",
+        default_qos: "normal",
+        partitions: [
+          { name: "Students", total_nodes: 2, state: ["UP"], allow_qos: ["normal"], gpu_types: ["A100"] },
+          { name: "GPU", total_nodes: 1, state: ["UP"], allow_qos: ["normal", "gpu"], gpu_types: ["A100"] },
+        ],
+        qos: [
+          { name: "normal", max_cpus: 64, max_gpus: 4, source_authority: "visual-fixture" },
+          { name: "gpu", max_cpus: 64, max_gpus: 8, source_authority: "visual-fixture" },
+        ],
+        dynamic_facts: [],
+        limitations: [],
+        snapshot_ref: {
+          snapshot_id: "platform_visual",
+          freshness: options.stalePlatform ? "stale" : "fresh",
+          observed_at: options.stalePlatform ? "2020-01-01T00:00:00Z" : "2026-07-16T02:08:00Z",
         },
-        gpu: { required: false, types: ["A100"] },
+      });
+    }
+    if (url.pathname === "/api/v1/platform/snapshots/latest") {
+      const capturedAt = options.stalePlatform ? "2020-01-01T00:00:00Z" : "2026-07-16T02:08:00Z";
+      return json(route, {
+        snapshot_id: "platform_visual",
+        scope: "login_node",
+        source_type: "worker",
+        source_name: "visual-fixture",
+        captured_at: capturedAt,
+        observed_at: capturedAt,
+        freshness: options.stalePlatform ? "stale" : "fresh",
+        data_quality: options.stalePlatform ? "degraded" : "complete",
+        collection_status: "succeeded",
+        counts: { commands: 2, partitions: 2, nodes: 2, jobs: 1, limitations: 0 },
+        snapshot: {
+          snapshot_id: "platform_visual",
+          scope: "login_node",
+          captured_at: capturedAt,
+          nodes: [
+            { node_name: "node-a", partitions: ["Students"], state_normalized: "idle", cpus_total: 64, cpus_allocated: 16, memory_mb: 256000 },
+            { node_name: "node-b", partitions: ["GPU"], state_normalized: "mixed", cpus_total: 64, cpus_allocated: 32, memory_mb: 256000 },
+          ],
+          squeue_jobs: [],
+        },
+        limitations: [],
+      });
+    }
+    if (url.pathname === "/api/v1/platform/entitlements/latest") {
+      const user = request.headers()["x-pilot107-user"] || "alice";
+      return json(route, {
+        snapshot_id: `entitlement_${user}`,
+        captured_at: "2026-07-16T02:08:00Z",
+        observed_at: "2026-07-16T02:08:00Z",
+        freshness: "fresh",
+        data_quality: "complete",
+        default_account: user === "bob" ? "acct_bob" : "acct_alice",
+        associations: [{
+          account: user === "bob" ? "acct_bob" : "acct_alice",
+          partition: "Students",
+          qos: ["normal"],
+          default_qos: "normal",
+        }],
       });
     }
     if (url.pathname === "/api/v1/platform/observation") {
@@ -494,7 +562,7 @@ async function installMockApi(page, options = {}) {
       const items = runListFor(request.headers()["x-pilot107-user"] || "alice")
         .filter((item) => !state || item.state === state)
         .filter((item) => !q || JSON.stringify(item).toLowerCase().includes(q));
-      return json(route, { items });
+      return json(route, { items, page: { limit: 20, has_more: false, next_cursor: null } });
     }
     if (url.pathname === "/api/v1/runs/run_alice_failed/workspace") {
       return json(route, runWorkspacePayload(runDetailPayload({ omitWorkdir: options.omitWorkdir })));
@@ -659,20 +727,18 @@ async function installMockApi(page, options = {}) {
         checksum: "f".repeat(64),
       });
     }
-    if (url.pathname === "/api/v1/agent/sessions") {
+    if (url.pathname === "/api/v1/agent-sessions") {
       return json(route, { items: [agentSession] });
     }
-    if (url.pathname === "/api/v1/agent/sessions/agent_visual") {
+    if (url.pathname === "/api/v1/agent-sessions/agent_visual") {
       return json(route, agentSession);
     }
-    if (url.pathname === "/api/v1/agent/sessions/agent_visual/events") {
-      return json(route, { items: agentEvents });
-    }
-    if (url.pathname === "/api/v1/agent/conversations") {
-      return json(route, { items: [{ conversation_id: "conversation_visual", title: "Slurm queue", updated_at: "2026-07-16T02:08:00Z" }] });
-    }
-    if (url.pathname === "/api/v1/agent/conversations/conversation_visual/messages") {
-      return json(route, { items: [{ message_id: "msg_visual", role: "assistant", content: "排队原因是 Students 分区当前资源不足。", created_at: "2026-07-16T02:08:00Z" }] });
+    if (url.pathname === "/api/v1/agent-sessions/agent_visual/events") {
+      return json(route, {
+        session_id: "agent_visual",
+        items: agentEvents,
+        page: { limit: 100, has_more: false, next_after_event_id: null, last_event_id: 3 },
+      });
     }
 
     return route.continue();
@@ -944,13 +1010,34 @@ function preparedRunPayload(overrides = {}) {
 
 function unifiedMarketItemPayload() {
   return {
+    kind: "curated_template",
     item_id: "curated_release_visual",
-    source_type: "template_release",
     title: "Verified Python CPU",
-    summary: "Verified on simulator",
-    trust_level: "verified",
-    payload: defaultStudioContract(),
-    source_ref: "template_visual@1.1.0",
+    description: "Verified on simulator",
+    visibility: "public",
+    scope_key: null,
+    publisher: "alice",
+    published_at: "2026-07-16T02:08:00Z",
+    updated_at: "2026-07-16T02:08:00Z",
+    tags: ["python"],
+    adoption: { available: true, reason: null },
+    withdrawn_at: null,
+    template: {
+      template_id: "template_visual",
+      release_version: "1.1.0",
+      content_sha256: "c".repeat(64),
+    },
+    contract_payload: defaultStudioContract(),
+    compatibility: {},
+    publication: {},
+    metrics: {
+      adoption_count: 1,
+      verification_passed: 1,
+      verification_failed: 0,
+      verification_expired: 0,
+      success_rate: 1,
+      latest_verification: null,
+    },
   };
 }
 
@@ -968,33 +1055,82 @@ function templateMarketPayload() {
 }
 
 function marketApplicationPayload(overrides = {}) {
+  const completed = Boolean(overrides.completed);
   return {
-    application_id: "market_application_visual",
-    item_id: "curated_release_visual",
-    status: overrides.completed ? "completed" : "awaiting_confirmation",
-    plan: {
-      target_contract: defaultStudioContract(),
-      changes: [{ path: "/project/workdir", before: null, after: "/public/home/alice/studio-case" }],
-    },
-    created_contract_id: overrides.completed ? "contract_adopted_visual" : null,
+    session_id: "market_application_visual",
+    owner: "alice",
+    request_key: "visual-market-application",
+    source_kind: "curated_template",
+    source_item_id: "curated_release_visual",
+    source_digest: "e".repeat(64),
+    assurance: "curated",
+    user_intent: "将此市场条目安全地应用到我的私有实验工程",
+    state: completed ? "completed" : "awaiting_confirmation",
+    version: completed ? 2 : 1,
+    project_id: "project_market_visual",
+    workspace_id: "workspace_market_visual",
+    change_set_id: "changeset_market_visual",
+    target_contract_id: completed ? "contract_adopted_visual" : null,
+    adoption_id: completed ? "adoption_visual" : null,
+    target_contract_payload: defaultStudioContract(),
+    plan_digest: "a".repeat(64),
+    confirmation_digest: "b".repeat(64),
+    change_set_digest: "c".repeat(64),
+    created_at: "2026-07-16T02:08:00Z",
+    updated_at: "2026-07-16T02:08:00Z",
   };
 }
 
 function agentSessionPayload() {
   return {
     session_id: "agent_visual",
-    mode: "repair",
-    state: "awaiting_approval",
-    target: { kind: "run", id: "run_alice_failed" },
-    summary: "Dependency repair plan",
+    owner: "alice",
+    request_key: "visual-agent-session",
+    profile_id: "hpc-readonly-v1",
+    model_profile_id: "campus-default",
+    source: {},
+    state: "idle",
+    state_version: 1,
+    resource_usage: {},
+    outcome: null,
     created_at: "2026-07-16T02:08:00Z",
+    updated_at: "2026-07-16T02:08:03Z",
   };
 }
 
 function agentEventPayloads() {
   return [
-    { event_id: "event_1", seq: 1, type: "observation", content: "stderr shows numpy missing", created_at: "2026-07-16T02:08:01Z" },
-    { event_id: "event_2", seq: 2, type: "proposal", content: "install numpy", created_at: "2026-07-16T02:08:02Z" },
-    { event_id: "event_3", seq: 3, type: "approval_required", content: "change runtime environment", created_at: "2026-07-16T02:08:03Z" },
+    {
+      event_id: 1,
+      turn_id: "turn_visual",
+      session_id: "agent_visual",
+      sequence: 1,
+      event_type: "turn_started",
+      payload: { task_kind: "interactive_readonly" },
+      created_at: "2026-07-16T02:08:01Z",
+    },
+    {
+      event_id: 2,
+      turn_id: "turn_visual",
+      session_id: "agent_visual",
+      sequence: 2,
+      event_type: "tool_call_completed",
+      payload: {
+        tool_call_id: "call_visual",
+        tool_name: "platform_get_snapshot",
+        result: { snapshot_id: "platform_visual" },
+        is_error: false,
+      },
+      created_at: "2026-07-16T02:08:02Z",
+    },
+    {
+      event_id: 3,
+      turn_id: "turn_visual",
+      session_id: "agent_visual",
+      sequence: 3,
+      event_type: "message_delta",
+      payload: { delta: "排队原因是 Students 分区当前资源不足。" },
+      created_at: "2026-07-16T02:08:03Z",
+    },
   ];
 }
