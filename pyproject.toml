@@ -40,6 +40,10 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 "src/pilot107/agent/operation_attempts.py" = ["E501"]
 "src/pilot107/agent/operation_ledger.py" = ["E501"]
 "src/pilot107/agent/operation_reconciler.py" = ["E501"]
+# Launch authority contains reviewable SQL/request literals whose wrapped form is
+# less readable; keep all semantic Ruff checks enabled and scope only E501.
+"src/pilot107/core/launch.py" = ["E501"]
+"src/pilot107/api/workarea_launch_routes.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
