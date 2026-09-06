@@ -70,11 +70,12 @@ def install_workarea_launch_extension() -> None:
                     return response
         return original_post(self, path, body=body, headers=headers)
 
-    # setattr keeps the extension isolated while preserving strict mypy on the
-    # concrete Pilot107HttpApi class; both callables keep the original method
-    # signatures and unrelated requests delegate to the captured methods.
-    setattr(Pilot107HttpApi, "_handle_get", extended_get)
-    setattr(Pilot107HttpApi, "_handle_post", extended_post)
+    # The extension mutates the class object at composition time. Deliberately
+    # type only that object as Any so the rest of Pilot107HttpApi remains under
+    # strict mypy checking; no lint/type rule is suppressed globally or locally.
+    api_type: Any = Pilot107HttpApi
+    api_type._handle_get = extended_get
+    api_type._handle_post = extended_post
     _INSTALLED = True
 
 
