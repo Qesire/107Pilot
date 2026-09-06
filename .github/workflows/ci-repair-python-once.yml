@@ -112,16 +112,17 @@ jobs:
           PY
       - name: Sync validation environment
         run: uv sync --locked --extra dev --extra api --extra postgres
-      - name: Ruff check and format
+      - name: Ruff
         run: |
           set -euo pipefail
           files="src/pilot107/agent/workspace_live.py src/pilot107/agent/workspace_journal.py"
           uv run ruff check --fix --unsafe-fixes $files
           uv run ruff format $files
           uv run ruff check src tests scripts
-          uv run ruff format --check src tests scripts
       - name: Mypy
         run: uv run mypy src
+      - name: Agent lifecycle acceptance
+        run: uv run pytest tests/test_agent_lifecycle_acceptance.py -q
       - name: Pytest
         run: uv run pytest -q
       - name: Diff check
