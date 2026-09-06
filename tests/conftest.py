@@ -33,6 +33,7 @@ from pilot107.core.remediation_store import RemediationStore
 from pilot107.core.repair_ticket_store import RepairTicketStore
 from pilot107.core.run_publications import RunPublicationStore
 from pilot107.core.run_store import RunStore
+from pilot107.core.ssh_connections import SshConnectionStore
 from pilot107.core.template_market import TemplateMarketStore
 from pilot107.core.template_policy import TemplatePublicationGate
 from pilot107.core.user_entitlement_store import UserEntitlementStore
@@ -208,6 +209,12 @@ def _patch_sqlite_domain_constructors(
         module,
         "PostgresUploadSessionStore",
         lambda _dsn, **_kwargs: UploadSessionStore(db_path),
+    )
+    _patch_if_present(
+        stack,
+        module,
+        "PostgresSshConnectionStore",
+        lambda _dsn, **_kwargs: SshConnectionStore(db_path),
     )
     _patch_if_present(
         stack,
