@@ -14,6 +14,8 @@ import "./styles/file-workspace-v2.css";
 import "./styles/task-indicator-v2.css";
 import "./styles/file-picker-v2.css";
 import "./styles/experiment-shell-v2.css";
+import "./styles/scientific-calm-v3.css";
+import "./styles/workarea-v2.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {
