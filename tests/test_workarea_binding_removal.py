@@ -145,7 +145,10 @@ def test_user_asset_binding_is_removed_atomically() -> None:
         target_ref="/project/code",
     )
 
-    assert any(statement.startswith("DELETE FROM workarea_assets") for statement in connection.executed)
+    assert any(
+        statement.startswith("DELETE FROM workarea_assets")
+        for statement in connection.executed
+    )
     assert any(
         statement.startswith("DELETE FROM workarea_binding_sources")
         for statement in connection.executed
@@ -164,7 +167,10 @@ def test_inherited_binding_cannot_be_removed() -> None:
             target_ref="run-1",
         )
 
-    assert not any(statement.startswith("DELETE FROM workarea_runs") for statement in connection.executed)
+    assert not any(
+        statement.startswith("DELETE FROM workarea_runs")
+        for statement in connection.executed
+    )
 
 
 def test_launch_run_cannot_be_removed_after_manual_source_promotion() -> None:
@@ -178,7 +184,10 @@ def test_launch_run_cannot_be_removed_after_manual_source_promotion() -> None:
             target_ref="run-launch",
         )
 
-    assert not any(statement.startswith("DELETE FROM workarea_runs") for statement in connection.executed)
+    assert not any(
+        statement.startswith("DELETE FROM workarea_runs")
+        for statement in connection.executed
+    )
 
 
 def test_candidate_contract_cannot_be_removed_after_manual_source_promotion() -> None:
@@ -193,5 +202,6 @@ def test_candidate_contract_cannot_be_removed_after_manual_source_promotion() ->
         )
 
     assert not any(
-        statement.startswith("DELETE FROM workarea_contracts") for statement in connection.executed
+        statement.startswith("DELETE FROM workarea_contracts")
+        for statement in connection.executed
     )
