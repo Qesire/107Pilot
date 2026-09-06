@@ -94,6 +94,10 @@ export interface LaunchCommitResponse {
 
 interface Page<T> { items: T[] }
 
+function withSignal(signal?: AbortSignal): RequestInit {
+  return signal ? { signal } : {};
+}
+
 async function request<T>(
   path: string,
   user: string,
@@ -129,9 +133,13 @@ const post = <T>(path: string, user: string, body: object) => request<T>(path, u
 
 export const workareaApi = {
   list: (user: string, signal?: AbortSignal) =>
-    request<Page<WorkAreaSummary>>(`/api/v1/workareas?limit=100`, user, { signal }),
+    request<Page<WorkAreaSummary>>(`/api/v1/workareas?limit=100`, user, withSignal(signal)),
   get: (user: string, id: string, signal?: AbortSignal) =>
-    request<WorkAreaDetail>(`/api/v1/workareas/${encodeURIComponent(id)}`, user, { signal }),
+    request<WorkAreaDetail>(
+      `/api/v1/workareas/${encodeURIComponent(id)}`,
+      user,
+      withSignal(signal),
+    ),
   create: (user: string, input: { title: string; description: string; request_key: string }) =>
     post<WorkAreaDetail>("/api/v1/workareas", user, input),
   addBinding: (
@@ -144,7 +152,11 @@ export const workareaApi = {
     input,
   ),
   contracts: (user: string, signal?: AbortSignal) =>
-    request<Page<ContractSummary>>(`/api/v1/contracts?owner=${encodeURIComponent(user)}&limit=100`, user, { signal }),
+    request<Page<ContractSummary>>(
+      `/api/v1/contracts?owner=${encodeURIComponent(user)}&limit=100`,
+      user,
+      withSignal(signal),
+    ),
   createCandidate: (
     user: string,
     workareaId: string,
@@ -155,9 +167,17 @@ export const workareaApi = {
     input,
   ),
   candidate: (user: string, candidateId: string, signal?: AbortSignal) =>
-    request<LaunchCandidate>(`/api/v1/launch-candidates/${encodeURIComponent(candidateId)}`, user, { signal }),
+    request<LaunchCandidate>(
+      `/api/v1/launch-candidates/${encodeURIComponent(candidateId)}`,
+      user,
+      withSignal(signal),
+    ),
   preflight: (user: string, candidateId: string) =>
-    post<LaunchPreflight>(`/api/v1/launch-candidates/${encodeURIComponent(candidateId)}/preflight`, user, {}),
+    post<LaunchPreflight>(
+      `/api/v1/launch-candidates/${encodeURIComponent(candidateId)}/preflight`,
+      user,
+      {},
+    ),
   commit: (
     user: string,
     candidateId: string,
@@ -168,7 +188,15 @@ export const workareaApi = {
     input,
   ),
   launches: (user: string, workareaId: string, signal?: AbortSignal) =>
-    request<Page<LaunchRecord>>(`/api/v1/workareas/${encodeURIComponent(workareaId)}/launches?limit=100`, user, { signal }),
+    request<Page<LaunchRecord>>(
+      `/api/v1/workareas/${encodeURIComponent(workareaId)}/launches?limit=100`,
+      user,
+      withSignal(signal),
+    ),
   launch: (user: string, launchId: string, signal?: AbortSignal) =>
-    request<LaunchRecord>(`/api/v1/launches/${encodeURIComponent(launchId)}`, user, { signal }),
+    request<LaunchRecord>(
+      `/api/v1/launches/${encodeURIComponent(launchId)}`,
+      user,
+      withSignal(signal),
+    ),
 };
