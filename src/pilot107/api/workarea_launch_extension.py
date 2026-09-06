@@ -1,8 +1,8 @@
 """Narrow route extension for WorkArea/Launch delivery APIs.
 
 The central stdlib HTTP adapter is intentionally stable and very large. This
-module installs an isolated extension at its two internal dispatch seams so the
-competition vertical can evolve without duplicating or rewriting the existing
+module installs an isolated extension at its dispatch seams so the competition
+vertical can evolve without duplicating or rewriting the existing
 Run/Files/Market router. Unrelated paths fall through to the original handlers.
 """
 
@@ -22,15 +22,16 @@ _ROUTE_ROOTS = frozenset({"workareas", "launch-candidates", "launches"})
 
 
 def install_workarea_launch_extension() -> None:
-    """Install once on :class:`Pilot107HttpApi` internal dispatch methods."""
+    """Install once on :class:`Pilot107HttpApi` dispatch methods."""
 
     global _INSTALLED
     if _INSTALLED:
         return
-    from pilot107.api.http_app import Pilot107HttpApi
+    from pilot107.api.http_app import Pilot107HttpApi, _request_id
 
     original_get = Pilot107HttpApi._handle_get
     original_post = Pilot107HttpApi._handle_post
+    original_patch = Pilot107HttpApi.handle_patch
 
     def extended_get(
         self: Any,
@@ -71,12 +72,44 @@ def install_workarea_launch_extension() -> None:
                     return response
         return original_post(self, path, body=body, headers=headers)
 
+    def extended_patch(
+        self: Any,
+        path: str,
+        body: bytes = b"",
+        headers: Any = None,
+    ) -> Any:
+        parts = _parts(path)
+        if not parts or parts[0] != "workareas":
+            return original_patch(self, path, body=body, headers=headers)
+        request_id = _request_id(headers)
+        response = self._proxy_auth_error("PATCH", path, body, headers)
+        if response is None:
+            identity, auth_error = self._resolve_identity(headers)
+            if auth_error is not None:
+                response = auth_error
+            else:
+                routes = _routes(self)
+                if routes is None:
+                    return original_patch(self, path, body=body, headers=headers)
+                response = routes.handle_patch(parts, body=body, identity=identity)
+                if response is None:
+                    return original_patch(self, path, body=body, headers=headers)
+        return self._finalize_and_trace(
+            response,
+            method="PATCH",
+            path=path,
+            request_id=request_id,
+            request_headers=headers,
+            enable_etag=False,
+        )
+
     # The extension mutates the class object at composition time. Deliberately
     # type only that object as Any so the rest of Pilot107HttpApi remains under
     # strict mypy checking; no lint/type rule is suppressed globally or locally.
     api_type: Any = Pilot107HttpApi
     api_type._handle_get = extended_get
     api_type._handle_post = extended_post
+    api_type.handle_patch = extended_patch
     _INSTALLED = True
 
 
