@@ -355,7 +355,7 @@ class PostgresLaunchStore:
                     contract_id, request_key, candidate_digest, preflight_digest,
                     committed_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (owner, request_key) DO NOTHING
+                ON CONFLICT DO NOTHING
                 RETURNING *
                 """,
                 (
@@ -373,6 +373,11 @@ class PostgresLaunchStore:
             ).fetchone()
             if row is None:
                 row = connection.execute(
+                    "SELECT * FROM launches WHERE candidate_id = %s AND owner = %s",
+                    (candidate.candidate_id, candidate.owner),
+                ).fetchone()
+            if row is None:
+                row = connection.execute(
                     "SELECT * FROM launches WHERE owner = %s AND request_key = %s",
                     (candidate.owner, request_key),
                 ).fetchone()
@@ -382,8 +387,9 @@ class PostgresLaunchStore:
             if (
                 record.candidate_id != candidate.candidate_id
                 or record.preflight_digest != preflight.assessment_digest
+                or record.candidate_digest != candidate.candidate_digest
             ):
-                raise LaunchConflict("commit request_key refers to another reviewed Launch")
+                raise LaunchConflict("commit conflicts with another reviewed Launch")
             return record
 
     def attach_run(self, launch_id: str, *, owner: str, run_id: str, ordinal: int = 0) -> None:
