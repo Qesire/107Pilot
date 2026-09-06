@@ -21,6 +21,7 @@ import {
   workareaApi,
   type LaunchPreflight,
   type LaunchRecord,
+  type WorkAreaBinding,
   type WorkAreaDetail,
 } from "./workarea-api";
 
@@ -167,6 +168,16 @@ function WorkAreaDetailPage({ user, navigate, workareaId }: PageProps & { workar
     },
   });
 
+  const unbind = useMutation({
+    mutationFn: (input: { kind: "asset" | "contract" | "run"; target_ref: string }) => workareaApi.removeBinding(user, workareaId, input),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workarea", user, workareaId] }),
+        queryClient.invalidateQueries({ queryKey: ["workareas", user] }),
+      ]);
+    },
+  });
+
   const update = useMutation({
     mutationFn: () => workareaApi.update(user, workareaId, {
       title: editTitle.trim(),
@@ -177,6 +188,11 @@ function WorkAreaDetailPage({ user, navigate, workareaId }: PageProps & { workar
       await queryClient.invalidateQueries({ queryKey: ["workareas", user] });
       setEditOpen(false);
     },
+  });
+
+  const removeBinding = (item: WorkAreaBinding) => unbind.mutate({
+    kind: item.kind,
+    target_ref: item.target_ref,
   });
 
   return <QueryBoundary pending={area.isPending} error={area.error}>
@@ -227,6 +243,8 @@ function WorkAreaDetailPage({ user, navigate, workareaId }: PageProps & { workar
         </div>
       </section> : null}
 
+      {unbind.isError ? <p className="wa-error" role="alert">解除绑定失败：{unbind.error.message}</p> : null}
+
       <div className="wa-workspace-grid">
         <section className="wa-focus-surface wa-assets-surface">
           <div className="wa-surface-header">
@@ -252,7 +270,13 @@ function WorkAreaDetailPage({ user, navigate, workareaId }: PageProps & { workar
               <FilePlus2 aria-hidden="true" size={15} /> 从文件系统添加
             </button>
           </div>
-          <BindingList area={area.data} section="assets" empty="尚未绑定文件资产。" />
+          <BindingList
+            area={area.data}
+            section="assets"
+            empty="尚未绑定文件资产。"
+            onRemove={removeBinding}
+            removing={unbind.isPending}
+          />
           {pickerOpen ? <FilePickerDialog
             user={user}
             homePath={`/public/home/${user}`}
@@ -285,6 +309,8 @@ function WorkAreaDetailPage({ user, navigate, workareaId }: PageProps & { workar
               section="runs"
               empty="尚无历史或 Launch 产生的 Run。"
               onOpen={(id) => navigate(`/runs/${encodeURIComponent(id)}?user=${encodeURIComponent(user)}&tab=overview`)}
+              onRemove={removeBinding}
+              removing={unbind.isPending}
             />
           </section>
 
@@ -293,7 +319,13 @@ function WorkAreaDetailPage({ user, navigate, workareaId }: PageProps & { workar
               <h2>配置引用</h2>
               <p>选择 Contract 发起运行时自动建立来源关系。</p>
             </div>
-            <BindingList area={area.data} section="contracts" empty="尚未关联 Contract。" />
+            <BindingList
+              area={area.data}
+              section="contracts"
+              empty="尚未关联 Contract。"
+              onRemove={removeBinding}
+              removing={unbind.isPending}
+            />
           </section>
         </aside>
       </div>
@@ -633,11 +665,15 @@ function BindingList({
   section,
   empty,
   onOpen,
+  onRemove,
+  removing = false,
 }: {
   area: WorkAreaDetail;
   section: BindingSection;
   empty: string;
   onOpen?: (id: string) => void;
+  onRemove?: (item: WorkAreaBinding) => void;
+  removing?: boolean;
 }) {
   const items = area.bindings[section];
   if (!items.length) return <p className="wa-empty-inline">{empty}</p>;
@@ -646,9 +682,16 @@ function BindingList({
       <StatusBadge label={bindingLabel(item.role ?? item.kind)} tone={item.source === "inherited" ? "info" : "neutral"} />
       <span className="wa-binding-main">
         <code title={item.target_ref}>{item.target_ref}</code>
-        <small>{item.source === "inherited" ? "由 Launch 继承" : "用户明确绑定"}</small>
+        <small>{item.source === "inherited" ? "由 Launch 继承 · 不可解除" : "用户明确绑定"}</small>
       </span>
       {onOpen ? <button className="wa-binding-open" type="button" onClick={() => onOpen(item.target_ref)}>打开</button> : null}
+      {item.source === "user" && onRemove ? <button
+        className="wa-binding-open"
+        type="button"
+        disabled={removing}
+        aria-label={`解除绑定 ${item.target_ref}`}
+        onClick={() => onRemove(item)}
+      >解除</button> : null}
     </li>)}
   </ul>;
 }
