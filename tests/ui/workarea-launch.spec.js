@@ -212,6 +212,15 @@ async function installWorkAreaLaunchMock(page) {
   });
 }
 
+async function createWorkArea(page) {
+  await page.goto("/workareas?user=alice");
+  await page.getByRole("button", { name: "新建研究区" }).click();
+  await page.getByLabel("名称").fill("Competition vertical");
+  await page.getByLabel("说明").fill("WorkArea to Launch to Run");
+  await page.getByRole("button", { name: "创建并进入" }).click();
+  await expect(page).toHaveURL(new RegExp(`/workareas/${WORKAREA_ID}`));
+}
+
 test.beforeEach(async ({ page }) => {
   await installWorkAreaLaunchMock(page);
 });
@@ -227,7 +236,7 @@ test("creates and edits a WorkArea, reviews request, commits once, and reaches R
   await expect(page).toHaveURL(new RegExp(`/workareas/${WORKAREA_ID}`));
 
   await expect(page.getByRole("heading", { name: "Competition vertical" })).toBeVisible();
-  await page.getByRole("button", { name: "编辑研究区" }).click();
+  await page.getByRole("button", { name: "编辑", exact: true }).click();
   await page.getByLabel("名称").fill("Competition vertical revised");
   await page.getByLabel("说明").fill("Persistent research context");
   await page.getByRole("button", { name: "保存研究区" }).click();
@@ -245,8 +254,7 @@ test("creates and edits a WorkArea, reviews request, commits once, and reaches R
 
   await expect(page.getByRole("heading", { name: "Effective Slurm Request" })).toBeVisible();
   await expect(page.getByText("Students / qos_stu_medium_2gpu")).toBeVisible();
-  const reviewedScript = page.locator("textarea.mono[readonly]");
-  await expect(reviewedScript).toHaveValue(/python train\.py/);
+  await expect(page.getByLabel("将提交的脚本")).toHaveValue(/python train\.py/);
   await expect(page.getByText("preflight-digest")).toBeVisible();
 
   await page.getByRole("checkbox").check();
@@ -259,4 +267,34 @@ test("creates and edits a WorkArea, reviews request, commits once, and reaches R
 
   await page.getByRole("button", { name: /打开 Run、日志与 Evidence/ }).click();
   await expect(page).toHaveURL(new RegExp(`/runs/${RUN_ID}`));
+});
+
+test("WorkArea decision surfaces stay flat and keep one strong primary action", async ({ page }) => {
+  await createWorkArea(page);
+
+  const styles = await page.evaluate(() => {
+    const primary = document.querySelector(".wa-page-header .button.primary");
+    const secondary = document.querySelector(".wa-page-header .button.secondary");
+    const focusSurface = document.querySelector(".wa-focus-surface");
+    const topbar = document.querySelector(".app-topbar");
+    const primaryStyle = primary ? getComputedStyle(primary) : null;
+    const secondaryStyle = secondary ? getComputedStyle(secondary) : null;
+    const focusStyle = focusSurface ? getComputedStyle(focusSurface) : null;
+    const topbarStyle = topbar ? getComputedStyle(topbar) : null;
+    return {
+      primaryCount: document.querySelectorAll(".wa-page-header .button.primary").length,
+      primaryTransform: primaryStyle?.transform ?? null,
+      primaryShadow: primaryStyle?.boxShadow ?? null,
+      secondaryShadow: secondaryStyle?.boxShadow ?? null,
+      focusShadow: focusStyle?.boxShadow ?? null,
+      topbarBackdrop: topbarStyle?.backdropFilter ?? null,
+    };
+  });
+
+  expect(styles.primaryCount).toBe(1);
+  expect(styles.primaryTransform).toBe("none");
+  expect(styles.primaryShadow).toBe("none");
+  expect(styles.secondaryShadow).toBe("none");
+  expect(styles.focusShadow).toBe("none");
+  expect(["none", ""]).toContain(styles.topbarBackdrop);
 });
