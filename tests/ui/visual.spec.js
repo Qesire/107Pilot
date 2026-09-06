@@ -46,7 +46,8 @@ test("run filters are URL-controlled and narrow the server query", async ({ page
 test("run deep link survives direct navigation and wraps long workdir", async ({ page }) => {
   await page.goto("/runs/run_alice_failed?user=alice");
 
-  await expect(page.getByRole("heading", { name: "运行详情" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运行详情", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运行视图", level: 2 })).toBeVisible();
   await expect(
     page.getByTestId("run-workspace-overview").getByText("contract_alice_002", { exact: true }),
   ).toBeVisible();
@@ -135,7 +136,7 @@ test("mobile layout exposes primary destinations without horizontal overflow", a
 test("studio requires server validation before creating a canonical contract", async ({ page }) => {
   await page.goto("/studio/new?user=alice");
 
-  await expect(page.getByRole("heading", { name: "实验工作区" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运行配置", level: 1 })).toBeVisible();
   await expect(page.getByRole("button", { name: "创建 Contract" })).toBeDisabled();
   await page.getByRole("textbox", { name: "工作目录", exact: true }).fill("/public/home/alice/studio-case");
   await page.getByRole("textbox", { name: /^runtime\.environment\.DATA_ROOT/ }).fill("/public/home/alice/dataset.tar.gz");
@@ -251,8 +252,8 @@ test("experiment shell opens a Run as one workspace without eager deep reads", a
   });
 
   await page.goto("/runs/run_alice_failed?user=alice");
-  await expect(page.getByRole("heading", { name: "实验工作区" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "运行详情" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运行详情", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运行视图", level: 2 })).toBeVisible();
   await expect(page.getByText("contract_alice_002", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("/work/alice/projects/a-very-long-directory-name/failed-case", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: /已加载 .* 个结果/ })).toHaveCount(0);
@@ -270,7 +271,7 @@ test("experiment shell opens a Run as one workspace without eager deep reads", a
 
 test("experiment shell keeps Studio preparation and preflight in the same context", async ({ page }) => {
   await page.goto("/studio/new?user=alice");
-  await expect(page.getByRole("heading", { name: "实验工作区" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "运行配置", level: 1 })).toBeVisible();
   await expect(page.getByRole("button", { name: "阶段：准备" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "阶段：配置" })).toHaveAttribute("aria-current", "step");
   await expect(page.getByRole("button", { name: "阶段：运行前检查" })).toBeDisabled();
