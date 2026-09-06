@@ -1,6 +1,6 @@
 name: ci-repair-python-once
 
-# Candidate validation v22.
+# Candidate validation v23.
 on:
   push:
     branches:
@@ -117,6 +117,54 @@ jobs:
         run: uv run ruff check src tests
       - name: mypy
         run: uv run mypy src
+      - name: Contract and composition targets
+        run: |
+          uv run pytest -q \
+            tests/test_lifecycle_store_selection.py \
+            tests/test_postgres_only_runtime_authority.py \
+            tests/agent/test_tool_gateway.py \
+            tests/test_agent_tool_gateway_api.py \
+            tests/test_api_service.py \
+            tests/test_worker_service.py \
+            tests/api/test_service_snapshot_wiring.py \
+            tests/api/test_service_template_seed_wiring.py
+      - name: Sandbox diagnostic
+        run: |
+          uv run python - <<'PY'
+          from pathlib import Path
+          import tempfile
+
+          from pilot107.agent.sandbox import SandboxExecutor
+          from pilot107.agent.workspace import AgentWorkspaceRecord, WorkspaceSnapshot
+
+          with tempfile.TemporaryDirectory() as temporary:
+              root = Path(temporary) / "workspace"
+              root.mkdir()
+              (root / "main.py").write_text("print('ok')\n", encoding="utf-8")
+              workspace = AgentWorkspaceRecord(
+                  workspace_id="workspace-sandbox-diag",
+                  project_id="project-sandbox-diag",
+                  owner="alice",
+                  local_root=str(root),
+                  snapshot=WorkspaceSnapshot(
+                      source_ref="/public/home/alice/project",
+                      digest="b" * 64,
+                      entries=(),
+                      captured_at="2026-08-19T00:00:00Z",
+                  ),
+                  created_at="2026-08-19T00:00:00Z",
+                  updated_at="2026-08-19T00:00:00Z",
+              )
+              sandbox = SandboxExecutor()
+              argv = ("python", "-m", "py_compile", "main.py")
+              result = sandbox.execute(workspace, argv=argv, timeout=3)
+              print("SANDBOX_STATUS", result.status)
+              print("SANDBOX_EXIT", result.exit_code)
+              print("SANDBOX_LIMIT", result.limit_reason)
+              print("SANDBOX_STDOUT", repr(result.stdout))
+              print("SANDBOX_STDERR", repr(result.stderr))
+              print("SANDBOX_COMMAND", sandbox._sandbox_command(root.resolve(), argv))
+          PY
       - name: Lifecycle acceptance
         run: uv run pytest tests/test_agent_lifecycle_acceptance.py -q
       - name: Full pytest
@@ -141,8 +189,6 @@ jobs:
           name: python-teststore-candidate
           path: |
             /tmp/candidate.patch
-            src/pilot107/api/service.py
-            src/pilot107/worker/service.py
             src/pilot107/agent/workspace_live.py
             src/pilot107/agent/workspace_journal.py
             src/pilot107/agent/operation_ledger.py
@@ -153,3 +199,5 @@ jobs:
             tests/agent/test_project_store_contract.py
             tests/agent/test_task_store_contract.py
             tests/test_control_repository.py
+            tests/api/test_service_snapshot_wiring.py
+            tests/api/test_service_template_seed_wiring.py
