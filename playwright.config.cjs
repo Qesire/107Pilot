@@ -20,12 +20,6 @@ module.exports = defineConfig({
   expect: {
     timeout: 5_000,
   },
-  // These two visual assertions encoded the pre-WorkArea dashboard contract: a
-  // global recent Run was treated as current context without explicit user
-  // selection. workbench-workarea.spec.js replaces them with the competition
-  // WorkArea continuity contract, including user isolation and fail-closed
-  // stale selection behavior.
-  grepInvert: /workspace prioritizes current work and preparation facts|switching user updates URL and invalidates scoped queries/,
   use: {
     baseURL: "http://127.0.0.1:3197",
     launchOptions,
