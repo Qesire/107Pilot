@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
-from pilot107.core.contracts import ContractError, ContractService
+from pilot107.core.contracts import ContractService
 from pilot107.core.launch import (
     LaunchCandidateRecord,
     LaunchConflict,
@@ -61,7 +61,7 @@ class LaunchService:
         if contract.owner != owner:
             raise PermissionError("Contract owner does not match WorkArea owner")
         # Selecting a Contract for a Launch also makes that relationship visible
-        # at WorkArea level.  Contract remains the sole configuration authority.
+        # at WorkArea level. Contract remains the sole configuration authority.
         self.workareas.link_contract(workarea_id, owner=owner, contract_id=contract_id)
         return self.launches.create_candidate(
             workarea_id=workarea_id,
@@ -97,7 +97,7 @@ class LaunchService:
             }
         )
         # On a passing assessment, serialize the exact RunSubmitRequest fields
-        # that Commit will feed to RunService.  This is the reviewable Slurm
+        # that Commit will feed to RunService. This is the reviewable Slurm
         # request boundary required by the product design.
         if validation.status == "OK":
             submit_request = self.contracts.to_submit_request(contract)
@@ -127,9 +127,9 @@ class LaunchService:
         if previous.status != "OK":
             raise LaunchConflict("blocked preflight cannot be committed")
 
-        # Re-evaluate immediately before Commit.  Snapshot/freshness changes are
-        # therefore observable as PRELIGHT_STALE instead of silently submitting
-        # a request different from the one the user reviewed.
+        # Re-evaluate immediately before Commit. Snapshot/freshness changes are
+        # observable as PREFLIGHT_STALE instead of silently submitting a request
+        # different from the one the user reviewed.
         current = self.assess(candidate_id, owner=owner)
         if current.assessment_digest != expected_preflight_digest:
             raise LaunchConflict("preflight became stale; review the effective request again")
@@ -149,14 +149,15 @@ class LaunchService:
         self.launches.attach_run(launch.launch_id, owner=owner, run_id=run.run_id, ordinal=0)
         self.workareas.link_run(candidate.workarea_id, owner=owner, run_id=run.run_id)
 
-        # A retried HTTP Commit must not duplicate submission.  If a prior call
-        # already advanced the Run, simply return the durable Launch/Run view.
+        # A retried HTTP Commit must not duplicate submission. If a prior call
+        # already advanced the Run, return the durable Launch/Run view.
         run = self.run_store.get_run(run.run_id)
         if run.state != RunState.VALIDATED:
+            current_launch = self.launches.get(launch.launch_id, owner=owner)
             return LaunchCommitResult(
-                launch=self.launches.get(launch.launch_id, owner=owner),
+                launch=current_launch,
                 run=run,
-                submit_error=self.launches.get(launch.launch_id, owner=owner).submit_error,
+                submit_error=current_launch.submit_error,
             )
 
         try:
@@ -211,7 +212,7 @@ def _submit_request_payload(request: Any) -> dict[str, Any]:
         "parent_run_id": request.parent_run_id,
         "lineage_reason": request.lineage_reason,
         "remediation_plan_id": request.remediation_plan_id,
-        "workflow": request.workflow.as_payload(),
+        "workflow": request.workflow.to_payload(),
         "resource_plan": {
             "partition": plan.partition,
             "qos": plan.qos,
