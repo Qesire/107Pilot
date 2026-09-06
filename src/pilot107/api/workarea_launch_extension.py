@@ -11,9 +11,11 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from pilot107.api.workarea_binding_removal_routes import WorkAreaBindingRemovalRoutes
 from pilot107.api.workarea_launch_routes import WorkAreaLaunchRoutes
 from pilot107.core.launch import PostgresLaunchStore
 from pilot107.core.workarea import PostgresWorkAreaStore
+from pilot107.core.workarea_binding_removal import PostgresWorkAreaBindingRemovalService
 from pilot107.core.workarea_binding_source import PostgresWorkAreaBindingSourceStore
 from pilot107.services.launch_service import LaunchService
 
@@ -32,6 +34,7 @@ def install_workarea_launch_extension() -> None:
     original_get = Pilot107HttpApi._handle_get
     original_post = Pilot107HttpApi._handle_post
     original_patch = Pilot107HttpApi.handle_patch
+    original_delete = Pilot107HttpApi.handle_delete
 
     def extended_get(
         self: Any,
@@ -103,6 +106,36 @@ def install_workarea_launch_extension() -> None:
             enable_etag=False,
         )
 
+    def extended_delete(
+        self: Any,
+        path: str,
+        headers: Any = None,
+    ) -> Any:
+        parts = _parts(path)
+        if not parts or parts[0] != "workareas":
+            return original_delete(self, path, headers=headers)
+        request_id = _request_id(headers)
+        response = self._proxy_auth_error("DELETE", path, b"", headers)
+        if response is None:
+            identity, auth_error = self._resolve_identity(headers)
+            if auth_error is not None:
+                response = auth_error
+            else:
+                routes = _binding_removal_routes(self)
+                if routes is None:
+                    return original_delete(self, path, headers=headers)
+                response = routes.handle_delete(parts, identity=identity)
+                if response is None:
+                    return original_delete(self, path, headers=headers)
+        return self._finalize_and_trace(
+            response,
+            method="DELETE",
+            path=path,
+            request_id=request_id,
+            request_headers=headers,
+            enable_etag=False,
+        )
+
     # The extension mutates the class object at composition time. Deliberately
     # type only that object as Any so the rest of Pilot107HttpApi remains under
     # strict mypy checking; no lint/type rule is suppressed globally or locally.
@@ -110,6 +143,7 @@ def install_workarea_launch_extension() -> None:
     api_type._handle_get = extended_get
     api_type._handle_post = extended_post
     api_type.handle_patch = extended_patch
+    api_type.handle_delete = extended_delete
     _INSTALLED = True
 
 
@@ -148,6 +182,23 @@ def _routes(api: Any) -> WorkAreaLaunchRoutes | None:
         binding_sources=binding_sources,
     )
     api._workarea_launch_extension_routes = routes
+    return routes
+
+
+def _binding_removal_routes(api: Any) -> WorkAreaBindingRemovalRoutes | None:
+    existing = getattr(api, "_workarea_binding_removal_routes", None)
+    if isinstance(existing, WorkAreaBindingRemovalRoutes):
+        return existing
+    if existing is False:
+        return None
+    workarea_routes = _routes(api)
+    if workarea_routes is None:
+        api._workarea_binding_removal_routes = False
+        return None
+    routes = WorkAreaBindingRemovalRoutes(
+        PostgresWorkAreaBindingRemovalService(workarea_routes.binding_sources)
+    )
+    api._workarea_binding_removal_routes = routes
     return routes
 
 
